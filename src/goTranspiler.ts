@@ -34103,3 +34103,191 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     }
     return goTernaryJoinUpstreamPrintDeclarationList.call(this, node, identation);
 };
+
+// ===== ral-84g2: reader-result locals =====
+// A. `(x as List).length` / `(x as List)[i]` and the parenthesized forms print as the bare local's read, so
+// the list-sink verdict of a wrapped list local is the verdict of the outermost type-only wrapper.
+{
+    const sinkReads = GoTranspiler.prototype.goListLocalSinkReadsAsList;
+    GoTranspiler.prototype.goListLocalSinkReadsAsList = function (node, nilTestSafe: boolean) {
+        let outer: any = node;
+        while (((outer.parent?.kind === SyntaxKind.AsExpression) || (outer.parent?.kind === SyntaxKind.ParenthesizedExpression)
+            || (outer.parent?.kind === SyntaxKind.NonNullExpression)) && (outer.parent.expression === outer)) {
+            outer = outer.parent;
+        }
+        return sinkReads.call(this, outer, nilTestSafe);
+    };
+}
+// B. R4 for an annotated local: `const x: Bool = this.handleOption (m, o[, d])` (or `: boolean`) read only
+// against `true`. The annotation drives the checker only; the Go read is the same boxed HandleOption answer,
+// so the declaration takes the `== true` comparison once, exactly like the unannotated R4 local.
+{
+    const trueLocal = GoTranspiler.prototype.goHandleOptionTrueLocal;
+    GoTranspiler.prototype.goHandleOptionTrueLocal = function (declaration) {
+        const annotation: any = declaration?.type;
+        if (annotation === undefined) {
+            return trueLocal.call(this, declaration);
+        }
+        const call: any = declaration.initializer;
+        const boolAnnotation = (annotation.kind === SyntaxKind.BooleanKeyword)
+            || ((annotation.kind === SyntaxKind.TypeReference) && (annotation.typeName?.kind === SyntaxKind.Identifier) && (annotation.typeName.text === 'Bool'));
+        if (!boolAnnotation || (declaration.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+            || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'handleOption')
+            || (call.arguments.length < 2) || (call.arguments.length > 3)) {
+            return false;
+        }
+        const comparesWithTrue = (n: any): boolean => {
+            const parent: any = n.parent;
+            const op = parent?.operatorToken?.kind;
+            if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)
+                && (op !== SyntaxKind.ExclamationEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsToken))) {
+                return false;
+            }
+            return (((parent.left === n) ? parent.right : parent.left)?.kind === SyntaxKind.TrueKeyword);
+        };
+        return this.goDeclaredLocalTypeIfSafe(declaration, 'bool', comparesWithTrue,
+            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
+    };
+}
+// C. `let xs = this.safeList (c, k[, []])` rebound only as `xs = this.arrayConcat (..)` (BaseExchange.ArrayConcat
+// returns a []any) and otherwise read as a list (length, element and accessor index reads) or handed to
+// arrayConcat: a []any local. ArrayConcat concatenates a nil slice exactly like the empty default the box held,
+// so dropping the `[]` default (SafeListTyped answers nil) changes no answer; a nil test, a copy or any other
+// hand-out keeps the box. At least one native read (length / element) is required.
+{
+    const listUnbox = GoTranspiler.prototype.goSafeListLocalUnbox;
+    const isConcat = (call: any): boolean => (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'arrayConcat') && (call.arguments.length === 2);
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        const shipped = listUnbox.call(this, declaration);
+        if ((shipped !== undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)) {
+            return shipped;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        let rebinds = 0;
+        let natives = 0;
+        const reads = (n: any): boolean => {
+            const outer = ccxtGoSafeCollectionTypeOnlyWrapper(n);
+            const parent: any = outer.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === outer) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                if (isConcat(parent.right)) {
+                    rebinds++;
+                    return true;
+                }
+                return false;
+            }
+            if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== outer) && isConcat(parent)) {
+                return true; // handed to arrayConcat: a nil slice concatenates like the empty default
+            }
+            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === outer) && (parent.name?.text === 'length'))
+                || ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === outer))) {
+                if (!ccxtGoSafeCollectionUseReads(this, outer, 'list', true)) {
+                    return false;
+                }
+                natives++;
+                return true;
+            }
+            return ccxtGoSafeCollectionUseReads(this, outer, 'list', true);
+        };
+        const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, reads,
+            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
+        if ((typed === undefined) || (rebinds === 0) || (natives === 0)) {
+            return undefined;
+        }
+        if (!ccxtGoListElementReadsAreBare(this, scope, declaration)) {
+            return undefined;
+        }
+        return typed;
+    };
+}
+// an element read of a typed list local prints `xs[i]` bare (no DerefScalar) only when the checker proves the
+// local's elements are objects; true when the local has no element read at all
+function ccxtGoListElementReadsAreBare (goTranspiler, scope, declaration) {
+    const elementRead = goTranspiler.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression)
+        && (ccxtGoUnwrapTypeOnly(n.expression)?.kind === SyntaxKind.Identifier) && (ccxtGoUnwrapTypeOnly(n.expression).text === declaration.name.text));
+    if (!elementRead) {
+        return true;
+    }
+    const checker: any = goTranspiler.checkerOrUndefined();
+    try {
+        const type: any = checker?.getTypeAtLocation(declaration.name);
+        const element: any = ((type !== undefined) && checker.isArrayType(type)) ? checker.getIndexTypeOfType(type, IndexKind.Number) : undefined;
+        const parts: any[] = (element === undefined) ? [] : (((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element]);
+        return (parts.length > 0) && parts.every((p: any) => (p.flags & TypeFlags.Object) !== 0);
+    } catch (e) {
+        return false;
+    }
+}
+function ccxtGoUnwrapTypeOnly (node) {
+    let current = node;
+    while ((current?.kind === SyntaxKind.ParenthesizedExpression) || (current?.kind === SyntaxKind.AsExpression) || (current?.kind === SyntaxKind.NonNullExpression)) {
+        current = current.expression;
+    }
+    return current;
+}
+// D. `this.isEmpty (xs)` on a list local: BaseExchange.IsEmpty answers true for the nil box, a nil []any and an
+// empty []any alike (reflect length 0), so the typed slice gives the same answer as the box, defaulted or not.
+{
+    const listReads = GoTranspiler.prototype.goSafeListUseReadsTheList;
+    GoTranspiler.prototype.goSafeListUseReadsTheList = function (node) {
+        if (listReads.call(this, node)) {
+            return true;
+        }
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)) {
+            return false; // only a safeList-seeded local: another producer would need a conversion at the declaration
+        }
+        const outer = ccxtGoSafeCollectionTypeOnlyWrapper(node);
+        const call: any = outer.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === outer)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (call.expression.name?.text === 'isEmpty');
+    };
+}
+// E. `const xs = this.safeList (c, k)` (no default) read as a list (length, element, accessor index, isEmpty) and
+// compared with undefined: SafeListTyped answers nil exactly where the box held the untyped nil, and the typed
+// local's `xs == nil` is the native slice test with that same answer. Every other use keeps the box, and at least
+// one native read (length / element) is required.
+{
+    const listUnbox = GoTranspiler.prototype.goSafeListLocalUnbox;
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        const shipped = listUnbox.call(this, declaration);
+        if ((shipped !== undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)
+            || (declaration.initializer.arguments.length !== 2)) {
+            return shipped;
+        }
+        let natives = 0;
+        const reads = (n: any): boolean => {
+            const outer = ccxtGoSafeCollectionTypeOnlyWrapper(n);
+            const parent: any = outer.parent;
+            if (this.goIsNilComparisonOperand(outer, parent)) {
+                return true;
+            }
+            if (!this.goSafeListUseReadsTheList(n)) {
+                return false;
+            }
+            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name?.text === 'length')) || (parent?.kind === SyntaxKind.ElementAccessExpression)) {
+                natives++;
+            }
+            return true;
+        };
+        const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, reads,
+            (n: any) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n)));
+        // the base class's element reads carry no JSON-origin proof and print DerefScalar on a typed slice: keep its box
+        const baseTree = /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
+        if ((typed === undefined) || (natives === 0) || baseTree) {
+            return undefined;
+        }
+        return typed;
+    };
+}

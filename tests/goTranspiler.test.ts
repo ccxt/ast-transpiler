@@ -14538,3 +14538,67 @@ describe ('84g1 nil-declared *string handed to an optional slot', () => {
         expect(out).not.toContain('var s *string = nil');
     });
 });
+
+describe ('ral-84g2 reader-result locals', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type List = any[];\n' +
+        'type Bool = boolean | undefined;\n' +
+        'export class Exchange {\n' +
+        '    options: Dict;\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n' +
+        '    handleOption (m: string, o: string, d: any = undefined) { return d; }\n';
+    const run = (members: string, dir: string, name = 'x.ts'): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'r84g2-'));
+        try {
+            const src = path.join(tmp, dir);
+            fs.mkdirSync(src, { recursive: true });
+            const file = path.join(src, name);
+            fs.writeFileSync(file, PRELUDE + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('A: a list local read only through `(x as List).length` is a []any with a native len', () => {
+        const body = '    f (raw: Dict): any {\n        const xs = this.safeList (raw, "data", []);\n        const n = (xs as List).length;\n        return n;\n    }\n';
+        const out = run(body, 'ts/src');
+        expect(out).toContain('var xs []any = SafeListTyped(raw, "data")');
+        expect(out).toContain('len(xs)');
+        // a member call through the wrapper still keeps the box
+        const join = body.replace('(xs as List).length', '(xs as List).join (",")');
+        expect(run(join, 'ts/src')).not.toContain('var xs []any');
+    });
+    test('B: a Bool-annotated handleOption local read only against true is a Go bool', () => {
+        const body = '    f (): any {\n        const snap: Bool = this.handleOption ("watchX", "snap", true);\n        if (snap === true) {\n            return 1;\n        }\n        return 0;\n    }\n';
+        expect(run(body, 'ts/src/pro')).toContain('var snap bool = this.HandleOption("watchX", "snap", true) == true');
+        // any other read, or another annotation, keeps the box
+        expect(run(body.replace('snap === true', 'snap === 3'), 'ts/src/pro')).not.toContain('var snap bool');
+        expect(run(body.replace(': Bool', ': number'), 'ts/src/pro')).not.toContain('var snap bool');
+    });
+    test('C: a list local rebound only through arrayConcat and read natively is a []any', () => {
+        const pre = '    arrayConcat (a: any, b: any): any[] { return a; }\n';
+        const body = pre + '    f (raw: Dict, more: Dict[]): any {\n        let xs: Dict[] = this.safeList (raw, "list", []);\n        xs = this.arrayConcat (more, xs);\n        let n = 0;\n        for (let i = 0; i < xs.length; i++) {\n            n = n + 1;\n        }\n        return n;\n    }\n';
+        const out = run(body, 'ts/src');
+        expect(out).toContain('var xs []any = SafeListTyped(raw, "list")');
+        expect(out).toContain('len(xs)');
+        // a nil test sees the dropped default: keep the box
+        expect(run(body.replace('return n;', 'return (xs === undefined) ? 0 : n;'), 'ts/src')).not.toContain('var xs []any');
+        // another rebinding keeps the box
+        expect(run(body.replace('this.arrayConcat (more, xs)', 'more'), 'ts/src')).not.toContain('var xs []any');
+    });
+    test('D/E: a no-default list local nil-tested, isEmpty-tested and read natively is a []any', () => {
+        const pre = '    isEmpty (a: any): boolean { return true; }\n';
+        const body = pre + '    f (raw: Dict): any {\n        const xs: Dict[] = this.safeList (raw, "fees");\n        let n = 0;\n        if ((xs !== undefined) && !this.isEmpty (xs)) {\n            for (let i = 0; i < xs.length; i++) {\n                n = n + 1;\n            }\n        }\n        return n;\n    }\n';
+        const out = run(body, 'ts/src/pro');
+        expect(out).toContain('var xs []any = SafeListTyped(raw, "fees")');
+        expect(out).toContain('xs != nil');
+        expect(out).toContain('len(xs)');
+        // without a native read the local keeps the box
+        expect(run(body.replace('xs.length', '3'), 'ts/src/pro')).not.toContain('var xs []any');
+        // a copy out keeps the box
+        expect(run(body.replace('return n;', 'const ys = xs;\n        return [ n, ys ];'), 'ts/src/pro')).not.toContain('var xs []any');
+    });
+});
