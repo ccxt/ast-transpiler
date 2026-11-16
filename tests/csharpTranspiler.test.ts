@@ -8292,3 +8292,15 @@ describe('ral-77c1 dict params bag on parent-printed overrides', () => {
         expect((output.match(/cancelOrders\([^)]*IDictionary<string, object> parameters = null\)/g) || []).length).toBe(2);
     });
 });
+
+describe('ral-84c8 guarded concat over a build-typed string? local', () => {
+    test('a read the hook names prints the null-guarded concatenation instead of add()', () => {
+        const t = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const csharp = t.csharpTranspiler;
+        csharp.csharpGuardedStringConcatLocal = (identifier) => identifier.text === 'head';
+        const input = 'function f (a, b) {\n    const head = a;\n    const other = b;\n    return [ head + \'/\' + b, other + \'/\' + b ];\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('((object)(head == null ? null : head + "/" + (string)(object)(b)))');
+        expect(output).toContain('add(add(other, "/"), b)');
+    });
+});
