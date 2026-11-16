@@ -2988,6 +2988,9 @@ export class RustTranspiler extends BaseTranspiler {
         // ta: a read inside a `&&` / `||` / `!` chain the printer already prints as a Rust `bool` (a `let x: bool`
         // initializer, a boxed logical): `(x == Some(true))` is the truthiness `x.as_bool() == Some(true)` gave, None -> false
         if (kind === 'bool' && this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n)) return 'cond';
+        // ral-67a: a string nil local as a lent `Precise.<op>` operand passes as is (`&impl PreciseArg`: `&Option<String>`
+        // reads `None` as the `Null` box and `Some(s)` as its `Str`): no box, no copy
+        if (kind === 'str' && this.rustPreciseLentOperand(n)) return 'lend';
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             return this.rustNilBoxCallOk(parent, parent.arguments.indexOf(n)) ? 'box' : undefined;
         }
@@ -3075,6 +3078,7 @@ export class RustTranspiler extends BaseTranspiler {
         const local = this.rustNilLocalOfIdentifier(node);
         const form = local === undefined ? undefined : this.rustNilReadForm(node, local.kind);
         if (form === 'cond') return `(${super.printIdentifier(node)} == Some(true))`;
+        if (form === 'lend') return super.printIdentifier(node);
         if (form !== 'box') return undefined;
         const name = super.printIdentifier(node);
         if (local.kind === 'str' && (local.declaration.parent.flags & NodeFlags.Const) !== 0) return `Value::from(${name}.as_deref())`;
@@ -3086,7 +3090,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // An empty local the literal rule above rejects can still join the scalar rule: its writes
     // are exact scalar sources, every use is a scalar use form, and at least one use is native.
-    private static readonly RUST_NIL_SCALAR_NATIVE_FORMS = new Set([ 'test', 'cond', 'concat', 'native', 'targ' ]);
+    private static readonly RUST_NIL_SCALAR_NATIVE_FORMS = new Set([ 'test', 'cond', 'concat', 'native', 'targ', 'parg' ]);
 
     /** `ostr|oint|onum` for an empty local the scalar rule types, else undefined. */
     rustNilScalarKind(declaration): string | undefined {
@@ -3312,7 +3316,8 @@ export class RustTranspiler extends BaseTranspiler {
             // za: a same-spelled property name (`this.nonce ()`, `this.symbol (..)`) is not a use of the local
             if (this.rustIdentifierIsPropertyName(n) && n.parent?.kind !== SyntaxKind.ShorthandPropertyAssignment) return true;
             const form = this.rustScalarUseForms.get(n);
-            if (form === 'slot' || form === 'test') return true;
+            // ral-67a: a lent Precise operand (`&x`) reads in place: no copy, no move
+            if (form === 'slot' || form === 'test' || form === 'parg') return true;
             const parent: any = n.parent;
             if (isBinaryExpression(parent) && parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
                 const rhs: any = this.unwrapParens(parent.right);
@@ -6025,8 +6030,31 @@ export class RustTranspiler extends BaseTranspiler {
     /** vd: only a local declared with a value (nil-declared locals keep their own box rules). */
     rustPreciseLendLocal(n): boolean {
         const declaration: any = this.rustDeclaredNode(n);
-        return declaration !== undefined && isVariableDeclaration(declaration) && declaration.initializer !== undefined
-            && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null';
+        if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+        if (declaration.initializer !== undefined && this.literalKindOfNode(this.unwrapParens(declaration.initializer)) !== 'null') return true;
+        return this.rust67aNilStrLend(declaration);
+    }
+
+    /** ral-67a: a `let x: Str = undefined` local (declared string type, no value) lends at a Precise operand too: the
+     *  runtime takes `&impl PreciseArg`, and `&Option<String>` reads `None` as the `Null` box and `Some(s)` as its `Str`. */
+    rust67aNilStrLend(declaration: any): boolean {
+        if (declaration.type === undefined || !isIdentifier(declaration.name)) return false;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) !== 0 || list.declarations.length !== 1) return false;
+        if (this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) === 'string') return true;
+        // the declared type node itself: `string`, `string | undefined` or the base alias `Str` (a checker that answers `any`)
+        return this.rust67aStrTypeNode(declaration.type);
+    }
+
+    /** ral-67a: `string` / `Str` / a union of those with `undefined`, read from the type node. */
+    rust67aStrTypeNode(type: any): boolean {
+        if (type === undefined) return false;
+        if (type.kind === SyntaxKind.StringKeyword) return true;
+        if (type.kind === SyntaxKind.TypeReference) return isIdentifier(type.typeName) && String(type.typeName.text) === 'Str' && (type.typeArguments?.length ?? 0) === 0;
+        if (type.kind !== SyntaxKind.UnionType) return false;
+        const parts: any[] = Array.from(type.types ?? []);
+        const isUndefined = (p: any) => p.kind === SyntaxKind.UndefinedKeyword || (p.kind === SyntaxKind.LiteralType && p.literal?.kind === SyntaxKind.UndefinedKeyword);
+        return parts.some((p) => !isUndefined(p)) && parts.every((p) => isUndefined(p) || this.rust67aStrTypeNode(p));
     }
 
     /** vd: `n` is a direct string operand (one of the first two, the third of `stringDiv` is the precision) of a lent

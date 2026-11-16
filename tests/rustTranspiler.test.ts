@@ -22757,3 +22757,41 @@ describe('ral-67c: declared-empty NullableDict sign headers', () => {
         expect(nonLiteral).toContain('let mut requestHeaders: Value = Value::Null;');
     });
 });
+
+describe('ral-67a: a declared-empty string local read only as Precise operands is Option<String>, lent as `&x`', () => {
+    const cls = (decl: string) => `type Str = string | undefined;
+class Precise {
+    static stringAdd(a: Str, b: Str) { if (a === undefined || b === undefined) { return undefined; } return a + b; }
+    static stringMul(a: Str, b: Str) { if (a === undefined || b === undefined) { return undefined; } return a + b; }
+}
+class A {
+    safeString(o: any, k: any, d: Str = undefined): Str { return undefined as any; }
+    parseNumber(x: any): any { return x; }
+    hold(x: any): any { return x; }
+    run(position: any, long: boolean) {
+        const rate = this.safeString(position, 'r');
+        const size = this.safeString(position, 's');
+        ${decl}
+        if (long) {
+            onePlus = Precise.stringAdd('1', rate);
+        } else {
+            onePlus = Precise.stringAdd('-1', rate);
+        }
+        const left = Precise.stringMul(size, onePlus);
+        const right = Precise.stringMul(rate, onePlus);
+        return this.hold([ this.parseNumber(left), this.parseNumber(right) ]);
+    }
+}`;
+    test('aster / binance parseAccountPosition `onePlusMaintenanceMarginPercentageString`: typed, written from the Precise result, lent at both operands', () => {
+        const out = transpiler.transpileRust(cls('let onePlus: Str = undefined;')).content;
+        expect(out).toContain('let mut onePlus: Option<String> = None;');
+        expect(out).toMatch(/onePlus = crate::precise::Precise::stringAdd\([^;]*\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toContain('crate::precise::Precise::stringMul(&size, &onePlus)');
+        expect(out).toContain('crate::precise::Precise::stringMul(&rate, &onePlus)');
+        expect(out).not.toContain('onePlus: Value');
+    });
+    test('negative: an `any`-declared empty local keeps its Value box', () => {
+        const out = transpiler.transpileRust(cls('let onePlus: any = undefined;')).content;
+        expect(out).toContain('let mut onePlus: Value = Value::Null;');
+    });
+});
