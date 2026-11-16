@@ -24055,3 +24055,46 @@ describe('ral-80d: a safeValue result tested with Array.isArray splits into its 
         expect(out).toMatch(/let (?:mut )?data: Value = /);
     });
 });
+
+describe('ral-80f: awaited venue results declared TransferEntry[] / PredictionOrder / Market[]', () => {
+    const write = (dir: string, files: Record<string, string>) => {
+        for (const [ rel, text ] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.writeFileSync (path.join (dir, rel), text);
+        }
+    };
+    const base = 'export interface Dict { [key: string]: any }\n'
+        + 'export interface TransferEntry { id: string; [key: string]: any }\n'
+        + 'export interface PredictionOrder { id: string; [key: string]: any }\n'
+        + 'export interface MarketInterface { id: string; [key: string]: any }\n'
+        + 'export type Market = MarketInterface | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    options: Dict = {};\n'
+        + '    safeDict (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n'
+        + '    hold (x: any): any { return x; }\n'
+        + '}\n';
+    const run = (key: string, decl: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, 'ral-80f-' + key);
+        write (dir, { 'ts/src/base/Exchange.ts': base, 'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\n"
+            + "import type { Dict, TransferEntry, PredictionOrder, Market } from './base/Exchange.js';\n"
+            + 'export default class venue extends Exchange {\n' + decl
+            + '    async run (p: Dict = {}): Promise<any> {\n' + use + '    }\n}\n' });
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('TransferEntry[]: an awaited result read by index is a shared list', () => {
+        const out = run ('transfers', '    async transfersOf (m: string): Promise<TransferEntry[]> {\n        return this.hold (m);\n    }\n',
+            "        const transfers = await this.transfersOf ('x');\n        return this.safeDict (transfers, 0);\n");
+        expect(out).toMatch(/let mut transfers: crate::value::List = self\.transfersOf\("x"\)\.await\.into_list\(\);/);
+    });
+    test('PredictionOrder: an awaited result read by key is a shared map', () => {
+        const out = run ('porder', '    async placeOne (m: string): Promise<PredictionOrder> {\n        return this.hold (m);\n    }\n',
+            "        const placed = await this.placeOne ('x');\n        return this.safeDict (placed, 'info');\n");
+        expect(out).toMatch(/let mut placed: crate::value::Dict = self\.placeOne\("x"\)\.await\.into_dict\(\);/);
+    });
+    test('Market[] is a list, a bare Market (MarketInterface | undefined) is not a map', () => {
+        const out = run ('markets', '    async swaps (m: string): Promise<Market[]> {\n        return this.hold (m);\n    }\n    async oneMarket (m: string): Promise<Market> {\n        return this.hold (m);\n    }\n',
+            "        const markets = await this.swaps ('x');\n        const one = await this.oneMarket ('y');\n        return this.hold ([ this.safeDict (markets, 0), this.safeDict (one, 'info') ]);\n");
+        expect(out).toMatch(/let mut markets: crate::value::List = self\.swaps\("x"\)\.await\.into_list\(\);/);
+        expect(out).toMatch(/let mut one: Value = self\.oneMarket\("y"\)\.await;/);
+    });
+});

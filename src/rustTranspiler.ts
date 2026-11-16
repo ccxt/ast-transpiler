@@ -26606,7 +26606,12 @@ export class RustTranspiler extends BaseTranspiler {
         'Ticker', 'Tickers', 'Order', 'Trade', 'OrderBook', 'Position', 'Balances', 'Transaction', 'Transfer', 'FundingRate', 'FundingRates',
         'Leverage', 'Leverages', 'MarginMode', 'MarginModes', 'MarginModification', 'OpenInterest', 'TradingFeeInterface', 'TradingFees',
         'DepositAddress', 'LedgerEntry', 'OHLCV', 'Liquidation', 'FundingHistory', 'FundingRateHistory', 'Greeks', 'Currencies',
+        // ral-80f: the transfer and prediction-order records (maps at runtime, like the unified ones above)
+        'TransferEntry', 'PredictionOrder',
     ]);
+
+    /** ral-80f: element records that only name a list (`Market` itself is `MarketInterface | undefined`, so never a bare map). */
+    private static readonly RUST_VENUE_LIST_ELEMENT_NAMES: Set<string> = new Set([ 'Market', 'MarketInterface' ]);
 
     rustVenueContainerReturnKind(call: any): { kind: 'dict' | 'list', nullable: boolean } | undefined {
         const callee: any = call?.expression;
@@ -26648,7 +26653,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner === 'List' || inner === 'Dict[]' || inner === 'any[]') return { kind: 'list', nullable: false };
         if (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(inner)) return { kind: 'dict', nullable: false };
         const elem = /^(\w+)\[\]$/.exec(inner);
-        if (elem !== null && RustTranspiler.RUST_VENUE_RECORD_NAMES.has(elem[1])) return { kind: 'list', nullable: false };
+        if (elem !== null && (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(elem[1]) || RustTranspiler.RUST_VENUE_LIST_ELEMENT_NAMES.has(elem[1]))) return { kind: 'list', nullable: false };
         // ral-43g: a tuple return `[A, B, ..]` whose every return statement is an array literal of that arity: the body
         // builds `Value::from(vec![..])` on every path, so the result is a list (never Null)
         if (/^\[[^[\]]+\]$/.test(inner) && this.rustTupleLiteralReturns(declaration, inner.slice(1, -1).split(',').length)) return { kind: 'list', nullable: false };
