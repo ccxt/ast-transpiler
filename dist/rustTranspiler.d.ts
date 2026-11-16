@@ -1255,6 +1255,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOwnedLastUse(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
     rustWsSettleCall(call: any): boolean;
+    /** ral-73c E1: `const e = new XError (msg)` (a ccxt error class the printer routes to `crate::exchange_errors::<x>(msg)`,
+     *  which returns `ExchangeError`) in a non-test function, never written, whose every use is the settled value of a ws
+     *  `client.reject (e, ..)` (rustWsSettleCall: `err: impl Into<Value>`, the same `From<ExchangeError>` box the `Value`
+     *  local took at its declaration). Decided from the AST and the checker's symbols. */
+    rust73cRejectOnlyError(declaration: any): boolean;
+    /** The class-name shape `printNewExpression` routes to the runtime error constructors. */
+    private static readonly RUST_ERROR_CLASS_NAME;
     /** `client.future|reusableFuture(hash)` on a ws handle: the hand-written method takes `hash: impl Into<Value>`. */
     rustWsFlightCall(call: any): boolean;
     /** `this.watch(url, hash, message, subscribeHash, ..)` / `this.watchMultiple(url, ..)`: url and hashes are `impl Into<Option<&str>>`. */
@@ -2785,6 +2792,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  argument shape keeps the helper call the ccxt post-pass rewrites. */
     /** ral-41a: `parseInt (x as string)` whose one argument is the cast `top` of an `Option<String>` local. */
     rustParseIntOfOptStr(call: any, top: any): boolean;
+    /** ral-73h: `str` / `ostr` when `arg` is a bare identifier of a typed string local (the one argument of `parseInt` / `parseFloat`). */
+    rust73hParseStrLocalKind(arg: any): string | undefined;
+    /** ral-73h: `n` is the sole bare argument of a global `parseInt` / `parseFloat` call. */
+    rust73hParseArgUse(n: any): boolean;
     printNativeParseCall(node: CallExpression): string | undefined;
     isNodeInsideNode(node: Node, container: Node): boolean;
     /** Root place of an access chain (`x` for `x['a']['b']`, `this.balance` for
@@ -3069,6 +3080,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of a ws `client.resolve|reject|send (m, ..)`: each takes the boxed `Value` by value, so the map's last
      *  use moves into `Value::Map(m)`, exactly the shared map the boxed local handed over. */
     rustLiteralMoveSlot(n: any): boolean;
+    /** ral-73a: `y = x` (statement), y another plain `let` of the same function declared `undefined` (no initializer value) and
+     *  annotated `NullableDict` / `Dict`: x moves whole into y's `Option<Dict>` / `Value` box (`Value::Map(x)`, the box the helper
+     *  form made at the write; no copy) at x's last use. */
+    rust73aNilDictAliasWrite(n: any): boolean;
+    /** ral-73a: `this.f = x` (statement, a direct property of `this`, outside the test tier): the field is a `Value` slot that
+     *  stores the reference, so a native map moves into it whole as `Value::Map(x)` at x's last use. */
+    rust73aThisFieldStore(n: any): boolean;
     /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
     rustWsSettleMove(n: any): boolean;
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
@@ -3346,6 +3364,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `KeyRead::read` on the held map / list is the arm `get_value` dispatches to for every key kind). */
     rustValueKeyType(key: any): boolean;
     rustBorrowedIndexReadUse(n: any): boolean;
+    /** ral-73e A: `x[k]` (x the held container local `n`) is a plain one-link read: not the head of a chain (whose outer links
+     *  keep their own printed forms) and outside the test tier. */
+    rust73eStrKeyRead(n: any): boolean;
     private rustExtendReuseLocals;
     /** A plain map literal (outside the test tier): every `x = ..` write must be `x = this.extend (x, y)`; the
      *  existing borrowed-dict use rules decide the rest. The `IndexMap` bearer rule claims its locals first. */
@@ -3504,6 +3525,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBuiltKeyWriteLineOk(n: any, extra?: number): boolean;
     rustNullTestedDictLocal(init: any, nullTests: number, writes: number): boolean;
     rustDictElementSource(init: any): boolean;
+    /** ral-73d: an object interface declared only in the base `ts/src/base/types.ts` (a unified record such as `Trade`,
+     *  `Position`, `Account`, `PredictionPosition`): no call signature, no array, no union. */
+    rust73dBaseRecordType(type: any): boolean;
     /** te: `this.urls['<lit>']` where the base `Exchange` declaration types that entry as a string-keyed map
      *  (`urls!: { api: Dict, .. }`). The read leaves its box as the shared map (the same Arc bump the copy paid);
      *  a missing or non-map entry reads Null at every string key, exactly as the empty map `into_dict()` leaves. */
@@ -3760,6 +3784,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  ral-qa use rule), a non-map row (Null, list, scalar, out of range) reads Null there exactly as the empty map `into_dict()`
      *  leaves; the local owns its map (an Arc bump of the row), so nothing borrows the list while it lives. */
     rustListRowKeyReadSource(init: any): boolean;
+    /** ral-73d: `this.<f>[i]` (a numeric index) where `f` is a field declared only in the base tier as a list of a unified
+     *  record (`accounts!: Account[]`): the row a counter loop binds; read only at literal string keys (ral-42g's use rule). */
+    rust73dBaseRecordFieldRow(init: any): boolean;
     /** `this.safeX (o, '<k>'[, d])`: a base by-reference reader whose container is `o`, at a literal non-index string key. */
     rustSafeValueKeyReaderUse(n: any): boolean;
     private rustVenueContainerDecisions;
@@ -4194,6 +4221,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsSubscriptionWriteValue(n: any): boolean;
     private rustBuiltLists;
     rustBuiltListLocal(declaration: any): boolean;
+    /** ral-73a: `this.f[..] = x` / `m[k] = x` (m another local or parameter, k a literal or a plain identifier other than x) at
+     *  x's last use, or at its last use on its path (rustGuardedBranchLastUse: every later use sits in the else branch of the
+     *  nearest if whose then-branch holds the store). */
+    rust73aStoreLastUse(place: any, n: any, declaration: any): boolean;
     /** ral-56s: a base `this.arrayConcat (a, b)` (two operands, non-test tier): always a `Value::Arr`. */
     rustBuiltListConcatInit(init: any): boolean;
     /** ral-56s: `t = x` (statement) where `t` is a nil-declared (`let t: T = undefined` / `let t;`) local of the same function
