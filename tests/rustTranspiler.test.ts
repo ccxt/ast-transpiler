@@ -23388,3 +23388,25 @@ describe('ral-73g: a params alias lent to a lent-params slot holds the map', () 
         expect(out).toContain('let mut y: Value =');
     });
 });
+
+describe('ral-73f: safe reader locals whose one vetoing use had no native form', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    numberToString (x: any): string { return x; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('R1: `-x` over a safeNumber local is the Option<f64> negation (pro bitfinex aski1)', () => {
+        const out = write ('ral-73f-neg', "    checksum (ask: Dict) {\n        const aski1 = this.safeNumber (ask, 1);\n        if (aski1 !== undefined) {\n            return this.numberToString (-aski1);\n        }\n        return undefined;\n    }\n");
+        expect(out).toContain('let mut aski1: Option<f64> = ');
+        expect(out).toContain('Value::from((if let Some(__v) = aski1 { Some(-__v) } else { None }))');
+        expect(out).not.toContain('let mut aski1: Value');
+    });
+    test('R1 negative: `-x` of a safeNumber local that also keys an untyped element read keeps the Value form', () => {
+        const out = write ('ral-73f-neg-neg', "    checksum (ask: any) {\n        const aski1 = this.safeNumber (ask, 1);\n        const p = ask[aski1];\n        return [ -aski1, p ];\n    }\n");
+        expect(out).toMatch(/let mut aski1: Value = /);
+    });
+});

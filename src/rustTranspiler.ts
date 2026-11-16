@@ -3235,7 +3235,8 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || !isPrefixUnaryExpression(inner) || inner.operator !== SyntaxKind.MinusToken || !isIdentifier(inner.operand)) return undefined;
         const kind = this.rustScalarLocalOf(inner.operand)?.kind;
-        return kind === 'int' || kind === 'oint' ? { kind, name: super.printIdentifier(inner.operand) } : undefined;
+        // ral-73f R1: also an `f64` / `Option<f64>` number local (`Float(-x)`, `Null` stays `Null`: the match on its box)
+        return kind === 'int' || kind === 'oint' || kind === 'num' || kind === 'onum' ? { kind, name: super.printIdentifier(inner.operand) } : undefined;
     }
 
     /** ral-65p: `n` is x's own operand of the `Math.min|max (x, y)` arm of a `x = (x === undefined) ? y : Math.min|max (x, y)`
@@ -8389,7 +8390,7 @@ export class RustTranspiler extends BaseTranspiler {
         // kind reads x's decision, which the solver is deciding right now; the write proves both operands `Option<i64>`
         if (kind === 'oint' && this.rust65pSelfMinOperand(n)) return 'native';
         // ral-65p: the operand of `-x` (rust65pNegatedIntLocal prints the negation itself, natively or boxed)
-        if ((kind === 'int' || kind === 'oint') && n.parent?.kind === SyntaxKind.PrefixUnaryExpression && this.rust65pNegatedIntLocal(n.parent) !== undefined) return 'native';
+        if ((kind === 'int' || kind === 'oint' || kind === 'num' || kind === 'onum') && n.parent?.kind === SyntaxKind.PrefixUnaryExpression && this.rust65pNegatedIntLocal(n.parent) !== undefined) return 'native';
         // qb: a numeric local as an operand of `Math.min|max` over a `Value` operand boxes once (`&Value::from(x)`:
         // the Int / Float / Null the `Value` local held; `Copy`, so no clone)
         if ((kind === 'int' || kind === 'num' || kind === 'oint' || kind === 'onum') && this.rustMathMinMaxValueOperand(n) && this.rustInlineIfMatchInit(this.rustDeclaredNode(n))) return 'box';
@@ -12026,7 +12027,7 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = kind.startsWith('o');
         const wrap = (t: string) => own === kind ? t : (optional && own === kind.slice(1) ? `Some(${t})` : undefined);
         const negated = this.rust65pNegatedIntLocal(node);
-        if (negated !== undefined) return wrap(negated.kind === 'int' ? `(-${negated.name})` : `(if let Some(__v) = ${negated.name} { Some(-__v) } else { None })`);
+        if (negated !== undefined) return wrap(negated.kind === 'int' || negated.kind === 'num' ? `(-${negated.name})` : `(if let Some(__v) = ${negated.name} { Some(-__v) } else { None })`);
         // 51k: `a % b` with a typed non-literal divisor: the `i64` remainder (truncating like `mod_val` on Int), `None` for a zero / `None` side
         if (this.rust51kLitModKind(node) !== undefined) {
             if (own !== kind) return undefined;
@@ -19954,7 +19955,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (operator !== SyntaxKind.MinusToken) return idn + this.PrefixFixOperators[operator] + this.printNode(operand, 0);
         // ral-65p: a typed integer local boxes its negation (the `Int(-x)` / `Null` the match on its box answered)
         const negated = this.rust65pNegatedIntLocal(node);
-        if (negated !== undefined) return idn + (negated.kind === 'int' ? `Value::Int(-${negated.name})` : `Value::from((if let Some(__v) = ${negated.name} { Some(-__v) } else { None }))`);
+        if (negated !== undefined) return idn + (negated.kind === 'int' ? `Value::Int(-${negated.name})` : (negated.kind === 'num' ? `Value::Float(-${negated.name})` : `Value::from((if let Some(__v) = ${negated.name} { Some(-__v) } else { None }))`));
         const operandText = this.printNode(operand, 0);
         return idn + (this.foldNegateLiteral(operandText) ?? this.printRustNativeNegate(operand, operandText) ?? `negate(&${operandText})`);
     }
