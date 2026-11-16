@@ -23455,3 +23455,24 @@ describe('ral-73b R1: a nil-declared string local written from a typed market / 
         expect(out).not.toContain(': Value = Value::Null;');
     });
 });
+
+describe('ral-73e: safeDict results read at a typed string key', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('A gemini parseMarket conflictingMarkets: `m[k]` with a typed Option<String> key reads the held map', () => {
+        const out = write ('ral-73e-a', "    m (market: Dict) {\n        const conflicting = this.safeDict (this.options, 'conflictingMarkets', {});\n        const id = this.safeString (market, 'id');\n        if (id in conflicting) {\n            const row = conflicting[id];\n            return this.keep (row);\n        }\n        return undefined;\n    }\n");
+        expect(out).toMatch(/let (?:mut )?conflicting: crate::value::Dict = /);
+        expect(out).toContain('crate::value::KeyRead::read(&&conflicting, &Value::from(id.as_deref()))');
+    });
+    test('A negative: a key that is no typed local (an inline reader call) keeps the local Value', () => {
+        const out = write ('ral-73e-a-neg', "    m (market: Dict) {\n        const conflicting = this.safeDict (this.options, 'conflictingMarkets', {});\n        const id = this.safeString (market, 'id');\n        if (id in conflicting) {\n            return this.keep (conflicting[this.safeString (market, 'id')]);\n        }\n        return undefined;\n    }\n");
+        expect(out).toMatch(/let (?:mut )?conflicting: Value = /);
+    });
+});

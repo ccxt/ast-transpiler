@@ -23399,8 +23399,18 @@ export class RustTranspiler extends BaseTranspiler {
         const keyScalar = this.rustScalarLocalOf(key);
         // ral-62n: a typed string key re-boxes at the read as the very `Str` / `Null` its Value local held (`Value::from`)
         if (keyScalar !== undefined && (keyScalar.kind === 'str' || keyScalar.kind === 'ostr') && keyDecl.initializer !== undefined && this.rustOwnKeysElementKey(n, key)) return true;
+        // ral-73e A: a typed string key re-boxes at the read as the `Str` / `Null` its Value local held (`Value::from(k.as_deref())`):
+        // `KeyRead::read` on the held map / list is the arm `get_value` took for that boxed key
+        if (keyScalar !== undefined && (keyScalar.kind === 'str' || keyScalar.kind === 'ostr') && this.rust73eStrKeyRead(n)) return true;
         return keyScalar === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
+    }
+
+    /** ral-73e A: `x[k]` (x the held container local `n`) is a plain one-link read: not the head of a chain (whose outer links
+     *  keep their own printed forms) and outside the test tier. */
+    rust73eStrKeyRead(n: any): boolean {
+        const up: any = n.parent;
+        return !this.rustTestTierSource(n) && !(isElementAccessExpression(up.parent) && up.parent.expression === up);
     }
 
     // ── ral-oc: map literals rebuilt by `x = this.extend (x, y)` (rustExtendReuseLiteral / printExtendReuseWrite) ──
