@@ -5099,7 +5099,7 @@ describe('ws cache class parameters', () => {
     test('a configured params bag prints Dictionary<string, object>', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'dictParamsMethods': [ 'FetchMyBuys' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const output = t.transpileCSharp('class Test {\n    fetchMyBuys (symbol, params = {}) {\n        return params;\n    }\n    other (params = {}) {\n        return params;\n    }\n}').content;
-        expect(output).toContain('fetchMyBuys(object symbol, Dictionary<string, object> parameters = null)');
+        expect(output).toContain('fetchMyBuys(object symbol, IDictionary<string, object> parameters = null)');
         expect(output).toContain('other(object parameters = null)');
     });
     test('configured core argument types print on the signature, a written one reads an object shadow', () => {
@@ -8280,5 +8280,15 @@ describe('csharp ws cache-map entry locals', () => {
         expect(output).toMatch(/ccxt\.pro\.ArrayCache cache = \(\(ccxt\.pro\.ArrayCache\)/);
         expect(output).toMatch(/ccxt\.pro\.ArrayCache other = \(\(ccxt\.pro\.ArrayCache\)this\.safeValue\(this\.positionsByType, type\)\)/);
         expect(output).not.toMatch(/ccxt\.pro\.ArrayCache plain/);
+    });
+});
+
+describe('ral-77c1 dict params bag on parent-printed overrides', () => {
+    test('an override printed from its parent parameter list keeps the Dictionary params bag', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'dictParamsMethods': [ 'cancelOrders' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const input = 'class Base {\n    cancelOrders (ids: string[], symbol: string = undefined, params = {}) {\n        return params;\n    }\n}\nclass Venue extends Base {\n    cancelOrders (ids, symbol = undefined, params = {}) {\n        return params;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).not.toMatch(/cancelOrders\([^)]*object parameters = null\)/);
+        expect((output.match(/cancelOrders\([^)]*IDictionary<string, object> parameters = null\)/g) || []).length).toBe(2);
     });
 });

@@ -3165,8 +3165,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         let type = handlerType !== undefined ? handlerType : this.printParameterType(node);
         type = type ? type : "";
         if (defaultValue && (type === 'object') && this.csharpIsDictParamsBag(node)) {
-            this.csharpParamTypes.set(node, 'Dictionary<string, object>');
-            return 'Dictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
+            this.csharpParamTypes.set(node, 'IDictionary<string, object>');
+            return 'IDictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
         }
         this.csharpParamTypes.set(node, type); // see csharpPrintedParamType
 
@@ -3193,6 +3193,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         const camel = (method.name as any)?.text ?? '';
         const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
         return this.csharpDictParamsMethods.has(camel) || this.csharpDictParamsMethods.has(pascal);
+    }
+
+    // an override printed from its parent's parameter list (the first own parameter is untyped):
+    // a parent `params = {}` of a csharpDictParamsMethods method prints the same Dictionary as the
+    // parent's own signature, since C# overrides are invariant on parameter types
+    printParameteCustomName(node, name, defaultValue = true) {
+        if (defaultValue && this.csharpIsDictParamsBag(node) && (this.printParameterType(node) === 'object')) {
+            return 'IDictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
+        }
+        return super.printParameteCustomName(node, name, defaultValue);
     }
 
     // ==== hand-written runtime members, base fields and their views ====
