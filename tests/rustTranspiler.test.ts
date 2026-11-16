@@ -21630,3 +21630,81 @@ describe('ral-63e: a split-element key of a pure read chain on an annotated dict
         expect(out).toContain('let mut parentKey: Value = ');
     });
 });
+
+describe('ral-63n: an optional safeDict stored whole through a type assertion `m[k] = x as T` (backpack fetchTickers)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport interface Ticker { symbol: string | undefined; }\nexport type Tickers = Dict;\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-63n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Ticker, Tickers } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table. `as Ticker` prints nothing: the store takes the local's own value. The held value is Dict or Null (no default);
+    // the store boxes it back with map_or(Value::Null, Value::Dict): Null -> Null, {} -> Dict({}), {'a': 1} -> Dict({'a': 1}), the very
+    // Value the boxed local inserted; the null test is_some() equals `!= Null`. Nothing is compared as a number.
+    const rebox = (h: Record<string, any> | null) => h === null ? null : h;
+    test('truth table: the reboxed store equals the boxed one', () => {
+        for (const h of [ null, {}, { 'a': 1 } ]) { expect(rebox(h)).toEqual(h); expect(h !== null).toBe(rebox(h) !== null); }
+    });
+    const backpack = "    fetchTickers (tickers: any, syms: string[], source: string): Tickers {\n        const result: Tickers = {};\n        for (let i = 0; i < syms.length; i++) {\n            const marketSymbol = syms[i];\n            const ticker = this.safeDict (tickers, marketSymbol);\n            if ((ticker !== undefined) && (source !== 'External')) {\n                result[marketSymbol] = ticker as Ticker;\n            }\n        }\n        return result;\n    }\n";
+    test('backpack fetchTickers: ticker is Option<Dict> and the asserted store moves it', () => {
+        const out = run(backpack);
+        expect(out).toContain('let mut ticker: Option<crate::value::Dict> = ');
+        expect(out).toContain('ticker.map_or(Value::Null, Value::Dict));');
+    });
+    test('guard: an asserted value inside a larger expression is not a whole store', () => {
+        const out = run(backpack.replace('result[marketSymbol] = ticker as Ticker;', 'result[marketSymbol] = [ ticker as Ticker ];'));
+        expect(out).not.toContain('let mut ticker: Option<crate::value::Dict> = ');
+    });
+});
+
+describe('ral-63n: a no-default safeInteger local ordered against a number-typed Value (base buildOHLCVC / filterBySinceLimit shapes)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n}\n";
+    const run = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-63n-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try {
+            t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts'));
+            return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content;
+        } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    // Truth table of the new compare form `matches!(x, Some(__p) if (__p as f64) OP v.as_f64().unwrap_or(f64::NAN))` against the
+    // old `x.as_f64().unwrap_or(f64::NAN) OP v.as_f64().unwrap_or(f64::NAN)`. x is a no-default safeInteger: Int or Null (never Float,
+    // never Str). The other side v is a number-typed Value: Null, Int, Float, or (unchecked at runtime) Str.
+    //   Null on x: old NaN OP _ = false; new None = false.  Null on v: both NaN on the right = false (Some(p) and NaN is false).
+    //   Int x vs Int / Float v: both compare (p as f64) with v's f64 payload: same answer (5 < 5.5 true, 5 < 5 false, 6 < 5.5 false).
+    //   Int x vs Str v: Value::as_f64 of a Str is None on both forms (NaN), so false on both: no string-to-number coercion either way.
+    type V = { t: 'Null' } | { t: 'Int', v: number } | { t: 'Float', v: number } | { t: 'Str', v: string };
+    const asF64 = (x: V) => x.t === 'Int' || x.t === 'Float' ? x.v : NaN;
+    const ops: Record<string, (a: number, b: number) => boolean> = { '<': (a, b) => a < b, '<=': (a, b) => a <= b, '>': (a, b) => a > b, '>=': (a, b) => a >= b };
+    const oldForm = (x: V, v: V, op: string) => ops[op](asF64(x), asF64(v));
+    const newForm = (x: V, v: V, op: string) => x.t === 'Int' ? ops[op](x.v, asF64(v)) : false;
+    test('truth table: Null on either side, Int against Int / Float, Int against Str agree on every operator', () => {
+        const xs: V[] = [ { t: 'Null' }, { t: 'Int', v: 5 }, { t: 'Int', v: 6 }, { t: 'Int', v: -1 } ];
+        const vs: V[] = [ { t: 'Null' }, { t: 'Int', v: 5 }, { t: 'Float', v: 5.5 }, { t: 'Float', v: 5.0 }, { t: 'Str', v: '5' } ];
+        for (const op of Object.keys(ops)) for (const x of xs) for (const v of vs) expect(newForm(x, v, op)).toBe(oldForm(x, v, op));
+    });
+    const shape = "    build (trades: any[], since: number = 0, ms: number = 1): any {\n        for (let i = 0; i < trades.length; i++) {\n            const trade = this.safeDict (trades, i, {});\n            const ts = this.safeInteger (trade, 'timestamp');\n            if (ts === undefined) {\n                continue;\n            }\n            if (ts < since) {\n                continue;\n            }\n            return Math.floor (ts / ms) * ms;\n        }\n        return undefined;\n    }\n";
+    test('buildOHLCVC ts: Option<i64>, the ordered test prints the matches! form and the arithmetic boxes it back', () => {
+        const out = run(shape);
+        expect(out).toContain('let mut ts: Option<i64> = ');
+        expect(out).toContain('matches!(ts, Some(__p) if (__p as f64) < since.as_f64().unwrap_or(f64::NAN))');
+        expect(out).toContain('(Value::from(ts)).as_f64()');
+    });
+    test('guard: a reader with a default keeps its own decision (the default may be any number)', () => {
+        const out = run(shape.replace("this.safeInteger (trade, 'timestamp')", "this.safeInteger (trade, 'timestamp', ms)"));
+        expect(out).not.toContain('matches!(ts, Some(__p) if (__p as f64) < since');
+    });
+    test('guard: an any-typed partner is not a number Value and keeps the box', () => {
+        const out = run(shape.replace('since: number = 0', 'since: any = 0'));
+        expect(out).not.toContain('let mut ts: Option<i64> = ');
+    });
+});

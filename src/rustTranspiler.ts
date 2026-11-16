@@ -11068,6 +11068,14 @@ export class RustTranspiler extends BaseTranspiler {
                 const test = lk === undefined ? `${value} ${sign} (__p as f64)` : `(__p as f64) ${sign} ${value}`;
                 return `matches!(${text(k, typed)}, Some(__p) if ${test})`;
             }
+            // ral-63n: an `Option<i64>` no-default `safeInteger*` local (Int or Null on every path) ordered against a
+            // number-typed `Value`: `None` is the helper's `Null` (NaN, false), `Some(p)` orders as `p as f64`, the `as_f64` payload
+            if (k === 'oint' && own !== undefined && this.rust63nNoDefaultIntReader(own.declaration) && this.rustScalarValueNumber(other)) {
+                if (dry) return '_';
+                const value = `${this.printNode(other, 0).trim()}.as_f64().unwrap_or(f64::NAN)`;
+                const test = lk === undefined ? `${value} ${sign} (__p as f64)` : `(__p as f64) ${sign} ${value}`;
+                return `matches!(${text(k, typed)}, Some(__p) if ${test})`;
+            }
             // ral-54n: also an `i64` `safeInteger*` local with an integer-literal default (40d rustIntReaderLitDefault): the reader
             // answers an `Int` on every path, so `(x as f64)` is the very `as_f64` payload the boxed local compared with
             if ((k !== 'int' && k !== 'num') || own === undefined || !(this.rustRdOwnInit(own.declaration) || (k === 'int' && this.rustIntReaderLitDefault(own.declaration))) || !this.rustScalarValueNumber(other)) return undefined;
@@ -12386,6 +12394,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const base = RustTranspiler.RUST_SCALAR_INT_HELPERS[String(init.expression.name.text)];
         return base !== undefined && init.arguments.length === base + 1 && this.rustScalarIntLiteral(this.unwrapParens(init.arguments[base])) !== undefined;
+    }
+
+    /** ral-63n: `const x = this.safeInteger* (..)` with no default argument: the reader answers an `Int` or `Null`. */
+    rust63nNoDefaultIntReader(declaration: any): boolean {
+        const init: any = declaration === undefined || !isVariableDeclaration(declaration) ? undefined : this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(init.expression.name.text);
+        const base = RustTranspiler.RUST_SCALAR_INT_HELPERS[name];
+        return base !== undefined && name.startsWith('safeInteger') && init.arguments.length === base;
     }
 
     /** ral-54n: `this.safeInteger* (..)` printed as its `Value` (an `Int` or `Null` on every path). */
@@ -20719,7 +20736,10 @@ export class RustTranspiler extends BaseTranspiler {
     /** qe: `rows.push (x)` into another local list, or `m[k] = x` into a local container that is not a tagged store
      *  (never `this.*`, `client.subscriptions` or a cache `hashmap()` read): the map enters the store whole, once. */
     rustLocalStoreHandOff(n: any): boolean {
-        const up: any = n.parent;
+        // 63n: `m[k] = x as T` / `m[k] = (x)`: the assertion only retypes the TS side; the printed store still takes x whole.
+        let at: any = n;
+        while (isAsExpression(at.parent) || isParenthesizedExpression(at.parent)) at = at.parent;
+        const up: any = at.parent;
         const own: any = this.rustDeclarationOfIdentifier(n);
         const untaggedLocal = (root: any): boolean => {
             if (!isIdentifier(root) || this.rustIdentifierRefersToDeclaration(root, own)) return false;
@@ -20727,9 +20747,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (d === undefined || !isVariableDeclaration(d) || d.name === root) return false;
             return d.initializer === undefined || !this.rustInitReadsTaggedStore(d.initializer) && !this.rustContainerInitReadsStore(this.rustSkipWrappers(d.initializer));
         };
-        if (isCallExpression(up) && isPropertyAccessExpression(up.expression) && up.arguments.length === 1 && up.arguments[0] === n
+        if (at === n && isCallExpression(up) && isPropertyAccessExpression(up.expression) && up.arguments.length === 1 && up.arguments[0] === n
             && String(up.expression.name.text) === 'push') return untaggedLocal(up.expression.expression);
-        if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
+        if (isBinaryExpression(up) && up.right === at && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left)
             && up.parent?.kind === SyntaxKind.ExpressionStatement) return untaggedLocal(this.rustSkipWrappers(up.left.expression));
         return false;
     }
