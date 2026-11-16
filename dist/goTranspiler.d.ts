@@ -8,8 +8,39 @@ export declare function goNilJoinTypeSelfTest(): any[];
 export declare const CCXT_GO_BOOL_METHOD_NAMES: string[];
 export declare const CCXT_GO_STRING_PTR_METHOD_NAMES: string[];
 export declare const CCXT_GO_HELPER_RETURN_TYPES: {
-    'this.ParseTimeframe': string;
-    'exchange.ParseTimeframe': string;
+    GetArgMap: string;
+    GetArgMapSlice: string;
+    GetArgAnySlice: string;
+    GetArgStringSlice: string;
+    GetArgString: string;
+    GetArgBool: string;
+    GetArgInt64: string;
+    GetArgFloat64: string;
+    GetArgStringPtr: string;
+    GetArgInt64Ptr: string;
+    GetArgFloat64Ptr: string;
+    GetArgBoolPtr: string;
+    'this.ToArray': string;
+    'this.SortBy': string;
+    'this.SortBy2': string;
+    'this.FilterBy': string;
+    'this.ParseTransactionsByType': string;
+    'this.ArraySlice': string;
+    'this.Sort': string;
+    'this.ExtractParams': string;
+    'this.ArrayConcat': string;
+    'this.ArraysConcat': string;
+    'this.ParseCurrenciesCustom': string;
+    'this.DeepExtend2': string;
+    'this.Account': string;
+    'this.ParseOrderBook': string;
+    'this.Market': string;
+    'this.Currency': string;
+    'this.SafeCurrency': string;
+    'this.SafeMarket': string;
+    'this.Outcome': string;
+    'this.SafeOutcome': string;
+    'this.ParseSearchQueries': string;
     'this.ApplyEventFetchParams': string;
     'this.ParsePredictionPositions': string;
     'this.ParseDepositAddresses': string;
@@ -116,39 +147,8 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.HandleParamString': string;
     'this.HandleParamString2': string;
     'this.HandleMarketTypeAndParams': string;
-    'this.Outcome': string;
-    'this.SafeOutcome': string;
-    'this.ParseSearchQueries': string;
-    'this.ToArray': string;
-    'this.SortBy': string;
-    'this.SortBy2': string;
-    'this.FilterBy': string;
-    'this.ParseTransactionsByType': string;
-    'this.ArraySlice': string;
-    'this.Sort': string;
-    'this.ExtractParams': string;
-    'this.ArrayConcat': string;
-    'this.ArraysConcat': string;
-    'this.ParseCurrenciesCustom': string;
-    'this.DeepExtend2': string;
-    'this.Account': string;
-    'this.ParseOrderBook': string;
-    'this.Market': string;
-    'this.Currency': string;
-    'this.SafeCurrency': string;
-    'this.SafeMarket': string;
-    GetArgMap: string;
-    GetArgMapSlice: string;
-    GetArgAnySlice: string;
-    GetArgStringSlice: string;
-    GetArgString: string;
-    GetArgBool: string;
-    GetArgInt64: string;
-    GetArgFloat64: string;
-    GetArgStringPtr: string;
-    GetArgInt64Ptr: string;
-    GetArgFloat64Ptr: string;
-    GetArgBoolPtr: string;
+    'this.ParseTimeframe': string;
+    'exchange.ParseTimeframe': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -159,7 +159,7 @@ export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
 export declare function ccxtGoElementAccessType(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare const CCXT_GO_FAMILY_RETURN_TYPE = "*string";
 export declare const CCXT_GO_FAMILY_LITERAL_RETURN_TYPE = "string";
-export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "string" | "bool" | "int" | "float64";
+export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "bool" | "float64" | "int" | "string";
 export declare function ccxtGoTernaryDeclaration(node: any): any;
 export declare function ccxtGoTypeOfArithmeticInitializer(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare function ccxtGoUnboxArithmeticDeclaration(goTranspiler: any, printed: any): any;
@@ -782,9 +782,10 @@ declare class GoNilDeclaredAssignmentScan {
 }
 export declare function installCcxtGoNilDeclaredStringJoins(goTranspiler: any): void;
 export declare class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssignmentScan {
-    valueTypeOf(rhs: any): "bool" | "int" | "float64";
+    valueTypeOf(rhs: any): "bool" | "float64" | "int";
     classifyIdentifier(node: any, assigned: any): any;
     isStringWrite(rhs: any): boolean;
+    boolSlotWrite(node: any): boolean;
 }
 export declare function installCcxtGoNilDeclaredValueJoins(goTranspiler: any): void;
 export declare function ccxtGoNilDeclaredParseNumberJoin(goTranspiler: any, declaration: any): any;
@@ -1967,4 +1968,31 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     goBaseCacheField(node: any): string | undefined;
     goBaseCacheInitText(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    goSafeDictMapPredictionAsWs: boolean;
+}
+export interface GoTranspiler {
+    goHandleOptionTrueLocal(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goReusableFutureCall(node: any): boolean;
+    goReusableFutureLocal(declaration: any): boolean;
+    goReusableFutureLocalCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goTernaryJoinParts(declaration: any): {
+        goType: string;
+        derefTrue: boolean;
+        derefFalse: boolean;
+    } | undefined;
+    goTernaryJoinPartsUncached(declaration: any): {
+        goType: string;
+        derefTrue: boolean;
+        derefFalse: boolean;
+    } | undefined;
+    goTernaryJoinHasForeignComparison(declaration: any, goType: string): boolean;
+    goTernaryJoinArmType(node: any): string | undefined;
+    goTernaryJoinConditionDefines(condition: any, name: string, outcome: boolean): boolean;
+    goTernaryJoinDeclaration(statement: any, declaration: any, identation: number): string | undefined;
 }

@@ -204,6 +204,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
     csharpIsDictParamsBag(node: any): boolean;
+    printParameteCustomName(node: any, name: any, defaultValue?: boolean): any;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpBaseDictionaryView(node: any): string | undefined;
     csharpBaseDictionaryViewKeyKind(key: any): 'string' | 'object' | undefined;
@@ -264,13 +265,16 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceBoundOperand(node: any, isEnd?: boolean): {
         kind: string;
-        text: string;
-    } | {
-        kind: string;
         value: any;
+        text?: undefined;
     } | {
-        kind: string;
         value?: undefined;
+        kind: string;
+        text?: undefined;
+    } | {
+        value?: undefined;
+        kind: string;
+        text: string;
     };
     csharpSliceArithmeticBound(node: any): {
         kind: string;
@@ -282,7 +286,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "string" | "list";
+    csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceStringType(type: any): boolean;
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     csharpPlusChainNonNullStringType(node: any, self?: any): string | undefined;
