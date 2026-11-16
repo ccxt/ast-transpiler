@@ -470,6 +470,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilOptStrConcatUse(n: any): boolean;
     /** ral-56x K1: `return x` of a literal-seeded string local (never a parameter alias) in a `-> Option<String>` method. */
     rust56xStrReturnLocal(n: any, fn: any): boolean;
+    /** ral-61x: `return x` of the method's own nil-declared `let x: Str = undefined` local (an accumulator the body writes):
+     *  as an `Option<String>` it is the payload itself, as a `Value` a checker-string `Value` (converts either way). */
+    rust61xNilStrReturnLocal(n: any, fn: any): boolean;
     rust56xStrReturnText(exp: any, fn: any): string | undefined;
     /** ral-56x K1: a `+` partner that is itself a concat (or a `.toString()`) the printer already prints as a boxed `Value::Str(format!(..))`
      *  (always a `Str`, never `Null`), so the optional string joins the same `format!` with its `as_deref().unwrap_or("null")` text. */
@@ -703,6 +706,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The scalar kind an expression yields exactly (`null` for nullish); `fresh` admits the
      *  non-null literal kinds (`str|int|num|bool`) a declaration may seed. */
     rustScalarValueKind(expr: any, fresh: boolean): string | undefined;
+    /** ral-61p: base `this.getSupportedMapping (key, { 'k': 'v', .. })` at a declaration whose mapping is an object literal of
+     *  string-literal values: the base body throws unless `key in mapping` and then answers `mapping[key]`, so the result
+     *  is always one of those literals (a `String`, never `Null`). */
+    rustSupportedMappingStr(expr: any): boolean;
+    /** ral-61p: `this.handleOption (m, o, <literal>)` resolved to the base tier: the option value or the default argument.
+     *  A string literal default names `ostr` (the runtime answers the stored option or that literal; a stored option of
+     *  another kind reads as `None`, the same miss the `Value` form's `.as_str()` compare made). */
+    rustHandleOptionLiteralKind(expr: any): string | undefined;
     private static readonly RUST_BASE_SCALAR_RETURNS;
     /** Base `parseNumber(s)` with no default over a string (literal, string local, `Precise.string*`): the
      *  runtime parses a `Str` to `Float` and answers `Null` otherwise, so the result is exactly an `Option<f64>`. */
@@ -1312,6 +1323,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  string `stringify_param` made of the boxed local, `"null"` for `None`); a value reading `self` is bound first. Over
      *  the line budget the helper chain takes the key as a `Value` (`From<Option<&str>>`, the one allocation). */
     printNestedFieldUpperKeyWrite(left: any, acc: string, value: string): string | undefined;
+    /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
+     *  receiver is itself an element read and which is itself the receiver of the outermost written element access. */
+    rust61kNestedFieldMiddleKey(n: any): boolean;
     /** `this.f` (one level, no element read in between). */
     rustThisFieldTarget(node: any): boolean;
     /** `n` is (inside) an argument of a call that lies within `root`, the call itself not being `n`. */
@@ -1722,6 +1736,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  insert never sees a `None` key, so the key text is the `Str` the boxed key held (removeRepeatedTradesFromArray `id`). */
     rust55xGuardedSafeStringKey(n: any, local: any): boolean;
     rustScalarOptKeyUse(n: any): boolean;
+    /** ral-61k: `n` keys a read `m[n]` inside `v` of the statement write `m[n] = v` (same map and key bindings) on a typed
+     *  one-level map bearer. */
+    rust61kSelfReassignRead(n: any): boolean;
+    /** ral-61k: `n` keys a statement write `m[n] = v` and every element read of the map `m` (declared by `declaration`) keyed
+     *  by `n`'s own binding sits inside `v` of a write `m[n] = v` (the `m[k] = f(m[k])` self-reassign). */
+    rust61kSelfReassignOnlyRead(declaration: any, name: string, n: any): boolean;
     rustScalarOptKeyArg(key: any): string | undefined;
     rustScalarOptKeyCount(declaration: any): number;
     rustScalarOptKeyCostly(declaration: any, kind: string): boolean;
@@ -3064,6 +3084,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBorrowedKinds;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
+    /** ral-61n: optional map locals whose key-set uses (`Object.keys`, `in`) print off `x.as_deref()`. */
+    private rustOptKeySetLocals;
     static readonly RUST_NEVER_NULL_TEST_READERS: Set<string>;
     private rustNeverNullTests;
     /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
@@ -3071,6 +3093,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `true` / `false` for a null test the never-null rule recorded on a local that kept its plain container form. */
     printNeverNullContainerTest(left: any, op: any): string | undefined;
     rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined;
+    /** ral-61i: `let x = undefined` / `let x: T;` (a statement, one declarator) written only as statements `x = await this.<endpoint> (..)`
+     *  of REST endpoints declared `Promise<Dict>` (or `x = undefined`): the optional map the declared-endpoint rule holds. */
+    rustDeclaredDictEndpointLet(d: any): boolean;
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
     rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
     /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */
@@ -3114,6 +3139,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `x = y.clone().into_dict()` (the form a declared-endpoint write prints; a non-map answer is the empty map there too).
      *  Answers the endpoint write. */
     rustEndpointAliasWrite(write: any): any;
+    /** ral-61i: `n` is the bare source of `t = n` (rustEndpointAliasWrite) and `t` another local that holds a typed reuse map. */
+    rustEndpointAliasSourceUse(n: any, declaration: any): boolean;
     /** The producer of a reuse write builds from untagged operands only: `extend` / `omit` operands proven plain
      *  (`rustUntaggedMapOperand`), `indexBy` / `groupBy` fresh maps, a REST `safeDict` read off a local (parsed JSON). */
     rustReuseProducerUntagged(n: any, rhs: any): boolean;
@@ -3286,7 +3313,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustValueWriteOpen;
     /** ral-ra: `m['k'] = x` / `m.k = x` one level on another local `m` (not `x` itself): the store takes the value by
      *  value, so the shared container is boxed there once (moved at its last use, else the Arc bump the `Value` paid). */
-    rustLocalKeyPlace(place: any, n: any): boolean;
+    rustLocalKeyPlace(place: any, n: any, castRecv?: boolean): boolean;
     rustOptReaderBoxUse(n: any, init: any): boolean;
     /** ral-55h: `n` is a handler argument (not the `this` receiver slot) of `h.call (this, ..)` on an identifier `h` typed
      *  `any` (the by-name ws dispatch the ccxt build turns into `self.dispatch_ws_handler(&h, &[..])`). */
@@ -3307,8 +3334,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrKeyParam(declaration: any): boolean;
     rustBorrowedStrKeyTest(name: string, node: any): string;
     rustBorrowedDictName(node: any): string | undefined;
+    /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
+    rustOptKeySetDictName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
     printBorrowedInOp(key: any, obj: any): string | undefined;
+    /** The `contains_key` test of `key` on the map printed as `name` (boxed `Value::Bool(..)` when `boxed`). */
+    printBorrowedInOpOn(name: string | undefined, key: any, boxed?: boolean): string | undefined;
     /** A read of `n['literal']` / `n.name` (not a write target, call receiver, length or digit key). */
     rustDictKeyReadUse(n: any): boolean;
     /** The typed declaration line (`: crate::value::Dict = .. .into_dict()`, about 40 chars more) stays within 400 chars. */
