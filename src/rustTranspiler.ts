@@ -11274,7 +11274,9 @@ export class RustTranspiler extends BaseTranspiler {
                 const l: any = this.unwrapParens(inner.left);
                 const r: any = this.unwrapParens(inner.right);
                 const lit = (n: any) => this.literalKindOfNode(n) === 'string' || this.literalKindOfNode(n) === 'null';
-                return (leaf(l) && lit(r)) || (lit(l) && leaf(r));
+                // ral-66s2: `x === true` / `x !== false` over such a local (bitget parseCurrency `active`): the same native compare text
+                const boolLit = (n: any) => this.literalKindOfNode(n) === 'boolean';
+                return (leaf(l) && (lit(r) || boolLit(r))) || ((lit(l) || boolLit(l)) && leaf(r));
             }
             return isBinaryExpression(inner) && this.isLogicalOp(inner.operatorToken.kind) && leaf(inner.left) && leaf(inner.right);
         };

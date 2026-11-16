@@ -22592,3 +22592,24 @@ describe('ral-66s1: tuple slots handed straight on', () => {
         expect(out).toContain('channel.clone().map(Value::from).unwrap_or(Value::Null)');
     });
 });
+
+describe('ral-66s2: a logical local over `x === true` / `x !== false` leaves of same-function locals is a native bool boxed at its hand-off', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    safeBool (o: any, k: any, d: Bool = undefined): Bool { return o; }\n    keep (x: any): any { return x; }\n    hold (x: any): any { return x; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('bitget parseCurrency `active`: declared bool, boxed `Value::Bool(active)` at the one literal-value hand-off', () => {
+        const out = write ('ral-66s2-bool-lit-leaves', "    parseCurrency (entry: Dict) {\n        const withdraw = this.safeBool (entry, 'w');\n        const deposit = this.keep (entry['d']);\n        const active = (withdraw === true) && (deposit === true);\n        return this.hold ({ 'active': active, 'w': withdraw });\n    }\n");
+        expect(out).toContain('let mut active: bool = ((withdraw == Some(true)) && (deposit == Some(true)));');
+        expect(out).toContain('m.insert("active".to_string(), Value::Bool(active));');
+    });
+    test('negative: a leaf compared to a non-literal keeps the local Value', () => {
+        const out = write ('ral-66s2-bool-lit-leaves-neg', "    parseCurrency (entry: Dict) {\n        const withdraw = this.safeBool (entry, 'w');\n        const deposit = this.keep (entry['d']);\n        const active = (withdraw === deposit) && (deposit === true);\n        return this.hold ({ 'active': active });\n    }\n");
+        expect(out).toMatch(/let mut active: Value = /);
+    });
+});
