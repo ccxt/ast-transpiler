@@ -713,6 +713,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-61p: `this.handleOption (m, o, <literal>)` resolved to the base tier: the option value or the default argument.
      *  A string literal default names `ostr` (the runtime answers the stored option or that literal; a stored option of
      *  another kind reads as `None`, the same miss the `Value` form's `.as_str()` compare made). */
+    /** ral-62p: `this.handleOption (m, o, d) as Bool` (or `as boolean`) on the base handleOption. */
+    rust62pBoolCastOption(node: any): boolean;
     rustHandleOptionLiteralKind(expr: any): string | undefined;
     private static readonly RUST_BASE_SCALAR_RETURNS;
     /** Base `parseNumber(s)` with no default over a string (literal, string local, `Precise.string*`): the
@@ -977,6 +979,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Dict` (kucoin fetchBalance `result = this.mergeBalanceAccount (result, currencyCode, ..)` in a sibling block): the
      *  written local's type is its annotation and the argument boxes into the call, as the plain walk already prints it. */
     rust60kBaseCallArgDictWrite(n: any, write: any): boolean;
+    /** ral-62p: the key of an element read `m[k]` that is a direct argument of a base-class `this.f (..)` call, the call the
+     *  whole source of a write to a local declared `Dict` / `List` (indodax fetchDepositsWithdrawals
+     *  `transactions = this.arrayConcat (transactions, withdraw[key])`): the written local's type is its annotation, the
+     *  element read prints its own key form and the call takes the read's `Value` either way, never this key's box. */
+    rust62pBaseCallArgKeyWrite(n: any, write: any): boolean;
     /** ral-58k: the key argument of a base `this.safeDict (src, k, dflt)` that is the whole source of a write to a local
      *  declared `Dict` (bitget pro handleBalance `account = this.safeDict (this.balance, code, account)`): the written local's
      *  type is its annotation, never this key's, and the reader takes the key as a boxed `Value` either way. */
@@ -1323,6 +1330,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  string `stringify_param` made of the boxed local, `"null"` for `None`); a value reading `self` is bound first. Over
      *  the line budget the helper chain takes the key as a `Value` (`From<Option<&str>>`, the one allocation). */
     printNestedFieldUpperKeyWrite(left: any, acc: string, value: string): string | undefined;
+    /** ral-62k: `n` is the last key of a statement write `x[..][n] = v` whose chain root is a plain local identifier
+     *  (two or more hops) and whose value never names `n` or `this`. */
+    rust62kLocalNestedLastKey(n: any): boolean;
     /** ral-61k: `n` keys a middle hop of a statement write `this.balance|options[..][n][..] = v`: an element read whose
      *  receiver is itself an element read and which is itself the receiver of the outermost written element access. */
     rust61kNestedFieldMiddleKey(n: any): boolean;
@@ -1736,6 +1746,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  insert never sees a `None` key, so the key text is the `Str` the boxed key held (removeRepeatedTradesFromArray `id`). */
     rust55xGuardedSafeStringKey(n: any, local: any): boolean;
     rustScalarOptKeyUse(n: any): boolean;
+    /** ral-62k: every element read of the map `m` (declared by `declaration`) is keyed by `n`'s own binding; write targets
+     *  (and hops of one) are not reads. */
+    rust62kOwnKeyOnlyRead(declaration: any, name: string, n: any): boolean;
     /** ral-61k: `n` keys a read `m[n]` inside `v` of the statement write `m[n] = v` (same map and key bindings) on a typed
      *  one-level map bearer. */
     rust61kSelfReassignRead(n: any): boolean;
@@ -2651,6 +2664,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustI64IndexText(keyNode: any, place: string): string;
     /** A registered `i64` counter as a helper key (`Value::Int(i)`). zf: a read the ccxt write-back binds takes it too
      *  (`writeBackIndexedMutations` matches `get_value(&xs, &Value::Int(i))` and writes back at the same `Int` key). */
+    /** ral-62n: the boxed key text of a typed `String` / `Option<String>` local keying a borrowed index read. */
+    rust62nTypedStrKey(key: any): string | undefined;
     rustI64HelperKeyText(keyNode: any, read?: any): string | undefined;
     /** xb: a use of a registered counter in its own function, outside any scalar scope solve (decisions never see a trial counter). */
     rustI64CounterOperand(node: any): boolean;
@@ -2947,6 +2962,14 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  not mutated again by the statement after the push. The printer prints the push AND the write-back insert itself (arrPush),
      *  so the bind no longer leans on ccxt's write-back pass (which reads only the boxed `k.as_str()` text). */
     rustOwnedWriteBackPushBind(access: any): boolean;
+    /** ral-62e: `if (!(k in m)) { m[k] = []; } const b = m[k]; b.push (v);` (kucoin / okx borrow-rate buckets): the printer-owned
+     *  push bind (rustOwnedWriteBackPushBind) whose only other reference is that push. The guard right before the bind wrote a list
+     *  under `k`, and every element write of `m` in the function stores an array literal or an array-typed value, so the read is
+     *  always an `Arr` for a present key: the bind is a `List` local. A `None` key reads an empty list where the box read Null; its
+     *  push is dropped with the local and nothing is written back in either form (`if let Some(__k)`). */
+    private rustOwnedBucketListDecisions;
+    rustOwnedBucketListBind(declaration: any): boolean;
+    rustOwnedBucketListBindUncached(declaration: any): boolean;
     /** ral-xf: `const x = m[k]` mutated by the next statement, where `m` is a map-literal local and `k` a plain
      *  identifier key: the printer's native read (`m.get(k.as_str().unwrap_or("")).cloned()..`) is a form ccxt's
      *  write-back pass (`writeBackIndexedMutations`) and push pass (`rustVecPushInline`) read as the same get. */
@@ -3086,6 +3109,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustOptContainerLocals;
     /** ral-61n: optional map locals whose key-set uses (`Object.keys`, `in`) print off `x.as_deref()`. */
     private rustOptKeySetLocals;
+    static readonly RUST_62N_DICT_READERS: Set<string>;
+    private rust62nDictArrayTests;
+    /** ral-62n: the reader's default (after its key arguments) is absent, `undefined` or an object literal: a map default. */
+    rust62nMapOrNullDefault(call: any): boolean;
     static readonly RUST_NEVER_NULL_TEST_READERS: Set<string>;
     private rustNeverNullTests;
     /** ral-60n: the reader's default is the empty literal of the local's kind (`[]` for a list, `{}` for a map). */
@@ -3315,6 +3342,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value, so the shared container is boxed there once (moved at its last use, else the Arc bump the `Value` paid). */
     rustLocalKeyPlace(place: any, n: any, castRecv?: boolean): boolean;
     rustOptReaderBoxUse(n: any, init: any): boolean;
+    /** ral-62n: the array literal is the default argument of a base `safeList*` reader, or the whole right side of a
+     *  `x = [..]` / `m[k] = [..]` statement (written into a place, not handed to a call's `Value` slot). */
+    rust62nListLiteralSink(list: any): boolean;
+    static readonly RUST_62N_LIST_READERS: Set<string>;
     /** ral-55h: `n` is a handler argument (not the `this` receiver slot) of `h.call (this, ..)` on an identifier `h` typed
      *  `any` (the by-name ws dispatch the ccxt build turns into `self.dispatch_ws_handler(&h, &[..])`). */
     rustWsDispatchCallArg(n: any): boolean;
@@ -4016,6 +4047,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every write to the local (`x = ..`) sits at or before `write` in source order. */
     rustWritesAllBefore(declaration: any, write: any): boolean;
     rustDefaultedAliasMove(write: any): any;
+    private rustNnListHandOffs;
+    /** ral-62i: `y = x` (statement), y a built list local of x's function (not x itself): the never-null list x hands over. */
+    rustNnListHandOff(n: any, declaration: any): boolean;
+    /** ral-62i: `y = x` is the only statement of the then-branch of `if (x !== undefined)` (or `!=`). */
+    rustNnGuardedWrite(write: any, x: any): boolean;
+    private rustOptMapDefaultTernaries;
+    /** ral-62i: n is the `whenFalse` arm of `(n === undefined) ? {} : n` (or `!== undefined` with the arms swapped). */
+    rustOptMapDefaultTernaryArm(n: any, declaration: any): boolean;
+    /** ral-62i: the print of a ternary admitted by rustOptMapDefaultTernaryArm once its local holds `Option<Dict>`. */
+    printOptMapDefaultTernary(node: any, bare?: boolean): string | undefined;
     rustBuiltListOf(node: any): any;
     /** ral-tf: a bare element local read nowhere after the literal (no loop or closure between): it moves into the element slot. */
     rustBuiltListMovedElement(e: any): boolean;
