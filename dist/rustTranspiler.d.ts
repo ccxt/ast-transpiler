@@ -452,6 +452,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-64p: while seeding, a `const y = this.sum (..)` / `Math.min|max (..)` local's kind is its initializer's
      *  combinator kind (rustArithCallKind), before y's own decision is seeded. */
     rust64pConstArithKind(node: any): string | undefined;
+    /** ral-67b: the right side of a write into a declared-empty `Bool` local: `a && b` / `a || !b` (rustBoolLeafLogical: every
+     *  leaf a local of the same function) whose checker type at the write is exactly `boolean`. JS hands back an operand, and
+     *  every operand the checker narrows to `boolean` is a JS boolean there, so the condition's native `bool` is the value. */
+    rust67bBoolLogicalWrite(expr: any): boolean;
     /** ral-47d: `rhs` names another nil-declared (`let y: Str = undefined`) string local of the same function. */
     rustNilStrPartner(rhs: any, declaration: any, scope: any): boolean;
     /** ral-45b: the local has a `x = x.slice(..)` / case self write or a `x += ..` append (the forms lift 1 / 2 admit). */
@@ -823,6 +827,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_PRECISE_LENT;
     /** vd: only a local declared with a value (nil-declared locals keep their own box rules). */
     rustPreciseLendLocal(n: any): boolean;
+    /** ral-67a: a `let x: Str = undefined` local (declared string type, no value) lends at a Precise operand too: the
+     *  runtime takes `&impl PreciseArg`, and `&Option<String>` reads `None` as the `Null` box and `Some(s)` as its `Str`. */
+    rust67aNilStrLend(declaration: any): boolean;
+    /** ral-67a: `string` / `Str` / a union of those with `undefined`, read from the type node. */
+    rust67aStrTypeNode(type: any): boolean;
     /** vd: `n` is a direct string operand (one of the first two, the third of `stringDiv` is the precision) of a lent
      *  `Precise.<op>(..)` call. */
     rustPreciseLentOperand(n: any): boolean;
@@ -900,6 +909,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParseNumberStrCall(call: any): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
+    /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
+     *  source, so the read prints the same native `len()` (or `get_array_length`) as a list receiver, an `Int` every time. */
+    rust67bCastListLengthRecv(recv: any): boolean;
     rustSelfRootedLengthRecv(recv: any): boolean;
     rustLocalRootedLengthRecv(recv: any): boolean;
     rustListLengthText(node: any): string;
@@ -2153,6 +2165,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedResultReadOnlyAt(x: any): boolean;
     /** Element-access hook: the native read of a typed result element, boxed through its shared record handle. */
     printTypedResultElemRead(node: any): string | undefined;
+    /** `n` is the list argument of a base-tier `this.safeDict (n, i[, d])` whose index is an int literal, an i64 counter,
+     *  an int scalar local or a number local seeded with an int literal. */
+    rust67gSafeDictElemUse(n: any): boolean;
+    rust67gIndexText(key: any, mark: boolean): string | undefined;
+    /** Call hook: the native `safeDict` read of a typed result row. */
+    printTyped67gSafeDict(node: any, identation: number): string | undefined;
     printTypedResultIndex(key: any): string;
     private rustRecordElemDecisions;
     rustRecordElemLocal(declaration: any): string | undefined;
@@ -2302,6 +2320,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printTranspiledVariadicCall(node: any, receiver: string, methodName: string, identation: number): string | undefined;
     rustTranspiledCalleeParams(node: any, methodName: string): any[] | undefined;
     printArgsForCallExpression(node: any, identation: any): string;
+    /** ral-67f: true when the value of a helper write `r[..][k] = v` reads the write's root: the same local identifier, or
+     *  any `this` / `super` when the root is a `this.x` field (`&mut self.x` borrows all of `self`). */
+    rustHelperWriteReadsRoot(baseExpr: any, value: any): boolean;
     /** A bare local argument whose hand-off needs no clone (`rustOwnedUseIsFree`) carries the owned-use mark. */
     rustOwnedArgText(arg: any, text: string): string;
     rustPrintedArgs(node: any, identation: any, params?: any[]): string[];
@@ -3383,6 +3404,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilMapLocal(declaration: any): boolean;
     rustNilMapLocalUncached(declaration: any): boolean;
     private rustNilListLocals;
+    /** ral-67c: `x = this.extend (x, y)` (base `extend`, y not naming x) on a `let` whose declared type node is `NullableDict` / `Dict`. */
+    rust67cNilMapExtendWrite(n: any, declaration: any): boolean;
+    private static readonly RUST_67C_MAP_TYPES;
+    /** ral-67c: `x = y` where y is a `const y = { .. }` (plain map literal, never rebound) of x's function that no typed rule takes
+     *  (y prints `Value` and holds a map on every path): x takes it back with `.into_opt_dict()` (moved at y's last use). */
+    rust67cMapLocalSource(rhs: any, declaration: any): any;
+    /** ral-67c: the head `x` of `x = this.extend (x, y)` on a nil map local: the optional map moves out (`x.take()`) and is written back. */
+    rust67cNilMapExtendHead(node: any, declaration: any): boolean;
     /** og: the nil-declared map local a declaration aliases whole (`const x = y`, same function, no closure between). */
     rustNilMapAliasSource(declaration: any): any;
     /** og: `y` as the whole initializer of a nil-map alias: the handle moves at y's last use, else an Arc bump. */
