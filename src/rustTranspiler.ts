@@ -6,6 +6,23 @@ import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaratio
 import * as fs from 'fs';
 import * as tsSync from "typescript/unstable/sync";
 
+/** A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no
+ *  dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it can vanish or change mid-scan). */
+export function isRustTsIndexSource(name: string): boolean {
+    const temp = /\.nooverloads\.(\d+)\.ts$/.exec(name);
+    return name.endsWith('.ts') && !name.endsWith('.d.ts') && !name.startsWith('.') && (temp === null || temp[1] === String(process.pid));
+}
+
+/** The text of a listed ts/src file; undefined when it vanished between listing and reading, any other error throws. */
+export function readRustTsIndexSource(file: string): string | undefined {
+    try {
+        return fs.readFileSync(file, 'utf8');
+    } catch (e) {
+        if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return undefined;
+        throw e;
+    }
+}
+
 // ── type-keyed native forms ──
 // A plain place path (`a`, `self.a.b`): side-effect-free, so it may be read twice or evaluated eagerly.
 const RUST_PLAIN_PLACE = /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -7449,12 +7466,12 @@ export class RustTranspiler extends BaseTranspiler {
         for (const dir of [ '', '/pro', '/prediction' ]) {
             let entries: string[] = [];
             try {
-                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts'));
+                entries = fs.readdirSync(srcRoot + dir).filter(isRustTsIndexSource);
             } catch (e) {
                 continue;
             }
             for (const f of entries) {
-                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(header)) {
+                for (const m of (readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? '').matchAll(header)) {
                     const types = table.get(m[1]) ?? new Set<string>();
                     types.add(String(m[3] ?? '').trim());
                     table.set(m[1], types);
@@ -7477,11 +7494,14 @@ export class RustTranspiler extends BaseTranspiler {
         for (const dir of [ '', 'pro/', 'prediction/' ]) {
             let entries: string[] = [];
             try {
-                entries = fs.readdirSync(`${srcRoot}/${dir}`).filter((f) => f.endsWith('.ts'));
+                entries = fs.readdirSync(`${srcRoot}/${dir}`).filter(isRustTsIndexSource);
             } catch (e) {
                 continue;
             }
-            for (const f of entries) texts.set(dir + f, fs.readFileSync(`${srcRoot}/${dir}${f}`, 'utf8'));
+            for (const f of entries) {
+                const text = readRustTsIndexSource(`${srcRoot}/${dir}${f}`);
+                if (text !== undefined) texts.set(dir + f, text);
+            }
         }
         const up = new Map<string, string>();
         const find = (x: string): string => {
@@ -30262,7 +30282,9 @@ export class RustTranspiler extends BaseTranspiler {
             try {
                 decision = this.rustVenueLentKindUncached(param) ?? null;
             } catch (e) {
-                decision = null;
+                // a failed proof is a generator bug or an unreadable source: never fall back to the weaker `Value` slot
+                this.rustLentVenueDecisions.delete(param);
+                throw e;
             }
             this.rustLentVenueDecisions.set(param, decision);
         }
@@ -30356,12 +30378,12 @@ export class RustTranspiler extends BaseTranspiler {
         const declared = /^ {4}(?:(?:override|async|public|protected|private|static)\s+)*([A-Za-z_]\w*)\s*(?:<[^>]*>)?\s*\(/gm;
         let entries: string[] = [];
         try {
-            entries = fs.readdirSync(srcRoot + '/base').filter((f) => f.endsWith('.ts'));
+            entries = fs.readdirSync(srcRoot + '/base').filter(isRustTsIndexSource);
         } catch (e) {
             entries = [];
         }
         for (const f of entries) {
-            for (const m of fs.readFileSync(`${srcRoot}/base/${f}`, 'utf8').matchAll(declared)) names.add(m[1]);
+            for (const m of (readRustTsIndexSource(`${srcRoot}/base/${f}`) ?? '').matchAll(declared)) names.add(m[1]);
         }
         this.rustBaseTierMethodNamesByRoot.set(srcRoot, names);
         return names;
@@ -30851,12 +30873,12 @@ export class RustTranspiler extends BaseTranspiler {
         for (const dir of [ '', '/pro', '/prediction' ]) {
             let entries: string[] = [];
             try {
-                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts'));
+                entries = fs.readdirSync(srcRoot + dir).filter(isRustTsIndexSource);
             } catch (e) {
                 continue;
             }
             for (const f of entries) {
-                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(declared)) names.add(m[1]);
+                for (const m of (readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? '').matchAll(declared)) names.add(m[1]);
             }
         }
         this.rustVenueMethodNamesByRoot.set(srcRoot, names);
@@ -30885,12 +30907,12 @@ export class RustTranspiler extends BaseTranspiler {
         for (const [dir, weight] of [ [ '', 1 ], [ '/pro', 1 ], [ '/prediction', 1 ], [ '/base', 2 ] ] as [string, number][]) {
             let entries: string[] = [];
             try {
-                entries = fs.readdirSync(srcRoot + dir).filter((f) => f.endsWith('.ts'));
+                entries = fs.readdirSync(srcRoot + dir).filter(isRustTsIndexSource);
             } catch (e) {
                 continue;
             }
             for (const f of entries) {
-                for (const m of fs.readFileSync(`${srcRoot}${dir}/${f}`, 'utf8').matchAll(declared)) counts.set(m[1], (counts.get(m[1]) ?? 0) + weight);
+                for (const m of (readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? '').matchAll(declared)) counts.set(m[1], (counts.get(m[1]) ?? 0) + weight);
             }
         }
         this.rustVenueMethodDeclCountsByRoot.set(srcRoot, counts);
@@ -33761,12 +33783,12 @@ export class RustTranspiler extends BaseTranspiler {
             for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
                 let entries: string[] = [];
                 try {
-                    entries = fs.readdirSync(root + dir).filter((f) => f.endsWith('.ts') && (dir !== '/base' || f === 'Exchange.ts' || f === 'PredictionExchange.ts'));
+                    entries = fs.readdirSync(root + dir).filter((f) => isRustTsIndexSource(f) && (dir !== '/base' || f === 'Exchange.ts' || f === 'PredictionExchange.ts'));
                 } catch (e) {
                     continue;
                 }
                 for (const f of entries) {
-                    for (const m of fs.readFileSync(`${root}${dir}/${f}`, 'utf8').matchAll(header)) {
+                    for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
                         seen++;
                         if (m[1].replace(/\s+/g, '') !== `${pname}:string`) agree = false;
                     }

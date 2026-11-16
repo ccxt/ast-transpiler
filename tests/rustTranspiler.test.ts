@@ -21424,3 +21424,53 @@ describe('ral-62x: a required typed `string` parameter seeds an optional (`Str`-
         expect(out).not.toContain('let mut idValue: Option<String>');
     });
 });
+
+describe('ral-63v: ts/src index scans ignore other processes temp copies', () => {
+    let root: string;
+    let src: string;
+    beforeAll(() => {
+        root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-idx-'));
+        src = path.join (root, 'ts', 'src');
+        fs.mkdirSync (path.join (src, 'base'), { recursive: true });
+        fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), 'export default class Exchange {\n    baseOnly (x: string): string {\n        return x;\n    }\n}\n');
+        fs.writeFileSync (path.join (src, 'venue.ts'), 'import Exchange from \'./base/Exchange.js\';\nexport default class venue extends Exchange {\n    venueOnly (x: string): string {\n        return x;\n    }\n}\n');
+        // another process's copy that vanished between listing and reading
+        fs.symlinkSync ('gone-63v.ts', path.join (src, 'base', 'Exchange.nooverloads.99999.ts'));
+        // another process's live copy, a dot-file temp copy and a declaration file: never part of the index
+        fs.writeFileSync (path.join (src, 'base', 'Exchange.nooverloads.99998.ts'), 'export default class Exchange {\n    foreignCopy (x: string): string {\n        return x;\n    }\n}\n');
+        fs.writeFileSync (path.join (src, 'base', '.__ExchangeNoOverloads.ts'), 'export default class Exchange {\n    dotCopy (x: string): string {\n        return x;\n    }\n}\n');
+        fs.writeFileSync (path.join (src, 'base', 'types.d.ts'), 'export default class Exchange {\n    declOnly (x: string): string;\n}\n');
+        // this process's own stripped copy is the base the transpile reads
+        fs.writeFileSync (path.join (src, 'base', `Exchange.nooverloads.${process.pid}.ts`), 'export default class Exchange {\n    ownCopy (x: string): string {\n        return x;\n    }\n}\n');
+    });
+    afterAll(() => {
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('base tier names: a dangling foreign copy is skipped, the own copy kept', () => {
+        const rust: any = (transpiler as any).rustTranspiler;
+        const names: Set<string> = rust.rustBaseTierMethodNames(src);
+        expect([...names].sort()).toEqual([ 'baseOnly', 'ownCopy' ]);
+    });
+    test('declaration counts, venue names, return types and families read real sources only', () => {
+        const rust: any = (transpiler as any).rustTranspiler;
+        const counts: Map<string, number> = rust.rustVenueMethodDeclCounts(src);
+        expect(counts.get('baseOnly')).toBe(2);
+        expect(counts.get('venueOnly')).toBe(1);
+        expect(counts.has('foreignCopy')).toBe(false);
+        expect(counts.has('dotCopy')).toBe(false);
+        expect(counts.has('declOnly')).toBe(false);
+        expect([...rust.rustVenueMethodNames(src)]).toEqual([ 'venueOnly' ]);
+        expect([...rust.rustVenueReturnTypes(src).keys()]).toEqual([ 'venueOnly' ]);
+        expect([...rust.rustVenueFamilies(src).familyOf.keys()]).toEqual([ 'venue.ts' ]);
+    });
+    test('an unreadable source that did not vanish fails loudly', () => {
+        const bad = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-idxbad-'));
+        fs.mkdirSync (path.join (bad, 'ts', 'src', 'base', 'Exchange.ts'), { recursive: true });
+        const rust: any = (transpiler as any).rustTranspiler;
+        try {
+            expect(() => rust.rustBaseTierMethodNames(path.join (bad, 'ts', 'src'))).toThrow(/EISDIR/);
+        } finally {
+            fs.rmSync (bad, { recursive: true, force: true });
+        }
+    });
+});
