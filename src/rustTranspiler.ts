@@ -6643,7 +6643,9 @@ export class RustTranspiler extends BaseTranspiler {
         // parameter can still carry an `Int` that `parse_number` would pass through
         const arg: any = this.unwrapParens(call.arguments[0]);
         const kind = isIdentifier(arg) ? this.rustScalarIdentifierKind(arg) : this.rustScalarValueKind(arg, true);
-        return kind === 'str' || kind === 'ostr';
+        // ral-84g R1: a venue method already printed `-> Option<String>` (rustVenueStrCall: every venue declaration of the name
+        // declares a string return) boxes into a `Str` or `Null` at the argument, never an `Int`
+        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg);
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
@@ -23381,8 +23383,11 @@ export class RustTranspiler extends BaseTranspiler {
         const store84dWrites: any[] = [];
         // ral-60n: never-null reader initializer (checked once more after the walk: no whole write may follow)
         const neverNullInit = !nilDeclared && allSlot === undefined && init !== undefined && (from === 'dict' || from === 'list')
-            && this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
-            && this.rustEmptyContainerLiteral(init.arguments[init.arguments.length - 1], from);
+            && ((this.rustContainerInitNeverNull(init, from === 'list' ? 'list' : 'map') && this.rustBaseCallNamed(init, RustTranspiler.RUST_NEVER_NULL_TEST_READERS)
+            && this.rustEmptyContainerLiteral(init.arguments[init.arguments.length - 1], from))
+            // ral-84g R4: a `this.` call the fresh-container proof (rustBuiltReturnSourceKind) shows building this very kind on every
+            // path (a base `extend` / `groupBy`, a method whose every return is a built list) is never Null either
+            || (isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === from));
         const neverNullTests: any[] = [];
         // ral-62n: `Array.isArray (x)` of a base `safeDict*` result (a map or Null on every path, never a list)
         const dictArrayTests: any[] = [];
@@ -23502,6 +23507,9 @@ export class RustTranspiler extends BaseTranspiler {
                 keySets++;
                 // `k in m` is the map's own `contains_key`: a native read of the shared map (the boxed `in_op` Dict arm)
                 if (isBinaryExpression(n.parent)) reads++;
+                // ral-84g R3: `Object.keys|values (m)` of a base `groupBy` / `indexBy` result (always a map) enumerates the map
+                // natively (`m.keys()` / `m.values()`, printBorrowedKeys), the very list `object_keys` / `object_values` built
+                else if (from === 'dict' && init !== undefined && isCallExpression(init) && this.rustBaseCallNamed(init, RustTranspiler.RUST_84G_GROUP_HELPERS)) reads++;
                 return true;
             }
             if (this.rustExtendHeadUse(n)) return ++extendHeads > 0 && ++reads > 0;
@@ -31932,6 +31940,7 @@ export class RustTranspiler extends BaseTranspiler {
     // map (the head is the local itself or a proven map). `omit` hands a list through unchanged, so an unproven head
     // (a `params: Value` that may carry a list body) never qualifies.
     private static readonly RUST_ALWAYS_MAP_HELPERS = new Set([ 'extend', 'indexBy', 'groupBy' ]);
+    private static readonly RUST_84G_GROUP_HELPERS = new Set([ 'indexBy', 'groupBy' ]);
 
     /** The initialiser of a reassigned handed local answers a map on every path. */
     rustHandedMapInit(declaration: any): boolean {
@@ -31946,7 +31955,13 @@ export class RustTranspiler extends BaseTranspiler {
                 if (a !== undefined && isCallExpression(a)) return this.rustBaseCallNamed(a, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) || (this.rustOmitOfDict(a) && this.rustOmitLineFits(a));
                 if (a === undefined || !isIdentifier(a)) return false;
                 const d: Node | undefined = this.rustDeclarationOfIdentifier(a);
-                return d !== undefined && d !== a && isParameterDeclaration(d) && this.rustProvenMapParam(d) && !this.rustLocalIsReassigned(d, String(a.text));
+                if (d !== undefined && d !== a && isParameterDeclaration(d) && this.rustProvenMapParam(d) && !this.rustLocalIsReassigned(d, String(a.text))) return true;
+                // ral-84g R2: the bare head of the other arm's omit, when that omit's head proof (rustOmitOfDict) admits it:
+                // the same proven map unchanged on the other path
+                const other: Expression | undefined = this.rustSkipWrappers(x === init.whenTrue ? init.whenFalse : init.whenTrue);
+                if (other === undefined || !isCallExpression(other) || !this.rustOmitOfDict(other) || !this.rustOmitLineFits(other)) return false;
+                const head: Expression | undefined = this.rustSkipWrappers(other.arguments[0]);
+                return head !== undefined && isIdentifier(head) && this.rustDeclarationOfIdentifier(head) === d;
             };
             return arm(init.whenTrue) && arm(init.whenFalse) && String(declaration.initializer.getText()).split('\n')[0].length <= 240;
         }

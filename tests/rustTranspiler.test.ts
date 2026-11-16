@@ -24597,3 +24597,73 @@ describe('ral-84f: a watched ticker resolved through the REST parent parse helpe
         expect(out).toMatch(/let mut newTicker: Value = self\.watchMultiple\(/);
     });
 });
+
+describe('ral-84g R1: parseNumber of a venue string method', () => {
+    test('a one-argument parseNumber of a venue method every declaration of which returns Str is an Option<f64>', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-84g-r1');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Int = number | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    parseNumber (value: any, d: Num = undefined): number { return value; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fromEn (en: Str, scale: Int): Str {\n        if (en === undefined || scale === undefined) {\n            return undefined;\n        }\n        return en + scale.toString ();\n    }\n    fromAny (en: any): any {\n        return en;\n    }\n    fees (o: any, s: Int) {\n        const fee = this.parseNumber (this.fromEn (this.safeString (o, 'fee'), s));\n        const raw = this.parseNumber (this.fromAny (o));\n        if (fee === undefined) {\n            return [ raw ];\n        }\n        return { 'fee': fee, 'raw': raw };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut fee: Option<f64> = self\.parseNumber\(.*\)\.as_f64\(\);/);
+        expect(out).toContain('let mut raw: Value = ');
+    });
+});
+
+describe('ral-84g R2: `c ? this.omit (m, k) : m` over a proven non-parameter map holds the map on both arms', () => {
+    test('the bare arm is the other arm\'s proven omit head, so the reassigned handed local is a Dict', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84g-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    omit (x: any, ...args: any[]): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    async fetchTransfers (code: Str = undefined, params: Dict = {}): Promise<any> {\n        const request: Dict = {};\n        const paramsRequest: Dict = this.omit (params, 'paginate');\n        const until = this.safeInteger (paramsRequest, 'until');\n        let paramsOmitted: Dict = (until !== undefined) ? this.omit (paramsRequest, 'until') : paramsRequest;\n        if (until !== undefined) {\n            paramsOmitted = this.omit (paramsOmitted, 'x');\n        }\n        return await this.privatePostX (this.extend (request, paramsOmitted));\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchTransfers'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut paramsOmitted: crate::value::Dict = \(if/);
+    });
+});
+
+describe('ral-84g R3: Object.values of a groupBy result is a native read of the map', () => {
+    test('a groupBy local enumerated by Object.values is a Dict and enumerates natively; an unproven head stays boxed', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84g3-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    groupBy (x: any, k: string, out = {}) { return out; }\n    hold (x: any): any { return x; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (data: any[], raw: any) {\n        const grouped = this.groupBy (data, 'currency');\n        const values = Object.values (grouped);\n        const other = this.hold (raw);\n        const more = Object.values (other);\n        return [ values, more ];\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut grouped: crate::value::Dict = /);
+        expect(out).toContain('grouped.values().cloned().collect()');
+        expect(out).toMatch(/let mut other: Value = /);
+    });
+});
+
+describe('ral-84g R4: a null test of a this-call result the fresh-container proof shows built on every path folds', () => {
+    test('a base groupBy result is never Null: the local is a Dict and its null test is constant', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-84g4-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    groupBy (x: any, k: string, out = {}) { return out; }\n    hold (x: any): any { return x; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (data: any[]) {\n        const grouped = this.groupBy (data, 'currency');\n        if (grouped === undefined) {\n            throw new Error ('missing');\n        }\n        return Object.values (grouped);\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut grouped: crate::value::Dict = /);
+        expect(out).toContain('if (false) {');
+    });
+});
