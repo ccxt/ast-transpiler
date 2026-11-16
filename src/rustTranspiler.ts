@@ -27615,7 +27615,7 @@ export class RustTranspiler extends BaseTranspiler {
                     natives++;
                     return true;
                 }
-                // ral-60i: `this.safeList (x, k, x as any)` of a nil-assigned list (the list itself as its own default): the
+                // ral-60i: `this.safeList (x, k, x)` (cast to any) of a nil-assigned list (the list itself as its own default): the
                 // default slot takes the box (`Value::Arr(x.clone())`, the copy the boxed local paid), the head is lent above;
                 // a missing key hands the very list back, as the boxed default did
                 if (nilAssigned && isAsExpression(up) && up.expression === n && isCallExpression(up.parent) && up.parent.arguments.length === 3
