@@ -23162,7 +23162,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (extendReuse) from = 'dict';
         // ral-qa: a base `safeValue*` result read only at string keys: every non-map value (Null included) reads Null at
         // a string key exactly as the empty map `into_dict()` leaves, so the local holds the shared map
-        const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && (this.rustSafeValueKeyReadSource(init) || this.rustKeyReadTernarySource(init));
+        const keyReadOnly = from === undefined && !nilDeclared && init !== undefined && (this.rustSafeValueKeyReadSource(init) || this.rustKeyReadTernarySource(init) || this.rust80gParseJsonKeyReadSource(init));
         if (keyReadOnly) from = 'dict';
         // ral-42g: a row `xs[i]` of a checker list (counter-loop binding) read only at literal string keys: the same invariant
         const elemKeyReadOnly = from === undefined && !nilDeclared && init !== undefined && this.rustListRowKeyReadSource(init);
@@ -26521,6 +26521,16 @@ export class RustTranspiler extends BaseTranspiler {
         // the receiver chain names no ws client state nor a market / currency table
         const names = (x: any): boolean => (isPropertyAccessExpression(x) && /^(?:markets|markets_by_id|currencies|currencies_by_id|clients|futures|subscriptions|orderbooks|cache)$/.test(String(x.name.text))) || (x.forEachChild(names) ?? false);
         return !names(call.arguments[0]);
+    }
+
+    /** ral-80g: `const o = this.parseJson (s)` (base `parseJson`, one argument): its answer is whatever JSON the text holds
+     *  (a map, a list, a scalar) or Null. Under ral-qa's use rule (literal string-key base reads only) a non-map answer reads
+     *  Null at every key exactly as the empty map `into_dict()` leaves, and a parsed value carries no store tag. */
+    rust80gParseJsonKeyReadSource(call: any): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(call.expression.name.text) !== 'parseJson' || call.arguments.length !== 1 || this.rustTestTierSource(call)) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     /** ral-45g: `c ? a : b` whose arms are each a local / parameter, a numeric-index row, an empty map literal or a ral-qa
@@ -31484,6 +31494,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isVariableDeclaration(declaration)) return false;
         const init: any = this.rustSkipWrappers(declaration.initializer);
         if (init !== undefined && this.rustOmitOfDict(init) && this.rustOmitDeclLineFits(declaration)) return true;
+        // ral-80g R2: `c ? this.omit (p, k) : p` where every arm answers a map: an omit of a proven map, an always-map base
+        // helper, or the proven-map params parameter itself (rustProvenMapParam)
+        if (init !== undefined && isConditionalExpression(init) && this.rustDictTernaryInit(init)) {
+            const arm = (x: any): boolean => {
+                const a: any = this.rustSkipWrappers(x);
+                if (a !== undefined && isCallExpression(a)) return this.rustBaseCallNamed(a, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) || (this.rustOmitOfDict(a) && this.rustOmitLineFits(a));
+                if (a === undefined || !isIdentifier(a)) return false;
+                const d: any = this.rustDeclarationOfIdentifier(a);
+                return d !== undefined && d !== a && isParameterDeclaration(d) && this.rustProvenMapParam(d) && !this.rustLocalIsReassigned(d, String(a.text));
+            };
+            return arm(init.whenTrue) && arm(init.whenFalse) && String(declaration.initializer.getText()).split('\n')[0].length <= 240;
+        }
         return init !== undefined && (this.rustBaseCallNamed(init, RustTranspiler.RUST_ALWAYS_MAP_HELPERS) || (this.rustOmitOfDict(init) && this.rustOmitLineFits(init)))
             && String(declaration.initializer.getText()).split('\n')[0].length <= 240;
     }

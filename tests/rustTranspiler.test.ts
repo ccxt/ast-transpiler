@@ -23979,3 +23979,52 @@ describe('ral-80e: a typed number reader local as a whole Math.min / Math.max ar
         expect(out).not.toContain('let mut pricePlaces: Option<i64>');
     });
 });
+
+describe('ral-80g R1: a base parseJson result read only at literal string keys holds a map (ral-qa invariant)', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    parseJson (s: any) { return JSON.parse (s); }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('grvt parseTransaction: `parsedMeta = this.parseJson (s)` read only by safeString at literal keys', () => {
+        const out = write ('ral-80g-r1', "    m (s: Str) {\n        const parsedMeta = this.parseJson (s);\n        const a = this.safeString (parsedMeta, 'direction');\n        const b = this.safeString (parsedMeta, 'endpoint');\n        return [ a, b ];\n    }\n");
+        expect(out).toMatch(/let (?:mut )?parsedMeta: crate::value::Dict = /);
+        expect(out).toContain('&parsedMeta, "direction"');
+    });
+    test('negative: a null-tested parseJson result keeps the Value (Null is not the empty map there)', () => {
+        const out = write ('ral-80g-r1-neg', "    m (s: Str) {\n        const parsed = this.parseJson (s);\n        if (parsed !== undefined) {\n            return this.safeString (parsed, 'x');\n        }\n        return undefined;\n    }\n");
+        expect(out).toMatch(/let (?:mut )?parsed: Value = /);
+    });
+});
+
+describe('ral-80g R2: a reassigned `c ? this.omit (params, k) : params` local of a typed unified method holds the map', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    omit (x: any, ...args: any[]): any { return x; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+            + "    async fetchOpenOrders (symbol: Str = undefined, params: Dict = {}): Promise<any> {\n        const request: Dict = {};\n        const userref = this.safeInteger (params, 'userref');\n        let paramsOmitted: Dict = (userref !== undefined) ? this.omit (params, 'userref') : params;\n        const clientOrderId = this.safeString (paramsOmitted, 'clientOrderId');\n        if (clientOrderId !== undefined) {\n            paramsOmitted = this.omit (paramsOmitted, 'clientOrderId');\n        }\n        return await this.privatePostX (this.extend (request, paramsOmitted));\n    }\n"
+            + "    rebound (x: any) {\n        let y = (x !== undefined) ? this.omit (x, 'a') : x;\n        y = this.omit (y, 'b');\n        return this.privatePostX (this.extend ({}, y));\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-80g-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchOpenOrders'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('kraken fetchOpenOrders paramsOmitted: the ternary of an omit and the typed params is a Dict lent to its reads', () => {
+        expect(out).toMatch(/let mut paramsOmitted: crate::value::Dict = \(if /);
+        expect(out).toContain('&paramsOmitted, "clientOrderId"');
+    });
+    test('negative: an untyped `x` arm (may be a list) keeps the local Value', () => {
+        expect(out).toMatch(/let mut y: Value = /);
+    });
+});
