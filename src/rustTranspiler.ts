@@ -22938,6 +22938,8 @@ export class RustTranspiler extends BaseTranspiler {
         const base = /2$/.test(String(callee.name.text)) ? 3 : 2;
         if (init.arguments.length !== base + 1) return false;
         if (kind === 'list' ? isArrayLiteralExpression(last) : this.rustPlainDictLiteral(last)) return true;
+        // ral-76d: the default is itself a never-null base reader of the same kind (`safeDict (r, 'k', this.safeDict (rows, 0, {}))`)
+        if (isCallExpression(last) && this.rustBorrowedSourceKind(last) === (kind === 'list' ? 'list' : 'dict') && this.rustContainerInitNeverNull(last, kind)) return true;
         // ral-43d: the default is a plain (never-null) Dict local: `safeDict` answers the map read or that map
         return kind === 'map' && this.rustNeverNullDictLocalArg(last);
     }

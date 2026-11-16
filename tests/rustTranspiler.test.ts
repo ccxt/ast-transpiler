@@ -23846,3 +23846,23 @@ describe('ral-76c R1: an element of a local string[] read through string methods
         expect(out).not.toMatch(/let mut entry: Value/);
     });
 });
+
+describe('ral-76d: safeDict results whose default is another never-null base reader', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('btse fetchTicker: `safeDict (r, k, this.safeDict (rows, 0, {}))` handed whole holds the map', () => {
+        const out = write ('ral-76d-a', "    m (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        const data = this.safeDict (response, 'data', this.safeDict (rows, 0, {}));\n        return this.keep (data);\n    }\n");
+        expect(out).toMatch(/let (?:mut )?data: crate::value::Dict = /);
+    });
+    test('negative: an inner reader without a default (may be Null) keeps the local Value', () => {
+        const out = write ('ral-76d-a-neg', "    m (response: any) {\n        const rows = this.safeList (response, 'data', []);\n        const data = this.safeDict (response, 'data', this.safeDict (rows, 0));\n        return this.keep (data);\n    }\n");
+        expect(out).toMatch(/let (?:mut )?data: Value = /);
+    });
+});
