@@ -11647,8 +11647,9 @@ describe('literal and boxed-field locals typed at the declaration', () => {
         // vd lends it to the &impl PreciseArg operand as is
         expect(out).toContain('crate::precise::Precise::stringMul(&leftSide, ');
         expect(out).toContain('let mut leftSide: Option<String> = crate::precise::Precise::stringMul(');
-        // negative: read twice in its write (no last use) keeps its box
-        expect(out).toContain('let mut twice: Value = ');
+        // ral-76h: read twice in its write, both lent (`&twice`): no copy, so it is typed too
+        expect(out).toContain('out = crate::precise::Precise::stringAdd(&twice, &twice).as_str().map(str::to_owned);');
+        expect(out).not.toContain('let mut twice: Value = ');
         expect(out).not.toContain('leftSide.clone()');
     });
     test('wi: a params Dict slot handed back whole in the returned tuple is a Dict, moved there (no copy)', () => {
@@ -23720,5 +23721,26 @@ describe('ral-76a: a venue Str method returning its own safeString local prints 
     test('S2: the literal seed written from the venue Str method is Option<String>', () => {
         expect(out).toContain('let mut instruction: Option<String> = Some("GTC".to_string());');
         expect(out).not.toContain('let mut instruction: Value');
+    });
+});
+
+describe('ral-76h R1: a Precise string result lent to later Precise calls before its last use is typed', () => {
+    const base = "export type Str = string | undefined;\nexport interface Dict { [key: string]: any }\nexport class Precise { static stringMul (a: Str, b: Str): Str { return a; } static stringDiv (a: Str, b: Str): Str { return a; } }\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = (body: string) => "import Exchange, { Precise } from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n";
+    const out = (body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-76h-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue(body));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the ratio read by two Precise writes in two sibling blocks (same name) is an Option<String>, lent as &ratio', () => {
+        const text = out("    one (o: Dict, inverse: boolean) {\n        const filled = this.safeString (o, 'filled');\n        let cost = this.safeString (o, 'cost');\n        let average: Str = undefined;\n        if (filled !== undefined) {\n            const ratio = Precise.stringMul (filled, cost);\n            average = Precise.stringDiv (ratio, cost);\n            if (inverse) {\n                average = Precise.stringDiv (cost, ratio);\n            }\n        }\n        if (average !== undefined) {\n            const ratio = Precise.stringMul (filled, average);\n            cost = Precise.stringDiv (ratio, average);\n            if (inverse) {\n                cost = Precise.stringDiv (average, ratio);\n            }\n        }\n        return this.hold ([ average, cost ]);\n    }\n");
+        expect(text).toContain('let mut ratio: Option<String> = crate::precise::Precise::stringMul(&filled, &cost).as_str().map(str::to_owned);');
+        expect(text).toContain('average = crate::precise::Precise::stringDiv(&ratio, &cost).as_str().map(str::to_owned);');
+        expect(text).toContain('average = crate::precise::Precise::stringDiv(&cost, &ratio).as_str().map(str::to_owned);');
+        expect(text).toContain('let mut ratio: Option<String> = crate::precise::Precise::stringMul(&filled, &average).as_str().map(str::to_owned);');
+        expect(text).not.toContain('let mut ratio: Value');
     });
 });
