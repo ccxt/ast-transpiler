@@ -10713,6 +10713,9 @@ export class RustTranspiler extends BaseTranspiler {
         // zb: a typed-signature numeric parameter (`limit: Int` -> `Option<i64>`) holds only that variant or `Null`,
         // so `Math.min|max (limit, n)` / `this.sum (since, d)` over it is the helper's own Int / Null arm exactly
         const param = this.rustArithParamKind(inner); if (param !== undefined) return param;
+        // ral-64p: a base `this.parseToInt (x)` of the typed-return table (`Option<i64>`, rustArithTypedIntCall) answers
+        // `Int` or `Null` only, so `this.sum (this.parseToInt (x), d)` is the helper's own Int / Null arm exactly
+        if (this.rustArithTypedIntCall(inner) !== undefined) return 'oint';
         return isCallExpression(inner) && this.rustScalarValueKind(inner, true) === 'int' && this.rustScalarNativeText('int', inner) !== undefined ? 'int' : undefined;
     }
 
@@ -10846,7 +10849,7 @@ export class RustTranspiler extends BaseTranspiler {
             const ty = base === 'int' ? 'i64' : 'f64';
             const sides = Array.from(node.arguments).map((a: any, i: number) => {
                 const k = this.rustArithOperandKind(a);
-                if (k === 'oint' || k === 'onum') return { opt: this.rustScalarOperandText(k, a), bind: `__m${i}`, use: base === 'num' && k === 'oint' ? `(__m${i} as f64)` : `__m${i}` };
+                if (k === 'oint' || k === 'onum') return { opt: this.rustArithTypedIntCall(a) !== undefined ? this.rustBaseTypedBareText(this.unwrapParens(a)) : this.rustScalarOperandText(k, a), bind: `__m${i}`, use: base === 'num' && k === 'oint' ? `(__m${i} as f64)` : `__m${i}` };
                 return { use: this.rustScalarOperandText(base, a) };
             });
             const opts = sides.filter((x: any) => x.opt !== undefined);

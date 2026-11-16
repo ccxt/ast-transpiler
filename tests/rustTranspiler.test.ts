@@ -22080,3 +22080,26 @@ describe('ral-64n: bitflyer fetchMarkets: `s.split (d as string)` with an option
         expect(out).not.toContain('let mut e: Option<String> = self.safeString(');
     });
 });
+
+describe('ral-64p: a base sum over a typed base parseToInt operand is Option<i64>', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nconst sum = (...args) => {\n    const result = args.filter ((x) => x !== undefined);\n    return (result.length > 0) ? result.reduce ((a, b) => a + b, 0) : undefined;\n};\nexport default class Exchange {\n    sum = sum;\n    numberToString (n: any): string { return String (n); }\n    parseToInt (number: any): number {\n        const stringifiedNumber = this.numberToString (number) as string;\n        return parseInt (stringifiedNumber);\n    }\n    seconds (): number { return 0; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = (write: string) => "    m (raw: Dict, request: Dict) {\n        const until = this.parseToInt (raw['u']);\n        const start = this.parseToInt (raw['s']);\n        const duration = 60;\n        let endTime: Int = undefined;\n        if (until !== undefined) {\n            endTime = this.sum (this.parseToInt (until / 1000), duration);\n        }\n        if (start !== undefined) {\n            const rangeEnd = this.sum (start, duration);\n            if ((endTime === undefined) || (rangeEnd < endTime)) {\n                endTime = rangeEnd;\n            }\n        }\n" + write + "        if ((endTime !== undefined) && (this.sum (endTime, duration) < this.seconds ())) {\n            request['end'] = endTime;\n        }\n        return this.keep (request);\n    }\n";
+    test('whitebit fetchOHLCV `endTime` / `rangeEnd`: the sum over parseToInt is the helper\'s own Int / Null arm', () => {
+        const out = write ('ral-64p-sum-ptoi', body (''));
+        expect(out).toContain('let mut endTime: Option<i64> = None;');
+        expect(out).toMatch(/endTime = \(if let Some\(__m0\) = self\.parseToInt\([^;]*\) \{ Some\(\(__m0 \+ duration\)\) \} else \{ None \}\);/);
+        expect(out).toContain('let mut rangeEnd: Option<i64> = ');
+    });
+    test('negative: an untyped (`any`) operand keeps the sum and the local Value', () => {
+        const out = write ('ral-64p-sum-ptoi-neg', body ('        endTime = this.sum (this.keep (until), duration);\n'));
+        expect(out).toContain('let mut endTime: Value = Value::Null;');
+    });
+});
