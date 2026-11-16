@@ -286,7 +286,6 @@ const GO_TUPLE_JOIN_MAP_SLOTS = {
     'handleOptionBoolAndParams': [ 1 ],
     'handleOptionBoolAndParams2': [ 1 ],
     'handleOptionIntegerAndParams': [ 1 ],
-    'handleOptionIntegerAndParams2': [ 1 ],
     'handleUntilOption': [ 0, 1 ],
 };
 
@@ -876,8 +875,6 @@ export function installNilDeclaredTupleJoins (goTranspiler) {
 const GO_TUPLE_JOIN_SELF_INITIALIZER_TYPES = {
     'this.extend (a, b)': 'map[string]any',
     'this.safeDict (a, b)': 'map[string]any',
-    '[]': '[]any',
-    '{}': 'map[string]any',
 };
 
 function tupleJoinSelfTranspiler () {
@@ -1104,17 +1101,11 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
     // locals the printer declares for a provable optional argument
     'GetArgMap': 'map[string]any',
-    'GetArgMapSlice': '[]map[string]any',
-    'GetArgAnySlice': '[]any',
-    'GetArgStringSlice': '[]string',
     'GetArgString': 'string',
     'GetArgBool': 'bool',
     'GetArgInt64': 'int64',
-    'GetArgFloat64': 'float64',
     'GetArgStringPtr': '*string',
     'GetArgInt64Ptr': '*int64',
-    'GetArgFloat64Ptr': '*float64',
-    'GetArgBoolPtr': '*bool',
     // generated boolean-returning methods (see CCXT_GO_BOOL_METHOD_NAMES above)
     ...Object.fromEntries (CCXT_GO_BOOL_METHOD_NAMES.map ((name) => [ 'this.' + name, 'bool' ])),
     // exchange_functions.go / exchange_generic.go
@@ -1122,8 +1113,6 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.SortBy': '[]any',
     'this.SortBy2': '[]any',
     'this.FilterBy': '[]any',
-    // kraken parseTransactionsByType: goTranspiler.ts#goProvenListMethods retypes it to []any
-    'this.ParseTransactionsByType': '[]any',
     // hand-written (exchange.go): a slice on every path, a nil []any when the argument is not one
     'this.ArraySlice': '[]any',
     'this.Sort': '[]any',
@@ -1132,12 +1121,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // never a typed nil — the Go twin returns a nil `[]any` (not an untyped nil) when an
     // operand is not a slice, which reads exactly like the old boxed `nil`.
     'this.ArrayConcat': '[]any',
-    // retyped by goTranspiler.ts#retypeGoProvenParseMethods: every return is the []any{} accumulator / the result map literal
-    'this.ArraysConcat': '[]any',
-    'this.ParseCurrenciesCustom': 'map[string]any',
     // deepExtend2 is Go-only: every return path hands back the `outDict` accumulator (a
     // non-map operand panics on the assertion instead of escaping), so `map[string]any` is exact.
-    'this.DeepExtend2': 'map[string]any',
     'this.Account': 'map[string]any',
     'this.ParseOrderBook': 'map[string]any',
     'this.Market': 'map[string]any',
@@ -1163,18 +1148,12 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.ParseSearchQueries': '[]any',
     ...Object.fromEntries ([ 'ParseLastPrices', 'RemoveKeysFromDict', 'ParseTickersForRolling', 'ParseBidsAsksCustom', 'ParseSxbetTickersByHash' ].flatMap ((n) => [ [ 'this.' + n, 'map[string]any' ], [ 'this.DerivedExchange.' + n, 'map[string]any' ] ])),
     ...Object.fromEntries ([ [ 'ParseLeverageTiers', 'map[string]any' ], [ 'ParseLeverages', 'map[string]any' ], [ 'ParseMarginModes', 'map[string]any' ], [ 'ParseMarketLeverageTiers', '[]any' ], [ 'ParseEmulatedLeverageTiers', '[]any' ] ].flatMap (([ n, t ]) => [ [ 'this.' + n, t ], [ 'this.DerivedExchange.' + n, t ] ])),
-    'this.ApplyEventFetchParams': '[]any',
-    'this.ParsePredictionPositions': '[]any',
-    'this.ParseDepositAddresses': '[]any', 'this.DerivedExchange.ParseDepositAddresses': '[]any',
-    'this.SetApiCredentials': 'map[string]any',
-    'this.ParseDepositMethodIds': '[]any', 'this.ParsePortfolioDetails': '[]any',
     // exchange.go / exchange_string.go
     'this.StringToCharsArray': '[]string',
     // exchange_eth.go returns []uint8 on every path (hand-written, never nil-typed)
     'this.EthEncodeStructuredData': '[]uint8',
     // exchange_market_type.go (hand-written)
     'this.MarketSymbols': '[]string',
-    'exchange.MarketSymbols': '[]string',
     'this.Capitalize': 'string',
     'this.Uuid16': 'string',
     'this.Uuid22': 'string',
@@ -1207,7 +1186,6 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.Remove0xPrefix': 'string',
     'this.StringToBase64': 'string',
     'this.BinaryToBase16': 'string',
-    'this.BinaryToBase64': 'string',
     'this.BinaryToBase58': 'string',
     'this.BinaryToString': 'string',
     'this.Base16ToBinary': '[]byte',
@@ -1287,7 +1265,6 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'Eddsa': 'string',
     'Jwt': 'string',
     'Rsa': 'string',
-    'Totp': 'string',
     'Ecdsa': 'map[string]any',
     // exchange_generated.go: SafeCurrencyCode / SafeSymbol return the code/symbol field of
     // the dict safeCurrency/safeMarket always hands back, so their signature is coerced to
@@ -1295,7 +1272,6 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // in build/goTranspiler.ts) and an absent value stays a nil pointer.
     'this.SafeCurrencyCode': '*string',
     'this.SafeSymbol': '*string',
-    'this.DerivedExchange.SafeCurrencyCode': '*string',
     // base tuple helpers (exchange_generated.go). These are transpiled, but their emitted
     // signature is coerced to `[]any` — every return path in the TS body prints a Go
     // `[]any{...}` literal, see the coerceRegex in build/goTranspiler.ts#transpileBaseMethods.
@@ -1304,17 +1280,9 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.HandleOptionAndParams': '[]any',
     'this.HandleOptionAndParams2': '[]any',
     'this.HandleOptionStringAndParams': '[]any',
-    'this.HandleOptionStringAndParams2': '[]any',
     'this.HandleOptionBoolAndParams': '[]any',
-    'this.HandleOptionBoolAndParams2': '[]any',
-    'this.HandleOptionBoolAndParamsNullable': '[]any',
-    'this.HandleOptionBoolAndParams2Nullable': '[]any',
-    'this.HandleOptionIntegerAndParamsNullable': '[]any',
-    'this.HandleOptionIntegerAndParams2Nullable': '[]any',
     'this.HandleOptionIntegerAndParams': '[]any',
-    'this.HandleOptionIntegerAndParams2': '[]any',
     'this.HandleParamString': '[]any',
-    'this.HandleParamString2': '[]any',
     'this.HandleMarketTypeAndParams': '[]any',
     ...Object.fromEntries (CCXT_GO_STRING_PTR_METHOD_NAMES.flatMap ((name) => [ [ 'this.' + name, '*string' ], [ 'exchange.' + name, '*string' ] ])),
     // exchange.go: seconds as int64; a missing/malformed timeframe panics NotSupported like TS
@@ -1524,10 +1492,6 @@ const CCXT_GO_INT_OPERAND_CALLEES = {
     'this.Milliseconds': 'int64',
     'this.Seconds': 'int64',
     'this.Microseconds': 'int64',
-    'this.Crc32': 'int64',
-    'this.RandNumber': 'int64',
-    'this.PrecisionFromString': 'int',
-    'this.BinaryLength': 'int',
 };
 
 // `ccxt.Multiply(...)`: the pro / prediction packages print the package-level
@@ -2675,7 +2639,6 @@ function installCcxtGoSafeCollectionUnbox (goTranspiler) {
 export const CCXT_GO_EXCHANGE_MAP_FIELDS = {
     'Has': 'map[string]any',
     'Api': 'map[string]any',
-    'TransformedApi': 'map[string]any',
     'RequiredCredentials': 'map[string]any',
     'HttpExceptions': 'map[string]any',
     'Timeframes': 'map[string]any',
@@ -2683,8 +2646,6 @@ export const CCXT_GO_EXCHANGE_MAP_FIELDS = {
     'Exceptions': 'map[string]any',
     'Precision': 'map[string]any',
     'UserAgents': 'map[string]any',
-    'TokenBucket': 'map[string]any',
-    'CommonCurrencies': 'map[string]any',
     'Limits': 'map[string]any',
     'Fees': 'map[string]any',
     'Status': 'map[string]any',
@@ -3268,28 +3229,19 @@ export const CCXT_GO_ARRAY_BINDING_HOLDERS = [
     'HandleOptionAndParams',
     'HandleOptionAndParams2',
     'HandleOptionStringAndParams',
-    'HandleOptionStringAndParams2',
     'HandleOptionBoolAndParams',
-    'HandleOptionBoolAndParams2',
     'HandleOptionBoolAndParamsNullable',
     'HandleOptionBoolAndParams2Nullable',
     'HandleOptionIntegerAndParamsNullable',
     'HandleOptionIntegerAndParams2Nullable',
     'HandleOptionIntegerAndParams',
-    'HandleOptionIntegerAndParams2',
     'HandleParamString',
-    'HandleParamString2',
     'HandleMarketTypeAndParams',
     'HandleUntilOption',
     'HandleMarginModeAndParams',
-    'HandleSubTypeAndParams',
-    'HandleNetworkCodeAndParams',
-    'HandleWithdrawTagAndParams',
     'HandlePostOnly',
     'HandleParamBool',
-    'HandleParamBool2',
     'HandleParamInteger',
-    'HandleParamInteger2',
     'HandleTriggerPricesAndParams',
     'HandleTriggerDirectionAndParams',
 ];
@@ -3811,7 +3763,6 @@ function ccxtGoCounterCallType (goTranspiler, initializer, printedValue) {
 const CCXT_GO_ANNOTATED_RETURN_NATIVE = {
     'Str': [ '*string', 'string' ],
     'Dict': [ 'map[string]any' ],
-    'ExchangeOptions': [ 'map[string]any' ],
     // `Market` is MarketInterface | undefined: the dict or nil, like a Dict return
     'Market': [ 'map[string]any' ],
     'List': [ '[]any' ],
@@ -5732,9 +5683,6 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     'FetchTransactionsWithMethodAsync': '*', 'FetchDepositsWithdrawalsAsync': '*',
     'WatchTradesForSymbolsAsync': '*', 'WatchOrderBookForSymbolsAsync': '*',
     'WatchOHLCVForSymbolsAsync': '*',
-    // consumers that decide on the nil-ness of the box (container argument only)
-    'DeepExtend': {'*': 'container'},
-    'SubstituteString': '*',
     // bodies read the value only through derefScalar-ing helpers (IsGreaterThan/IsEqual/
     // InArray/NumberToString/FilterByCurrencySinceLimit)
     'GetClosestLimit': {'0': 'deref'}, 'CheckRequiredArgument': {'1': 'deref'},
@@ -5743,7 +5691,6 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     'isEmpty': {'0': 'deref'}, 'isArray': {'0': 'deref'}, 'filterByArray': {'2': 'deref'},
     'filterByArrayTickers': {'2': 'deref'}, 'filterByArrayPositions': {'2': 'deref'},
     // tag slot: IsDictionary/IsEqual deref it; a present value is handed back as the tuple's element 0
-    'handleWithdrawTagAndParams': {'0': 'deref'},
     'FindNearestCeiling': {'1': 'deref'}, 'ParseToInt': {'0': 'deref'}, 'ParseToNumeric': {'0': 'deref'},
     'ParseBorrowRateHistory': {'1': 'deref', '2': 'deref', '3': 'deref'},
 };
@@ -5759,13 +5706,7 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R1 concrete container send in the body
     'CancelAllContractOrdersAsync': '[]any',
     // R1 concrete container send in the body
-    'CancelAllOrdersAfterAsync': 'map[string]any',
-    // concrete []any
-    'CancelAllOrdersAsync': '[]any',
-    // R1 concrete container send in the body
     'CancelAllOrdersRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order[]>'] -> []any
-    'CancelAllOrdersWsAsync': '[]any',
     // R1 concrete container send in the body
     'CancelAllSpotOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -5774,8 +5715,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'CancelContractOrderAsync': 'map[string]any',
     // concrete map[string]any; TS Promise<Order>
     'CancelOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'CancelOrderWsAsync': 'map[string]any',
     // R1 concrete container send in the body
     'CancelOrdersAsync': '[]any',
     // R1 concrete container send in the body
@@ -5788,8 +5727,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'CancelSpotOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelTwapOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'CancelUnifiedOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CancelUtaOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -5798,26 +5735,14 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'ClosePositionAsync': 'map[string]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'CompleteRawTopicsAsync': '[]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-    'CreateApiKeyAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateContractOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateContractOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-    'CreateConvertTradeAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'CreateDepositAddressAsync': 'map[string]any',
     // R1 concrete container send in the body
     'CreateExtendedOrderRequestAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'CreateGiftCodeAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'CreateMarketBuyOrderWithCostAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateMarketOrderWithCostAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'CreateMarketSellOrderWithCostAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Dict>'] -> map[string]any
     'CreateOrDeriveApiKeyAsync': 'map[string]any',
     // bodies send map[string]any (concrete) e.g. ParseOrder(map[string]any); TS Promise<Order>
@@ -5839,12 +5764,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateSwapOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'CreateTrailingAmountOrderAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'CreateTrailingPercentOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'CreateTwapOrderAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'CreateUtaOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'CreateUtaOrdersAsync': '[]any',
@@ -5852,8 +5771,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'EditContractOrderAsync': 'map[string]any',
     // R1 concrete container send in the body
     'EditOrderRequestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'EditOrderWsAsync': 'map[string]any',
     // R1 concrete container send in the body
     'EditOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
@@ -5867,8 +5784,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchAccountPositionsAsync': '[]any',
     // R1 concrete container send in the body
-    'FetchAccountSettingsAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchAccountsAsync': '[]any',
     // R2 TS annotations ['Promise<Account[]>'] -> []any
     'FetchAccountsV2Async': '[]any',
@@ -5876,34 +5791,14 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchAccountsV3Async': '[]any',
     // R2 TS annotations ['Promise<PredictionOrder[]>'] -> []any
     'FetchAmmOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-    'FetchApiKeyAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-    'FetchApiKeysAsync': 'map[string]any',
     // TS Promise<Balances> (Dict-shaped); NewBalances(res) asserts map[string]any
     'FetchBalanceAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'FetchBalanceWsAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
-    'FetchBidsAsksAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<BorrowInterest[]>'] -> []any
-    'FetchBorrowInterestAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchBorrowRateHistoriesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict[]>'] -> []any
-    'FetchBorrowRateHistoryAsync': '[]any',
     // R1 concrete container send in the body
     'FetchCanceledAndClosedOrdersAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchCanceledOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchClosedContractOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'FetchClosedOrderAsync': 'map[string]any',
     // concrete []any; TS Promise<Order[]>
     'FetchClosedOrdersAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchClosedOrdersWsAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchClosedSpotOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Balances>'] -> map[string]any
@@ -5912,8 +5807,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchContractDepositAddressAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchContractDepositsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchContractMarketsAsync': '[]any',
     // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchContractOHLCVAsync': '[]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
@@ -5927,14 +5820,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchContractWithdrawalsAsync': '[]any',
     // R1 concrete container send in the body
-    'FetchConvertCurrenciesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-    'FetchConvertQuoteAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Conversion>'] -> map[string]any
-    'FetchConvertTradeAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Conversion[]>'] -> []any
-    'FetchConvertTradeHistoryAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchCrossBorrowRatesAsync': 'map[string]any',
     // concrete map[string]any; TS Promise<Currencies>
     'FetchCurrenciesAsync': 'map[string]any',
@@ -5943,53 +5828,25 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R1 concrete container send in the body
     'FetchCurrenciesFromWebAsync': 'map[string]any',
     // R1 concrete container send in the body
-    'FetchCurrencyAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchCurrencyByIdAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchDefaultMarketsAsync': '[]any',
     // TS Promise<DepositAddress>
     'FetchDepositAddressAsync': 'map[string]any',
     // R1 concrete container send in the body
-    'FetchDepositAddressDefaultAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchDepositAddressSupplementAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchDepositAddressesByNetworkAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-    'FetchDepositAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchDepositMethodIdAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict[]>'] -> []any
-    'FetchDepositMethodIdsAsync': '[]any',
     // R2 TS annotations ['Promise<Dict[]>'] -> []any
     'FetchDepositMethodsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchDepositWithdrawFeesAsync': 'map[string]any',
     // concrete []any; TS Promise<Transaction[]>
     'FetchDepositsAsync': '[]any',
     // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchDepositsOrWithdrawalsHelperAsync': '[]any',
     // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchDepositsWithdrawalsAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
-    'FetchDepositsWsAsync': '[]any',
     // R2 TS annotations ['Promise<LeverageTier[]>'] -> []any
     'FetchDerivativesMarketLeverageTiersAsync': '[]any',
     // R2 TS annotations ['Promise<OpenInterest[]>'] -> []any
     'FetchDerivativesOpenInterestHistoryAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchEventsByQueryAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'FetchFinancialBalanceAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchFundingHistoryAsync': '[]any',
-    // R2 TS annotations ['Promise<FundingRate>'] -> map[string]any
-    'FetchFundingIntervalAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<FundingRates>'] -> map[string]any
-    'FetchFundingIntervalsAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchFundingLimitsAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchFundingRateAsync': 'map[string]any',
     // R1 concrete container send in the body
@@ -5997,63 +5854,29 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R1 concrete container send in the body
     'FetchFundingRatesAsync': 'map[string]any',
     // R1 concrete container send in the body
-    'FetchFutureMarketsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchGreeksAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchHip3MarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<Market[]>'] -> []any
-    'FetchInverseSwapMarketsAsync': '[]any',
-    // R1 concrete container send in the body
     'FetchL2OrderBookAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchL3OrderBookAsync': 'map[string]any',
     // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
     'FetchLedgerAsync': '[]any',
     // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
-    'FetchLedgerByEntriesAsync': '[]any',
-    // R2 TS annotations ['Promise<LedgerEntry[]>'] -> []any
     'FetchLedgerEntriesByIdsAsync': '[]any',
-    // R2 TS annotations ['Promise<LedgerEntry>'] -> map[string]any
-    'FetchLedgerEntryAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchLeverageAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchLeverageTiersAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-    'FetchLiquidationsAsync': '[]any',
-    // R2 TS annotations ['Promise<LongShortRatio[]>'] -> []any
-    'FetchLongShortRatioHistoryAsync': '[]any',
-    // R2 TS annotations ['Promise<MarginModification[]>'] -> []any
-    'FetchMarginAdjustmentHistoryAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'FetchMarginBalanceAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchMarginModeAsync': 'map[string]any',
     // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchMarkOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-    'FetchMarkPriceAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchMarkPricesAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Market>'] -> map[string]any
     'FetchMarketAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Market>'] -> map[string]any
     'FetchMarketByIdAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<LeverageTier[]>'] -> []any
-    'FetchMarketLeverageTiersAsync': '[]any',
     // concrete []any (ParseMarkets); TS Promise<Market[]>
     'FetchMarketsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchMarketsByTypeAndSubTypeAsync': '[]any',
-    // R2 TS annotations ['Promise<Market[]>'] -> []any
-    'FetchMarketsByTypeAsync': '[]any',
     // R1 concrete container send in the body
     'FetchMarketsFromAPIAsync': '[]any',
     // R2 TS annotations ['Promise<Dict[]>'] -> []any
     'FetchMarketsFromCacheAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchMarketsFromWebAsync': '[]any',
     // R1 concrete container send in the body
     'FetchMarketsV1Async': '[]any',
     // R1 concrete container send in the body
@@ -6061,35 +5884,15 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R1 concrete container send in the body
     'FetchMarketsV3Async': '[]any',
     // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'FetchMyBuysAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMyContractTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'FetchMyDustTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-    'FetchMyLiquidationsAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'FetchMySellsAsync': '[]any',
-    // R2 TS annotations ['Promise<Dict[]>'] -> []any
-    'FetchMySettlementHistoryAsync': '[]any',
     // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMySpotTradesAsync': '[]any',
     // concrete []any; TS Promise<Trade[]>
     'FetchMyTradesAsync': '[]any',
     // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'FetchMyTradesWsAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'FetchMyUtaTradesAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchNetworkDepositAddressAsync': 'map[string]any',
     // concrete []any; TS Promise<OHLCV[]>
     'FetchOHLCVAsync': '[]any',
-    // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
-    'FetchOHLCVWsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchOpenInterestAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<OpenInterest[]>'] -> []any
-    'FetchOpenInterestHistoryAsync': '[]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOpenOrderAsync': 'map[string]any',
     // concrete []any; TS Promise<Order[]>
@@ -6098,18 +5901,10 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchOpenOrdersV1Async': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenOrdersV2Async': '[]any',
-    // R1 concrete container send in the body
-    'FetchOpenOrdersWsAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenSpotOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchOpenSwapOrdersAsync': '[]any',
-    // R2 TS annotations ['Promise<Option>'] -> map[string]any
-    'FetchOptionAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<OptionChain>'] -> map[string]any
-    'FetchOptionChainAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchOptionMarketsAsync': '[]any',
     // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchOptionOHLCVAsync': '[]any',
     // R2 TS annotations ['Promise<Position[]>'] -> []any
@@ -6128,10 +5923,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchOrderDefaultAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order>'] -> map[string]any
     'FetchOrderSupplementAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchOrderTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Order>'] -> map[string]any
-    'FetchOrderWsAsync': 'map[string]any',
     // concrete []any sends; TS Promise<Order[]>
     'FetchOrdersAsync': '[]any',
     // R1 concrete container send in the body
@@ -6163,24 +5954,12 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'LoadOutcomeAsync': 'map[string]any',
     // exchange_generated.go fetchPaginatedCallDynamicBody `ch <- this.FilterBySinceLimit(sortedRes, since,
     'FetchPaginatedCallDynamicAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchPortfoliosAsync': '[]any',
     // R2 TS annotations ['Promise<Position>'] -> map[string]any
     'FetchPositionAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
-    'FetchPositionHistoryAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchPositionModeAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
-    'FetchPositionWsAsync': '[]any',
-    // R2 TS annotations ['Promise<ADL[]>'] -> []any
-    'FetchPositionsADLRankAsync': '[]any',
     // concrete []any; TS Promise<Position[]>
     'FetchPositionsAsync': '[]any',
     // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchPositionsForSymbolAsync': '[]any',
-    // R2 TS annotations ['Promise<Position[]>'] -> []any
-    'FetchPositionsHistoryAsync': '[]any',
     // R2 TS annotations ['Promise<Position[]>'] -> []any
     'FetchPositionsRiskAsync': '[]any',
     // R2 TS annotations ['Promise<Position[]>'] -> []any
@@ -6200,31 +5979,13 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawActiveMarketsAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawEventsBySearchAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawEventsListAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawMarketsBySearchAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsPagedAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawMarketsByTagsAsync': '[]any',
     // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawMarketsListAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawQuestionsBySearchAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawQuestionsListAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
     'FetchRawTopicsAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchRawTopicsByQueriesAsync': '[]any',
-    // R2 TS annotations ['Promise<any[]>'] -> []any
-    'FetchSeriesEventsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchSettlementHistoryAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'FetchSpotBalanceAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchSpotMarketsAsync': '[]any',
     // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
@@ -6240,15 +6001,7 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchSpotOrdersByStatusAsync': '[]any',
     // R1 concrete container send in the body
-    'FetchStatusAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Market[]>'] -> []any
-    'FetchSwapAndFutureMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'FetchSwapBalanceAsync': 'map[string]any',
-    // R1 concrete container send in the body
     'FetchSwapMarketsAsync': '[]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-    'FetchTicker2Async': 'map[string]any',
     // concrete map[string]any; TS Promise<Ticker>
     'FetchTickerAsync': 'map[string]any',
     // R1 concrete container send in the body
@@ -6259,32 +6012,18 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchTickerV2Async': 'map[string]any',
     // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
     'FetchTickerV3Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-    'FetchTickerWsAsync': 'map[string]any',
     // concrete map[string]any sends; TS Promise<Tickers> (Dict) is contradicted by some []any impls -> map
     'FetchTickersAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchTickersV2Async': 'map[string]any',
     // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'FetchTickersV3Async': 'map[string]any',
-    // R2 TS annotations ['Promise<Dict>'] -> map[string]any
-    'FetchTradeQuoteAsync': 'map[string]any',
     // concrete []any; TS Promise<Trade[]>
     'FetchTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'FetchTradesWsAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchTradingFeeAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchTradingFeesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TradingFees>'] -> map[string]any
-    'FetchTradingFeesWsAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchTradingLimitsAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchTradingLimitsByIdAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchTransactionFeeAsync': 'map[string]any',
     // R1 concrete container send in the body
     'FetchTransactionFeesAsync': 'map[string]any',
     // R1 concrete container send in the body
@@ -6293,18 +6032,10 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchTransactionsByTypeAsync': '[]any',
     // R2 TS annotations ['Promise<Transaction[]>'] -> []any
     'FetchTransactionsWithMethodAsync': '[]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-    'FetchTransferAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'FetchTransfersAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchUSDTMarketsAsync': '[]any',
     // R1 concrete container send in the body
     'FetchUTAMarketsAsync': '[]any',
     // R2 TS annotations ['Promise<OHLCV[]>'] -> []any
     'FetchUTAOHLCVAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchUnderlyingAssetsAsync': '[]any',
     // R2 TS annotations ['Promise<Balances>'] -> map[string]any
     'FetchUtaBalanceAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
@@ -6315,24 +6046,12 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'FetchUtaOrderAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'FetchUtaOrdersByStatusAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchVolatilityHistoryAsync': '[]any',
-    // R1 concrete container send in the body
-    'FetchWithdrawAddressesAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-    'FetchWithdrawalAsync': 'map[string]any',
     // concrete []any; TS Promise<Transaction[]>
     'FetchWithdrawalsAsync': '[]any',
-    // R2 TS annotations ['Promise<Transaction[]>'] -> []any
-    'FetchWithdrawalsWsAsync': '[]any',
     // R1 concrete container send in the body
     'GetAssetHistoryRowsAsync': '[]any',
     // R1 concrete container send in the body
     'HandleAccountIndexAsync': '[]any',
-    // R1 concrete container send in the body
-    'HandleNetworkIdAndParamsAsync': '[]any',
-    // R1 concrete container send in the body
-    'HandlePortfolioAndParamsAsync': '[]any',
     // R1 concrete container send in the body
     'HandleUTAAndParamsAsync': '[]any',
     // R2 TS annotations ['Promise<TransferEntry[]>'] -> []any
@@ -6382,41 +6101,19 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     // R1 concrete container send in the body
     'TransferAsync': 'map[string]any',
     // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-    'TransferBetweenMainAndSubAccountAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-    'TransferBetweenSubAccountsAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
     'TransferClassicAsync': 'map[string]any',
     // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
-    'TransferInAsync': 'map[string]any',
-    // R1 concrete container send in the body
-    'TransferOutAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<TransferEntry>'] -> map[string]any
     'TransferUtaAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Balances>'] -> map[string]any
-    'WatchBalanceAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
-    'WatchBidsAsksAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<FundingRate>'] -> map[string]any
-    'WatchFundingRateAsync': 'map[string]any',
     // R2 TS annotations ['Promise<FundingRates>'] -> map[string]any
     'WatchFundingRatesAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-    'WatchLiquidationsAsync': '[]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
     'WatchLiquidationsForSymbolsAsync': '[]any',
-    // R2 TS annotations ['Promise<Ticker>'] -> map[string]any
-    'WatchMarkPriceAsync': 'map[string]any',
     // R2 TS annotations ['Promise<Tickers>'] -> map[string]any
     'WatchMarkPricesAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
-    'WatchMyLiquidationsAsync': '[]any',
     // R2 TS annotations ['Promise<Liquidation[]>'] -> []any
     'WatchMyLiquidationsForSymbolsAsync': '[]any',
     // TS watchMyTrades -> Promise<Trade[]>
     'WatchMyTradesAsync': '[]any',
-    // R2 TS annotations ['Promise<Trade[]>'] -> []any
-    'WatchMyTradesForSymbolsAsync': '[]any',
     // TS watchOHLCV -> Promise<OHLCV[]>
     'WatchOHLCVAsync': '[]any',
     // R2 TS annotations ['Promise<Dictionary<Dictionary<OHLCV[]>>>'] -> map[string]any
@@ -6425,10 +6122,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'WatchOrdersAsync': '[]any',
     // R2 TS annotations ['Promise<Order[]>'] -> []any
     'WatchOrdersForSymbolsAsync': '[]any',
-    // R2 TS annotations ['Promise<Position>'] -> map[string]any
-    'WatchPositionAsync': 'map[string]any',
-    // TS watchPositions -> Promise<Position[]>
-    'WatchPositionsAsync': '[]any',
     // pro/binance.go watchTickerBody `ch <- ccxt.GetValue(tickers, symbol)`
     'WatchTickerAsync': 'map[string]any',
     // `ch <- this.FilterByArray(this.Tickers, "symbol", symbols)`
@@ -6437,10 +6130,6 @@ export const CCXT_GO_ASYNC_ELEM_TYPES = {
     'WatchTradesAsync': '[]any',
     // R2 TS annotations ['Promise<Trade[]>'] -> []any
     'WatchTradesForSymbolsAsync': '[]any',
-    // concrete map[string]any; TS Promise<Transaction>
-    'WithdrawAsync': 'map[string]any',
-    // R2 TS annotations ['Promise<Transaction>'] -> map[string]any
-    'WithdrawWsAsync': 'map[string]any',
     // exchange_helpers.go:1946 `results := make([]any, len(tasks))` ... `ch <- results`; also a `ch <- nil
     'promiseAll': '[]any',
     // every override sends a safeDict-with-default / applyEventFetchParams list
@@ -6455,162 +6144,24 @@ export const CCXT_GO_ASYNC_FORWARD_SAFE = [
 
 // receivers whose element type is not nameable (the Watch family and interface results): never typed
 export const CCXT_GO_ASYNC_ELEM_EXCLUDED = [
-    'ApproveBuilderFeeAsync',
-    'AuthenticateAsync',
-    'AuthenticateRestAsync',
-    'AuthenticateUtaAsync',
     'CallDynamically',
-    'ChangeApiKeyAsync',
-    'ConnectCentrifugoAsync',
-    'CreateAmmOrderAsync',
-    'CreateOrderbookOrderAsync',
-    'CreateSubAccountAsync',
-    'EditOrderAsync',
-    'EnsureErc20AllowanceAsync',
-    'EnsureUserDataStreamWsSubscribeListenTokenAsync',
-    'EnsureUserDataStreamWsSubscribeSignatureAsync',
-    'EthRpcAsync',
     'Fetch2Async',
-    'FetchADLRankAsync',
-    'FetchAccountIdByTypeAsync',
-    'FetchAllGreeksAsync',
     'FetchAsync',
-    'FetchBuilderApprovalsAsync',
-    'FetchCrossBorrowRateAsync',
-    'FetchDepositWithdrawFeeAsync',
-    'FetchEventAsync',
-    'FetchIsolatedBorrowRateAsync',
-    'FetchIsolatedBorrowRatesAsync',
-    'FetchLastPricesAsync',
-    'FetchLatestBlockHeightAsync',
-    'FetchLeveragesAsync',
-    'FetchMarginModesAsync',
-    'FetchNonceAsync',
-    'FetchOpenInterestsAsync',
-    'FetchOrderBookWsAsync',
-    'FetchOrderStatusAsync',
-    'FetchOutcomeAsync',
-    'FetchOutcomesAsync',
-    'FetchPaymentMethodsAsync',
-    'FetchPrivateDepositWithdrawFeesAsync',
-    'FetchPublicDepositWithdrawFeesAsync',
-    'FetchQuoteAsync',
-    'FetchRawEventByTickerAsync',
-    'FetchRawMarketByIdAsync',
-    'FetchRawQuestionByIdAsync',
-    'FetchRawTopicDetailAsync',
-    'FetchRestOrderBookSafeAsync',
-    'FetchSettlementsAsync',
     'FetchTimeAsync',
-    'FetchWalletAsync',
-    'FetchWebEndpointAsync',
-    'FetchWithdrawalWhitelistAsync',
-    'GetAccountIdAsync',
-    'GetListenKeyAsync',
-    'GetSystemConfigAsync',
-    'GetUrlByMarketTypeAsync',
-    'GetUtaUrlAsync',
-    'GetWithdrawNonceAsync',
-    'GetZKContractSignatureObjAsync',
-    'GetZKTransferSignatureObjAsync',
-    'HandleBuilderFeeApprovalAsync',
-    'HelperForWatchMultipleConstructAsync',
-    'InitializeClientAsync',
-    'IsUTAEnabledAsync',
-    'LoadAccountAsync',
-    'LoadAccountInfosAsync',
-    'LoadAccountSettingsAsync',
-    'LoadApiCredentialsAsync',
-    'LoadApiKeyAsync',
-    'LoadCurrencyNetworksAsync',
-    'LoadDydxProtosAsync',
-    'LoadMarketsAndSignInAsync',
-    'LoadMultiSignAddressAsync',
-    'LoadOutcomesAsync',
-    'LoadTimeDifferenceAsync',
-    'LoadUnifiedStatusAsync',
-    'NegotiateAsync',
-    'PreLoadLighterLibraryAsync',
     'PromiseAll',
     'RequestAsync',
-    'RequestPrivateAsync',
-    'RetrieveAccountAsync',
-    'SeedOrderBookAsync',
-    'SeedPositionBalancesAsync',
-    'SendEvmTransactionAsync',
-    'SetMarginModeAsync',
-    'SetPositionModeAsync',
-    'SignInAsync',
     'SubscribeAsync',
-    'SubscribeMultipleAsync',
-    'SubscribeMyriadChannelAsync',
-    'SubscribeOpinionChannelAsync',
-    'SubscribePrivateAsync',
-    'SubscribePrivateUtaAsync',
-    'SubscribePublicAsync',
-    'SubscribePublicMultipleAsync',
-    'SubscribePublicMultipleUtaAsync',
-    'SubscribePublicUtaAsync',
-    'SubscribeUserChannelAsync',
-    'TradeRequestAsync',
     'UnSubscribeAsync',
-    'UnSubscribeMultipleAsync',
-    'UnSubscribePublicMultipleAsync',
     'UnWatchAsync',
-    'UnWatchBalanceAsync',
-    'UnWatchBidsAsksAsync',
-    'UnWatchChannelAsync',
-    'UnWatchChannelsAsync',
-    'UnWatchFundingRateAsync',
-    'UnWatchMarkPriceAsync',
-    'UnWatchMarkPricesAsync',
-    'UnWatchMyTradesAsync',
-    'UnWatchOHLCVAsync',
-    'UnWatchOHLCVForSymbolsAsync',
     'UnWatchOrderBookAsync',
     'UnWatchOrderBookForSymbolsAsync',
-    'UnWatchOrdersAsync',
-    'UnWatchPositionsAsync',
-    'UnWatchPrivateAsync',
-    'UnWatchPublicAsync',
-    'UnWatchPublicMultipleAsync',
-    'UnWatchTickerAsync',
-    'UnWatchTickersAsync',
-    'UnWatchTopicsAsync',
     'UnWatchTradesAsync',
     'UnWatchTradesForSymbolsAsync',
-    'UnWatchWalletEventsAsync',
     'UnsubscribeAsync',
-    'UnsubscribePublicAsync',
-    'UnwatchPublicAsync',
-    'WaitForTransactionReceiptAsync',
-    'WalletEventsTopicAsync',
     'Watch',
-    'WatchExecuteRequestAsync',
-    'WatchHeartbeatAsync',
-    'WatchManyAsync',
-    'WatchMultiHelperAsync',
-    'WatchMultiTickerHelperAsync',
-    'WatchMultiple',
-    'WatchMultipleSubscriptionAsync',
-    'WatchMultipleWrapperAsync',
     'WatchOrderBookAsync',
     'WatchOrderBookForSymbolsAsync',
-    'WatchPrivateAsync',
-    'WatchPrivateMultipleAsync',
-    'WatchPrivateRequestAsync',
-    'WatchPrivateSubscribeAsync',
     'WatchPublicAsync',
-    'WatchPublicMultipleAsync',
-    'WatchRequestAsync',
-    'WatchSpotPrivateAsync',
-    'WatchSpotPublicAsync',
-    'WatchStockMarketStreamAsync',
-    'WatchSwapPrivateAsync',
-    'WatchSwapPublicAsync',
-    'WatchTopicsAsync',
-    'WatchWalletEventsAsync',
-    'WathPublicAsync',
 ];
 
 // the printed receive, `(<-this.FetchTickerAsync(...))` / `(<-ccxt.Watch(...))`
@@ -8009,8 +7560,6 @@ const CCXT_GO_TUPLE_PARAMS_PRODUCERS = {
     'this.HandleOptionAndParams': 0, 'this.HandleOptionAndParams2': 0,
     'this.HandleOptionStringAndParams': 0, 'this.HandleOptionStringAndParams2': 0,
     'this.HandleOptionBoolAndParams': 0, 'this.HandleOptionBoolAndParams2': 0,
-    'this.HandleOptionBoolAndParamsNullable': 0, 'this.HandleOptionBoolAndParams2Nullable': 0,
-    'this.HandleOptionIntegerAndParamsNullable': 0, 'this.HandleOptionIntegerAndParams2Nullable': 0,
 };
 
 // Go type of element `index` of a `this.<m> (..)` tuple, read off the checker's declared return
@@ -8934,14 +8483,11 @@ const CCXT_GO_PRODUCER_DECLARATIONS = {
     'this.OpinionOrderRawAmounts': 'map',
     'this.ParseBinaryMarketToOutcomes': 'list',
     'this.ParseCancelOrders': 'list',
-    'this.ParseBorrowRateHistory': 'list',
     'this.ParsePredictionOrders': 'list', 'this.FilterByOutcomeSinceLimit': 'list',
     'this.ParsePredictionTrades': 'list',
     'this.ParseFundingRate': 'map',
     'this.ParseMarketLeverageTiers': 'list',
     'this.ParseOHLCVs': 'list',
-    'this.InsertMissingCandles': 'list',
-    'this.ParseTradingViewOHLCV': 'list',
     'this.ParseTrade': 'map',
     'this.ParseOrder': 'map',
     'this.ParseTicker': 'map',
@@ -8950,7 +8496,6 @@ const CCXT_GO_PRODUCER_DECLARATIONS = {
     'this.Omit': 'map',
     'this.SafeMarket': 'map',
     'this.ParseTransaction': 'map',
-    'this.ParseWsOHLCVs': 'list',
     'this.PolymarketOrderRawAmounts': 'map',
     'this.SignPredictfunOrder': 'map',
     'this.AddKeyInArrayItems': 'list',
@@ -9015,7 +8560,6 @@ const CCXT_GO_PRODUCER_DECLARATIONS = {
     'this.SafePredictionTrade': 'map',
     'this.SeparateBidsOrAsks': 'list',
     'this.ParseOpenInterestsHistory': 'list', 'this.ParseLiquidations': 'list', 'this.ParseADLRanks': 'list', 'this.FilterByArrayADLRanks': 'list', 'this.ParseOpenInterests': 'map',
-    'this.ParseConversions': 'list', 'this.ParseLongShortRatioHistory': 'list', 'this.ParseAccounts': 'list', 'this.ParseAllGreeks': 'map', 'this.ParseOptionChain': 'map', 'this.ParseAccount': 'map',
     'this.ParseFundingRateHistories': 'list', 'this.ParseIncomes': 'list', 'this.ParseFundingHistories': 'list',
     'this.ParseDepositAddresses': 'list',
 };
@@ -13786,7 +13330,6 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'MathRound': 'float64',
     'MathAbs': 'float64',
     'MathPow': 'float64',
-    'ToFloat64': 'float64',
     'EvalTruthy': 'bool',
     'IsEqual': 'bool',
     'IsGreaterThan': 'bool',
@@ -13795,11 +13338,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'IsLessThanOrEqual': 'bool',
     'InOp': 'bool',
     'IsArray': 'bool',
-    'IsString': 'bool',
     'IsInt': 'bool',
-    'IsBool': 'bool',
-    'IsNumber': 'bool',
-    'IsObject': 'bool',
     'IsDictionary': 'bool',
     'StartsWith': 'bool',
     'EndsWith': 'bool',
@@ -13815,7 +13354,6 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'strings.HasSuffix': 'bool',
     'strconv.FormatInt': 'string',
     'IsInstance': 'bool',
-    'IsInteger': 'bool',
     'this.InArray': 'bool',
     'this.ValueIsDefined': 'bool',
     'Precise.StringGt': 'bool',
@@ -14384,12 +13922,7 @@ const GO_BASE_PAIR_TWINS: { [name: string]: string } = {
 // (unchanged, omitted or extended: always a map[string]any in Go)
 const GO_PARAMS_TUPLE_HELPERS: { [name: string]: number } = {
     'handleUntilOption': 1,
-    'handleNetworkCodeAndParams': 1,
-    'handleWithdrawTagAndParams': 1,
-    'handleTriggerAndParams': 1,
-    'handleTriggerDirectionAndParams': 1,
     'handlePostOnly': 1,
-    'handleTriggerPricesAndParams': 3,
 };
 
 // destructures the Go build layer already rewrites natively: the pair-result helpers print
@@ -14400,8 +13933,6 @@ const GO_TUPLE_NATIVE_BINDING_PRODUCERS = [
     'HandleUntilOption', 'HandleMarginModeAndParams', 'HandleOptionBoolAndParams',
     'HandleOptionBoolAndParams2', 'HandleOptionIntegerAndParams', 'HandleOptionIntegerAndParams2',
     'HandleOptionStringAndParams2', 'HandleOptionAndParams', 'HandleOptionAndParams2',
-    'HandleOptionBoolAndParamsNullable', 'HandleOptionBoolAndParams2Nullable',
-    'HandleOptionIntegerAndParamsNullable', 'HandleOptionIntegerAndParams2Nullable',
     'HandleNetworkCodeAndParams', 'HandleWithdrawTagAndParams', 'HandlePostOnly',
     'HandleParamString', 'HandleParamString2', 'HandleParamInteger', 'HandleParamInteger2',
     'HandleParamBool', 'HandleParamBool2',
