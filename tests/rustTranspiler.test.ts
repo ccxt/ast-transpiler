@@ -21197,3 +21197,57 @@ describe('ral-62e: a guarded borrow-rate bucket bind (`if (!(k in m)) m[k] = [];
         expect(out).toMatch(/let mut bucket: Value = /);
     });
 });
+
+describe('ral-62i: a never-null defaulted list reader local handed whole to a built list local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, tail: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (response: Dict) {\n        const data = this.safeDict (response, 'data', {});\n        const trades: Dict[] = this.safeList (data, 'items', []);\n        let rows: Dict[] = [];\n        if (trades !== undefined) {\n            rows = trades;\n        }\n        for (let i = 0; i < rows.length; i++) {\n            this.keep (this.safeString (rows, i));\n        }\n" + tail + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('the source holds the List and hands it over without a box', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62i-nn-pos', "        return 1;\n")).content;
+        expect(out).toContain('let mut trades: crate::value::List = ');
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toContain('rows = trades;');
+        expect(out).not.toContain('trades.into_list()');
+    });
+    test('a source boxed straight back to a Value slot keeps its box', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62i-nn-neg', "        return this.keep (trades);\n")).content;
+        expect(out).not.toContain('let mut trades: crate::value::List');
+    });
+});
+
+describe('ral-62i: a no-default safeDict local defaulted to {} by a ternary on its own null test', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (trade: Dict) {\n        const rawOrder = this.safeDict (trade, 'order');\n        const isMatch = rawOrder !== undefined;\n" + body + "    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    // Truth table: the reader answers Null (missing / non-map) or the map M. Old: `if x == Null { {} } else { x }` then
+    // `.into_dict()` = {} for Null, M for M. New: `x.unwrap_or_default()` on Option<Dict> = {} for None, M for Some(M).
+    test('truth table', () => {
+        const oldForm = (held: 'Null' | 'M') => held === 'Null' ? '{}' : 'M';
+        const newForm = (held: 'None' | 'Some(M)') => held === 'None' ? '{}' : 'M';
+        expect([ oldForm ('Null'), oldForm ('M') ]).toEqual([ newForm ('None'), newForm ('Some(M)') ]);
+    });
+    test('the source holds the optional map and the ternary is its unwrap_or_default (moved at its last use)', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62i-tern-pos', "        const order = (rawOrder === undefined) ? {} : rawOrder;\n        return [ isMatch, this.safeString (order, 'amount') ];\n")).content;
+        expect(out).toContain('let mut rawOrder: Option<crate::value::Dict> = ');
+        expect(out).toContain('let mut order: crate::value::Dict = rawOrder.unwrap_or_default();');
+    });
+    test('a later read of the source keeps a clone at the ternary', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62i-tern-later', "        const order = (rawOrder !== undefined) ? rawOrder : {};\n        return [ isMatch, this.safeString (order, 'amount'), this.safeString (rawOrder, 'id') ];\n")).content;
+        expect(out).toContain('let mut rawOrder: Option<crate::value::Dict> = ');
+        expect(out).toContain('rawOrder.clone().unwrap_or_default()');
+    });
+    test('a non-empty literal arm keeps the local Value', () => {
+        const out = transpiler.transpileRustByPath (write ('ral-62i-tern-neg', "        const order = (rawOrder === undefined) ? { 'a': 1 } : rawOrder;\n        return [ isMatch, this.safeString (order, 'amount') ];\n")).content;
+        expect(out).not.toContain('let mut rawOrder: Option<crate::value::Dict>');
+    });
+});

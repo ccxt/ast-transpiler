@@ -2509,7 +2509,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -18883,6 +18883,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printConditionalExpression(node, identation) {
+        const optMapDefault = this.printOptMapDefaultTernary(node); if (optMapDefault !== undefined) return optMapDefault;
         const condition = this.printCondition(node.condition, 0);
         const whenTrue = this.printTernaryArm(node.whenTrue);
         const whenFalse = this.printTernaryArm(node.whenFalse);
@@ -21798,6 +21799,13 @@ export class RustTranspiler extends BaseTranspiler {
             // `Promise<Dict>` endpoint) whose target is a typed reuse map: the optional map hands its map over
             // (`x.clone().unwrap_or_default()`), the empty map for `None` exactly as the boxed `x.clone().into_dict()` did
             if (nilDeclared && from === 'dict' && this.rustEndpointAliasSourceUse(n, declaration)) return ++reads > 0;
+            // ral-62i: `y = x` (statement) of a never-null defaulted list reader local (ral-60n) into a built list local of the
+            // same function: the List handle moves (or is shared at a later read) into the typed target, which took
+            // `x.into_list()` of the very `Value::Arr` the boxed local held
+            if (neverNullInit && from === 'list' && this.rustNnListHandOff(n, declaration)) return ++reads > 0;
+            // ral-62i: `(x === undefined) ? {} : x` on a no-default map reader local: the optional map's own
+            // `unwrap_or_default()` (the empty map for `None`, the map itself otherwise), no box
+            if (!nilDeclared && from === 'dict' && writes === 0 && this.rustOptMapDefaultTernaryArm(n, declaration)) return ++lentNullable > 0 && ++reads > 0;
             // ral-40h: `const|let y = x` of a container local (phase 1): the alias takes the container whole
             // ral-53n: the initializer / a whole write of a never-null alias of this kind is lent (`Value::from(&x)` shares the Arc)
             if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustNnAliasSourceUse(n, from)) return ++reads > 0;
@@ -28675,11 +28683,100 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(y);
         if (declaration === undefined || declaration.name === y || !isVariableDeclaration(declaration)) return undefined;
         if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(write) || this.rustLocalIsReassigned(declaration, String(y.text))) return undefined;
-        if (!this.rustDefaultedListValue(declaration, y)) return undefined;
+        // ral-62i: or the same defaulted reader local while (or after) it is decided the never-null List itself
+        const nnList = this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))
+            && (this.rustBorrowedPending.has(declaration) || this.rustBorrowedLocalKind(declaration) === 'list');
+        if (!nnList && !this.rustDefaultedListValue(declaration, y)) return undefined;
         let branch: any = write.parent?.parent;
         if (!isBlock(branch)) branch = write.parent;
         const guard: any = branch?.parent?.kind === SyntaxKind.IfStatement && branch.parent.thenStatement === branch ? branch.parent : undefined;
         return this.rustLocalLastUse(y, declaration) || (guard !== undefined && this.rustGuardedBranchLastUse(y, declaration, guard)) ? declaration : undefined;
+    }
+
+    private rustNnListHandOffs = new WeakSet<any>();
+
+    /** ral-62i: `y = x` (statement), y a built list local of x's function (not x itself): the never-null list x hands over. */
+    rustNnListHandOff(n: any, declaration: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        const target: any = this.rustDeclarationOfIdentifier(up.left);
+        if (target === undefined || target === declaration || target.name === up.left || !isVariableDeclaration(target) || this.rustBorrowedPending.has(target)) return false;
+        if (this.rustEnclosingFunction(target) !== this.rustEnclosingFunction(declaration) || this.rustBuiltListOf(up.left) === undefined) return false;
+        // only under its own null test (`if (x !== undefined) { y = x; }`), moved there (no copy is added)
+        if (!this.rustNnGuardedWrite(up, n)) return false;
+        if (this.rustDefaultedAliasMove(up) === undefined) return false;
+        // every other read of x is the guard's null test: nothing boxes x back (a box-only container stays Value)
+        const guardIf: any = findAncestor(up, (a: any) => a.kind === SyntaxKind.IfStatement);
+        const guardTest: any = this.rustSkipWrappers(guardIf?.expression);
+        const scope = this.rustEnclosingFunction(declaration);
+        const nameNodes: any[] = this.rustScopeNameNodes(scope, String(declaration.name.text));
+        for (const m of nameNodes) {
+            if (m === n || m === declaration.name || !isIdentifier(m) || this.rustIdentifierIsPropertyName(m) || !this.rustIdentifierRefersToDeclaration(m, declaration)) continue;
+            if (m.parent !== guardTest) return false;
+        }
+        this.rustNnListHandOffs.add(up);
+        return true;
+    }
+
+    /** ral-62i: `y = x` is the only statement of the then-branch of `if (x !== undefined)` (or `!=`). */
+    rustNnGuardedWrite(write: any, x: any): boolean {
+        const statement: any = write.parent;
+        let branch: any = statement?.parent;
+        if (isBlock(branch)) {
+            if (branch.statements.length !== 1) return false;
+        } else branch = statement;
+        const guard: any = branch?.parent;
+        if (guard === undefined || guard.kind !== SyntaxKind.IfStatement || guard.thenStatement !== branch) return false;
+        const test: any = this.rustSkipWrappers(guard.expression);
+        if (!isBinaryExpression(test) || (test.operatorToken.kind !== SyntaxKind.ExclamationEqualsEqualsToken && test.operatorToken.kind !== SyntaxKind.ExclamationEqualsToken)) return false;
+        const l: any = this.rustSkipWrappers(test.left);
+        const r: any = this.rustSkipWrappers(test.right);
+        const tested: any = isIdentifier(l) && l.text === x.text ? l : (isIdentifier(r) && r.text === x.text ? r : undefined);
+        if (tested === undefined || this.rustDeclarationOfIdentifier(tested) !== this.rustDeclarationOfIdentifier(x)) return false;
+        return this.literalKindOfNode(tested === l ? r : l) === 'null';
+    }
+
+    private rustOptMapDefaultTernaries = new WeakSet<any>();
+
+    /** ral-62i: n is the `whenFalse` arm of `(n === undefined) ? {} : n` (or `!== undefined` with the arms swapped). */
+    rustOptMapDefaultTernaryArm(n: any, declaration: any): boolean {
+        const up: any = n.parent;
+        if (up === undefined || !isConditionalExpression(up)) return false;
+        const test: any = this.rustSkipWrappers(up.condition);
+        if (!isBinaryExpression(test)) return false;
+        const op = test.operatorToken.kind;
+        const eq = op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.EqualsEqualsToken;
+        const ne = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
+        if (!eq && !ne) return false;
+        const l: any = this.rustSkipWrappers(test.left);
+        const r: any = this.rustSkipWrappers(test.right);
+        const tested: any = isIdentifier(l) && this.rustIdentifierRefersToDeclaration(l, declaration) ? l : (isIdentifier(r) && this.rustIdentifierRefersToDeclaration(r, declaration) ? r : undefined);
+        if (tested === undefined || this.literalKindOfNode(tested === l ? r : l) !== 'null') return false;
+        const arm: any = eq ? up.whenFalse : up.whenTrue;
+        const empty: any = this.rustSkipWrappers(eq ? up.whenTrue : up.whenFalse);
+        if (arm !== n || empty === undefined || !isObjectLiteralExpression(empty) || empty.properties.length !== 0) return false;
+        this.rustOptMapDefaultTernaries.add(up);
+        return true;
+    }
+
+    /** ral-62i: the print of a ternary admitted by rustOptMapDefaultTernaryArm once its local holds `Option<Dict>`. */
+    printOptMapDefaultTernary(node: any, bare = false): string | undefined {
+        if (node === undefined || !this.rustOptMapDefaultTernaries.has(node)) return undefined;
+        const test: any = this.rustSkipWrappers(node.condition);
+        const eq = test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken || test.operatorToken.kind === SyntaxKind.EqualsEqualsToken;
+        const x: any = this.rustSkipWrappers(eq ? node.whenFalse : node.whenTrue);
+        const declaration: any = this.rustDeclarationOfIdentifier(x);
+        if (declaration === undefined || this.rustBorrowedLocalKind(declaration) !== 'dict' || !this.rustOptContainerLocals.has(declaration)) return undefined;
+        const name = super.transformIdentifier(x, this.ReservedKeywordsReplacements[x.text] ?? x.text);
+        // moved when nothing reads the local after this ternary and no loop repeats it
+        const scope = this.rustEnclosingFunction(declaration);
+        const nameNodes: any[] = this.rustScopeNameNodes(scope, String(declaration.name.text));
+        const later = nameNodes.some((m: any) => m !== x && isIdentifier(m) && m !== declaration.name
+            && !this.rustIdentifierIsPropertyName(m) && this.rustIdentifierRefersToDeclaration(m, declaration) && m.pos >= node.end);
+        const inLoop = findAncestor(node, (a: any) => a === scope || a.kind === SyntaxKind.ForStatement || a.kind === SyntaxKind.ForOfStatement || a.kind === SyntaxKind.ForInStatement
+            || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement) !== scope;
+        const owned = `${name}${later || inLoop ? '.clone()' : ''}.unwrap_or_default()`;
+        return bare ? owned : `Value::Dict(${owned})`;
     }
 
     rustBuiltListOf(node: any): any {
@@ -28872,6 +28969,11 @@ export class RustTranspiler extends BaseTranspiler {
     printBuiltListWrite(left: any, right: any): string | undefined {
         if (this.rustBuiltListOf(left) === undefined) return undefined;
         const rhs: any = this.rustSkipWrappers(right);
+        // ral-62i: the never-null list local handed over whole (moved at its last use, else the shared handle)
+        if (isIdentifier(rhs) && isBinaryExpression(rhs.parent) && this.rustNnListHandOffs.has(rhs.parent)) {
+            const src: any = this.rustDeclarationOfIdentifier(rhs);
+            if (src !== undefined && this.rustBorrowedLocalKind(src) === 'list') return `${this.printNode(left, 0).trim()} = \u0004${this.rustOptListName(rhs)}`;
+        }
         const guarded: any = isIdentifier(rhs) && isBinaryExpression(rhs.parent) ? this.rustOptListGuardedMove(rhs.parent) : undefined;
         if (guarded !== undefined) return `${this.printNode(left, 0).trim()} = ${rhs.text}.${this.rustDefaultedListValue(guarded, rhs) ? 'into_list' : 'unwrap_or_default'}()`;
         if (isIdentifier(rhs) && isBinaryExpression(rhs.parent) && this.rustDefaultedAliasMove(rhs.parent) !== undefined) return `${this.printNode(left, 0).trim()} = ${rhs.text}.into_list()`;
