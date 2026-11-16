@@ -20264,3 +20264,56 @@ describe('ral-59n: a typed scalar local against a Value at an equality prints th
         expect(out).not.toContain('(code.as_deref() == self.');
     });
 });
+
+describe('ral-59a: omit results lent to a three-argument omit, a Value alias, or a venue helper\'s optional Dict slot', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: number = undefined): number { return o; }\n    omit (x: any, ...k: any[]): any { return x; }\n    extend (...args: any[]): any { return args[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleOptionIntegerAndParams (params: object, methodName: string, optionName: string, defaultValue: number = undefined): [number, Dict] {\n        return [ this.safeInteger (params, optionName, defaultValue), this.omit (params, optionName) ];\n    }\n}\n";
+    const mk = (name: string, body: string): string => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "    other (x: any): any {\n        return x;\n    }\n}\n");
+        // ccxt transpiles the base class first on the same Transpiler
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const head = "        const [ g, paramsG ] = this.handleOptionIntegerAndParams (params, 'withdraw', 'g', 2);\n";
+    test('bitfinex withdraw: `this.omit (x, \'a\', \'b\')` lends &x and the local stays Dict', () => {
+        const out = mk ('r59a-rest', "    async withdraw (code: string, params = {}): Promise<any> {\n" + head + "        const paramsOmitted: Dict = this.omit (paramsG, 'network');\n        const wallet = this.safeString (paramsOmitted, 'wallet', 'exchange');\n        const paramsOmitted2: Dict = this.omit (paramsOmitted, 'network', 'wallet');\n        return this.extend ({ 'w': wallet, 'g': g }, paramsOmitted2);\n    }\n");
+        expect(out).toContain('let mut paramsOmitted: crate::value::Dict = self.omit(&paramsG, ');
+        expect(out).toMatch(/self\.omit\(&paramsOmitted, Value::Str\("network"\.into\(\)\), &\[Value::Str\("wallet"\.into\(\)\)\]\)/);
+    });
+    test('guard: a three-argument omit with a non-literal extra key keeps Value', () => {
+        const out = mk ('r59a-rest-neg', "    async withdraw (code: string, params = {}): Promise<any> {\n" + head + "        const paramsOmitted: Dict = this.omit (paramsG, 'network');\n        const paramsOmitted2: Dict = this.omit (paramsOmitted, 'network', code);\n        return this.extend ({ 'g': g }, paramsOmitted2);\n    }\n");
+        expect(out).toContain('let mut paramsOmitted: Value = ');
+    });
+    test('bingx fetchMyTrades: an omit copied whole into a Value local (`y = x`) boxes there and stays Dict', () => {
+        const out = mk ('r59a-alias', "    async fetchMyTrades (symbol: string, params = {}): Promise<any> {\n" + head + "        let paramsTrades = undefined;\n        const paramsUntil = this.omit (paramsG, 'until');\n        if (symbol === 'a') {\n            paramsTrades = paramsUntil;\n        } else {\n            paramsTrades = this.omit (paramsUntil, 'tradingUnit');\n        }\n        return this.other (this.extend ({ 'g': g }, paramsTrades));\n    }\n");
+        expect(out).toContain('let mut paramsUntil: crate::value::Dict = self.omit(&paramsG, ');
+        expect(out).toMatch(/paramsTrades = Value::(?:from\(&paramsUntil\)|Dict\(paramsUntil\));/);
+    });
+    test('guard: the same alias inside a loop keeps Value', () => {
+        const out = mk ('r59a-alias-neg', "    async fetchMyTrades (symbol: string, params = {}): Promise<any> {\n" + head + "        let paramsTrades = undefined;\n        const paramsUntil = this.omit (paramsG, 'until');\n        for (let i = 0; i < 2; i++) {\n            paramsTrades = paramsUntil;\n        }\n        return this.other (this.extend ({ 'g': g }, paramsTrades));\n    }\n");
+        expect(out).toContain('let mut paramsUntil: Value = ');
+    });
+    test('kalshi fetchEvents: an omit handed to a venue helper\'s trailing `rest: Dict = {}` rides in optional_args as the shared map', () => {
+        const out = mk ('r59a-helper', "    async fetchEvents (q: string, params = {}): Promise<any> {\n" + head + "        const rest = this.omit (paramsG, [ 'status', 'limit' ]);\n        const a = await this.fetchEventsByQuery (q, g, rest);\n        return await this.fetchEventsByQuery (q, g, rest);\n    }\n    async fetchEventsByQuery (q: string, limit: number, rest: Dict = {}): Promise<any> {\n        return this.extend ({ 'q': q, 'l': limit }, rest);\n    }\n");
+        expect(out).toContain('let mut rest: crate::value::Dict = self.omit(&paramsG, ');
+        expect(out).toContain('&[Value::from(&rest)]');
+        expect(out).toContain('&[Value::Dict(rest)]');
+        // the decision itself: the helper's trailing `rest: Dict = {}` is an optional params slot for the omit local
+        const rt: any = (transpiler as any).rustTranspiler;
+        const calls: boolean[] = [];
+        const orig = rt.rustOptionalParamsSlot.bind (rt);
+        rt.rustOptionalParamsSlot = (c: any, a: any) => { const r = orig (c, a); if (String (c?.expression?.name?.text) === 'fetchEventsByQuery' && a?.text === 'rest') calls.push (r); return r; };
+        try {
+            mk ('r59a-helper2', "    async fetchEvents (q: string, params = {}): Promise<any> {\n" + head + "        const rest = this.omit (paramsG, [ 'status', 'limit' ]);\n        return await this.fetchEventsByQuery (q, g, rest);\n    }\n    async fetchEventsByQuery (q: string, limit: number, rest: Dict = {}): Promise<any> {\n        return this.extend ({ 'q': q, 'l': limit }, rest);\n    }\n");
+        } finally {
+            rt.rustOptionalParamsSlot = orig;
+        }
+        expect(calls).toContain(true);
+    });
+    test('guard: a local rewritten from another identifier keeps its old box at a helper slot', () => {
+        const out = mk ('r59a-helper-neg', "    async fetchEvents (q: string, params = {}): Promise<any> {\n" + head + "        const other = this.omit (paramsG, 'x');\n        let rest = this.omit (paramsG, [ 'status', 'limit' ]);\n        if (q === 'a') {\n            rest = other;\n        }\n        return await this.fetchEventsByQuery (q, g, rest);\n    }\n    async fetchEventsByQuery (q: string, limit: number, rest: Dict = {}): Promise<any> {\n        return this.extend ({ 'q': q, 'l': limit }, rest);\n    }\n");
+        expect(out).not.toContain('let mut rest: crate::value::Dict');
+    });
+});

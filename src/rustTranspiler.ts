@@ -15942,11 +15942,18 @@ export class RustTranspiler extends BaseTranspiler {
     rustOptionalParamsSlot(call: any, arg: any): boolean {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const name = String(call.expression.name.text);
-        if (!/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(name)) return false;
+        // ral-59a: also the trailing `x: Dict = {}` of any other transpiled method that is not a typed unified one (a venue
+        // helper such as lbank fetchPublicTransactionFees, kalshi fetchEventsByQuery, or base parseOrders): every
+        // parameter from the first default on rides in the `optional_args` slice there too
+        const wide = !/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(name);
+        if (wide && (this.rustTypedUnified.has(name) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !isIdentifier(arg) || this.rustRewrittenFromLocal(this.rustDeclarationOfIdentifier(arg)))) return false;
         const at = Array.from(call.arguments ?? []).indexOf(arg);
         const params = at < 0 ? undefined : this.rustTranspiledCalleeParams(call, name);
         const param: any = params?.[at];
-        if (param === undefined || param.dotDotDotToken !== undefined || param.initializer === undefined || !isIdentifier(param.name) || param.name.text !== 'params') return false;
+        if (param === undefined || param.dotDotDotToken !== undefined || param.initializer === undefined || !isIdentifier(param.name) || (!wide && param.name.text !== 'params')) return false;
+        if (wide && (at !== params.length - 1 || !isObjectLiteralExpression(param.initializer) || param.initializer.properties.length !== 0
+            || params.some((p: any) => p.dotDotDotToken !== undefined))) return false;
         return String(param.type?.getText?.() ?? '').replace(/\s+/g, '') === 'Dict';
     }
 
@@ -15955,7 +15962,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node) || !this.rustOptionalParamsSlot(node.parent, node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node || !this.rustHandedDictLocal(declaration)) return undefined;
-        return `Value::from(&${text})`;
+        // ral-59a: the widened (non-handle*) slot moves the map at its last use, as the plain box did before
+        const wide = !/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(String((node.parent as any).expression.name.text));
+        return wide && this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
     }
 
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
@@ -28613,6 +28622,8 @@ export class RustTranspiler extends BaseTranspiler {
             }
             const ok = (call.arguments[0] === n && this.rustBorrowedDictReader(call) !== undefined)
                 || (call.arguments[0] === n && call.arguments.length === 2 && this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT))
+                // ral-59a: `this.omit (x, k1, k2, ..)` (extra keys ride in the `optional_args` slice as printed today) lends `&x` too
+                || (call.arguments[0] === n && this.rustHandedRestOmit(call))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n)
                 // ral-55a: a reassigned handed map read by a hand-written any-key reader (`safeString2 (x, 'a', 'b')`) is lent;
                 // ral-57a: so is an omit result that is never reassigned (`const p = this.omit (q, k)` read by `safeString2`)
@@ -28948,6 +28959,10 @@ export class RustTranspiler extends BaseTranspiler {
             && lentDict(first)) {
             return `self.omit(${lent(first)}, ${this.printNode(node.arguments[1], identation).trim()}, &[])`;
         }
+        if (this.rustHandedRestOmit(node) && isIdentifier(first) && lentDict(first)) {
+            const rest = Array.from(node.arguments).slice(2).map((a: any) => this.printNode(a, identation).trim()).join(', ');
+            return `self.omit(${lent(first)}, ${this.printNode(node.arguments[1], identation).trim()}, &[${rest}])`;
+        }
         const operand: any = this.rustHandedDictExtendOperand(node);
         // ral-40a: an `Option<Dict>` local lent to `extend` (MergeOperands for `&[&Option<Dict>; 1]`)
         const optOperand = (n: any) => {
@@ -28958,6 +28973,13 @@ export class RustTranspiler extends BaseTranspiler {
         const head = this.printNode(first, identation).trim();
         const method = this.toSnakeCaseName(String((node.expression as any).name.text));
         return `self.${method}(${isIdentifier(first) && this.printExtendHeadArg(first, head) !== undefined ? head : RustTranspiler.cloneIfBareLocal(head)}, &[${lent(operand)}])`;
+    }
+
+    /** ral-59a: a base `this.omit (x, k1, k2, ..)` with literal extra keys and no spread: the call keeps its printed
+     *  `optional_args` slice, only the head is lent (`OmitSource for &Dict`). */
+    rustHandedRestOmit(call: any): boolean {
+        if (!isCallExpression(call) || call.arguments.length < 3 || !this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT)) return false;
+        return Array.from(call.arguments).slice(1).every((a: any) => isStringLiteral(a));
     }
 
     /** `let mut x: crate::value::Dict = <slot read>.into_dict()` for a handed params slot. */
@@ -30020,6 +30042,16 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustHandedSlotBoxUse(n: any, declaration: any): boolean {
         const up: any = n.parent;
+        // ral-59a: a never-reassigned `const x = this.omit (m, k)` of a proven map copied whole into an untyped `Value` local
+        // (`let y = x` / `y = x`, no loop or closure in between): y keeps its box (`Value::Dict(x)` at the last use, else `Value::from(&x)`)
+        if (up !== undefined && this.rustOmitAliasSource(declaration)) {
+            if (isVariableDeclaration(up) && up.initializer === n) return this.rustEnclosingFunction(up) === this.rustEnclosingFunction(declaration) && this.rustAliasInitOutsideLoop(up, declaration) && this.rustSlotTargetStaysValue(up);
+            if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement && isIdentifier(up.left)) {
+                const target: any = this.rustDeclaredNode(up.left);
+                return target !== undefined && target !== up.left && isVariableDeclaration(target) && target !== declaration
+                    && this.rustEnclosingFunction(up) === this.rustEnclosingFunction(declaration) && this.rustAliasInitOutsideLoop(up, declaration) && this.rustSlotTargetStaysValue(target);
+            }
+        }
         if ((declaration?.kind !== SyntaxKind.BindingElement && !this.rustHandedTernaryLocal(declaration) && !this.rustNilSlotDictCandidate(declaration) && !this.rustHandedReassignedMap(declaration)) || up === undefined || this.rustScalarInNestedWrite(n, true)) return false;
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         // an element of a returned tuple literal (`return [ a, p ]`): the map boxes into the list
@@ -30040,6 +30072,28 @@ export class RustTranspiler extends BaseTranspiler {
         // the `impl Into<crate::Params>` slot of a typed unified call takes the boxed map as it took the `Value` local
         if (this.rustTypedParamsSlot(up, Array.from(up.arguments).indexOf(n))) return true;
         return this.rustNilBoxSlotOk(up, Array.from(up.arguments).indexOf(n));
+    }
+
+    /** ral-59a: a local initialised or rewritten whole from another identifier (`let x = y` / `x = y`): handing it to a
+     *  `Value` slot moved its source before; typing it would copy the source at the write instead. */
+    rustRewrittenFromLocal(declaration: any): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return true;
+        const init: any = declaration.initializer === undefined ? undefined : this.rustSkipWrappers(declaration.initializer);
+        if (init !== undefined && isIdentifier(init)) return true;
+        let fromLocal = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            const up: any = n.parent;
+            const rhs: any = isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken ? this.rustSkipWrappers(up.right) : undefined;
+            if (rhs !== undefined && isIdentifier(rhs)) fromLocal = true;
+            return true;
+        });
+        return fromLocal;
+    }
+
+    /** ral-59a: a single-binding, never-reassigned `const x = this.omit (m, k)` whose head is a proven map. */
+    rustOmitAliasSource(declaration: any): boolean {
+        return isVariableDeclaration(declaration) && isIdentifier(declaration.name) && (declaration.parent as any)?.declarations?.length === 1
+            && !this.rustNilSlotDictCandidate(declaration) && this.rustOmitOfDictInit(declaration) && !this.rustLocalIsReassigned(declaration, String(declaration.name.text));
     }
 
     /** ral-53a: no loop or closure between the source's declaration and the alias declaration. */
@@ -30066,7 +30120,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         const local = declaration !== undefined && isVariableDeclaration(declaration) && declaration.name !== node
-            && (this.rustDictTernaryArmPlace(node, declaration) || ((this.rustHandedTernaryLocal(declaration) || this.rustNilSlotDictCandidate(declaration) || this.rustHandedReassignedMap(declaration)) && this.rustHandedSlotBoxUse(node, declaration)));
+            && (this.rustDictTernaryArmPlace(node, declaration) || ((this.rustHandedTernaryLocal(declaration) || this.rustNilSlotDictCandidate(declaration) || this.rustHandedReassignedMap(declaration) || this.rustOmitAliasSource(declaration)) && this.rustHandedSlotBoxUse(node, declaration)));
         if (!local && (declaration?.kind !== SyntaxKind.BindingElement || declaration.name === node || !(this.rustHandedSlotBoxUse(node, declaration) || this.rustMutableSlotUse(node, declaration) === 'box'))) return undefined;
         if (!this.rustHandedDictLocal(declaration)) return undefined;
         return this.rustLocalLastUse(node, declaration) ? `Value::Dict(${text})` : `Value::from(&${text})`;
