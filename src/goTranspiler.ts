@@ -36758,3 +36758,258 @@ function ccxtGo90g2ListNativeRead (goTranspiler, declaration): boolean {
     };
 }
 // ===== ral-90g2 L (end) =====
+
+// ===== ral-90g3 (element reads, type assertions, GetValue results) =====
+// Every rule here decides from the TypeScript AST / checker and only fires under the ccxt order-book
+// config (`go.orderBook`), on a ws / prediction exchange file (the files ccxt's getWsRegexes reach).
+function go90g3ExchangeWsFile (node: Node): boolean {
+    return /(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/][^\\/]+\.ts$/.test(String(node.getSourceFile()?.fileName ?? ''));
+}
+function go90g3StoreCall (node): { receiver: tsAst.Identifier, method: string } | undefined {
+    const callee = node?.expression;
+    if ((node?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const method = String(callee.name?.text ?? '');
+    return ((method === 'store') || (method === 'storeArray')) ? { receiver: callee.expression, method } : undefined;
+}
+export interface GoTranspiler {
+    go90g3SideKeys(key): string[] | undefined;
+    go90g3ComputedSideLocal(declaration): { book: tsAst.Identifier, key: tsAst.Identifier, sides: string[] } | undefined;
+    go90g3ComputedSideCache: WeakMap<object, { book: tsAst.Identifier, key: tsAst.Identifier, sides: string[] } | null>;
+    go90g3PromiseLocal(declaration): boolean;
+    go90g3StringCharRead(node): boolean;
+}
+// R1: `const s = book[side]` with `book` printed as the order-book interface and `side` a Go `string` whose checker
+// type is a union of the configured side names ('asks' | 'bids'): the read is the interface accessor of that side
+// (GetValue reflects the same `Asks` / `Bids` field), so the local declares the side interface and is picked by a
+// native string compare. Every use must be the receiver of `.store (..)` / `.storeArray (..)`, which then print the
+// interface's own methods (no assertion).
+GoTranspiler.prototype.go90g3SideKeys = function (key) {
+    const cfg = this.goOrderBook;
+    if ((cfg === undefined) || (key?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(key) !== 'string')) {
+        return undefined;
+    }
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    try {
+        const type: Type | undefined = checker?.getTypeAtLocation(key);
+        if (type === undefined) {
+            return undefined;
+        }
+        const parts: Type[] = type.isUnionType() ? type.getTypes().slice() : [ type ];
+        const names: string[] = [];
+        for (const part of parts) {
+            if ((part.flags & TypeFlags.StringLiteral) === 0) {
+                return undefined;
+            }
+            const text = checker.typeToString(part).replace(/^["']|["']$/g, '');
+            if (!Object.prototype.hasOwnProperty.call(cfg.sides, text)) {
+                return undefined;
+            }
+            names.push(text);
+        }
+        return (names.length > 0) ? Array.from(new Set(names)).sort() : undefined;
+    } catch (e) {
+        return undefined;
+    }
+};
+GoTranspiler.prototype.go90g3ComputedSideLocal = function (declaration) {
+    if (this.go90g3ComputedSideCache === undefined) {
+        this.go90g3ComputedSideCache = new WeakMap<object, { book: tsAst.Identifier, key: tsAst.Identifier, sides: string[] } | null>();
+    }
+    if (this.go90g3ComputedSideCache.has(declaration)) {
+        return this.go90g3ComputedSideCache.get(declaration) ?? undefined;
+    }
+    this.go90g3ComputedSideCache.set(declaration, null); // re-entry answers box
+    let verdict: { book: tsAst.Identifier, key: tsAst.Identifier, sides: string[] } | undefined = undefined;
+    try {
+        const cfg = this.goOrderBook;
+        const init = declaration?.initializer;
+        if ((cfg !== undefined) && (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+            && (declaration.type === undefined) && (declaration.parent?.declarations?.length === 1)
+            && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement) && go90g3ExchangeWsFile(declaration)
+            && (init?.kind === SyntaxKind.ElementAccessExpression) && (init.expression?.kind === SyntaxKind.Identifier)
+            && (init.argumentExpression?.kind === SyntaxKind.Identifier)
+            && (this.goDeclaredTypeOfIdentifier(init.expression) === cfg.type)) {
+            const sides = this.go90g3SideKeys(init.argumentExpression);
+            const scope = this.goEnclosingFunction(declaration);
+            const name = declaration.name.text;
+            // R4: sibling-block bindings of the same name are separate Go variables; every use is resolved through the checker
+            const checker: Checker | undefined = this.checkerOrUndefined();
+            const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+            if ((sides !== undefined) && (scope !== undefined) && (own !== undefined) && !this.goTypeNameIsShadowed(scope, cfg.sideType)) {
+                let uses = 0;
+                const foreign = this.hasNodeWhere(scope, (n) => {
+                    if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                        return false;
+                    }
+                    const parent = n.parent;
+                    if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
+                        return false; // a member name, not the local
+                    }
+                    if (checker.getSymbolAtLocation(n) !== own) {
+                        return false; // another binding of the name (its own declaration decides for it)
+                    }
+                    const store = go90g3StoreCall(parent?.parent);
+                    if ((store !== undefined) && (store.receiver === n) && (parent.parent.expression === parent)) {
+                        uses++;
+                        return false;
+                    }
+                    return true;
+                });
+                if (!foreign && (uses > 0)) {
+                    verdict = { book: init.expression, key: init.argumentExpression, sides };
+                }
+            }
+        }
+    } finally {
+        this.go90g3ComputedSideCache.set(declaration, verdict ?? null);
+    }
+    return verdict;
+};
+// R2: a `promise` futures read (`client.futures['auth']`, resolved once) is a `*Future` like any other futures read
+// (goClientFutureLocal kept the name out because the ccxt `promise.Resolve(..)` regex asserted every such receiver);
+// the regex is folded into the print below, so the typed receiver calls Resolve natively.
+GoTranspiler.prototype.go90g3PromiseLocal = function (declaration) {
+    if ((this.goOrderBook === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.name.text !== 'promise') || (declaration.type !== undefined) || (declaration.parent?.declarations?.length !== 1)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !go90g3ExchangeWsFile(declaration)) {
+        return false;
+    }
+    const key = this.goClientFutureReadKey(declaration.initializer);
+    if ((key === undefined) || (key.kind !== SyntaxKind.StringLiteral)) {
+        return false;
+    }
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+    const scope = this.goEnclosingFunction(declaration);
+    if ((own === undefined) || (scope === undefined) || this.goTypeNameIsShadowed(scope, '*Future')) {
+        return false;
+    }
+    let uses = 0;
+    const foreign = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== 'promise') || (n === declaration.name)) {
+            return false;
+        }
+        const parent = n.parent;
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
+            return false;
+        }
+        if (checker.getSymbolAtLocation(n) !== own) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'resolve')
+            && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent) && (parent.parent.arguments?.length === 1)) {
+            uses++;
+            return false;
+        }
+        return true;
+    });
+    return !foreign && (uses > 0);
+};
+// R3: `const c = s[i]` on a Go `string` local inside `for (let i = 0; i < s.length; i++)` (or a length local of
+// it) with neither written in the body: GetValue answers `string(s[i])` for an index in range, so the local is a
+// Go string read natively.
+GoTranspiler.prototype.go90g3StringCharRead = function (node) {
+    if ((node?.kind !== SyntaxKind.ElementAccessExpression) || (node.expression?.kind !== SyntaxKind.Identifier)
+        || (node.argumentExpression?.kind !== SyntaxKind.Identifier) || (this.goOrderBook === undefined)) {
+        return false;
+    }
+    const declaration = node.parent;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== node) || (declaration.type !== undefined)
+        || (declaration.parent?.declarations?.length !== 1) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    if ((this.goDeclaredTypeOfIdentifier(node.expression) !== 'string') || !this.goIntOperandIdentifier(node.argumentExpression)) {
+        return false;
+    }
+    return this.goLoopBoundedIndexRead(node, node.expression, node.argumentExpression, 's', 'i') !== undefined;
+};
+{
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+        const declaration = initializer?.parent;
+        if ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer === initializer)) {
+            if (this.go90g3ComputedSideLocal(declaration) !== undefined) {
+                return this.goOrderBook.sideType;
+            }
+            if (this.go90g3PromiseLocal(declaration)) {
+                return '*Future';
+            }
+            if (this.go90g3StringCharRead(initializer)) {
+                return 'string';
+            }
+        }
+        return goTypeOfInitializer.call(this, initializer, printedValue);
+    };
+    const printVariableDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration = node?.declarations?.[0];
+        if ((node?.declarations?.length === 1) && (declaration?.kind === SyntaxKind.VariableDeclaration)) {
+            const cfg = this.goOrderBook;
+            const side = this.go90g3ComputedSideLocal(declaration);
+            if ((side !== undefined) && (this.getGoLocalType(declaration, '') === cfg.sideType)) {
+                const iden = this.getIden(identation);
+                const name = this.printNode(declaration.name, 0);
+                const book = this.printNode(side.book, 0);
+                const [ first, ...rest ] = side.sides;
+                let out = `${iden}var ${name} ${cfg.sideType} = ${book}.${cfg.sides[first]}()`;
+                for (const other of rest) {
+                    out += `\n${iden}if ${this.printNode(side.key, 0)} == "${other}" {\n${iden}\t${name} = ${book}.${cfg.sides[other]}()\n${iden}}`;
+                }
+                return out;
+            }
+            if (this.go90g3PromiseLocal(declaration) && (this.getGoLocalType(declaration, '') === '*Future')) {
+                const key = this.goClientFutureReadKey(declaration.initializer);
+                return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.Futures[${this.printNode(key, 0)}]`;
+            }
+            if (this.go90g3StringCharRead(declaration.initializer) && (this.getGoLocalType(declaration, '') === 'string')) {
+                const read = declaration.initializer;
+                return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} string = string(${this.printNode(read.expression, 0)}[${this.printNode(read.argumentExpression, 0)}])`;
+            }
+        }
+        return printVariableDeclarationList.call(this, node, identation);
+    };
+    // the ccxt ws regexes `X.StoreArray` -> `X.(IOrderBookSide).StoreArray`, `(bookside|asks|bids|Side).Store` ->
+    // `.(IOrderBookSide).Store` and `promise.Resolve(m)` -> `promise.(*Future).Resolve(ToGetsLimit(m))`, folded: the
+    // assertion is printed only for a receiver whose Go type is not already the interface / pointer.
+    const printCallExpression = GoTranspiler.prototype.printCallExpression;
+    GoTranspiler.prototype.printCallExpression = function (node, identation) {
+        const printed: string = printCallExpression.call(this, node, identation);
+        const cfg = this.goOrderBook;
+        if ((cfg === undefined) || !go90g3ExchangeWsFile(node)) {
+            return printed;
+        }
+        const lead = /^\s*/.exec(printed)[0];
+        const store = go90g3StoreCall(node);
+        if (store !== undefined) {
+            const receiverName = String(store.receiver.text ?? '');
+            if ((store.method === 'store') && !/(bookside|asks|bids|Side)$/.test(receiverName)) {
+                return printed;
+            }
+            const receiver = this.printNode(store.receiver, 0);
+            const head = `${receiver}.${store.method === 'store' ? 'Store' : 'StoreArray'}(`;
+            if (!printed.startsWith(head, lead.length) || (this.goDeclaredTypeOfIdentifier(store.receiver) === cfg.sideType)) {
+                return printed;
+            }
+            return lead + `${receiver}.(${cfg.sideType}).` + printed.slice(lead.length + receiver.length + 1);
+        }
+        const callee = node?.expression;
+        if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.Identifier)
+            && (callee.expression.text === 'promise') && (callee.name?.text === 'resolve') && (node.arguments?.length === 1)) {
+            const head = 'promise.Resolve(';
+            if (!printed.startsWith(head, lead.length) || !printed.endsWith(')')) {
+                return printed;
+            }
+            const arg = printed.slice(lead.length + head.length, -1);
+            if (arg.includes(')')) {
+                return printed;
+            }
+            const typed = this.goDeclaredTypeOfIdentifier(callee.expression) === '*Future';
+            return lead + `promise${typed ? '' : '.(*Future)'}.Resolve(ToGetsLimit(${arg}))`;
+        }
+        return printed;
+    };
+}
+// ===== ral-90g3 (end) =====

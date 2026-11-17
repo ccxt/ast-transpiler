@@ -15888,3 +15888,167 @@ describe ('ral-90g2 reader-result locals', () => {
         expect (run (body.replace ('acc["free"] = 2;', '').replace ('acc["total"] = 1;', ''), 'ts/src/pro')).not.toContain ('var acc map[string]any = ');
     });
 });
+
+describe('ral-90g3 element reads, type assertions and GetValue results', () => {
+    const BOOK = {
+        'classes': [ 'OrderBook' ], 'constructors': [ 'orderBook' ], 'cacheReaders': [ 'safeValue' ],
+        'type': 'OrderBookInterface', 'sideType': 'IOrderBookSide', 'unbox': 'OrderBookTyped',
+        'sides': { 'asks': 'GetAsks', 'bids': 'GetBids' },
+    };
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Side { store (p: any, a: any) { return p; } storeArray (d: any) { return d; } }\n'
+        + 'class OrderBook { asks: Side; bids: Side; reset (x: Dict) { return x; } }\n'
+        + 'class Client { futures: any = {}; }\n'
+        + 'class Exchange {\n'
+        + '    orderbooks: { [key: string]: OrderBook } = {};\n'
+        + '    orderBook (snapshot = {}): OrderBook { return new OrderBook (); }\n'
+        + '    safeString (o: any, k: any): string | undefined { return o[k]; }\n'
+        + '    safeNumber (o: any, k: any): number | undefined { return o[k]; }\n'
+        + '}\n';
+    const print = (body: string, tree = 'pro', book: typeof BOOK | null = BOOK): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'go90g3-'));
+        const cwd = process.cwd ();
+        try {
+            fs.mkdirSync (path.join (dir, 'ts', 'src', tree), { 'recursive': true });
+            fs.writeFileSync (path.join (dir, 'ts', 'src', tree, 'x.ts'), HEAD + body);
+            const config: { verbose: boolean, go: { parser: { NUM_LINES_END_FILE: number }, orderBook?: typeof BOOK } } = { 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+            if (book !== null) {
+                config.go.orderBook = book;
+            }
+            process.chdir (dir);
+            return new Transpiler (config).transpileGoByPath (path.join ('ts', 'src', tree, 'x.ts')).content;
+        } finally {
+            process.chdir (cwd);
+            fs.rmSync (dir, { 'recursive': true, 'force': true });
+        }
+    };
+    const SIDE = 'export class x extends Exchange {\n'
+        + '    handleBookDelta (orderbook: OrderBook, delta: any) {\n'
+        + '        let side: \'asks\' | \'bids\' = \'asks\';\n'
+        + '        if (this.safeString (delta, \'t\') === \'bid\') {\n'
+        + '            side = \'bids\';\n'
+        + '        }\n'
+        + '        const orderbookSide = orderbook[side];\n'
+        + '        orderbookSide.storeArray (delta);\n'
+        + '    }\n'
+        + '    handleOther (client: any) {\n'
+        + '        const book = this.orderBook ();\n'
+        + '        this.handleBookDelta (book, {});\n'
+        + '    }\n'
+        + '}\n';
+    test ('R1: a computed side read of a typed book declares the side interface and stores natively', () => {
+        const out = print (SIDE);
+        expect (out).toContain ('var orderbookSide IOrderBookSide = orderbook.GetAsks()');
+        expect (out).toContain ('if side == "bids" {');
+        expect (out).toContain ('orderbookSide = orderbook.GetBids()');
+        expect (out).toContain ('\torderbookSide.StoreArray(delta)');
+    });
+    test ('R1: a side local with another use keeps the box and the folded assertion', () => {
+        const out = print (SIDE.replace ('orderbookSide.storeArray (delta);', 'orderbookSide.storeArray (delta);\n        return orderbookSide;'));
+        expect (out).toContain ('var orderbookSide any = ');
+        expect (out).toContain ('orderbookSide.(IOrderBookSide).StoreArray(delta)');
+    });
+    test ('R1: a key that is not a side-name union keeps the box', () => {
+        const out = print (SIDE.replace ('let side: \'asks\' | \'bids\' = \'asks\';', 'let side: string = \'asks\';'));
+        expect (out).toContain ('var orderbookSide any = ');
+    });
+    const PROMISE = 'export class x extends Exchange {\n'
+        + '    handleAuthenticate (client: Client, message: any) {\n'
+        + '        const promise = client.futures[\'auth\'];\n'
+        + '        promise.resolve (message);\n'
+        + '    }\n'
+        + '}\n';
+    test ('R2: a literal-keyed promise futures read declares *Future and resolves natively', () => {
+        const out = print (PROMISE);
+        expect (out).toContain ('var promise *Future = client.Futures["auth"]');
+        expect (out).toContain ('promise.Resolve(ToGetsLimit(message))');
+        expect (out).not.toContain ('promise.(*Future)');
+    });
+    test ('R2: a promise handed out keeps the box and prints the folded assertion', () => {
+        const out = print (PROMISE.replace ('promise.resolve (message);', 'promise.resolve (message);\n        return promise;'));
+        expect (out).toContain ('var promise any = ');
+        expect (out).toContain ('promise.(*Future).Resolve(ToGetsLimit(message))');
+    });
+    const CHARS = 'export class x extends Exchange {\n'
+        + '    hexToInt (hex: string): number {\n'
+        + '        const lowerHex = hex.toLowerCase ();\n'
+        + '        const hexLength = lowerHex.length;\n'
+        + '        let r = 0;\n'
+        + '        for (let i = 0; i < hexLength; i++) {\n'
+        + '            const ch = lowerHex[i];\n'
+        + '            r = r + \'0123456789abcdef\'.indexOf (ch);\n'
+        + '        }\n'
+        + '        return r;\n'
+        + '    }\n'
+        + '}\n';
+    test ('R3: a loop-bounded character read of a Go string is a Go string', () => {
+        const out = print (CHARS, 'prediction');
+        expect (out).toContain ('var ch string = string(lowerHex[i])');
+        expect (out).toContain ('strings.Index("0123456789abcdef", ch)');
+    });
+    test ('R3: a written index keeps the box', () => {
+        const out = print (CHARS.replace ('const ch = lowerHex[i];', 'const ch = lowerHex[i];\n            i = i + 1;'), 'prediction');
+        expect (out).not.toContain ('var ch string');
+    });
+    test ('without the order-book config nothing changes', () => {
+        const out = print (SIDE, 'pro', null);
+        expect (out).not.toContain ('IOrderBookSide');
+    });
+});
+
+describe('ral-90g3 R4: computed side locals declared in sibling blocks', () => {
+    const BOOK = {
+        'classes': [ 'OrderBook' ], 'constructors': [ 'orderBook' ], 'cacheReaders': [ 'safeValue' ],
+        'type': 'OrderBookInterface', 'sideType': 'IOrderBookSide', 'unbox': 'OrderBookTyped',
+        'sides': { 'asks': 'GetAsks', 'bids': 'GetBids' },
+    };
+    const HEAD = 'type Dict = { [key: string]: any };\n'
+        + 'class Side { store (p: any, a: any) { return p; } storeArray (d: any) { return d; } }\n'
+        + 'class OrderBook { asks: Side; bids: Side; reset (x: Dict) { return x; } }\n'
+        + 'class Exchange {\n'
+        + '    orderbooks: { [key: string]: OrderBook } = {};\n'
+        + '    orderBook (snapshot = {}): OrderBook { return new OrderBook (); }\n'
+        + '    safeNumber (o: any, k: any): number | undefined { return o[k]; }\n'
+        + '}\n';
+    const print = (body: string): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'go90g3r4-'));
+        const cwd = process.cwd ();
+        try {
+            fs.mkdirSync (path.join (dir, 'ts', 'src', 'pro'), { 'recursive': true });
+            fs.writeFileSync (path.join (dir, 'ts', 'src', 'pro', 'x.ts'), HEAD + body);
+            process.chdir (dir);
+            return new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'orderBook': BOOK } }).transpileGoByPath (path.join ('ts', 'src', 'pro', 'x.ts')).content;
+        } finally {
+            process.chdir (cwd);
+            fs.rmSync (dir, { 'recursive': true, 'force': true });
+        }
+    };
+    const BODY = 'export class x extends Exchange {\n'
+        + '    handleBook (orderbook: OrderBook, message: any, raw: boolean) {\n'
+        + '        const d = this.safeNumber (message, 2);\n'
+        + '        if (raw) {\n'
+        + '            const side = (d !== undefined && d < 0) ? \'asks\' : \'bids\';\n'
+        + '            const bookside = orderbook[side];\n'
+        + '            bookside.storeArray ([ 1, 2 ]);\n'
+        + '        } else {\n'
+        + '            const side = (d !== undefined && d < 0) ? \'asks\' : \'bids\';\n'
+        + '            const bookside = orderbook[side];\n'
+        + '            bookside.storeArray ([ 3, 4 ]);\n'
+        + '        }\n'
+        + '    }\n'
+        + '    handleOther (client: any) {\n'
+        + '        const book = this.orderBook ();\n'
+        + '        this.handleBook (book, {}, true);\n'
+        + '    }\n'
+        + '}\n';
+    test ('each sibling-block side local declares the side interface', () => {
+        const out = print (BODY);
+        expect (out.split ('var bookside IOrderBookSide = orderbook.GetAsks()').length).toBe (3);
+        expect (out).not.toContain ('.(IOrderBookSide)');
+    });
+    test ('a sibling with another use keeps only its own box', () => {
+        const out = print (BODY.replace ('bookside.storeArray ([ 3, 4 ]);', 'bookside.storeArray ([ 3, 4 ]);\n            return bookside;'));
+        expect (out.split ('var bookside IOrderBookSide = ').length).toBe (2);
+        expect (out).toContain ('var bookside any = ');
+    });
+});
