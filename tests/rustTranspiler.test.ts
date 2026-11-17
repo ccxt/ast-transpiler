@@ -25382,3 +25382,64 @@ describe('ral-90rd: safeValue / safeDict / safeList result locals', () => {
         expect(out).not.toContain('let mut ledger: crate::value::Dict = ');
     });
 });
+
+describe('ral-90re R1: a string reader local handed to a base parseNumber inside a pushed pair', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    parseNumber (v: any, d: Num = undefined): Num { return v; }\n    hold (m: any): any { return m; }\n}\n";
+    const precise = "export class Precise {\n    static stringSub (a: Str, b: Str): Str { return a; }\n    static stringDiv (a: Str, b: Str): Str { return a; }\n}\ntype Str = string | undefined;\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Precise.ts'), precise);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('limitless fetchOrderBook priceStr / sizeStr: tested, Precise-rewritten, then parsed in a pushed pair', () => {
+        const out = write ('ral-90re-r1', "    o (rows: any[], yes: boolean, scaleStr: string) {\n        const bids = [];\n        for (let bi = 0; bi < rows.length; bi++) {\n            let priceStr = this.safeString (this.safeDict (rows, bi), 'price');\n            if (!yes && (priceStr !== undefined)) {\n                priceStr = Precise.stringSub ('1', priceStr);\n            }\n            let sizeStr = this.safeString (this.safeDict (rows, bi), 'size');\n            if (sizeStr !== undefined) {\n                sizeStr = Precise.stringDiv (sizeStr, scaleStr);\n            }\n            bids.push ([ this.parseNumber (priceStr), this.parseNumber (sizeStr) ]);\n        }\n        const asks = [];\n        for (let ai = 0; ai < rows.length; ai++) {\n            let priceStr = this.safeString (this.safeDict (rows, ai), 'price');\n            if (!yes && (priceStr !== undefined)) {\n                priceStr = Precise.stringSub ('1', priceStr);\n            }\n            let sizeStr = this.safeString (this.safeDict (rows, ai), 'size');\n            if (sizeStr !== undefined) {\n                sizeStr = Precise.stringDiv (sizeStr, scaleStr);\n            }\n            asks.push ([ this.parseNumber (priceStr), this.parseNumber (sizeStr) ]);\n        }\n        return [ bids, asks ];\n    }\n");
+        expect(out).toContain('let mut priceStr: Option<String> = ');
+        expect(out).toContain('let mut sizeStr: Option<String> = ');
+    });
+});
+
+describe('ral-90re R2: a required number parameter written into an optional number reader local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport type OrderType = string;\nexport type OrderSide = string;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    costToPrecision (s: string, c: any): string { return s; }\n    hold (m: any): any { return m; }\n    async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price: Num = undefined, params: Dict = {}): Promise<Dict> { return {}; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Num, OrderType, OrderSide } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['createOrder'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('phemex createOrder cost = (cost === undefined) ? amount : cost', () => {
+        const out = write ('ral-90re-r2', "    async createOrder (symbol: string, type: OrderType, side: OrderSide, amount: number, price: Num = undefined, params: Dict = {}): Promise<Dict> {\n        let cost = this.safeNumber (params, 'cost');\n        if (cost === undefined) {\n            cost = amount;\n        }\n        cost = (cost === undefined) ? amount : cost;\n        const request: Dict = { 'cost': this.costToPrecision (symbol, cost) };\n        return request;\n    }\n");
+        expect(out).toContain('let mut cost: Option<f64> = ');
+    });
+});
+
+describe('ral-90re R3: a ternary of two String fields of a safeMarket local keys a proven map read', () => {
+    test('binance parseAccountPositions code: `code in balances` and `balances[code]` read natively', () => {
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market', 'safeMarket'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const dir = path.join (rustFixtureRoot, 'ral-90re-r3');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/types.ts'), "export interface Dictionary<T> { [key: string]: T }\nexport type Dict = Dictionary<any>;\nexport type Str = string | undefined;\nexport interface MarketInterface { id: Str; symbol: string; base: string; quote: string; linear: boolean | undefined; contract: boolean; }\nexport type Market = MarketInterface | undefined;\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "import type { Dict, Str, MarketInterface } from './types.js';\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: any = undefined): boolean | undefined { return o; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeMarket (marketId: Str = undefined, market: any = undefined, delimiter: Str = undefined, marketType: Str = undefined): MarketInterface { return market; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/types.js';\nexport default class venue extends Exchange {\n    p (positions: Dict[], assets: Dict[]) {\n        const balances: Dict = {};\n        for (let i = 0; i < assets.length; i++) {\n            const code = this.safeString (assets[i], 'asset');\n            if (code !== undefined) {\n                balances[code] = { 'crossMargin': this.safeString (assets[i], 'm') };\n            }\n        }\n        const result = [];\n        for (let i = 0; i < positions.length; i++) {\n            const position = positions[i];\n            const marketId = this.safeString (position, 'symbol');\n            const market = this.safeMarket (marketId, undefined, undefined, 'contract');\n            const code = (this.safeBool (market, 'linear', false)) ? market['quote'] : market['base'];\n            if (code in balances) {\n                const parsed = this.safeValue (balances[code], 'crossMargin');\n                result.push (parsed);\n            }\n        }\n        return result;\n    }\n}\n");
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut code: String = ');
+        expect(out).toContain('if (balances.contains_key(code.as_str())) {');
+    });
+});
+
+describe('ral-90re R4: two string locals ordered against each other', () => {
+    test('sxbet applySxbetWsSnapshot version <= held: both String locals, the parse-else-str order', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-90re-r4');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    hold (m: any): any { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    a (snapshot: Dict, marketHash: string) {\n        const version = this.safeString (snapshot, 'version', '');\n        const held = this.safeString (this.safeDict (this.options, 'v', {}), marketHash, '');\n        if ((held !== '') && (version <= held)) {\n            return false;\n        }\n        return this.hold (version);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut version: String = ');
+        expect(out).toContain('let mut held: String = ');
+        expect(out).toContain('(match (Some(version.as_str()), Some(held.as_str())) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }) || __x == __y, (None, None) => true, _ => false })');
+    });
+});

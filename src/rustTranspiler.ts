@@ -5217,6 +5217,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-70f: ral-70f reader locals whose last use walk accepted every use (rustScalarLocalKindCore). */
     private rust70fWalkOk = new WeakSet<Node>();
+    /** ral-90re R1: locals whose use walk took a pushed `parseNumber` pair box only through rust90reParsedPairElement. */
+    private rust90rePairAdmitted = new WeakSet<Node>();
 
     rustScalarLocalKindUncached(declaration): string | undefined {
         this.rust70fWalkOk.delete(declaration);
@@ -5266,6 +5268,7 @@ export class RustTranspiler extends BaseTranspiler {
         let copied = 0;
         // uses that read the local itself (`.length`, compares) see the candidate kind
         if (this.rustScalarSeeding) return kind;
+        this.rust90rePairAdmitted.delete(declaration);
         const previous = this.rustScalarDecisions.get(declaration);
         this.rustScalarDecisions.set(declaration, kind);
         const ok = this.rustScalarUsesAll(declaration, String(declaration.name.text), (n) => {
@@ -5305,6 +5308,10 @@ export class RustTranspiler extends BaseTranspiler {
             || (this.rustScOwnSelfCall(declaration.initializer) && !this.rustOdExcludedCallee(declaration.initializer) && !this.rustVenueLocalHandedOn(declaration) && this.rustReaderLendBoxes(declaration)))))
             && !this.rust66s3StrReturnedVeto(declaration, scope);
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
+        // ral-90re R1: a string local boxed into a pushed `this.parseNumber` pair is typed only for a native use elsewhere (a box alone moves the conversion)
+        if (ok && nativeUses === 0 && this.rust90rePairAdmitted.has(declaration)) return undefined;
+        // ral-90re R3: a ternary over `String` fields of an owned `safeMarket` local is typed only for a native use (boxed straight back it moves the conversion)
+        if (ok && nativeUses === 0 && kind === 'str' && this.rust90reSmktArmTernary(declaration.initializer)) return undefined;
         // ral-84e: a record-arm ternary string is typed only for a native use (boxed straight back it stays the `Value` it is handed as)
         if (ok && nativeUses === 0 && kind === 'ostr' && this.rust84eRecordArmTernary(declaration.initializer)) return undefined;
         const unused = typedUses === 0 && !handOff && this.rustScalarNeedsNativeUse(declaration.initializer) && !this.rustVenueIntReboxed(declaration, kind, boxed);
@@ -7603,7 +7610,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (form === 'concat' && (trial === 'str' || trial === 'ostr')) continue;
             // a `.push(..)` argument: ccxt's native-push pass keys on the boxed operand text
             const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
-            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial) && !this.rustPushSelfCallArgUse(n, push, trial) && !r70f) return false;
+            if (push !== undefined && isCallExpression(push) && !this.rustCopyPushPairElement(n, push, trial) && !this.rustPushSelfCallArgUse(n, push, trial) && !(this.rust90reParsedPairElement(n, push, trial) && this.rust90rePairAdmitted.add(declaration)) && !r70f) return false;
             // nor when it feeds a write to another local (ccxt passes read that write's printed source)
             const write: any = findAncestor(n, (m: any) => isStatement(m) || (isBinaryExpression(m) && m.operatorToken.kind === SyntaxKind.EqualsToken));
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
@@ -7734,6 +7741,21 @@ export class RustTranspiler extends BaseTranspiler {
         if (up?.kind !== SyntaxKind.PropertyAssignment || up.initializer !== n || !isObjectLiteralExpression(up.parent)) return false;
         const form = this.rustScalarUseForms.get(n);
         return (form === 'box' || form === 'xbox') && this.isNodeInsideNode(n, call) && call.arguments.some((a: any) => this.isNodeInsideNode(n, a));
+    }
+
+    /** ral-90re R1: a string local boxed as the one argument of a base-tier `this.parseNumber (x)` that is a direct element of
+     *  the array literal pushed whole (`rows.push ([ this.parseNumber (price), this.parseNumber (size) ])`): the element prints
+     *  `self.parse_number(<box>, &[])` inside `Value::from(vec![..])`, a source ccxt's rustVecPushInline takes whatever its
+     *  elements print (as rustCopyPushPairElement), and the box converts the very `Str` / `Null` the `Value` local held. */
+    rust90reParsedPairElement(n: Node, push: CallExpression, kind: string | undefined): boolean {
+        if ((kind !== 'ostr' && kind !== 'str') || push.arguments.length !== 1) return false;
+        const call: Node = n.parent;
+        if (!isCallExpression(call) || call.arguments.length !== 1 || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'parseNumber') return false;
+        const callee: Node | undefined = this.rustScalarCallee(call);
+        if (callee === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName))) return false;
+        if (!isArrayLiteralExpression(call.parent) || this.unwrapParens(push.arguments[0]) !== call.parent) return false;
+        return this.rustScalarUseForms.get(n) === 'box';
     }
 
     /** 40d: a Copy number that is a direct element of the array literal pushed whole (`rows.push ([ price, amount ])`):
@@ -8836,6 +8858,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustUrlsKeyReadUse(n)) return 'okey';
         // uh: a ternary of two string literals keys a proven map read natively (`m.get(k)` is the entry `get_value` reads)
         if (kind === 'str' && this.rustStrLiteralTernaryLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // ral-90re R3: a ternary of two `String` fields of a typed market local (`c ? market['quote'] : market['base']`) keys a
+        // proven map read the same way (both arms are a `String`, so the key is never `Null`)
+        if (kind === 'str' && this.rust90reMarketFieldTernaryLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         // 40b: any initialised `String` local keys a proven map read by borrowing it (`m.get(k.as_str())` is the entry
         // `get_value` reads for its `Str` box); ws cache / subscription keys never reach here (rustWsCacheMapKeyUse above)
         if (kind === 'str' && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && !this.rust40bProTier(n) && this.rust40bFieldKeyRead(n)) return 'okey';
@@ -12111,6 +12136,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (isIdentifier(node) && this.rustOptParamKind(node) === kind) return true;
         // ral-68a R1: a required `&str` parameter into an `Option<String>` local (rustOptParamText prints `p.as_str().map(..)`)
         if (kind === 'ostr' && isIdentifier(node) && this.rustOptParamKind(node) === 'str') return true;
+        // ral-90re R2: a required `f64` / `i64` parameter into an `Option<f64>` / `Option<i64>` local (rustOptParamText's ral-62x arm
+        // prints `p.as_f64()` / `p.as_i64()`: the rebinding of a required typed parameter always holds that variant)
+        if ((kind === 'onum' || kind === 'oint') && isIdentifier(node) && this.rustOptParamKind(node) === kind.slice(1)) return true;
         return kind === 'bool' && this.rustBoolNativeText(node) !== undefined;
     }
 
@@ -12278,6 +12306,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (equality && (lk === 'bool' || rk === 'bool') && (lk === 'obool' || rk === 'obool') && (op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken)) {
             const [ o, b ] = lk === 'obool' ? [ left, right ] : [ right, left ];
             if (isIdentifier(b) && this.rustScalarLocalOf(b)?.kind === 'bool') return `(${text('obool', o)} ${sign} Some(${text('bool', b)}))`;
+        }
+        // ral-90re R4: two string locals ordered (`a <= b`): the same f64-parse-else-`str`-order match strOrderedComparison
+        // prints over the two `Str` / `Null` boxes, read off the typed locals (`Some(a.as_str())` / `a.as_deref()`)
+        if (!equality && base(lk) === 'str' && base(rk) === 'str' && isIdentifier(left) && isIdentifier(right)) {
+            if (dry) return '_';
+            const side = (k: string, n: Node) => k === 'str' ? `Some(${text(k, n)}.as_str())` : `${text(k, n)}.as_deref()`;
+            const strict = symbol.charAt(0);
+            const orEqual = symbol.length === 2;
+            const order = `(match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p ${strict} __q, _ => __x ${strict} __y })`;
+            return `(match (${side(lk, left)}, ${side(rk, right)}) { (Some(__x), Some(__y)) => ${order}${orEqual ? ' || __x == __y' : ''}, ${orEqual ? '(None, None) => true, ' : ''}_ => false })`;
         }
         if (lk === 'bool' || rk === 'bool' || base(lk) === 'str' || base(rk) === 'str') return undefined;
         const lo = lk.startsWith('o');
@@ -13555,6 +13593,26 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
+    /** ral-90re R3: a ternary initializer one of whose arms is a field read of an owned `safeMarket` (`smkt`) local. */
+    rust90reSmktArmTernary(init: Node): boolean {
+        const node: Node = this.unwrapParens(init);
+        if (node === undefined || !isConditionalExpression(node)) return false;
+        return [ node.whenTrue, node.whenFalse ].some((arm: Node) => {
+            const a: Node = this.unwrapParens(arm);
+            const local: Node | undefined = (isElementAccessExpression(a) || isPropertyAccessExpression(a)) ? this.rustTypedMarketLocalOf(a.expression) : undefined;
+            return local !== undefined && this.rustMarketLocalKind(local) === 'smkt';
+        });
+    }
+
+    /** ral-90re R3: `n` reads a local initialised from a ternary whose two arms are `String` fields of a typed market local. */
+    rust90reMarketFieldTernaryLocal(n: Node): boolean {
+        const declaration: Node | undefined = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        const init: Node = this.unwrapParens(declaration.initializer);
+        return isConditionalExpression(init) && this.rustMarketArmStrKind(this.unwrapParens(init.whenTrue)) === 'str'
+            && this.rustMarketArmStrKind(this.unwrapParens(init.whenFalse)) === 'str';
+    }
+
     rustStrLiteralTernaryLocal(n: any): boolean {
         const declaration: any = this.rustDeclaredNode(n);
         const init: any = declaration !== undefined && isVariableDeclaration(declaration) ? this.unwrapParens(declaration.initializer) : undefined;
@@ -16398,7 +16456,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustMarketArmStrKind(node): string | undefined {
         if (!this.rustTernaryArm(node) || !(isElementAccessExpression(node) || isPropertyAccessExpression(node))) return undefined;
         const declaration = this.rustTypedMarketLocalOf(node.expression);
-        if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
+        // ral-90re R3: an owned `safeMarket` local (`smkt`, a `crate::types::Market`) carries the same `String` fields
+        if (declaration === undefined || (this.rustMarketLocalKind(declaration) !== 'struct' && this.rustMarketLocalKind(declaration) !== 'smkt')) return undefined;
         const key = this.rustMarketReadKey(node.expression);
         if (key === undefined) return undefined;
         if (RustTranspiler.RUST_MARKET_STR_FIELDS[key] !== undefined) return 'str';
