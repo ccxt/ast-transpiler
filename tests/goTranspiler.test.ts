@@ -15738,3 +15738,99 @@ describe('ral-87g8 R4 int counters compared against an Int bound', () => {
         expect(out).toContain('var errors any = 0');
     });
 });
+
+describe('90g1 nil-seed pointer joins', () => {
+    const BASE = "import { yymmdd } from './functions/time.js';\n"
+        + 'export type Dict = { [key: string]: any };\n'
+        + 'export type Str = string | undefined;\n'
+        + 'export type Int = number | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    exceptions: Dict = {};\n'
+        + '    yymmdd = yymmdd;\n'
+        + '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n'
+        + '    safeInteger (a: any, k: any, d: any = undefined): Int { return a; }\n'
+        + '    networkIdToCode (networkId: Str = undefined, currencyCode: Str = undefined): Str { return networkId; }\n'
+        + '    throwExactlyMatchedException (exact: Dict, string: Str, message: string) { }\n'
+        + '    throwBroadlyMatchedException (broad: Dict, string: Str, message: string) { }\n'
+        + '}\n';
+    const TIME = 'export const yymmdd = (timestamp: any, infix = \'\') => \'\';\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g90-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base/functions'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/functions/time.ts'), TIME);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange, { Dict, Str, Int } from './base/Exchange.js';\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('R1: an *int64 join handed to base yymmdd with a nil test types and tests natively', () => {
+        const out = run('    f (market: Dict): any {\n'
+            + "        let symbol = 'a';\n"
+            + '        let expiry: Int = undefined;\n'
+            + "        if (market['future']) {\n"
+            + "            expiry = this.safeInteger (market, 'expiry');\n"
+            + '        }\n'
+            + '        if (expiry !== undefined) {\n'
+            + "            symbol = symbol + '-' + this.yymmdd (expiry);\n"
+            + '        }\n'
+            + '        return symbol;\n'
+            + '    }\n');
+        expect(out).toContain('var expiry *int64 = nil');
+        expect(out).toContain('if expiry != nil {');
+    });
+    test('R1: without a nil test the date argument keeps the box', () => {
+        const out = run('    f (market: Dict): any {\n'
+            + '        let expiry: Int = undefined;\n'
+            + "        if (market['future']) {\n"
+            + "            expiry = this.safeInteger (market, 'expiry');\n"
+            + '        }\n'
+            + '        return this.yymmdd (expiry);\n'
+            + '    }\n');
+        expect(out).toContain('var expiry any = nil');
+    });
+    test('R2: a *string join with a literal compare and a networkIdToCode argument prints the nil-guarded compare', () => {
+        const out = run('    f (currency: Dict, chainId: Str): any {\n'
+            + '        let code: Str = undefined;\n'
+            + "        if (currency !== undefined) {\n"
+            + "            code = this.safeString (currency, 'id');\n"
+            + "            if (code !== 'NIM') {\n"
+            + "                chainId = 'x';\n"
+            + '            }\n'
+            + '        }\n'
+            + "        return { 'network': this.networkIdToCode (chainId, code) };\n"
+            + '    }\n');
+        expect(out).toContain('var code *string = nil');
+        expect(out).toContain('code == nil || *code != "NIM"');
+    });
+    test('R3: a *string join handed to base throwBroadlyMatchedException with a nil test types natively', () => {
+        const out = run('    f (response: Dict, body: string): any {\n'
+            + '        let errorMessage: Str = undefined;\n'
+            + "        if (response['error']) {\n"
+            + "            errorMessage = this.safeString (response, 'message');\n"
+            + '        }\n'
+            + '        if (errorMessage !== undefined) {\n'
+            + "            this.throwBroadlyMatchedException (this.exceptions['broad'], errorMessage, body);\n"
+            + '        }\n'
+            + '        return undefined;\n'
+            + '    }\n');
+        expect(out).toContain('var errorMessage *string = nil');
+        expect(out).toContain('if errorMessage != nil {');
+    });
+    test('R3: a matcher argument without a native read keeps the box', () => {
+        const out = run('    f (response: Dict, body: string): any {\n'
+            + '        let errorMessage: Str = undefined;\n'
+            + "        if (response['error']) {\n"
+            + "            errorMessage = this.safeString (response, 'message');\n"
+            + '        }\n'
+            + "        this.throwBroadlyMatchedException (this.exceptions['broad'], errorMessage, body);\n"
+            + '        return undefined;\n'
+            + '    }\n');
+        expect(out).toContain('var errorMessage any = nil');
+    });
+});

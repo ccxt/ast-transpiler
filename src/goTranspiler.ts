@@ -4789,6 +4789,9 @@ function nilDeclaredReadIsSafe (goTranspiler, node) {
 
 // the scalar-pointer type to name on a nil-declared declaration, or undefined when
 // the family's proof does not hold for this declaration
+// 90g1: nil-seeded locals the round-90 read admissions joined to a scalar pointer (declaration -> Go type)
+const CCXT_GO_90_POINTER_JOINS = new WeakMap ();
+
 export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     if (declaration === undefined) {
         return undefined;
@@ -4817,6 +4820,10 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     let parsedNumberWrite = false;
     let elementWriteRead = false;
     let stringOnlyRead = false;
+    let dateArgumentRead = false;      // 90g1
+    let literalCompareRead = false;    // 90g1
+    let stringPtrArgumentRead = false; // 90g1
+    let nilTestRead = false;           // 90g1
     const visit = (n) => {
         if (readUnproven) {
             return;
@@ -4837,10 +4844,18 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
             } else if (!nilDeclaredReadIsSafe (goTranspiler, n)) {
                 if (ccxtGoNilDeclaredStringArgumentRead (goTranspiler, n)) {
                     stringOnlyRead = true;          // 84g1: admitted for a *string join only (checked below)
+                } else if (ccxtGo90DateFormatterArgument (goTranspiler, n)) {
+                    dateArgumentRead = true;        // 90g1 R1: *int64 join with a native nil test only (checked below)
+                } else if (ccxtGo90StringLiteralCompare (n)) {
+                    literalCompareRead = true;      // 90g1 R2: *string join only (checked below)
+                } else if (ccxtGo90StringPtrArgument (goTranspiler, n)) {
+                    stringPtrArgumentRead = true;   // 90g1 R3: *string join with a native read only (checked below)
                 } else {
                     readUnproven = true;
                     return;
                 }
+            } else if (ccxtGo90IsNilTest (n)) {
+                nilTestRead = true;                 // 90g1: a native `x == nil` / `x != nil` on the pointer
             } else if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === n)
                     && (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)) {
                 elementWriteRead = true;
@@ -4862,11 +4877,24 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     if (stringOnlyRead && (joinType !== '*string')) {
         return undefined;
     }
+    // 90g1: each round-90 read admission needs its join type and a native read beside it
+    if (dateArgumentRead && ((joinType !== '*int64') || !nilTestRead)) {
+        return undefined;
+    }
+    if (literalCompareRead && (joinType !== '*string')) {
+        return undefined;
+    }
+    if (stringPtrArgumentRead && ((joinType !== '*string') || !(nilTestRead || literalCompareRead))) {
+        return undefined;
+    }
     // the upstream rejects (shadowed type name, `x.push`, `++`, spread, destructuring,
     // a write of another type) must all pass for the same type
     if (goTranspiler.goTypeNameIsShadowed (scope, joinType)
         || !goTranspiler.goLocalIsSafeToType (scope, declaration, varName, joinType)) {
         return undefined;
+    }
+    if (dateArgumentRead || literalCompareRead || stringPtrArgumentRead) {
+        CCXT_GO_90_POINTER_JOINS.set (declaration, joinType);  // 90g1: consumers must see the pointer
     }
     return joinType;
 }
@@ -36372,3 +36400,124 @@ GoTranspiler.prototype.goNativeCompoundAssignment = function (op, leftNode, left
 };
 // ===== ral-87g8 R2 (end) =====
 
+// ------------------------- 90g1: nil-seed joins (round 90) -------------------------
+// R1: the scalar-pointer join may hand an *int64 local to the first argument of a base date formatter
+// (`this.yymmdd` / `ymd` / `yyyymmdd` / `ymdhms`). Their hand-written Go twins (go/v4/exchange_time.go)
+// derefScalar that argument at entry and return a string, so a typed-nil pointer reads as the absent box
+// did and the pointer never escapes. Admitted only for an *int64 join with at least one native nil test.
+const CCXT_GO_90_DATE_FORMATTERS = [ 'yymmdd', 'ymd', 'yyyymmdd', 'ymdhms' ];
+const CCXT_GO_90_DATE_FORMATTER_FILE = /[\\/]base[\\/]functions[\\/]time\.ts$/;
+
+function ccxtGo90DateFormatterArgument (goTranspiler, node) {
+    const call = node?.parent;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.arguments?.[0] !== node)) {
+        return false;
+    }
+    const callee = call.expression;
+    if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)
+        || !CCXT_GO_90_DATE_FORMATTERS.includes (String (callee.name?.text ?? ''))) {
+        return false;
+    }
+    let fileName = '';
+    try {
+        fileName = goTranspiler.getChecker ().getResolvedSignature (call)?.declaration?.resolve ()?.getSourceFile?.()?.fileName ?? '';
+    } catch (e) {
+        return false;
+    }
+    // the base helper (declared in base/functions/time.ts, bound on Exchange), not a venue override
+    return CCXT_GO_90_DATE_FORMATTER_FILE.test (fileName);
+}
+
+// `x === undefined` / `x !== undefined` (either side), which prints `x == nil` / `x != nil` on a pointer
+function ccxtGo90IsNilTest (node) {
+    const parent = node?.parent;
+    if ((parent?.kind !== ts.SyntaxKind.BinaryExpression) || !COMPARISON_TOKENS.includes (parent.operatorToken.kind)) {
+        return false;
+    }
+    return isUndefinedLiteral ((parent.left === node) ? parent.right : parent.left);
+}
+
+// R2: `x === 'lit'` / `x !== 'lit'` (either side) on a *string join. The printer spells a string-literal
+// compare of a *string operand `(x != nil && *x == "lit")` / `(x == nil || *x != "lit")`, which answers a nil
+// pointer exactly as IsEqual answered the absent box (never equal to a string) and reads the string natively.
+function ccxtGo90StringLiteralCompare (node) {
+    let child = node;
+    while (child.parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        child = child.parent;
+    }
+    const parent = child.parent;
+    if ((parent?.kind !== ts.SyntaxKind.BinaryExpression) || !COMPARISON_TOKENS.includes (parent.operatorToken.kind)) {
+        return false;
+    }
+    const op = parent.operatorToken.kind;
+    if (![ ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken ].includes (op)) {
+        return false;
+    }
+    const other = (parent.left === child) ? parent.right : parent.left;
+    return (other?.kind === ts.SyntaxKind.StringLiteral) || (other?.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral);
+}
+
+// R2: the networkId / currencyCode arguments of base `networkIdToCode` (and the htx override): both Go bodies bind
+// them with GetArgStringPtr, which passes a *string through and reads a nil pointer as the omitted argument.
+// R3: the `string` argument (slot 1) of base `throwExactlyMatchedException` / `throwBroadlyMatchedException`: the
+// transpiled Go bodies read it only through IsEqual / InOp / GetValue / GetIndexOf, which derefScalar it, and never
+// hand it on. Both are admitted only for a *string join that also has a native read (nil test or literal compare).
+const CCXT_GO_90_STRING_PTR_SLOTS = {
+    'networkIdToCode': [ 0, 1 ],
+    'throwExactlyMatchedException': [ 1 ],
+    'throwBroadlyMatchedException': [ 1 ],
+};
+
+function ccxtGo90StringPtrArgument (goTranspiler, node) {
+    const call = node?.parent;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression === node)) {
+        return false;
+    }
+    const callee = call.expression;
+    const name = String (callee?.name?.text ?? '');
+    const slots = CCXT_GO_90_STRING_PTR_SLOTS[name];
+    if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)
+        || !Array.isArray (slots) || !slots.includes (call.arguments.indexOf (node))) {
+        return false;
+    }
+    let declaration;
+    try {
+        declaration = goTranspiler.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
+    } catch (e) {
+        return false;
+    }
+    const fileName = declaration?.getSourceFile?.()?.fileName ?? '';
+    if (CCXT_GO_ELEMENT_1_BASE_FILE.test (fileName)) {
+        return true;
+    }
+    // the one venue override (htx networkIdToCode) binds both parameters with GetArgStringPtr as well
+    return (name === 'networkIdToCode') && /[\\/]htx\.ts$/.test (fileName);
+}
+
+// The printer's compare / truthiness arms ask goDeclaredTypeOfIdentifier for the operand's Go type; a local the
+// round-90 admissions joined to a pointer must answer that pointer there (a literal compare then prints
+// `(x != nil && *x == "lit")`), so the join is evaluated once per declaration and published here.
+const CCXT_GO_90_JOIN_PROBED = new WeakSet ();
+const goDeclaredTypeOfIdentifier90 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node) {
+    const known = goDeclaredTypeOfIdentifier90.call (this, node);
+    if ((known !== undefined) || (node?.kind !== ts.SyntaxKind.Identifier)) {
+        return known;
+    }
+    let declaration;
+    try {
+        declaration = this.checkerOrUndefined?.()?.getSymbolAtLocation (node)?.valueDeclaration?.resolve ();
+    } catch (e) {
+        return known;
+    }
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || !ts.isIdentifier (declaration.name)
+        || !isNilDeclaredInitializer (declaration.initializer) || (declaration.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement)
+        || (declaration.parent.declarations.length !== 1)) {
+        return known;
+    }
+    if (!CCXT_GO_90_JOIN_PROBED.has (declaration)) {
+        CCXT_GO_90_JOIN_PROBED.add (declaration);       // seeded before the scan: it re-enters for the same local
+        ccxtGoNilDeclaredJoinType (this, declaration);
+    }
+    return CCXT_GO_90_POINTER_JOINS.get (declaration);
+};
