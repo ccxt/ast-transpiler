@@ -39348,3 +39348,158 @@ function go93g2StringListElementRead (n, parent): boolean {
 // BaseExchange.MarketIdsSlice returns: nil exactly where MarketIds is nil, so `xs.length` prints len(xs).
 const GO93G2_LOOP_LIST_READERS: { [name: string]: string } = { 'safeListN': 'SafeListNSlice', 'marketIds': 'MarketIdsSlice' };
 // ===== ral-93g2 R2 (end) =====
+
+// ===== map-row lists read through string keys =====
+// `const xs = this.safeList (c, k)` read only as `xs.length` and as the loop-bounded `const e = xs[i]`, where every
+// such e is read only as the receiver of `this.safe* (e, 'literal', ..)`: xs prints `[]map[string]any` from the
+// hand-written SafeListMapsTyped (a non-map row is a nil map, which every safe* reader answers like the box).
+const GO_MAP_ROW_LIST_TYPE = '[]map[string]any';
+const goMapRowListVerdicts = new WeakMap<object, boolean>();
+function goMapRowSafeReaderUse (goTranspiler, n): boolean {
+    const call = n.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments[0] !== n) || (call.arguments.length < 2)) {
+        return false;
+    }
+    const callee = call.expression;
+    const key = call.arguments[1];
+    return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && /^safe[A-Z]/.test (callee.name?.text ?? '') && (GO_MAP_ROW_READERS.indexOf (callee.name.text) >= 0)
+        && ((key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral));
+}
+// `e['literal']` read (never written): on the map row it is the native index, nil where GetValue answered nil
+function goMapRowKeyRead (goTranspiler, n): boolean {
+    const access = n.parent;
+    const key = access?.argumentExpression;
+    return (access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === n)
+        && ((key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral))
+        && !goTranspiler.isGoElementAccessAssignmentTarget (access) && (access.parent?.kind !== SyntaxKind.ElementAccessExpression)
+        && (access.parent?.kind !== SyntaxKind.PropertyAccessExpression) && (access.parent?.kind !== SyntaxKind.DeleteExpression);
+}
+const GO_MAP_ROW_READERS = [ 'safeString', 'safeString2', 'safeStringLower', 'safeStringUpper', 'safeInteger', 'safeInteger2',
+    'safeNumber', 'safeNumber2', 'safeBool', 'safeTimestamp', 'safeTimestamp2', 'safeValue', 'safeDict', 'safeList', 'safeFloat',
+    'safeIntegerProduct', 'safeStringLower2', 'safeStringUpper2', 'safeBool2', 'safeValue2', 'safeDict2', 'safeList2' ];
+function goMapRowIdentifierUses (goTranspiler, declaration) {
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const name = declaration.name?.text;
+    if ((scope === undefined) || (typeof name !== 'string')) {
+        return undefined;
+    }
+    const uses = goTranspiler.goDescendantsOf (scope).filter ((n) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+        && (n !== declaration.name) && goTranspiler.goIdentifierRefersToDeclaration (n, declaration));
+    const sameName = goTranspiler.goDescendantsOf (scope).filter ((n) => (n.kind === SyntaxKind.VariableDeclaration) && (n.name?.text === name));
+    return (sameName.length === 1) ? uses : undefined;
+}
+// the element local `const e = xs[i]`: the bounded read of the list, read only by string-keyed safe readers
+function goMapRowElementLocal (goTranspiler, declaration, list): boolean {
+    const init = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.ElementAccessExpression) || (init.expression?.kind !== SyntaxKind.Identifier)
+        || (init.argumentExpression?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (declaration.parent?.declarations?.length !== 1)) {
+        return false;
+    }
+    const decl = goTranspiler.checkerOrUndefined ()?.getSymbolAtLocation (init.expression)?.valueDeclaration?.resolve ();
+    if (decl !== list) {
+        return false;
+    }
+    if (goTranspiler.goLoopBoundedIndexRead (init, init.expression, init.argumentExpression, init.expression.text, init.argumentExpression.text) === undefined) {
+        return false;
+    }
+    const uses = goMapRowIdentifierUses (goTranspiler, declaration);
+    return (uses !== undefined) && (uses.length > 0) && uses.some ((n) => goMapRowSafeReaderUse (goTranspiler, n) || goMapRowKeyRead (goTranspiler, n))
+        && uses.every ((n) => goMapRowSafeReaderUse (goTranspiler, n) || goMapRowKeyRead (goTranspiler, n)
+            || ((list.type !== undefined) && (n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.initializer === n)));
+}
+// no annotation, or a list of dictionaries (`Dict[]`, `any[]`, `object[]`)
+function goMapRowListAnnotationIsRows (type): boolean {
+    if (type === undefined) {
+        return true;
+    }
+    const element = (type.kind === SyntaxKind.ArrayType) ? type.elementType : undefined;
+    return (element?.kind === SyntaxKind.TypeReference) && (element.typeName?.text === 'Dict');
+}
+// the safeList called is the inherited reader, not one the calling class declares itself
+function goMapRowReaderIsInherited (goTranspiler, declaration): boolean {
+    const callee = declaration.initializer?.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.name === undefined)) {
+        return false;
+    }
+    const reader = goTranspiler.checkerOrUndefined ()?.getSymbolAtLocation (callee?.name)?.valueDeclaration?.resolve ();
+    let owner = declaration.parent;
+    while ((owner !== undefined) && (owner.kind !== SyntaxKind.ClassDeclaration)) {
+        owner = owner.parent;
+    }
+    return (reader !== undefined) && (owner !== undefined) && (reader.parent !== owner);
+}
+function goMapRowList (goTranspiler, declaration): boolean {
+    if (goMapRowListVerdicts.has (declaration)) {
+        return goMapRowListVerdicts.get (declaration);
+    }
+    goMapRowListVerdicts.set (declaration, false);
+    let verdict = false;
+    const file = String (declaration?.getSourceFile?.()?.fileName ?? '');
+    const args = (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && goMapRowListAnnotationIsRows (declaration.type) && (declaration.parent?.declarations?.length === 1) && !/(^|[\\/])base[\\/]/.test (file)
+        && goMapRowReaderIsInherited (goTranspiler, declaration) ? goTranspiler.goSafeListLocalArgs (declaration.initializer) : undefined;
+    if (args !== undefined) {
+        const uses = goMapRowIdentifierUses (goTranspiler, declaration);
+        let elements = 0;
+        verdict = (uses !== undefined) && (uses.length > 0) && uses.every ((n) => {
+            const parent = n.parent;
+            if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) {
+                return true;
+            }
+            if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)
+                && (parent.parent?.kind === SyntaxKind.VariableDeclaration) && (parent.parent.initializer === parent)
+                && goMapRowElementLocal (goTranspiler, parent.parent, declaration)) {
+                elements += 1;
+                return true;
+            }
+            return false;
+        }) && (elements > 0);
+    }
+    goMapRowListVerdicts.set (declaration, verdict);
+    return verdict;
+}
+function goMapRowElementOf (goTranspiler, declaration): boolean {
+    const init = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init?.kind !== SyntaxKind.ElementAccessExpression)
+        || (init.expression?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const list = goTranspiler.checkerOrUndefined ()?.getSymbolAtLocation (init.expression)?.valueDeclaration?.resolve ();
+    return (list?.kind === SyntaxKind.VariableDeclaration) && goMapRowList (goTranspiler, list) && goMapRowElementLocal (goTranspiler, declaration, list);
+}
+const getGoLocalTypeMapRows = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    if (goMapRowList (this, declaration)) {
+        return GO_MAP_ROW_LIST_TYPE;
+    }
+    if (goMapRowElementOf (this, declaration)) {
+        return GO_SAFE_DICT_LOCAL_TYPE;
+    }
+    return getGoLocalTypeMapRows.call (this, declaration, parsedValue);
+};
+const goLoopBoundedSliceReadMapRows = GoTranspiler.prototype.goLoopBoundedSliceRead;
+GoTranspiler.prototype.goLoopBoundedSliceRead = function (node, baseExpr, keyNode, containerStr: string, keyStr: string): string | undefined {
+    const list = (baseExpr?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined ()?.getSymbolAtLocation (baseExpr)?.valueDeclaration?.resolve () : undefined;
+    if ((list?.kind === SyntaxKind.VariableDeclaration) && goMapRowList (this, list) && !containerStr.includes ('\n') && !keyStr.includes ('\n')) {
+        return this.goLoopBoundedIndexRead (node, baseExpr, keyNode, containerStr, keyStr);
+    }
+    return goLoopBoundedSliceReadMapRows.call (this, node, baseExpr, keyNode, containerStr, keyStr);
+};
+const printVariableDeclarationListMapRows = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration = node?.declarations?.[0];
+    if ((node?.declarations?.length === 1) && goMapRowList (this, declaration)) {
+        const args = this.goSafeListLocalArgs (declaration.initializer);
+        return this.getIden (identation) + 'var ' + this.printNode (declaration.name, 0) + ' ' + GO_MAP_ROW_LIST_TYPE
+            + ' = this.SafeListMapsTyped(' + this.printNode (args.container, 0).trim () + ', ' + this.printNode (args.key, 0).trim () + ')';
+    }
+    if ((node?.declarations?.length === 1) && goMapRowElementOf (this, declaration)) {
+        const init = declaration.initializer;
+        return this.getIden (identation) + 'var ' + this.printNode (declaration.name, 0) + ' ' + GO_SAFE_DICT_LOCAL_TYPE
+            + ' = ' + this.printNode (init.expression, 0).trim () + '[' + this.printNode (init.argumentExpression, 0).trim () + ']';
+    }
+    return printVariableDeclarationListMapRows.call (this, node, identation);
+};

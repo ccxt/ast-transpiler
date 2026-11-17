@@ -17341,3 +17341,118 @@ describe ('ral-93g2 R3 string-list locals also read through safeString', () => {
         expect (out).not.toContain ('var marketIds []string');
     });
 });
+
+function goTranspileMapRows(source: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'map-rows-'));
+    fs.mkdirSync(path.join(dir, 'ts', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'ex.ts'), source);
+    const cwd = process.cwd();
+    try {
+        process.chdir(dir);
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        return x.transpileGoByPath('ts/src/ex.ts').content;
+    } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe('map-row lists read through string-keyed safe readers', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'class base {\n'
+        + '    safeList (d: unknown, k: unknown, x: unknown = undefined): unknown[] { return []; }\n'
+        + '    safeString (d: unknown, k: unknown, x: unknown = undefined): string { return \'\'; }\n'
+        + '}\n'
+        + 'export class ex extends base {\n';
+    const loop = (use: string) => '        const rows = this.safeList (response, \'data\');\n'
+        + '        const result = [];\n'
+        + '        for (let i = 0; i < rows.length; i++) {\n'
+        + '            const entry = rows[i];\n'
+        + '            result.push (' + use + ');\n'
+        + '        }\n'
+        + '        return result;\n';
+    test('the list reads SafeListMapsTyped and the row is the slice index', () => {
+        const out = goTranspileMapRows(head + '    f (response: Dict) {\n        // kept\n' + loop('{ \'id\': this.safeString (entry, \'id\') }') + '    }\n}\n');
+        expect(out).toContain('// kept');
+        expect(out).toContain('var rows []map[string]any = this.SafeListMapsTyped(response, "data")');
+        expect(out).toContain('var entry map[string]any = rows[i]');
+    });
+    test('a row handed on whole keeps the boxed list', () => {
+        const out = goTranspileMapRows(head + '    f (response: Dict) {\n' + loop('entry') + '    }\n}\n');
+        expect(out).not.toContain('SafeListMapsTyped');
+        expect(out).toContain('var entry any = rows[i]');
+    });
+    test('an index key read keeps the boxed list', () => {
+        const out = goTranspileMapRows(head + '    f (response: Dict) {\n' + loop('this.safeString (entry, 0)') + '    }\n}\n');
+        expect(out).not.toContain('SafeListMapsTyped');
+    });
+});
+
+describe('map-row lists: annotated Dict[] list with an empty default and an info row', () => {
+    test('prints the typed rows', () => {
+        const out = goTranspileMapRows('type Dict = { [key: string]: unknown };\n'
+            + 'class base {\n'
+            + '    safeList (d: unknown, k: unknown, x: unknown = undefined): unknown[] { return []; }\n'
+            + '    safeString (d: unknown, k: unknown, x: unknown = undefined): string { return \'\'; }\n'
+            + '}\n'
+            + 'export class ex extends base {\n'
+            + '    f (response: Dict) {\n'
+            + '        const rows: Dict[] = this.safeList (response, \'data\', []);\n'
+            + '        const result = [];\n'
+            + '        for (let i = 0; i < rows.length; i++) {\n'
+            + '            const entry = rows[i];\n'
+            + '            result.push ({ \'info\': entry, \'id\': this.safeString (entry, \'id\') });\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var rows []map[string]any = this.SafeListMapsTyped(response, "data")');
+        expect(out).toContain('var entry map[string]any = rows[i]');
+    });
+});
+
+describe('map-row lists: an unannotated list whose row is stored keeps the box', () => {
+    test('keeps []any', () => {
+        const out = goTranspileMapRows('type Dict = { [key: string]: unknown };\n'
+            + 'class base {\n'
+            + '    safeList (d: unknown, k: unknown, x: unknown = undefined): unknown[] { return []; }\n'
+            + '    safeString (d: unknown, k: unknown, x: unknown = undefined): string { return \'\'; }\n'
+            + '}\n'
+            + 'export class ex extends base {\n'
+            + '    f (response: Dict) {\n'
+            + '        const rows = this.safeList (response, \'data\');\n'
+            + '        const result = [];\n'
+            + '        for (let i = 0; i < rows.length; i++) {\n'
+            + '            const entry = rows[i];\n'
+            + '            result.push ({ \'info\': entry, \'id\': this.safeString (entry, \'id\') });\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).not.toContain('SafeListMapsTyped');
+    });
+});
+
+describe('map-row lists: a literal-key row read is the map index', () => {
+    test('prints row["k"]', () => {
+        const out = goTranspileMapRows('type Dict = { [key: string]: unknown };\n'
+            + 'class base {\n'
+            + '    safeList (d: unknown, k: unknown, x: unknown = undefined): unknown[] { return []; }\n'
+            + '    safeString (d: unknown, k: unknown, x: unknown = undefined): string { return \'\'; }\n'
+            + '}\n'
+            + 'export class ex extends base {\n'
+            + '    f (response: Dict) {\n'
+            + '        const rows = this.safeList (response, \'data\');\n'
+            + '        const result = [];\n'
+            + '        for (let i = 0; i < rows.length; i++) {\n'
+            + '            const entry = rows[i];\n'
+            + '            result.push ({ \'v\': entry[\'v\'], \'id\': this.safeString (entry, \'id\') });\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var entry map[string]any = rows[i]');
+        expect(out).toContain('entry["v"]');
+    });
+});
