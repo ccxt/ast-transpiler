@@ -7650,7 +7650,7 @@ export class RustTranspiler extends BaseTranspiler {
         const form = this.rustScalarUseForms.get(n);
         // vd lends a typed operand of a lent entry point as is ('parg'); the written text is still the Precise call
         // ral-76h: a lent operand ('parg') prints `&x` for the boxed and the typed local alike and moves nothing, so any use qualifies
-        if ((form !== 'box' && form !== 'parg') || !this.rustPreciseStringCall(declaration.initializer) || (form === 'box' && !this.rustLocalLastUse(n, declaration))) return false;
+        if ((form !== 'box' && form !== 'parg') || (form === 'box' && (!this.rustPreciseStringCall(declaration.initializer) || !this.rustLocalLastUse(n, declaration)))) return false;
         let top: any = n;
         for (;;) {
             while (isParenthesizedExpression(top.parent)) top = top.parent;
@@ -7684,7 +7684,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarFeedsElementWrite(n: any, write: any): boolean {
         const left: any = write.left;
         if (!isElementAccessExpression(left)) return false;
-        const recv: any = this.unwrapParens(left.expression);
+        let recv: Node = this.unwrapParens(left.expression);
+        // ral-87rb R1: a nested element write `m['a']['b'] = ..` writes a `Value` slot of a map just the same
+        while (isElementAccessExpression(recv)) recv = this.unwrapParens(recv.expression);
         if (!isIdentifier(recv) && !(isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword)) return false;
         // the key is not this local (key writes keep their own rules)
         return !this.isNodeInsideNode(n, left);
@@ -13536,9 +13538,32 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined) return false;
         if (isIdentifier(inner)) return this.rustValueIntCounter(inner);
+        // ral-87rb R4: also `c * k` and a step of a step (`(c * k) - k`) at a declaration whose `this.sum` uses all add int
+        // literals (rust87rbSumLiteralOnly; ral-57e keeps a product summed with an `any` operand boxed): an `Int` on every path
+        // (the boxed form already printed the native `Value::Int((c * k))`)
+        if (isBinaryExpression(inner) && (inner.operatorToken.kind === SyntaxKind.AsteriskToken || inner.operatorToken.kind === SyntaxKind.PlusToken || inner.operatorToken.kind === SyntaxKind.MinusToken)
+            && isBinaryExpression(this.unwrapParens(inner.left)) && this.rust76eCounterStep(inner.left) && this.rustScalarIntLiteral(this.unwrapParens(inner.right)) !== undefined) return this.rust87rbSumLiteralOnly(inner);
+        if (isBinaryExpression(inner) && inner.operatorToken.kind === SyntaxKind.AsteriskToken) {
+            const factor: Node = this.unwrapParens(inner.left);
+            return isIdentifier(factor) && this.rustValueIntCounter(factor) && this.rustScalarIntLiteral(this.unwrapParens(inner.right)) !== undefined && this.rust87rbSumLiteralOnly(inner);
+        }
         if (!isBinaryExpression(inner) || (inner.operatorToken.kind !== SyntaxKind.PlusToken && inner.operatorToken.kind !== SyntaxKind.MinusToken)) return false;
         const left: any = this.unwrapParens(inner.left);
         return isIdentifier(left) && this.rustValueIntCounter(left) && this.rustScalarIntLiteral(this.unwrapParens(inner.right)) !== undefined;
+    }
+
+    /** ral-87rb R4: `node` is (inside parentheses) the initializer of a declaration (or an operand of one) whose every
+     *  `this.sum (..)` use has only int-literal partners. */
+    rust87rbSumLiteralOnly(node: Node): boolean {
+        let top: Node = node;
+        while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || isBinaryExpression(top.parent))) top = top.parent;
+        const declaration: Node = top.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== top || !isIdentifier(declaration.name)) return false;
+        return this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: Node) => {
+            const call: Node = n.parent;
+            if (!isCallExpression(call) || !this.rustSumShape(call)) return true;
+            return Array.from(call.arguments).every((a: Node) => a === n || this.rustScalarIntLiteral(this.unwrapParens(a)) !== undefined);
+        });
     }
 
     /** tb: `const b = this.parseToInt (..)` (an `Int`-or-`Null` producer, `i64` / `Option<i64>`). */
@@ -20173,7 +20198,7 @@ export class RustTranspiler extends BaseTranspiler {
         const boxes: any[] = [];
         this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
             const form = this.rustScalarUseForms.get(n);
-            if (form === 'bslot') { slots++; writes.add(n.parent.parent); if (this.rustBoolSlotLineLong(n)) others = false; } else if (form === 'box') boxes.push(n); else if (form !== 'cond' && form !== 'write') others = false;
+            if (form === 'bslot') { slots++; writes.add(n.parent.parent); if (this.rustBoolSlotLineLong(n)) others = false; } else if (form === 'box') boxes.push(n); else if (form !== 'cond' && form !== 'write' && !(form === 'test' && this.rust87rbTrueTest(n))) others = false;
             return true;
         });
         // od: a `Value::Bool(x)` box inside the right side of the local's first slot write runs before any slot
@@ -20184,6 +20209,15 @@ export class RustTranspiler extends BaseTranspiler {
             if (up?.parent === undefined || [ ...writes ].some((w: any) => w.pos < up.parent.pos)) others = false;
         }
         return slots === 0 || others;
+    }
+
+    /** ral-87rb R3: `x === true` / `x !== true` reads a slot-written bool exactly: the slot prints `.as_bool() == Some(true)`,
+     *  which is `true` for the very values the boxed `is_equal(x, true)` matched (a `false` / `null` compare would not agree on a Null slot). */
+    rust87rbTrueTest(n: Node): boolean {
+        const parent: Node = n.parent;
+        if (!isBinaryExpression(parent) || !this.isEqualityOp(parent.operatorToken.kind)) return false;
+        const other: Node = this.unwrapParens(parent.left === n ? parent.right : parent.left);
+        return other?.kind === SyntaxKind.TrueKeyword;
     }
 
     /** The destructuring statement keeps the 400-char line budget with the slot's bool read.

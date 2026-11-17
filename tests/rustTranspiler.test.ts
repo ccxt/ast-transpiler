@@ -24761,3 +24761,92 @@ describe('ral-87ra R3: slot 3 of base handleTriggerPricesAndParams over a proven
         expect(out).toContain('let mut paramsTrigger: crate::value::Dict = ');
     });
 });
+
+describe("ral-87rb R1: a precision string read inside a nested element write source is an Option<String>", () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    orders: any = undefined;\n    currencyToPrecision (code: Str, fee: any, networkCode: Str = undefined): Str { return fee; }\n    safeString (obj: any, key: any, d: Str = undefined): Str { return obj[key]; }\n    safeDict (obj: any, key: any, d: Dict = undefined): Dict | undefined { return obj[key]; }\n    safeList (obj: any, key: any, d: any[] = undefined): any[] | undefined { return obj[key]; }\n    sum (...xs: any[]): any { return xs[0]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    handleMyTrade (symbol: string, orderId: string, tradeFee: Dict) {\n        const orders = this.safeDict (this.orders, symbol, {});\n        const order = this.safeDict (orders, orderId);\n        if (order !== undefined) {\n            const fees: Dict[] | undefined = this.safeList (order, 'fees');\n            if (fees !== undefined) {\n                for (let i = 0; i < fees.length; i++) {\n                    const orderFee = fees[i];\n                    const feeCost = this.sum (tradeFee['cost'], orderFee['cost']);\n                    let feeCostString = this.currencyToPrecision (tradeFee['currency'], feeCost);\n                    if (feeCostString === undefined) {\n                        feeCostString = '0';\n                    }\n                    order['fees'][i]['cost'] = parseFloat (feeCostString);\n                    break;\n                }\n            } else {\n                let feeCostString = this.currencyToPrecision (tradeFee['currency'], tradeFee['cost']);\n                if (feeCostString === undefined) {\n                    feeCostString = '0';\n                }\n                order['fee']['cost'] = parseFloat (feeCostString);\n            }\n        }\n        return order;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), "astfx-rs-87rb1-"));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, "ts/src/pro/venue.ts")).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test("binance pro handleMyTrade feeCostString: Option<String>, tested and parsed natively", () => {
+        expect(out).toContain('let mut feeCostString: Option<String> = ');
+        expect(out).toContain('if (feeCostString.is_none()) {');
+        expect(out).not.toContain('let mut feeCostString: Value');
+    });
+});
+
+describe("ral-87rb R2: a numberToString string lent into a Precise write is an Option<String>", () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Str = string | undefined;\nfunction numberToString (x: number | string): string;\nfunction numberToString (x: any): string | undefined;\nfunction numberToString (x: any): string | undefined { return x; }\nexport default class Exchange {\n    numberToString = numberToString;\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/precise.ts": "export class Precise {\n    static stringMul (a: string, b: string): string { return a; }\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport { Precise } from './precise.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    createOrderRequest (amount: number, price: number, params: any = {}) {\n        const request: any = {};\n        let notional: Str = undefined;\n        if (price !== undefined) {\n            const amountString = this.numberToString (amount);\n            const priceString = this.numberToString (price);\n            notional = Precise.stringMul (amountString, priceString);\n        } else {\n            const amountString = this.numberToString (amount);\n            notional = amountString;\n        }\n        request['notional'] = notional;\n        return this.hold (request);\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), "astfx-rs-87rb2-"));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, "ts/src/venue.ts")).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test("binance createOrderRequest amountString / priceString: Option<String>, lent to Precise.stringMul", () => {
+        expect(out).toContain('let mut amountString: Option<String> = ');
+        expect(out).toContain('let mut priceString: Option<String> = ');
+        expect(out).toContain('let mut amountString: Option<String> = self.numberToString(amount.clone());');
+    });
+});
+
+describe("ral-87rb R3: a slot-written bool compared === true is a bool", () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Bool = boolean | undefined;\nexport interface Dict { [key: string]: any }\nexport default class Exchange {\n    handleParamBool2 (params: Dict, a: string, b: string, d: Bool = undefined): [Bool, Dict] { return [ d, params ]; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport type { Bool, Dict } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    watchOrders (typeId: string, params: Dict = {}) {\n        let query = params;\n        let isTrigger: Bool = false;\n        [ isTrigger, query ] = this.handleParamBool2 (query, 'trigger', 'stop', false);\n        if ((isTrigger === true) && (typeId === 'options')) {\n            return this.hold (query);\n        }\n        if (isTrigger === true) {\n            return 1;\n        }\n        return 0;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), "astfx-rs-87rb3-"));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, "ts/src/pro/venue.ts")).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test("gate pro watchOrders isTrigger: bool from the destructured slot, === true reads it natively", () => {
+        expect(out).toContain('let mut isTrigger: bool = false;');
+        expect(out).toContain('if (isTrigger == true) {');
+        expect(out).not.toContain('let mut isTrigger: Value');
+    });
+});
+
+describe("ral-87rb R4: a for counter times an int literal is an i64", () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export default class Exchange {\n    secret: string = undefined;\n    sum (...xs: any[]): any { return xs[0]; }\n    parseToInt (x: any): number { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    convertSecretToPem (secret: any): string {\n        const fullLines = this.parseToInt (secret.length / 64);\n        let pem = '';\n        for (let i = 0; i <= fullLines; i++) {\n            const start = i * 64;\n            const end = this.sum (start, 64);\n            pem += this.secret.slice (start, end) + '\\n';\n        }\n        return pem;\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), "astfx-rs-87rb4-"));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, "ts/src/venue.ts")).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test("lbank convertSecretToPem start: i64 from the counter, end follows natively", () => {
+        expect(out).toContain('let mut start: i64 = (i * 64);');
+        expect(out).toContain('let mut end: i64 = (start + 64);');
+        expect(out).not.toContain('let mut start: Value');
+    });
+});
