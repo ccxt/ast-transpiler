@@ -25662,3 +25662,53 @@ describe('ral-90rg R4: a base method returning another base method call whose im
         expect(out).toContain('marginResult.get(0)');
     });
 });
+
+describe('ral-90rh R1: a parseInt local over a string parameter', () => {
+    test('precisionNumber is Option<i64>; == 0, > 0 and the n - 1 / -1 - n for bounds read it natively', () => {
+        const dir = path.join (rustFixtureRoot, 'r90rh-parseint');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parsePrecision (precision?: string): Str {\n        if (precision === undefined) {\n            return undefined;\n        }\n        const precisionNumber = parseInt (precision);\n        if (precisionNumber === 0) {\n            return '1';\n        }\n        if (precisionNumber > 0) {\n            let parsedPrecision = '0.';\n            for (let i = 0; i < precisionNumber - 1; i++) {\n                parsedPrecision = parsedPrecision + '0';\n            }\n            return parsedPrecision + '1';\n        } else {\n            let parsedPrecision = '1';\n            for (let i = 0; i < -1 - precisionNumber; i++) {\n                parsedPrecision = parsedPrecision + '0';\n            }\n            return parsedPrecision + '0';\n        }\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut precisionNumber: Option<i64> = ');
+        expect(out).toContain('(precisionNumber == Some(0))');
+        expect(out).toContain('matches!(precisionNumber, Some(__b) if (i as f64) < ((__b - 1) as f64))');
+        expect(out).toContain('matches!(precisionNumber, Some(__b) if (i as f64) < ((-1 - __b) as f64))');
+    });
+});
+
+describe('ral-90rh R2: a nil-declared Str local read as a map key under `as string`', () => {
+    test('market[key as string] keys the map with the Option<String> local', () => {
+        const dir = path.join (rustFixtureRoot, 'r90rh-castkey');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Dict = { [key: string]: any };\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    fee (markets: any, symbol: string, useQuote: boolean): Dict {\n        const market = this.safeDict (markets, symbol, {});\n        let key: Str = undefined;\n        if (useQuote) {\n            key = 'quote';\n        } else {\n            key = 'base';\n        }\n        return {\n            'currency': market[key as string],\n        };\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut key: Option<String> = None;');
+        expect(out).toContain('key = Some(\"quote\".to_string());');
+        expect(out).toContain('crate::value::KeyRead::read(&&market, &key.as_deref().map(Value::from).unwrap_or(Value::Null))');
+    });
+});
+
+describe('ral-90rh R3: an indexOf local over an untyped string parameter', () => {
+    test('colonIndex is i64; the >= 0 test and the slice bound read it natively', () => {
+        const dir = path.join (rustFixtureRoot, 'r90rh-indexof');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    query (outcomeSymbol: string): Str {\n        let marketPart = outcomeSymbol;\n        const colonIndex = outcomeSymbol.indexOf (':');\n        if (colonIndex >= 0) {\n            marketPart = outcomeSymbol.slice (0, colonIndex);\n        }\n        return marketPart;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut colonIndex: i64 = outcomeSymbol.as_str().and_then(|__s| __s.find(\":\")).map(|__i| __i as i64).unwrap_or(-1);');
+        expect(out).toContain('if colonIndex >= 0 {');
+    });
+});
+
+describe('ral-90rh R4: nil-declared locals compared with a typed market struct field', () => {
+    test('market[\'type\'] !== marketType and market[\'linear\'] !== isLinearSubType compare the fields natively', () => {
+        const dir = path.join (rustFixtureRoot, 'r90rh-mktfield');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Bool = boolean | undefined;\nexport interface MarketInterface { symbol: string; type: string; spot: boolean; linear: Bool; }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    market (symbol: string): MarketInterface { return undefined; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: Bool = undefined): Bool { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    sameKind (symbols: string[]): string[] {\n        const result: string[] = [];\n        let marketType: Str = undefined;\n        let isLinearSubType: Bool = undefined;\n        for (let i = 0; i < symbols.length; i++) {\n            const market = this.market (symbols[i]);\n            if (marketType !== undefined) {\n                if (market['type'] !== marketType) {\n                    throw new Error ('mixed ' + marketType);\n                }\n            }\n            if (isLinearSubType !== undefined) {\n                if (market['linear'] !== isLinearSubType) {\n                    throw new Error ('mixed subType');\n                }\n            }\n            marketType = this.safeString (market, 'type');\n            if (!this.safeBool (market, 'spot', false)) {\n                isLinearSubType = this.safeBool (market, 'linear');\n            }\n            result.push (market['symbol']);\n        }\n        return result;\n    }\n}\n");
+        const fresh = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': [ 'market' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = fresh.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut marketType: Option<String> = None;');
+        expect(out).toContain('let mut isLinearSubType: Option<bool> = None;');
+        expect(out).toContain('(Some((market).market_type.as_str()) != marketType.as_deref())');
+        expect(out).toContain('((market).linear != isLinearSubType)');
+    });
+});

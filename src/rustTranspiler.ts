@@ -2937,6 +2937,55 @@ export class RustTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    /** ral-90rh R4: `m['k']` off a typed (`struct`) market local whose field is a `String` (kind `ostr`) or an `Option<bool>`
+     *  (kind `obool`): the field text (`(m).market_type`, `(m).linear`), else undefined. */
+    rust90rhMarketFieldPartner(partner: any, kind: string): string | undefined {
+        if (partner === undefined || !(isElementAccessExpression(partner) || isPropertyAccessExpression(partner))) return undefined;
+        const declaration = this.rustTypedMarketLocalOf(partner.expression);
+        if (declaration === undefined || this.rustMarketLocalKind(declaration) !== 'struct') return undefined;
+        const key = this.rustMarketReadKey(partner.expression);
+        if (key === undefined) return undefined;
+        const recv = `(${this.printNode(declaration.name, 0)})`;
+        if (kind === 'ostr' && RustTranspiler.RUST_MARKET_STR_FIELDS[key] !== undefined) return `${recv}.${RustTranspiler.RUST_MARKET_STR_FIELDS[key]}`;
+        if (kind === 'obool' && RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key)) return `${recv}.${key}`;
+        return undefined;
+    }
+
+    /** ral-90rh R3: a declaration initializer `s.indexOf ('<non-empty literal>')`, `s` a bare identifier the checker types
+     *  `string` and no scalar rule types (it prints as `Value`). */
+    rust90rhValueIndexOf(expr: any): boolean {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'indexOf'
+            || node.arguments.length !== 1 || !this.rustDeclInitPosition(node)) return false;
+        const recv: any = node.expression.expression;
+        const needle: any = node.arguments[0];
+        if (!isIdentifier(recv) || this.literalKindOfNode(needle) !== 'string' || this.rustNativeStringLiteralArg(needle) === undefined || needle.text === '') return false;
+        // no typed-receiver rule takes the call (a string parameter read keeps its own closure-free `find` form: myriad, gate 15771)
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(recv)) === 'string' && this.rustScalarIdentifierKind(recv) === undefined
+            && this.rustScalarParamRead(recv) === undefined;
+    }
+
+    /** ral-90rh R1: `n - k` / `k - n` with `n` an `Option<i64>` local seeded by `parseInt (s)` and `k` an int literal: the
+     *  printed name of `n` and the `i64` text over its payload `__b`. */
+    rust90rhOintShiftBound(expr: any): { name: string, text: string } | undefined {
+        const node: any = this.unwrapParens(expr);
+        if (node === undefined || !isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.MinusToken) return undefined;
+        const [ left, right ] = [ this.unwrapParens(node.left), this.unwrapParens(node.right) ];
+        const local = (n: any): boolean => { const d: any = isIdentifier(n) ? this.rustDeclaredNode(n) : undefined; return d !== undefined && this.rustScalarLocalOf(n)?.kind === 'oint' && this.rust90rhParseIntInit(d.initializer); };
+        if (local(left) && this.rustScalarIntLiteral(right) !== undefined) return { name: super.printIdentifier(left), text: `__b - ${this.rustScalarIntLiteral(right)}` };
+        if (local(right) && this.rustScalarIntLiteral(left) !== undefined) return { name: super.printIdentifier(right), text: `${this.rustScalarIntLiteral(left)} - __b` };
+        return undefined;
+    }
+
+    /** ral-90rh R1: a declaration initializer `parseInt (s)` (one bare identifier argument, checker type `string`; no multiply form). */
+    rust90rhParseIntInit(expr: any): boolean {
+        const node: any = this.unwrapParens(expr);
+        // a bare identifier argument only: a method-call argument (`parseInt (s.replace (..))`) re-prints the receiver
+        // local's use inside the new form and moved grvt `size` back to `Value` (gate 15711)
+        return node !== undefined && isCallExpression(node) && node.arguments?.length === 1 && isIdentifier(this.unwrapParens(node.arguments[0]))
+            && this.rustDeclInitPosition(node) && this.rust68bParseIntWrite(node);
+    }
+
     /** ral-68b: `parseInt (s)` with one argument whose checker type is `string`, or that call times an integer literal. */
     rust68bParseIntWrite(expr: any): boolean {
         const node: any = this.unwrapParens(expr);
@@ -5193,6 +5242,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isPropertyAccessExpression(node)) return isIdentifier(node.name) && node.name.text === 'length' && (isIdentifier(node.expression) || this.rustSelfRootedLengthRecv(node.expression) || this.rustLocalRootedLengthRecv(node.expression));
         if (isElementAccessExpression(node)) return isIdentifier(node.expression) || this.rustInlineHandleStrSlot(node);
         if (isCallExpression(node) && isIdentifier(node.expression) && RustTranspiler.RUST_STR_RUNTIME_FREE.has(String(node.expression.text))) return true;
+        // ral-90rh R1: `parseInt (s)` of one checker-string argument (its kind is proven by rust90rhParseIntInit)
+        if (this.rust90rhParseIntInit(node)) return true;
         if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !this.rustScalarReceiver(node.expression.expression)) return false;
         // any `this.m(..)`: the kind comes from the callee's checker return
         return true;
@@ -5321,6 +5372,8 @@ export class RustTranspiler extends BaseTranspiler {
         const clientOnce = nativeUses === 0 && boxed === 1 && this.rustWsClientOnlyUse(declaration);
         // ral-51n: an any-list length typed only for its native uses (a box-only length stays the `Value` it is handed as)
         if (anyLength && typedUses === 0) return undefined;
+        // ral-90rh R1: a parseInt local typed only for its native uses (box-only stays the boxed parse)
+        if (kind === 'oint' && typedUses === 0 && this.rust90rhParseIntInit(declaration.initializer)) return undefined;
         // ral-87re: a comparison seed reading another local (cex `deposit`, only boxed into a literal) is typed for a native use only
         if (kind === 'bool' && typedUses === 0 && this.rust87reLocalSeeds.has(declaration)) return undefined;
         // ral-61p: a handleOption local typed from its default literal only for its native uses (boxed-straight-back stays `Value`)
@@ -5758,6 +5811,11 @@ export class RustTranspiler extends BaseTranspiler {
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
         if (fresh && this.rustNumParamToString(node)) return 'str';
+        // ral-90rh R3: `const i = s.indexOf ('<lit>')` over a checker-string `s` that no typed-local rule holds: printed
+        // `Value::Int(s.as_str().and_then(find).unwrap_or(-1))`, an `Int` on every path
+        if (fresh && this.rust90rhValueIndexOf(node)) return 'int';
+        // ral-90rh R1: `const n = parseInt (s)` over a checker-string `s`: the native parse answers `Int` or `Null` (`Option<i64>`)
+        if (fresh && this.rust90rhParseIntInit(node)) return 'oint';
         // ral-87rh R3: `x = v.toString ()` as a statement write into a `let` seeded with a string literal, where the printer
         // boxes the call whole as `Value::Str(format!("{}", v))` (rustFormatPrints): the `String` that `format!` makes
         if (fresh && this.rust87rhToStringWrite(node)) return 'str';
@@ -7901,6 +7959,10 @@ export class RustTranspiler extends BaseTranspiler {
         // tb: an `Option<i64>` parseToInt bound: `is_less_than(Int, Null)` is false, `Some` orders as f64 like the helper;
         // ral-55e / ral-56n: or a parseToInt bound whose `Option<i64>` kind is already decided (rustDecidedOintBound)
         if (boundKind === 'oint' && (this.rustTbCounterBound(cond, bound, 'oint') !== undefined || this.rustDecidedOintBound(cond, bound))) return `matches!(${super.printIdentifier(bound)}, Some(__b) if (${name} as f64) ${operator} (__b as f64))`;
+        // ral-90rh R1: `i < n - k` / `i < k - n` over a parseInt `Option<i64>` local `n` and an int literal `k`: the boxed bound
+        // was `Int` arithmetic or `Null` (NaN, false), so `Some` compares its difference as f64 and `None` is false
+        const shifted = this.rust90rhOintShiftBound(bound);
+        if (shifted !== undefined) return `matches!(${shifted.name}, Some(__b) if (${name} as f64) ${operator} ((${shifted.text}) as f64))`;
         const refs = (n: any): boolean => (isIdentifier(n) && n.text === name) || (n.forEachChild(refs) ?? false);
         if (refs(right) || !this.printsValueExpression(left) || !this.printsValueExpression(this.orderedComparisonOperand(right))) return undefined;
         if (this.printRustScalarBinary(cond) !== undefined || this.rustScalarOwnsOperand(left) || this.rustScalarOwnsOperand(right)) return undefined;
@@ -8904,6 +8966,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         // ral-84c R3: a nil-declared `let k: Str = undefined` keys a proven map read the same way (`None` misses, as `Null` did)
         if (kind === 'ostr' && this.rust84cNilStrKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
+        // ral-90rh R2: likewise under a `k as string` cast (base calculateFeeWithRate `market[key as string]`): the cast prints nothing
+        if (kind === 'ostr' && this.rust90rhCastKey(n) && this.rust84cNilStrKeyLocal(n) && this.rustOkeyReadUse(n.parent)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rust63eChainLinkKeyRead(n)) return 'okey';
         // ral-64k: the key of `const y = book[k]` on a typed ws order-book local is handed to `get_value` as is
         if ((kind === 'str' || kind === 'ostr') && this.rust64kBookKeyRead(n)) return 'bkey';
@@ -11100,6 +11164,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (base === 'str' && this.rust68aJoinWrite(node)) return wrap(this.rustSbJoinText(node));
         if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
         const paramText = this.rustOptParamText(kind, node); if (paramText !== undefined) return paramText;
+        // ral-90rh R3: `s.indexOf ('<lit>')` on a `Value` string: the `find` the boxed form wrapped, `-1` where it misses
+        if (kind === 'int' && this.rust90rhValueIndexOf(node)) {
+            const needle = this.rustNativeStringLiteralArg(node.arguments[0]);
+            return `${super.printIdentifier(node.expression.expression)}.as_str().and_then(|__s| __s.find("${needle}")).map(|__i| __i as i64).unwrap_or(-1)`;
+        }
         if (kind === 'oint' && this.rustLimitCall(node)) return this.rustLimitCallText(node);
         const shadowRead = this.rustProShadowScalarText(kind, node); if (shadowRead !== undefined) return shadowRead;
         const marketField = base === 'str' ? this.rustMarketArmStrText(kind, node) : undefined; if (marketField !== undefined) return marketField;
@@ -12467,6 +12536,14 @@ export class RustTranspiler extends BaseTranspiler {
             return `(${kind === 'int' ? `Some(${name} as f64)` : `Value::from(${name}).as_f64()`} ${sign} ${this.printNode(partner, 0).trim()}.as_f64())`;
         }
         if (!isIdentifier(self) || this.rustScalarIdentifierKind(self) === undefined) return undefined;
+        // ral-90rh R4: a field read off a typed market struct local (`m['type']`, `m['linear']`): the boxed side printed
+        // `Value::from(field)` (`Str` of the `String`, `Bool` / `Null` of the `Option<bool>`), so the field itself compares
+        const field = this.rust90rhMarketFieldPartner(partner, kind);
+        if (field !== undefined) {
+            if (dry) return '_';
+            const name = super.printIdentifier(self);
+            return kind === 'ostr' ? `(Some(${field}.as_str()) ${sign} ${name}.as_deref())` : `(${field} ${sign} ${name})`;
+        }
         // ral-59n: a base `safe*` scalar reader partner (a `Value`) compares through its payload accessor
         // (not for a local that also keys an element read: typing that key changes how the receiver map local is decided)
         if (!isIdentifier(partner)) return this.rust59nValueReaderPartner(partner) ? this.rustScalarPayloadPartnerTest(self, partner, kind, sign, dry) : undefined;
@@ -13722,9 +13799,18 @@ export class RustTranspiler extends BaseTranspiler {
         return `get_value(&${recv}, ${super.printIdentifier(key)}.${kind === 'str' ? 'as_str' : 'as_deref'}())`;
     }
 
+    /** ral-90rh R2: `n` is the identifier of a `n as string` that is a whole element-access key. */
+    rust90rhCastKey(n: any): boolean {
+        const cast: any = n?.parent;
+        return isIdentifier(n) && cast !== undefined && isAsExpression(cast) && cast.expression === n && cast.type?.kind === SyntaxKind.StringKeyword
+            && isElementAccessExpression(cast.parent) && cast.parent.argumentExpression === cast;
+    }
+
     /** Element-access hook: the native read of an `okey` use. */
     printOkeyRead(node: any): string | undefined {
-        const key: any = node.argumentExpression;
+        const arg: any = node.argumentExpression;
+        // ral-90rh R2: `m[k as string]` reads its `okey` key through the cast
+        const key: any = isAsExpression(arg) && this.rust90rhCastKey(arg.expression) ? arg.expression : arg;
         const keyKind = isIdentifier(key) && this.rustScalarUseForms.get(key) === 'okey' ? this.rustScalarLocalOf(key)?.kind : undefined;
         if (keyKind !== 'ostr' && keyKind !== 'str') return undefined;
         // int44 (wh x wg): a read wh lends off its held container prints there (`KeyRead::read`, boxed key)
@@ -20232,7 +20318,10 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
                 const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
-                const typedKey = isIdentifier(key) && !borrowedKey ? this.rust62nTypedStrKey(key) : undefined;
+                // ral-90rh R2: an `okey` `Option<String>` local under `as string` boxes its payload for the by-reference read
+                const castKey: any = isAsExpression(key) && this.rust90rhCastKey(key.expression) && this.rustScalarUseForms.get(key.expression) === 'okey' ? key.expression : undefined;
+                const typedKey = castKey !== undefined ? `${super.printIdentifier(castKey)}.as_deref().map(Value::from).unwrap_or(Value::Null)`
+                    : (isIdentifier(key) && !borrowedKey ? this.rust62nTypedStrKey(key) : undefined);
                 acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (typedKey ?? this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
             }
