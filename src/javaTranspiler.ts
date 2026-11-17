@@ -6290,7 +6290,20 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
-        return this.printCheckerTypedElementAccessRead(node) ?? super.printElementAccessExpression(node, identation);
+        return this.printJavaHandlerElementRead(node) ?? this.printCheckerTypedElementAccessRead(node) ?? super.printElementAccessExpression(node, identation);
+    }
+
+    // ral-87j2: `methods[key]` on a proven handler table prints the typed table's own get (the table is a
+    // fresh non-null HashMap<String, String>; get answers null for a missing or null key)
+    printJavaHandlerElementRead(node) {
+        if (!isElementAccessExpression(node) || !isIdentifier(node.expression)) {
+            return undefined;
+        }
+        this.javaScanHandlerTables(node);
+        if (!this.javaHandlerReads.has(this.javaHandlerKey(node))) {
+            return undefined;
+        }
+        return `${this.printNode(node.expression, 0).trim()}.get(${this.printNode(node.argumentExpression, 0).trim()})`;
     }
 
     // generated library tiers only (exchanges, pro, prediction, base); tests keep the helpers
@@ -10231,8 +10244,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (argument === undefined) {
             return undefined;
         }
-        // a ws Client map is initialised and final: the key copy is the helper's map branch
-        if (this.javaWsClientMapReceiver(argument)) {
+        // a ws Client map is initialised and final: the key copy is the helper's map branch;
+        // so is a proven handler table (a fresh non-null HashMap<String, String>, ral-87j2)
+        if (this.javaWsClientMapReceiver(argument) || this.javaHandlerTableIdentifier(argument)) {
             return `new java.util.ArrayList<Object>(${this.printNode(argument, 0)}.keySet())`;
         }
         if (isPropertyAccessExpression(argument)) {
@@ -11619,12 +11633,49 @@ export class JavaTranspiler extends BaseTranspiler {
         return failed ? undefined : references;
     }
 
-    // the table is read only as the first argument of `this.safeValue (methods, key)`
+    // the table is read only as the first argument of `this.safeValue (methods, key)`, or as the
+    // receiver of a `methods[key]` read with a string key (ral-87j2: both answer the entry or null)
     javaIsHandlerTableRead(call, read) {
+        if (call !== undefined && isElementAccessExpression(call) && call.expression === read) {
+            return !this.isLeftSideOfAssignment(call) && call.parent?.kind !== SyntaxKind.DeleteExpression
+                && this.javaHandlerStringKey(call.argumentExpression);
+        }
         return call !== undefined && isCallExpression(call) && call.arguments?.[0] === read
             && isPropertyAccessExpression(call.expression)
             && call.expression.name?.text === 'safeValue'
             && call.expression.expression?.kind === SyntaxKind.ThisKeyword;
+    }
+
+    // ral-87j2: a key whose checker type is string (undefined allowed): HashMap.get answers null for a
+    // missing or null key, like the helper's map branch
+    javaHandlerStringKey(key) {
+        const checker = this.checkerOrUndefined();
+        if (key === undefined || checker === undefined) {
+            return false;
+        }
+        if (isStringLiteralLikeNode(key)) {
+            return true;
+        }
+        let type;
+        try {
+            type = checker.getNonNullableType(checker.getTypeAtLocation(key));
+        } catch (e) {
+            return false;
+        }
+        return type !== undefined && (type.flags & TypeFlags.StringLike) !== 0;
+    }
+
+    // ral-87j2: a read that only asks for the table's keys (`Object.keys (methods)`, `k in methods`):
+    // the keys are the literal's, whatever the value box is
+    javaIsHandlerKeyRead(read) {
+        const parent = read.parent;
+        if (parent !== undefined && isCallExpression(parent) && parent.arguments?.length === 1 && parent.arguments[0] === read
+            && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+            && parent.expression.expression.text === 'Object' && parent.expression.name?.text === 'keys') {
+            return true;
+        }
+        return parent !== undefined && parent.kind === SyntaxKind.BinaryExpression && parent.right === read
+            && parent.operatorToken.kind === SyntaxKind.InKeyword;
     }
 
     // the local a table read is bound to: its declaration, or the plain write that reassigns it
@@ -11667,7 +11718,8 @@ export class JavaTranspiler extends BaseTranspiler {
                 ? (current.whenTrue === undefined ? current.whenFalse : current.whenTrue)
                 : current.expression;
         }
-        const read = current?.kind === SyntaxKind.CallExpression ? current.arguments?.[0] : undefined;
+        const read = current?.kind === SyntaxKind.CallExpression ? current.arguments?.[0]
+            : (current !== undefined && isElementAccessExpression(current) ? current.expression : undefined);
         if (current === undefined || read === undefined || read.kind !== SyntaxKind.Identifier
             || read.text !== tableName.text) {
             return false;
@@ -11749,6 +11801,9 @@ export class JavaTranspiler extends BaseTranspiler {
             const readCalls: any[] = [];
             let proven = true;
             for (const read of reads) {
+                if (this.javaIsHandlerKeyRead(read)) {
+                    continue;
+                }
                 const call = read.parent;
                 if (!this.javaIsHandlerTableRead(call, read)) {
                     proven = false;
@@ -11815,6 +11870,20 @@ export class JavaTranspiler extends BaseTranspiler {
         const key = this.printNode(node.arguments[1], 0).trim();
         // safeValue's map branch with a null key answers null; HashMap.get does the same
         return `${table}.get(${key})`;
+    }
+
+    // ral-87j2: an identifier naming the local a proven handler table literal initialises
+    javaHandlerTableIdentifier(node) {
+        if (node === undefined || !isIdentifier(node)) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || declaration.name.text !== node.text
+            || declaration.initializer === undefined) {
+            return false;
+        }
+        return this.javaHandlerDeclarationType(declaration) === JAVA_HANDLER_TABLE_TYPE;
     }
 
     // the declared Java type of the table local or of the local bound to one of its reads
