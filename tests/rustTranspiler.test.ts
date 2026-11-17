@@ -25457,18 +25457,27 @@ describe('ral-90rf R1: a Dict / List endpoint split by Array.isArray boxes its h
     };
     const early = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (!Array.isArray (response)) {\n            return this.keep ([ response ]);\n        }\n        return this.keep (response);\n    }\n";
     const elseArm = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (Array.isArray (response)) {\n            return this.keep (response);\n        } else {\n            return this.keep ({ 'info': response });\n        }\n    }\n";
-    test('tokocrypto fetchTickers: the map held after an exiting negated test is boxed back whole', () => {
-        const out = mk ('ral-90rf-r1a', 'Dict | List', early);
+    // stack-90r: at most one box per typed local: the two-box shapes of tokocrypto fetchTickers / alpaca cancelAllOrders stay Value
+    const earlyOne = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (!Array.isArray (response)) {\n            return this.keep ([ response ]);\n        }\n        return response.length;\n    }\n";
+    test('the map held after an exiting negated test is boxed back whole (one box: the list arm reads natively)', () => {
+        const out = mk ('ral-90rf-r1a', 'Dict | List', earlyOne);
         expect(out).toContain('let (mut response, response__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match self.public_get_ticker(');
         expect(out).toContain('if !(response.is_some())');
-        expect(out).toContain('response__map.clone().map_or(Value::Null, Value::Dict)');
-        expect(out).toContain('self.keep(response.map_or(Value::Null, Value::Arr))');
-    });
-    test('alpaca cancelAllOrders: a List endpoint read whole in the else arm', () => {
-        const out = mk ('ral-90rf-r1b', 'List', elseArm);
-        expect(out).toContain('if (response.is_some())');
         expect(out).toMatch(/response__map(\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)/);
+    });
+    const lendOne = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (Array.isArray (response)) {\n            return this.hold (response.length);\n        }\n        return this.keep (response);\n    }\n";
+    test('stack-90r: tokocrypto fetchTicker shape (one map box, list arm native) is typed', () => {
+        const out = mk ('ral-90rf-r1c', 'Dict | List', lendOne);
         expect(out).not.toMatch(/let mut response: Value = /);
+        expect(out).toMatch(/response__map(\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)/);
+    });
+    test('stack-90r narrowing: tokocrypto fetchTickers (map box + list box) stays Value', () => {
+        const out = mk ('ral-90rf-r1a2', 'Dict | List', early);
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+    test('stack-90r narrowing: alpaca cancelAllOrders (list box + map box in the else arm) stays Value', () => {
+        const out = mk ('ral-90rf-r1b', 'List', elseArm);
+        expect(out).toMatch(/let mut response: Value = /);
     });
     test('negative: an endpoint that may answer a string keeps the boxed local', () => {
         const out = mk ('ral-90rf-r1n', 'Dict | List | string', early);
@@ -25489,15 +25498,19 @@ describe('ral-90rf R2: a Dict / List endpoint split also rejoins outside both ar
     };
     const rejoin = "    async m (params = {}) {\n        const response = await this.privateGetLeverage (params);\n        let safeResponse = [];\n        if (Array.isArray (response)) {\n            safeResponse = response;\n        }\n        return this.keep ({ 'info': response, 'rows': safeResponse });\n    }\n";
     const keys = "    async m (params = {}) {\n        const response = await this.privateGetLeverage (params);\n        if (Array.isArray (response)) {\n            return this.keep (response);\n        } else {\n            const ids = Object.keys (response);\n            return this.keep (ids);\n        }\n    }\n";
+    const rejoinOne = "    async m (params = {}) {\n        const response = await this.privateGetLeverage (params);\n        let n = 0;\n        if (Array.isArray (response)) {\n            n = response.length;\n        }\n        return this.keep ({ 'info': response, 'n': n });\n    }\n";
     test('btse fetchLeverage: a whole use after the test rejoins the answer from the half that holds it', () => {
-        const out = mk ('ral-90rf-r2a', 'List', rejoin);
+        const out = mk ('ral-90rf-r2a', 'List', rejoinOne);
         expect(out).toContain('(match response { Some(__l) => Value::Arr(__l), None => response__map.map_or(Value::Null, Value::Dict) })');
         expect(out).not.toMatch(/let mut response: Value = /);
     });
-    test('whitebit fetchMyTrades: Object.keys in the map arm reads the held map', () => {
+    test('stack-90r narrowing: a rejoin plus a list-arm copy (two boxes) stays Value', () => {
+        const out = mk ('ral-90rf-r2a2', 'List', rejoin);
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+    test('stack-90r narrowing: whitebit fetchMyTrades (list box + Object.keys map box) stays Value', () => {
         const out = mk ('ral-90rf-r2b', 'Dict | List', keys);
-        expect(out).toContain('if (response.is_some())');
-        expect(out).toMatch(/response__map(\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)/);
+        expect(out).toMatch(/let mut response: Value = /);
     });
     test('negative: a Dict | List | string endpoint read whole after the test stays Value', () => {
         const out = mk ('ral-90rf-r2n', 'Dict | List | string', rejoin);
@@ -25658,7 +25671,10 @@ describe('ral-90rg R4: a base method returning another base method call whose im
         }
         const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
-        expect(out).toContain('let mut marginResult: Vec<Value> = ');
+        // stack-90r: the fresh call result moves out of its box (no `Vec<Value>` copy at the declaration)
+        expect(out).toContain('let mut marginResult: crate::value::List = ');
+        expect(out).toContain('.into_list();');
+        expect(out).not.toContain('.as_array().cloned()');
         expect(out).toContain('marginResult.get(0)');
     });
 });
@@ -25710,5 +25726,14 @@ describe('ral-90rh R4: nil-declared locals compared with a typed market struct f
         expect(out).toContain('let mut isLinearSubType: Option<bool> = None;');
         expect(out).toContain('(Some((market).market_type.as_str()) != marketType.as_deref())');
         expect(out).toContain('((market).linear != isLinearSubType)');
+    });
+});
+
+describe('stack-90r: a list bearer admitted by a compare-left read moves its fresh call result', () => {
+    test('`const parts = s.split (\'.\')` compared by index declares a moved List, not a Vec<Value> copy', () => {
+        const ts = "class venue {\n    handle (channel: string) {\n        const parts = channel.split ('.');\n        if (parts[0] === 'futures') {\n            return parts[1];\n        }\n        return undefined;\n    }\n}\n";
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).not.toContain('let mut parts: Vec<Value> = ');
+        expect(out).not.toContain('.as_array().cloned()');
     });
 });
