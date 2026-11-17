@@ -18992,9 +18992,24 @@ function ccxtGoVenuePairReturn(goTranspiler, node, printed, pair) {
   }
   const slot = (e, type, wrap) => {
     const text = goTranspiler.printNode(e, 0).trim();
-    const decl = e.kind === ts.SyntaxKind.Identifier ? goTranspiler.goDeclarationOfIdentifier?.(e) : void 0;
-    const declared = e.kind !== ts.SyntaxKind.Identifier ? void 0 : decl?.kind === ts.SyntaxKind.Parameter ? goTranspiler.goLocalIsRebound?.(goTranspiler.goEnclosingFunction?.(e), decl.name) ? void 0 : goTranspiler.goGetArgParameterType?.(decl) : goTranspiler.goDeclaredTypeOfIdentifier?.(e);
-    return declared === type || type === "map[string]any" && ccxtGoJoinedParamsLocal(goTranspiler, e) ? text : wrap + "(" + text + ")";
+    let decl;
+    try {
+      const symbol = e.kind === ts.SyntaxKind.Identifier ? goTranspiler.getChecker().getSymbolAtLocation(e) : void 0;
+      decl = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+    } catch (err) {
+      decl = void 0;
+    }
+    const declared = e.kind !== ts.SyntaxKind.Identifier ? void 0 : decl?.kind === ts.SyntaxKind.Parameter ? goTranspiler.goGetArgParameterType?.(decl) ?? goTranspiler.goNativeParameterType?.(decl) : goTranspiler.goDeclaredTypeOfIdentifier?.(e);
+    let joined;
+    const bindingCall = decl?.kind === ts.SyntaxKind.BindingElement ? decl.parent?.parent?.initializer : void 0;
+    if (ccxtGoTupleResultCall(bindingCall) && decl.parent.elements.length === 2 && decl.parent.elements.every((b) => ts.isIdentifier(b.name))) {
+      const names = decl.parent.elements.map((b) => b.name.text);
+      const bound = new RegExp("^\\s*" + names.join(", ") + " := ").test(goTranspiler.printNode(decl.parent.parent.parent, 0) ?? "");
+      const index = decl.parent.elements.indexOf(decl);
+      joined = !bound ? void 0 : index === 1 ? "map[string]any" : CCXT_GO_PAIR_SLOT_0[bindingCall.expression.name.text] ?? ccxtGoVenuePairOfCall(bindingCall)?.type;
+    }
+    const fresh = type === "map[string]any" && /^this\.(?:Extend|DeepExtend|OmitDict)\(/.test(text) && goTranspiler.isWholePrintedCall(text, text.indexOf("("));
+    return declared === type || joined === type || fresh ? text : wrap + "(" + text + ")";
   };
   return m[1] + slot(expr.elements[0], pair.type, pair.first) + ", " + slot(expr.elements[1], "map[string]any", "MapTyped") + m[3];
 }

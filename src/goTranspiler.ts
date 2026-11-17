@@ -9547,11 +9547,29 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
     }
     const slot = (e, type, wrap) => {
         const text = goTranspiler.printNode (e, 0).trim ();
-        const decl = (e.kind === ts.SyntaxKind.Identifier) ? goTranspiler.goDeclarationOfIdentifier?.(e) : undefined;
+        let decl;
+        try {
+            const symbol = (e.kind === ts.SyntaxKind.Identifier) ? goTranspiler.getChecker ().getSymbolAtLocation (e) : undefined;
+            decl = symbol?.valueDeclaration?.resolve () ?? symbol?.declarations?.map ((d) => d.resolve ())?.[0];
+        } catch (err) {
+            decl = undefined;
+        }
         const declared = (e.kind !== ts.SyntaxKind.Identifier) ? undefined : ((decl?.kind === ts.SyntaxKind.Parameter)
-            ? (goTranspiler.goLocalIsRebound?.(goTranspiler.goEnclosingFunction?.(e), decl.name) ? undefined : goTranspiler.goGetArgParameterType?.(decl))
+            ? (goTranspiler.goGetArgParameterType?.(decl) ?? goTranspiler.goNativeParameterType?.(decl))
             : goTranspiler.goDeclaredTypeOfIdentifier?.(e));
-        return ((declared === type) || ((type === 'map[string]any') && ccxtGoJoinedParamsLocal (goTranspiler, e))) ? text : wrap + '(' + text + ')';
+        // a joined `a, b := pair (..)` element holds that pair's slot type
+        let joined;
+        const bindingCall = (decl?.kind === ts.SyntaxKind.BindingElement) ? decl.parent?.parent?.initializer : undefined;
+        // a Go local keeps its declared static type whatever is written to it later, so a rebind does not matter here
+        if (ccxtGoTupleResultCall (bindingCall) && (decl.parent.elements.length === 2) && decl.parent.elements.every ((b) => ts.isIdentifier (b.name))) {
+            const names = decl.parent.elements.map ((b) => b.name.text);
+            const bound = new RegExp ('^\\s*' + names.join (', ') + ' := ').test (goTranspiler.printNode (decl.parent.parent.parent, 0) ?? '');
+            const index = decl.parent.elements.indexOf (decl);
+            joined = !bound ? undefined : ((index === 1) ? 'map[string]any'
+                : (CCXT_GO_PAIR_SLOT_0[bindingCall.expression.name.text] ?? ccxtGoVenuePairOfCall (bindingCall)?.type));
+        }
+        const fresh = (type === 'map[string]any') && /^this\.(?:Extend|DeepExtend|OmitDict)\(/.test (text) && goTranspiler.isWholePrintedCall (text, text.indexOf ('('));
+        return ((declared === type) || (joined === type) || fresh) ? text : wrap + '(' + text + ')';
     };
     return m[1] + slot (expr.elements[0], pair.type, pair.first) + ', ' + slot (expr.elements[1], 'map[string]any', 'MapTyped') + m[3];
 }
