@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type ParenthesizedExpression, type PropertyAccessExpression, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isThrowStatement, isTypeReferenceNode, isUnionTypeNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type ForStatement, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type ParenthesizedExpression, type PropertyAccessExpression, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isForStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isThrowStatement, isTypeReferenceNode, isUnionTypeNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
@@ -29875,6 +29875,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (declaration !== undefined && isVariableDeclaration(declaration) && !this.rustLocalReassigned(declaration) && this.rustBorrowedLocalKind(declaration) === 'dict') return 'dict';
         }
         if (this.rustWsCacheFieldDictRead(n)) return 'dict';
+        const keyed = this.rust92rfKeyedLocalElementKind(n);
+        if (keyed !== undefined) return keyed;
         if (isIdentifier(n)) {
             const declaration: any = this.rustDeclarationOfIdentifier(n);
             // a local left boxed whose only write is its book / cache source still holds that kind (or nothing)
@@ -29886,6 +29888,114 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         return undefined;
+    }
+
+    /** ral-92rf R2: a resolved `d[k]` (or an unreassigned local bound to it) where `d` is a handler's own `{}` map local whose
+     *  every write is `d[x] = v` with v one resolved kind (cache or dict), read only by `d[..]` and one `Object.keys (d)`,
+     *  and `k` an element of that keys list: the element is present and holds that kind. Decided from the AST. */
+    rust92rfKeyedLocalElementKind(x: Node, depth = 0): 'cache' | 'dict' | undefined {
+        let n: Node | undefined = this.rustStripWrappers(x);
+        if (n === undefined || depth > 2) return undefined;
+        const constLocal = (id: Node | undefined): VariableDeclaration | undefined => {
+            const d: Node | undefined = id !== undefined && isIdentifier(id) ? this.rustDeclarationOfIdentifier(id) : undefined;
+            return d !== undefined && isVariableDeclaration(d) && isIdentifier(d.name) && d.initializer !== undefined && !this.rustLocalReassigned(d)
+                && isVariableDeclarationList(d.parent) && d.parent.declarations.length === 1 ? d : undefined;
+        };
+        if (isIdentifier(n)) {
+            const d = constLocal(n);
+            return d === undefined ? undefined : this.rust92rfKeyedLocalElementKind(d.initializer, depth + 1);
+        }
+        if (!isElementAccessExpression(n)) return undefined;
+        const listed = this.rust92rfLoopListElementKind(n, constLocal);
+        if (listed !== undefined) return listed;
+        const map = constLocal(this.rustStripWrappers(n.expression));
+        const mapInit: Node | undefined = map === undefined ? undefined : this.rustStripWrappers(map.initializer);
+        if (map === undefined || mapInit === undefined || !isObjectLiteralExpression(mapInit) || mapInit.properties.length !== 0) return undefined;
+        // the key: `const k = ks[i]` with `const ks = Object.keys (d)`
+        const keyDecl = constLocal(this.rustStripWrappers(n.argumentExpression));
+        const keyInit: Node | undefined = keyDecl === undefined ? undefined : this.rustStripWrappers(keyDecl.initializer);
+        if (keyInit === undefined || !isElementAccessExpression(keyInit)) return undefined;
+        const keysDecl = constLocal(this.rustStripWrappers(keyInit.expression));
+        const keysInit: Node | undefined = keysDecl === undefined ? undefined : this.rustStripWrappers(keysDecl.initializer);
+        const isKeysOfMap = (c: Node | undefined): boolean => c !== undefined && isCallExpression(c) && c.arguments.length === 1 && isPropertyAccessExpression(c.expression)
+            && isIdentifier(c.expression.expression) && c.expression.expression.text === 'Object' && c.expression.name.text === 'keys'
+            && isIdentifier(this.rustStripWrappers(c.arguments[0])) && this.rustDeclarationOfIdentifier(this.rustStripWrappers(c.arguments[0])) === map;
+        if (!isKeysOfMap(keysInit)) return undefined;
+        const fn: Node | undefined = findAncestor(map, isFunctionLike);
+        if (fn === undefined || findAncestor(n, isFunctionLike) !== fn) return undefined;
+        let kind: 'cache' | 'dict' | undefined;
+        let ok = true;
+        for (const r of this.rustScopeNameNodes(fn, String((map.name as Identifier).text)) as Node[]) {
+            if (r === map.name || !isIdentifier(r) || this.rustIdentifierIsPropertyName(r)) continue;
+            if (this.rustDeclarationOfIdentifier(r) !== map || findAncestor(r, isFunctionLike) !== fn) { ok = false; break; }
+            const up: Node = r.parent;
+            if (isCallExpression(up) && isKeysOfMap(up)) continue;
+            if (!isElementAccessExpression(up) || up.expression !== r) { ok = false; break; }
+            const w: Node = up.parent;
+            if (isBinaryExpression(w) && w.left === up) {
+                if (w.operatorToken.kind !== SyntaxKind.EqualsToken || w.parent?.kind !== SyntaxKind.ExpressionStatement) { ok = false; break; }
+                const k = this.rustWsResolvedKind(w.right);
+                if ((k !== 'cache' && k !== 'dict') || (kind !== undefined && kind !== k)) { ok = false; break; }
+                kind = k;
+                continue;
+            }
+            // a plain read (no write target, no delete)
+            if (this.isNativeWriteTargetBase(up) || isDeleteExpression(w)) { ok = false; break; }
+        }
+        return ok ? kind : undefined;
+    }
+
+    /** ral-92rf R3: `xs[i]` where `xs` is a handler's own `[]` list local whose every write is a statement `xs.push (v)` (v one
+     *  resolved kind, cache or dict), read only by `xs[..]` / `xs.length`, and `i` the unwritten counter of the enclosing
+     *  `for (let i = 0; i < xs.length; i++)` with no push inside that loop: the element is present and holds that kind. */
+    rust92rfLoopListElementKind(n: ElementAccessExpression, constLocal: (id: Node | undefined) => VariableDeclaration | undefined): 'cache' | 'dict' | undefined {
+        const list = constLocal(this.rustStripWrappers(n.expression));
+        const init: Node | undefined = list === undefined ? undefined : this.rustStripWrappers(list.initializer);
+        if (list === undefined || init === undefined || !isArrayLiteralExpression(init) || init.elements.length !== 0) return undefined;
+        const idx: Node = this.rustStripWrappers(n.argumentExpression);
+        const iDecl: Node | undefined = isIdentifier(idx) ? this.rustDeclarationOfIdentifier(idx) : undefined;
+        const loop: Node | undefined = iDecl !== undefined && isVariableDeclaration(iDecl) ? iDecl.parent?.parent : undefined;
+        if (loop === undefined || !isForStatement(loop) || !(n.pos >= loop.statement.pos && n.end <= loop.statement.end)) return undefined;
+        const f: ForStatement = loop;
+        const cond: Node | undefined = f.condition === undefined ? undefined : this.rustStripWrappers(f.condition);
+        const lenOk = cond !== undefined && isBinaryExpression(cond) && cond.operatorToken.kind === SyntaxKind.LessThanToken
+            && isIdentifier(this.rustStripWrappers(cond.left)) && this.rustDeclarationOfIdentifier(this.rustStripWrappers(cond.left)) === iDecl
+            && isPropertyAccessExpression(this.rustStripWrappers(cond.right)) && (this.rustStripWrappers(cond.right) as PropertyAccessExpression).name.text === 'length'
+            && isIdentifier((this.rustStripWrappers(cond.right) as PropertyAccessExpression).expression)
+            && this.rustDeclarationOfIdentifier((this.rustStripWrappers(cond.right) as PropertyAccessExpression).expression) === list;
+        const start: Node | undefined = (iDecl as VariableDeclaration).initializer;
+        const startLit: Node | undefined = start === undefined ? undefined : this.rustStripWrappers(start);
+        if (!lenOk || startLit === undefined || !isNumericLiteral(startLit) || startLit.text !== '0') return undefined;
+        // the counter moves only by the loop's own `i++`
+        for (const r of this.rustScopeNameNodes(f, String(((iDecl as VariableDeclaration).name as Identifier).text)) as Node[]) {
+            if (!isIdentifier(r) || this.rustDeclarationOfIdentifier(r) !== iDecl || r === (iDecl as VariableDeclaration).name) continue;
+            const up: Node = r.parent;
+            const written = (isBinaryExpression(up) && up.left === r && rustIsAssignmentOperator(up.operatorToken.kind))
+                || ((isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) && up.operand === r);
+            if (written && up !== f.incrementor) return undefined;
+        }
+        const fn: Node | undefined = findAncestor(list, isFunctionLike);
+        if (fn === undefined || findAncestor(n, isFunctionLike) !== fn) return undefined;
+        let kind: 'cache' | 'dict' | undefined;
+        for (const r of this.rustScopeNameNodes(fn, String((list.name as Identifier).text)) as Node[]) {
+            if (r === list.name || !isIdentifier(r) || this.rustIdentifierIsPropertyName(r)) continue;
+            if (this.rustDeclarationOfIdentifier(r) !== list || findAncestor(r, isFunctionLike) !== fn) return undefined;
+            const up: Node = r.parent;
+            if (isPropertyAccessExpression(up) && up.expression === r && up.name.text === 'length' && !this.isNativeWriteTargetBase(up)) continue;
+            if (isPropertyAccessExpression(up) && up.expression === r && up.name.text === 'push') {
+                const call: Node = up.parent;
+                if (!isCallExpression(call) || call.expression !== up || call.arguments.length !== 1 || call.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+                if (call.pos >= f.pos && call.end <= f.end) return undefined;
+                const k = this.rustWsResolvedKind(call.arguments[0]);
+                if ((k !== 'cache' && k !== 'dict') || (kind !== undefined && kind !== k)) return undefined;
+                kind = k;
+                continue;
+            }
+            if (isElementAccessExpression(up) && up.expression === r && !this.isNativeWriteTargetBase(up) && !isDeleteExpression(up.parent)
+                && !(isBinaryExpression(up.parent) && up.parent.left === up)) continue;
+            return undefined;
+        }
+        return kind;
     }
 
     /** ral-ye: a read of a plain base cache field the class keeps as a map, typed by the field's declaration:
@@ -32343,6 +32453,9 @@ export class RustTranspiler extends BaseTranspiler {
                 const endpointSplit = this.rust87rfEndpointSplitSource(declaration, init);
                 // ral-90rf R1: where `Array.isArray (x)` failed (an else arm, or after an exiting `if (isArray) { .. }`), an endpoint
                 // declared to answer only a map or a list holds its map there: a whole hand-off boxes that map back (`Value::Dict`)
+                // the map arm lends the held map to an any-key reader before any whole box is considered (see R2 below)
+                if (endpointSplit && this.rust90rfMapOrListEndpoint(init) && this.rust90rfArmOf(n, declaration, fn) === 'map' && isCallExpression(use) && use.arguments[0] === n
+                    && this.rustBorrowedAnyKeyReader(use)) { mapReads++; this.rustOptListBoxes.set(n, 'map'); return true; }
                 if (endpointSplit && this.rust90rfArmOf(n, declaration, fn) === 'map' && this.rust90rfMapOrListEndpoint(init) && this.rust90rfWholeBoxUse(n)) {
                     mapBoxes.push(n);
                     return true;
@@ -32409,6 +32522,13 @@ export class RustTranspiler extends BaseTranspiler {
                     && !(isBinaryExpression(use) && use.left === up && rustIsAssignmentOperator(use.operatorToken.kind));
             }
             if (at === n && isCallExpression(up) && ((up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up)) || this.rustTypedFilterLentSlot(up, n))) {
+                natives++;
+                boxes.push([n, 'lend']);
+                return true;
+            }
+            // a lent list slot (a plural `parse*` response, `impl Into<crate::Value>`) takes the optional list lent: `&x` gives
+            // the shared list for `Some` and Null for `None`, exactly the boxed answer, with no box
+            if (at === n && isCallExpression(up) && up.expression !== n && this.rustLentListSlot(up, n) && !this.rustTypedFilterLentSlot(up, n)) {
                 natives++;
                 boxes.push([n, 'lend']);
                 return true;
@@ -33573,8 +33693,9 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         if (file.search(/\/ts\/src\/(?:base\/|pro\/|prediction\/)?[^/]+\.ts$/) < 0) return false;
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
-            // an override keeps the signature of the base declaration it overrides (checker-resolved)
-            if (!(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+            // ral-92rf R4: a venue's own plural parser (no base declaration, REST tier) whose rows parameter is declared a
+            // list of any shape takes it lent too, so a held list answer is handed over with no box
+            if (!(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return this.rust92rfVenueRowsParam(method, param, file);
             const overridden: any = this.getMethodOverride(method);
             return overridden !== undefined && overridden !== method && this.rustParamIsLentList(overridden.parameters?.[0]);
         }
@@ -33585,6 +33706,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (record) return this.rustLentRecordTypeNode(type);
         return RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type) || type?.kind === SyntaxKind.AnyKeyword || type?.kind === SyntaxKind.ObjectKeyword
             || (name === 'convertTradingViewToOHLCV' && typeName === 'NullableDict');
+    }
+
+    /** ral-92rf R4: `parseXs (rows: any[] | Dict[] | List, ..)` declared in a REST venue file (`ts/src/<id>.ts`), not async, not
+     *  overriding and not overridden by a ws subclass method of the same name: its first parameter prints `impl Into<crate::Value>`. */
+    rust92rfVenueRowsParam(method: MethodDeclaration, param: ParameterDeclaration, file: string): boolean {
+        if (file.search(/\/ts\/src\/[^/]+\.ts$/) < 0 || this.isAsyncFunction(method) || this.getMethodOverride(method) !== undefined) return false;
+        if (!isIdentifier(method.name) || !/^parse[A-Z]\w*s$/.test(String(method.name.text))) return false;
+        const type: TypeNode | undefined = param.type;
+        const anyList = type !== undefined && isArrayTypeNode(type) && type.elementType.kind === SyntaxKind.AnyKeyword;
+        const typeName = type !== undefined && isTypeReferenceNode(type) && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
+        return anyList || RustTranspiler.RUST_LENT_LIST_TYPES.has(typeName) || this.rustRowListTypeNode(type);
     }
 
     /** `object`, `Dict` or `any`, optionally `| undefined`: the parser reads its input as a `Value` of any shape. */
