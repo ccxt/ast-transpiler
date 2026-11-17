@@ -15014,3 +15014,159 @@ describe('84g7 R2 int64 pointer arm next to an int arm', () => {
         expect(out).toContain('var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)');
     });
 });
+
+describe('87g1 nil-seed joins', () => {
+    const BASE = 'export type Dict = { [key: string]: any };\n'
+        + 'export type Str = string | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    handlePostOnly (a: boolean, b: boolean, p: Dict = {}): [ boolean, Dict ] { return [ false, p ]; }\n'
+        + '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n'
+        + '}\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g87-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange, { Dict, Str } from './base/Exchange.js';\ntype Bool = boolean | undefined;\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('R1: a nil-seeded handlePostOnly slot 0 joins as bool and reads natively', () => {
+        const out = run('    f (type: string, params: Dict = {}): any {\n'
+            + '        const request: Dict = {};\n'
+            + '        let postOnly: Bool = undefined;\n'
+            + "        [ postOnly, params ] = this.handlePostOnly (type === 'market', false, params);\n"
+            + '        if (postOnly) {\n'
+            + "            request['postOnly'] = true;\n"
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n');
+        expect(out).toContain('var postOnly bool\n');
+        expect(out).toContain('\tif postOnly {\n');
+    });
+    test('R1: a nil test on the slot keeps the box', () => {
+        const out = run('    f (type: string, params: Dict = {}): any {\n'
+            + '        let postOnly: Bool = undefined;\n'
+            + "        [ postOnly, params ] = this.handlePostOnly (type === 'market', false, params);\n"
+            + '        return (postOnly === undefined);\n'
+            + '    }\n');
+        expect(out).toContain('var postOnly any = nil');
+    });
+    test('R2: a slot only compared with true joins as bool and prints the bare bool', () => {
+        const out = run('    handleUTAAndParams (params: Dict, m: string, d: boolean = false): [ boolean, Dict ] {\n'
+            + "        if (params['uta'] !== undefined) {\n"
+            + '            return [ true, params ];\n'
+            + '        }\n'
+            + "        return [ false, params ];\n"
+            + '    }\n'
+            + '    f (params: Dict = {}): any {\n'
+            + '        let uta = undefined;\n'
+            + "        [ uta, params ] = this.handleUTAAndParams (params, 'f', false);\n"
+            + '        if (uta === true) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return 2;\n'
+            + '    }\n');
+        expect(out).toContain('var uta bool\n');
+        expect(out).toContain('uta = utaparamsVariable[0] == true');
+        expect(out).toContain('\tif uta {\n');
+    });
+    test('R2: a slot handed on as a value keeps the box', () => {
+        const out = run('    handleUTAAndParams (params: Dict, m: string, d: boolean = false): [ boolean, Dict ] {\n'
+            + "        if (params['uta'] !== undefined) {\n"
+            + '            return [ true, params ];\n'
+            + '        }\n'
+            + "        return [ false, params ];\n"
+            + '    }\n'
+            + '    f (params: Dict = {}): any {\n'
+            + '        let uta = undefined;\n'
+            + "        [ uta, params ] = this.handleUTAAndParams (params, 'f', false);\n"
+            + '        if (uta === true) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return uta;\n'
+            + '    }\n');
+        expect(out).toContain('var uta any = nil');
+    });
+});
+
+describe('87g1 R2/R3 more', () => {
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo('type Dict = { [key: string]: any };\ntype Bool = boolean | undefined;\nclass V {\n' + body + '}\n').content;
+    };
+    test('R2: an awaited slot keeps the box', () => {
+        const out = go('    async h (p: Dict): Promise<any[]> { return [ p[\'u\'], p ]; }\n'
+            + '    async f (params: Dict = {}): Promise<any> {\n'
+            + '        let uta = undefined;\n'
+            + "        [ uta, params ] = await this.h (params);\n"
+            + '        if (uta === true) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return 2;\n'
+            + '    }\n');
+        expect(out).toContain('var uta any = nil');
+    });
+    test('R3: a literal-written flag read only as a condition is a Go bool', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let isAlgo: Bool = undefined;\n'
+            + "        if (params['a'] !== undefined) {\n"
+            + '            isAlgo = true;\n'
+            + '        }\n'
+            + '        if (isAlgo) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + '        return !isAlgo ? 2 : 3;\n'
+            + '    }\n');
+        expect(out).toContain('var isAlgo bool\n');
+        expect(out).toContain('\tif isAlgo {\n');
+    });
+    test('R3: a flag stored as a value keeps the box', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + '        let isAlgo: Bool = undefined;\n'
+            + "        if (params['a'] !== undefined) {\n"
+            + '            isAlgo = true;\n'
+            + '        }\n'
+            + "        return { 'algo': isAlgo };\n"
+            + '    }\n');
+        expect(out).toContain('var isAlgo any = nil');
+    });
+});
+
+describe('87g1 R4 *string join handed to a parameter that only feeds safe readers', () => {
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo('type Dict = { [key: string]: any };\ntype Str = string | undefined;\nclass V {\n'
+            + '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n' + body + '}\n').content;
+    };
+    const user = '    g (o: Dict, details: Dict): any {\n'
+        + '        let statusId: Str = undefined;\n'
+        + "        if (o['a']) {\n"
+        + "            statusId = this.safeString (o, 'status');\n"
+        + '        }\n'
+        + '        if (statusId === undefined) {\n'
+        + "            statusId = this.safeString (details, 's');\n"
+        + '        }\n'
+        + '        return this.parseOrderStatus (statusId);\n'
+        + '    }\n';
+    test('a status key handed to a safeString-only parser is a *string', () => {
+        const out = go('    parseOrderStatus (status: Str): Str {\n'
+            + "        const statuses: Dict = { 'placed': 'open' };\n"
+            + '        return this.safeString (statuses, (status as string), status);\n'
+            + '    }\n' + user);
+        expect(out).toContain('var statusId *string = nil');
+    });
+    test('a parser that returns its parameter keeps the box', () => {
+        const out = go('    parseOrderStatus (status: Str): Str {\n'
+            + '        return status;\n'
+            + '    }\n' + user);
+        expect(out).toContain('var statusId any = nil');
+    });
+});
