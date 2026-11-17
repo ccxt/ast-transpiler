@@ -40012,3 +40012,190 @@ GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, inde
     }
     return '*string';
 };
+
+// ===== ral-93g7 (begin): ternary joins over int / int64 operands =====
+// R1: an ordered comparison of a ternary int64 local with a Go `int` operand (or of an `int` local with an
+// int64 one) is not foreign: printWideningComparison prints it as `int64(x) > y`, the same answer the
+// boxed IsGreaterThan gave; against a boxed operand the helper stays. Equality against another static type keeps the box (`dataLength == pageSize`).
+GoTranspiler.prototype.goTernaryJoinHasForeignComparison = function (declaration, goType: string): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name;
+    if (scope === undefined) {
+        return true;
+    }
+    return this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        const ordered = (parent?.kind === SyntaxKind.BinaryExpression) && (ORDERED_COMPARISON_OPERATORS[parent.operatorToken.kind] !== undefined);
+        if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0) && !ordered)) {
+            return false;
+        }
+        const other = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+        if ((other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'))
+            || (other?.kind === SyntaxKind.NumericLiteral) || (other?.kind === SyntaxKind.StringLiteral) || this.goIsSignedNumericLiteral(other)) {
+            return false;
+        }
+        const otherType = this.goOperandStaticType(other, this.printNode(other, 0));
+        // a boxed `any` operand (a sibling ternary still being resolved, or one that stays boxed) keeps the
+        // ordered helper, which accepts both
+        const widened = ordered && ((goType === 'int64') || (goType === 'int'))
+            && ((otherType === 'int') || (otherType === 'int64') || (otherType === 'any'));
+        return (otherType !== undefined) && (otherType !== goType) && !widened;
+    });
+};
+// R2: a Go `int` arm next to an `int64` arm (`limitCapped = (n > cap) ? cap : n` with `cap` an
+// integer-literal seed) joins to int64, the int arm widened with `int64(..)`; the boxes held the same
+// integer either way. Admitted only for a local with an arithmetic / ordered use, never into a
+// parameter's copy (the widened declaration prints through the 84g7 R2 declaration printer).
+const goTernaryJoin93PartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoin93PartsUncached.call(this, declaration);
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
+        return undefined;
+    }
+    const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
+    const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
+    const mixed = ((whenTrue === 'int') && (whenFalse === 'int64')) || ((whenTrue === 'int64') && (whenFalse === 'int'));
+    if (!mixed || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+        || this.goTernaryJoinFeedsParameterCopy(declaration) || !this.goTernaryJoin90HasArithmeticUse(declaration)) {
+        return undefined;
+    }
+    return { goType: 'int64', derefTrue: false, derefFalse: false, widenTrue: whenTrue === 'int', widenFalse: whenFalse === 'int' } as GoTernaryJoinIntParts;
+};
+
+// R3: a value-typed local first asked inside a GetArg scan is kept boxed when it feeds another ternary
+// as an arm, because a pointer-typed sibling arm would wrap it in Int64PtrTyped (84g7). A consumer whose
+// other arm is an integer literal, a literal-seeded const or a sibling ternary local that does not join to a
+// pointer cannot do that, so only the other consumers keep the box.
+GoTranspiler.prototype.goTernaryJoinFeedsAnotherTernary = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name;
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    return (scope === undefined) || (checker === undefined) || this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const consumer = current.parent;
+        if ((consumer?.kind !== SyntaxKind.ConditionalExpression) || (consumer.condition === current)) {
+            return false;
+        }
+        if (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration) {
+            return true;
+        }
+        const other = this.goUnwrapParenthesizedNode((consumer.whenTrue === current) ? consumer.whenFalse : consumer.whenTrue);
+        if ((other?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(other.text)) {
+            return false;
+        }
+        if (other?.kind !== SyntaxKind.Identifier) {
+            return true;
+        }
+        const resolved = checker.getSymbolAtLocation(other)?.valueDeclaration?.resolve();
+        const otherDeclaration = (resolved?.kind === SyntaxKind.VariableDeclaration) ? (resolved as VariableDeclaration) : undefined;
+        const literalSeed = (otherDeclaration?.kind === SyntaxKind.VariableDeclaration)
+            && (otherDeclaration.parent?.flags & NodeFlags.Const) && (this.goUnwrapParenthesizedNode(otherDeclaration.initializer)?.kind === SyntaxKind.NumericLiteral)
+            && /^[0-9]+$/.test(this.goUnwrapParenthesizedNode(otherDeclaration.initializer).text);
+        if (literalSeed) {
+            return false;
+        }
+        // a sibling ternary local: only a pointer join on its side would wrap this arm
+        const sibling = ((otherDeclaration?.kind === SyntaxKind.VariableDeclaration)
+            && (this.goUnwrapParenthesizedNode(otherDeclaration.initializer)?.kind === SyntaxKind.ConditionalExpression)
+            && (goTernaryJoinOwner(otherDeclaration.initializer) === otherDeclaration)) ? otherDeclaration : undefined;
+        return (sibling === undefined) || (this.goTernaryJoinParts(sibling)?.goType?.startsWith('*') ?? false);
+    });
+};
+// R4: a ternary local's static type first asked inside a GetArg scan is provisional (84g7): it must not
+// stay in the top-level static-type cache, or a later operand print reads the box although the
+// declaration settles on int64 (`var d int64 = Multiply(n, duration).(int64)` instead of `n * duration`).
+const goTernaryJoin93LocalStaticType = GoTranspiler.prototype.goLocalStaticType;
+GoTranspiler.prototype.goLocalStaticType = function (node) {
+    if (!this.goTernaryJoinProvisional() || (this.goLocalTypeResolution.size !== 0)) {
+        return goTernaryJoin93LocalStaticType.call(this, node);
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const owner = ((declaration?.kind === SyntaxKind.VariableDeclaration)
+        && (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind === SyntaxKind.ConditionalExpression))
+        ? goTernaryJoinOwner(declaration.initializer) : undefined;
+    if ((owner === undefined) || (owner !== declaration) || this.goLocalStaticTypeCache.has(owner)) {
+        return goTernaryJoin93LocalStaticType.call(this, node);
+    }
+    const answer = goTernaryJoin93LocalStaticType.call(this, node);
+    this.goLocalStaticTypeCache.delete(owner);
+    return answer;
+};
+// R5: a `*int64` arm the ENCLOSING code proves defined (`if (until !== undefined) { const e = (until > now) ?
+// now : until; .. }`) reads as its pointee next to an int64 / int / integer-constant arm, exactly like an arm
+// the ternary's own condition proves defined. Same admission as R2: an arithmetic / ordered use, no copy.
+const goTernaryJoin93GuardedPartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoin93GuardedPartsUncached.call(this, declaration);
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
+        return undefined;
+    }
+    const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
+    const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
+    const guarded = (armNode, armType: string) => {
+        const arm = this.goUnwrapParenthesizedNode(armNode);
+        return (armType === '*int64') && (arm?.kind === SyntaxKind.Identifier) && this.goTernaryJoin93StatementGuarded(declaration, arm);
+    };
+    const value = (armType: string) => (armType === 'int64') || (armType === 'int') || (armType === 'const-int');
+    const pointerTrue = guarded(ternary.whenTrue, whenTrue) && value(whenFalse);
+    const pointerFalse = guarded(ternary.whenFalse, whenFalse) && value(whenTrue);
+    if ((!pointerTrue && !pointerFalse) || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+        || this.goTernaryJoinFeedsParameterCopy(declaration) || !this.goTernaryJoin90HasArithmeticUse(declaration)) {
+        return undefined;
+    }
+    return { goType: 'int64', derefTrue: pointerTrue, derefFalse: pointerFalse,
+        widenTrue: whenTrue === 'int', widenFalse: whenFalse === 'int' } as GoTernaryJoinIntParts;
+};
+export interface GoTranspiler {
+    goTernaryJoin93StatementGuarded(declaration, ident): boolean;
+}
+
+// the `if` blocks around the declaration's statement prove the never-rebound identifier non-nil
+GoTranspiler.prototype.goTernaryJoin93StatementGuarded = function (declaration, ident): boolean {
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    const statement = declaration?.parent?.parent;
+    if ((checker === undefined) || (statement?.kind !== SyntaxKind.FirstStatement)
+        || this.goLocalIsRebound(this.goEnclosingFunction(declaration), ident)) {
+        return false;
+    }
+    let child = statement;
+    let parent = statement.parent;
+    while (parent !== undefined) {
+        if (parent.kind === SyntaxKind.Block) {
+            child = parent;
+            parent = parent.parent;
+            continue;
+        }
+        if (parent.kind === SyntaxKind.IfStatement) {
+            if ((child === parent.thenStatement) && this.goConditionProvesNonNil(parent.expression, ident)) {
+                return true;
+            }
+            child = parent;
+            parent = parent.parent;
+            continue;
+        }
+        return false;
+    }
+    return false;
+};
+// ===== ral-93g7 (end) =====

@@ -17722,3 +17722,65 @@ describe('an async venue Str parameter fed pointers and unwritten string paramet
         expect(output).toContain('reqBody(ch chan any, side any)');
     });
 });
+
+describe('ral-93g7 ternary joins over int / int64 operands', () => {
+    const head = 'type Int = number | undefined;\n'
+        + 'class BaseExchange {\n'
+        + '    parseToInt (x: number): number { return x; }\n'
+        + '}\n'
+        + 'export class ex extends BaseExchange {\n';
+    test('an int64 ternary local compared with an int local is typed and compares through int64(..)', () => {
+        const out = goTranspile87g8(head
+            + '    f (limit: Int = undefined) {\n'
+            + '        const defaultLimit = 100;\n'
+            + '        const maxLimit = 1000;\n'
+            + '        const requestedLimit: Int = (limit === undefined) ? defaultLimit : limit;\n'
+            + '        const request = {};\n'
+            + '        if (requestedLimit > maxLimit) {\n'
+            + '            request[\'limit\'] = maxLimit;\n'
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var requestedLimit int64');
+        expect(out).toContain('requestedLimit > int64(maxLimit)');
+    });
+    test('a capped-limit chain over int seeds and an int64 parameter joins to int64 with native arithmetic', () => {
+        const out = goTranspile87g8(head
+            + '    f (limit: Int = undefined, duration: number = 60) {\n'
+            + '        const defaultLimit = 100;\n'
+            + '        const maxLimit = 1000;\n'
+            + '        const d = this.parseToInt (duration);\n'
+            + '        const requestedLimit: Int = (limit === undefined) ? defaultLimit : limit;\n'
+            + '        const limitCapped: Int = (requestedLimit > maxLimit) ? maxLimit : requestedLimit;\n'
+            + '        const span = limitCapped * d;\n'
+            + '        const request = {};\n'
+            + '        if (span > 5) {\n'
+            + '            request[\'limit\'] = limitCapped;\n'
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var limitCapped int64');
+        expect(out).toContain('limitCapped = int64(maxLimit)');
+        expect(out).toContain('limitCapped * d');
+        expect(out).not.toContain('Multiply(');
+    });
+    test('a *int64 arm guarded by the enclosing if reads as its pointee in an int64 join', () => {
+        const out = goTranspile87g8(head
+            + '    f (until: Int = undefined) {\n'
+            + '        const now = this.parseToInt (5);\n'
+            + '        const span = this.parseToInt (3);\n'
+            + '        const request = {};\n'
+            + '        if (until !== undefined) {\n'
+            + '            const end: int = (until > now) ? now : until;\n'
+            + '            request[\'start\'] = end - span;\n'
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var end int64');
+        expect(out).toContain('end = *until');
+        expect(out).toContain('end - span');
+    });
+});
