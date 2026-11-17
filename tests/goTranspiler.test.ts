@@ -16949,3 +16949,163 @@ describe('ral-92g7 native sum / min / max over int64 operands', () => {
         expect(out).toContain('Multiply((x + 1), 2)');
     });
 });
+
+function goTranspile92g8(source: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ral-92g8-'));
+    fs.mkdirSync(path.join(dir, 'ts', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'ex.ts'), source);
+    const cwd = process.cwd();
+    try {
+        process.chdir(dir);
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        return x.transpileGoByPath('ts/src/ex.ts').content;
+    } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe('ral-92g8 R1/R2 venue Num and Market[] producers print typed returns', () => {
+    const head = 'type Num = number | undefined;\n'
+        + 'type Str = string | undefined;\n'
+        + 'interface MarketInterface { id: string; }\n'
+        + 'type Market = MarketInterface | undefined;\n'
+        + 'type Dict = { [key: string]: unknown };\n'
+        + 'class base {\n'
+        + '    parseNumber (v: Str): Num { return undefined; }\n'
+        + '}\n'
+        + 'export class ex extends base {\n'
+        + '    parseScaled (value: Str): Num {\n'
+        + '        if (value === undefined) {\n'
+        + '            return undefined;\n'
+        + '        }\n'
+        + '        return this.parseNumber (value);\n'
+        + '    }\n'
+        + '    eventMarkets (e: Dict): Market[] {\n'
+        + '        const result: Market[] = [];\n'
+        + '        return result;\n'
+        + '    }\n';
+    test('a Num producer over parseNumber prints *float64 and a nil-tested local takes it', () => {
+        const out = goTranspile92g8(head
+            + '    f (s: Str) {\n'
+            + '        const fee = this.parseScaled (s);\n'
+            + '        if (fee !== undefined) {\n'
+            + '            return { \'cost\': fee };\n'
+            + '        }\n'
+            + '        return { \'v\': this.parseScaled (s) };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain(') ParseScaled(value any) *float64 {');
+        expect(out).toContain('var fee *float64 = this.ParseScaled(s)');
+        expect(out).toContain('if fee != nil {');
+    });
+    test('a Market[] producer prints []any and an indexed local takes it', () => {
+        const out = goTranspile92g8(head
+            + '    g (e: Dict) {\n'
+            + '        const ms = this.eventMarkets (e);\n'
+            + '        for (let i = 0; i < ms.length; i++) {\n'
+            + '            this.use (ms[i]);\n'
+            + '        }\n'
+            + '    }\n'
+            + '    use (m: Market) { return m; }\n'
+            + '}\n');
+        expect(out).toContain(') EventMarkets(e any) []any {');
+        expect(out).toContain('var ms []any = this.EventMarkets(e)');
+        expect(out).toContain('ms[i]');
+    });
+    test('a local only handed on keeps the box', () => {
+        const out = goTranspile92g8(head
+            + '    h (s: Str) {\n'
+            + '        const fee = this.parseScaled (s);\n'
+            + '        return { \'cost\': fee };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var fee any = this.ParseScaled(s)');
+    });
+    test('a Num producer with another return keeps any', () => {
+        const out = goTranspile92g8('type Num = number | undefined;\n'
+            + 'class base {}\n'
+            + 'export class ex extends base {\n'
+            + '    other (v: number): Num { return v * 2; }\n'
+            + '}\n');
+        expect(out).not.toContain('*float64 {');
+    });
+});
+
+describe('ral-92g8 R3 list seeds rebound through a defaulted safeList', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'type List = unknown[];\n'
+        + 'class base {\n'
+        + '    options: Dict = {};\n'
+        + '    safeList (o: unknown, k: string, d: unknown = undefined): List { return d as List; }\n'
+        + '    safeDict (o: unknown, k: string): Dict { return undefined; }\n'
+        + '    safeString (o: unknown, k: unknown): string { return undefined; }\n'
+        + '    run (t: string): number { return 0; }\n'
+        + '}\n'
+        + 'export class ex extends base {\n';
+    test('a seed read by index whose writes default to itself types []any', () => {
+        const out = goTranspile92g8(head
+            + '    f () {\n'
+            + '        let types: string[] = [ \'spot\', \'swap\' ];\n'
+            + '        const o = this.safeDict (this.options, \'fetchMarkets\');\n'
+            + '        if (o !== undefined) {\n'
+            + '            types = this.safeList (o, \'types\', types) as List;\n'
+            + '        }\n'
+            + '        for (let i = 0; i < types.length; i++) {\n'
+            + '            this.run (this.safeString (types, i));\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var types []any = []any{"spot", "swap"}');
+        expect(out).toContain('types = SafeListTypedDefault(o, "types", types)');
+        expect(out).toContain('i < len(types)');
+    });
+    test('a seed with a write defaulting to something else keeps the box', () => {
+        const out = goTranspile92g8(head
+            + '    g (other: List) {\n'
+            + '        let types = [ \'spot\' ];\n'
+            + '        types = this.safeList (this.options, \'types\', other);\n'
+            + '        return types.length;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var types any = []any{"spot"}');
+    });
+});
+
+describe('ral-92g8 R4 venue string[] producers over a literal-defaulted safeList', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'type Str = string | undefined;\n'
+        + 'class base {\n'
+        + '    safeList (o: unknown, k: unknown, d: unknown = undefined): unknown[] { return d as unknown[]; }\n'
+        + '    safeString (o: unknown, k: unknown): string { return undefined; }\n'
+        + '}\n'
+        + 'export class ex extends base {\n';
+    test('the producer prints []any with the typed reader and an indexed local takes it', () => {
+        const out = goTranspile92g8(head
+            + '    orderFlags (flags: Str): string[] {\n'
+            + '        const table: Dict = { \'1\': [ \'a\' ] };\n'
+            + '        return this.safeList (table, flags, []) as string[];\n'
+            + '    }\n'
+            + '    f (raw: Str) {\n'
+            + '        const flags = this.orderFlags (raw);\n'
+            + '        let n = 0;\n'
+            + '        for (let i = 0; i < flags.length; i++) {\n'
+            + '            n = i;\n'
+            + '        }\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain(') OrderFlags(flags any) []any {');
+        expect(out).toContain('return SafeListTypedDefault(table, flags, []any{})');
+        expect(out).toContain('var flags []any = this.OrderFlags(raw)');
+    });
+    test('a producer without the literal default keeps any', () => {
+        const out = goTranspile92g8(head
+            + '    orderFlags (flags: Str): string[] {\n'
+            + '        return this.safeList ({}, flags) as string[];\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('OrderFlags(flags any) any {');
+    });
+});

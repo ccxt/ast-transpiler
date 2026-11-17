@@ -38816,3 +38816,294 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
     return goTypeOfInitializerBase92g7.call(this, initializer, printedValue);
 };
 // ===== ral-92g7 (end) =====
+
+// Venue `Num` producers returning only absent / this.parseNumber print *float64; venue `Market[]`
+// producers returning only never-nil containers print []any. A caller local takes the type only
+// with a native use (nil test for the pointer; index / length for the slice).
+const GO_TYPED_VENUE_PRODUCER_CACHE = new WeakMap ();
+function goTypedVenueProducerType (goTranspiler, node): string | undefined {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined)) {
+        return undefined;
+    }
+    if (GO_TYPED_VENUE_PRODUCER_CACHE.has (node)) {
+        return GO_TYPED_VENUE_PRODUCER_CACHE.get (node);
+    }
+    GO_TYPED_VENUE_PRODUCER_CACHE.set (node, undefined);
+    const result = goTypedVenueProducerTypeUncached (goTranspiler, node) ?? (goTypedVenueStringListProducer (goTranspiler, node) ? '[]any' : undefined);
+    GO_TYPED_VENUE_PRODUCER_CACHE.set (node, result);
+    return result;
+}
+function goTypedVenueProducerTypeUncached (goTranspiler, node): string | undefined {
+    const name = node.name?.text;
+    const fileName = String (node.getSourceFile?.()?.fileName ?? '');
+    if ((typeof name !== 'string') || /(^|[\\/])base[\\/]/.test (fileName) || goTranspiler.isAsyncFunction (node)
+        || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name) || goTranspiler.goMethodKeepsBaseSignature?.(node)) {
+        return undefined;
+    }
+    const reserved = ccxtGoReservedMethodNames (node);
+    if ((reserved !== undefined) && (reserved.has (name) || reserved.has (name.charAt (0).toUpperCase () + name.slice (1)))) {
+        return undefined;
+    }
+    let alias;
+    let isArray = false;
+    try {
+        const checker = goTranspiler.getChecker ();
+        const type = checker.getReturnTypeOfSignature (checker.getSignatureFromDeclaration (node));
+        alias = type?.getAliasSymbol ()?.escapedName;
+        isArray = checker.isArrayType (type);
+    } catch (e) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    if (returns.length === 0) {
+        return undefined;
+    }
+    const annotation = node.type?.getText ()?.replace (/\s+/g, '');
+    if ((annotation === 'Market[]') && isArray) {
+        return returns.every ((r) => ccxtGoContainerNeverNil (goTranspiler, r.expression)) ? '[]any' : undefined;
+    }
+    if ((alias !== 'Num') || (annotation !== 'Num')) {
+        return undefined;
+    }
+    let sawValue = false;
+    for (const r of returns) {
+        const e = r.expression;
+        if (e === undefined) {
+            return undefined;
+        }
+        if (isAbsentExpression (e)) {
+            continue;
+        }
+        const callee = (e.kind === SyntaxKind.CallExpression) ? e.expression : undefined;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (callee.name?.text !== 'parseNumber')) {
+            return undefined;
+        }
+        sawValue = true;
+    }
+    return sawValue ? '*float64' : undefined;
+}
+// the retyped producer a `this.m (..)` call binds to, with its Go type
+function goTypedVenueCallType (goTranspiler, call): string | undefined {
+    while (call?.kind === SyntaxKind.ParenthesizedExpression) {
+        call = call.expression;
+    }
+    const callee = (call?.kind === SyntaxKind.CallExpression) ? call.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    let declaration = goTranspiler.goMethodDeclarationOfCallee (callee);
+    if (declaration === undefined) {
+        // a ws class calling its REST parent's method binds to the embedded parent's Go method
+        declaration = ccxtGoInheritedVenueMethod (goTranspiler, call);
+    }
+    return goTypedVenueProducerType (goTranspiler, declaration);
+}
+// the local has a use that prints native on goType: a nil test (pointer), an index or `.length` (slice)
+function goTypedVenueHasNativeUse (goTranspiler, declaration, goType: string): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const checker = goTranspiler.checkerOrUndefined ();
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    const symbol = checker.getSymbolAtLocation (declaration.name);
+    const compare = [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.EqualsEqualsToken, SyntaxKind.ExclamationEqualsToken ];
+    let found = false;
+    const visit = (n) => {
+        if (found) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n !== declaration.name) && (n.text === declaration.name.text) && (checker.getSymbolAtLocation (n) === symbol)) {
+            let current = n;
+            while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+                current = current.parent;
+            }
+            const parent = current.parent;
+            if (goType === '*float64') {
+                found = (parent?.kind === SyntaxKind.BinaryExpression) && compare.includes (parent.operatorToken.kind)
+                    && isAbsentExpression ((parent.left === current) ? parent.right : parent.left);
+            } else {
+                found = ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === current))
+                    || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === current) && (parent.name?.text === 'length'));
+            }
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    scope.forEachChild (visit);
+    return found;
+}
+// the declaration an initializer / `x = <call>` write belongs to
+function goTypedVenueTargetDeclaration (goTranspiler, initializer) {
+    let node = initializer;
+    while (node.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.parent;
+    }
+    const parent = node.parent;
+    if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node)) {
+        return parent;
+    }
+    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.EqualsToken) && (parent.right === node)
+        && (parent.left?.kind === SyntaxKind.Identifier)) {
+        return goTranspiler.goDeclarationOfIdentifier (parent.left);
+    }
+    return undefined;
+}
+const goMarketProducerReturnTypeBaseTypedVenue = GoTranspiler.prototype.goMarketProducerReturnType;
+GoTranspiler.prototype.goMarketProducerReturnType = function (node): string | undefined {
+    return goMarketProducerReturnTypeBaseTypedVenue.call (this, node) ?? goTypedVenueProducerType (this, node);
+};
+const goTypeOfInitializerBaseTypedVenue = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string): string | undefined {
+    const shipped = goTypeOfInitializerBaseTypedVenue.call (this, initializer, printedValue);
+    if (shipped !== undefined) {
+        return shipped;
+    }
+    const goType = goTypedVenueCallType (this, initializer);
+    if (goType === undefined) {
+        return undefined;
+    }
+    return goTypedVenueHasNativeUse (this, goTypedVenueTargetDeclaration (this, initializer), goType) ? goType : undefined;
+};
+// a box fed by a retyped pointer producer may hold a typed-nil pointer: its nil tests keep IsEqual
+const goAnyLocalHoldsPointerBaseTypedVenue = GoTranspiler.prototype.goAnyLocalHoldsPointer;
+GoTranspiler.prototype.goAnyLocalHoldsPointer = function (decl): boolean {
+    if (goAnyLocalHoldsPointerBaseTypedVenue.call (this, decl)) {
+        return true;
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const isPointerCall = (e) => String (goTypedVenueCallType (this, e) ?? '').startsWith ('*');
+    if (isPointerCall (decl.initializer)) {
+        return true;
+    }
+    const name = decl.name.text;
+    let holds = false;
+    const visit = (n) => {
+        if (holds) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken) && (n.left?.kind === SyntaxKind.Identifier)
+            && (n.left.text === name) && isPointerCall (n.right)) {
+            holds = true;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    this.goEnclosingFunction (decl)?.forEachChild (visit);
+    return holds;
+};
+
+// `let types = [ .. ]; types = this.safeList (o, k, types)`: the default is the local itself or a list
+// literal, so SafeListTypedDefault never answers nil and the local types []any (needs an index or
+// `.length` read).
+function goTypedVenueDefaultedSafeListWrite (goTranspiler, write, declaration): boolean {
+    const right = goTypedVenueUnparen (write?.right);
+    if ((right?.kind !== SyntaxKind.CallExpression) || (right.arguments.length !== 3)
+        || (right.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (right.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (right.expression.name?.text !== 'safeList')) {
+        return false;
+    }
+    const fallback = goTypedVenueUnparen (right.arguments[2]);
+    if (fallback?.kind === SyntaxKind.ArrayLiteralExpression) {
+        return true;
+    }
+    return (fallback?.kind === SyntaxKind.Identifier) && (ccxtGoParamDeclarationOf (goTranspiler, fallback) === declaration);
+}
+function goTypedVenueUnparen (node) {
+    while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression)) {
+        node = node.expression;
+    }
+    return node;
+}
+function goTypedVenueListSeedIsSafe (goTranspiler, scope, declaration, varName: string): boolean {
+    const init = goTypedVenueUnparen (declaration?.initializer);
+    // ccxt source trees only (an in-memory program keeps its shipped box)
+    if (!/(^|[\\/])ts[\\/]src[\\/]/.test (String (declaration?.getSourceFile?.()?.fileName ?? ''))) {
+        return false;
+    }
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length === 0)
+        || ((declaration.type !== undefined) && (declaration.type.getText ().replace (/\s+/g, '') !== 'string[]')) || (scope === undefined)) {
+        return false;
+    }
+    let writes = 0;
+    const unsafe = goTranspiler.hasNodeWhere (scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)
+            || (ccxtGoParamDeclarationOf (goTranspiler, n) !== declaration)) {
+            return false;
+        }
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            if (goTypedVenueDefaultedSafeListWrite (goTranspiler, parent, declaration)) {
+                writes += 1;
+                return false;
+            }
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments.indexOf (n) === 2) && (parent.parent?.kind === SyntaxKind.BinaryExpression)
+            && goTypedVenueDefaultedSafeListWrite (goTranspiler, parent.parent, declaration)) {
+            return false; // the reader default slot of its own write
+        }
+        return ccxtGoWriteSiteShippedVeto (goTranspiler, n, parent, '[]any');
+    });
+    return !unsafe && (writes > 0) && goTypedVenueHasNativeUse (goTranspiler, declaration, '[]any');
+}
+const goLocalIsSafeToTypeBaseTypedVenue = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    return goLocalIsSafeToTypeBaseTypedVenue.call (this, scope, declaration, varName, goType, stringWriteProven)
+        || ((goType === '[]any') && goTypedVenueListSeedIsSafe (this, scope, declaration, varName));
+};
+const printBinaryExpressionBaseTypedVenue = GoTranspiler.prototype.printBinaryExpression;
+GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+    const right = goTypedVenueUnparen (node?.right);
+    if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.left?.kind === SyntaxKind.Identifier)
+        && (right?.kind === SyntaxKind.CallExpression) && (right.expression?.name?.text === 'safeList')) {
+        const declaration = ccxtGoParamDeclarationOf (this, node.left);
+        if ((declaration?.kind === SyntaxKind.VariableDeclaration) && goTypedVenueDefaultedSafeListWrite (this, node, declaration)
+            && (this.goDeclaredTypeOfIdentifier (node.left) === '[]any')) {
+            const args = goTypedVenueUnparen (node.right).arguments.map ((a) => this.printNode (a, 0).trim ());
+            return this.printNode (node.left, 0) + ' = SafeListTypedDefault(' + args.join (', ') + ')';
+        }
+    }
+    return printBinaryExpressionBaseTypedVenue.call (this, node, identation);
+};
+
+// Venue `string[]` producers whose every return is `this.safeList (t, k, [ .. ])` never answer nil:
+// the signature prints []any and the return prints SafeListTypedDefault.
+function goTypedVenueDefaultedSafeListReturn (node): boolean {
+    const e = goTypedVenueUnparen (node);
+    return (e?.kind === SyntaxKind.CallExpression) && (e.arguments.length === 3) && (e.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (e.expression.expression?.kind === SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'safeList')
+        && (goTypedVenueUnparen (e.arguments[2])?.kind === SyntaxKind.ArrayLiteralExpression);
+}
+function goTypedVenueStringListProducer (goTranspiler, node): boolean {
+    const annotation = node?.type?.getText ()?.replace (/\s+/g, '');
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined) || ((annotation !== 'string[]') && (annotation !== 'Strings'))) {
+        return false;
+    }
+    const name = node.name?.text;
+    const fileName = String (node.getSourceFile?.()?.fileName ?? '');
+    if ((typeof name !== 'string') || /(^|[\\/])base[\\/]/.test (fileName) || goTranspiler.isAsyncFunction (node)
+        || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name) || goTranspiler.goMethodKeepsBaseSignature?.(node)) {
+        return false;
+    }
+    const reserved = ccxtGoReservedMethodNames (node);
+    if ((reserved !== undefined) && (reserved.has (name) || reserved.has (name.charAt (0).toUpperCase () + name.slice (1)))) {
+        return false;
+    }
+    const returns = collectReturnStatements (node.body);
+    return (returns.length > 0) && returns.every ((r) => goTypedVenueDefaultedSafeListReturn (r.expression));
+}
+const printReturnStatementBaseTypedVenue = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    const fn = this.goEnclosingFunction (node);
+    if ((fn !== undefined) && goTypedVenueDefaultedSafeListReturn (node.expression) && goTypedVenueStringListProducer (this, fn)) {
+        const args = goTypedVenueUnparen (node.expression).arguments.map ((a) => this.printNode (a, 0).trim ());
+        return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return SafeListTypedDefault(' + args.join (', ') + ')');
+    }
+    return printReturnStatementBaseTypedVenue.call (this, node, identation);
+};
