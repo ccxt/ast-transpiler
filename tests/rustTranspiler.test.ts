@@ -26025,3 +26025,97 @@ describe('ral-92rf R4: a venue-own plural parser with a list rows parameter take
         expect(out).not.toContain('settlements: impl Into<crate::Value>');
     });
 });
+
+describe('ral-92rg R1: a venue method returning a loaded market record it rules out as undefined', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: string }\nexport type Market = MarketInterface | undefined;\n"
+        + "export default class Exchange {\n    markets: Dict = {};\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Market, MarketInterface } from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    listedMarket (symbol: string): MarketInterface {\n        const market = this.safeDict (this.markets, symbol);\n        if ((market === undefined) || (this.safeString (market, 'kind') !== 'rfq')) {\n            throw new Error ('not listed: ' + symbol);\n        }\n        return market as MarketInterface;\n    }\n"
+        + "    unguarded (symbol: string): MarketInterface {\n        const market = this.safeDict (this.markets, symbol);\n        return market as MarketInterface;\n    }\n"
+        + "    use (symbol: string): Str {\n        const market = this.listedMarket (symbol);\n        const loose = this.unguarded (symbol);\n        return this.safeString (market, 'base') + this.safeString (loose, 'base');\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-92rg1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the producer returns the struct (decoded once) and its caller holds it and lends it to a key reader', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn listedMarket\(&self, [^)]*\) -> crate::types::Market \{/);
+        expect(text).toContain('return <crate::types::Market as crate::types::FromRaw>::from_raw(market);');
+        expect(text).toMatch(/let mut market: crate::types::Market = self\.listedMarket\(/);
+    });
+    test('negative: without the throwing undefined test the record may be Null, the method stays Value', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn unguarded\(&self, [^)]*\) -> Value \{/);
+        expect(text).toMatch(/let mut loose: Value = self\.unguarded\(/);
+    });
+});
+
+describe('ral-92rg R2: a venue method answering safeList with a ternary of list literals as its default', () => {
+    const ts = "class venue {\n"
+        + "    settlements (type: string, method: string): string[] {\n        const options = this.safeDict (this.options, type, {});\n        const inner = this.safeDict (options, method, {});\n        const defaultSettle = (type === 'swap') ? [ 'usdt' ] : [ 'btc' ];\n        return this.safeList (inner, 'settlementCurrencies', defaultSettle);\n    }\n"
+        + "    loose (type: string, d: any): string[] {\n        return this.safeList (this.options, type, d);\n    }\n"
+        + "    use () {\n        const currencies = this.settlements ('future', 'fetchMarkets');\n        for (let c = 0; c < currencies.length; c++) {\n            const settleId = this.safeString (currencies, c);\n        }\n        const other = this.loose ('x', undefined);\n        for (let c = 0; c < other.length; c++) {\n            const id = this.safeString (other, c);\n        }\n    }\n}\n";
+    test('the call result moves into a List bearer lent to the reader', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut currencies: crate::value::List = self.settlements(');
+        expect(out).toContain('c < (currencies.len() as i64)');
+    });
+    test('negative: a default the method does not prove a list keeps the Value local', () => {
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut other: Value = self.loose(');
+    });
+});
+
+describe('ral-92rg R3: a venue market slot read by key readers and boxed once into a literal value', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; id: string }\nexport type Market = MarketInterface | undefined;\n"
+        + "export default class Exchange {\n    market (symbol: string): MarketInterface { return undefined; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Market } from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    fromMarket (market: Market): Dict {\n        const limits = this.safeDict (market, 'limits', {});\n        return { 'info': market, 'symbol': this.safeString (market, 'symbol'), 'limits': limits };\n    }\n"
+        + "    handedOn (market: Market): Dict {\n        return { 'info': market, 'other': [ market ] };\n    }\n"
+        + "    fetchIt (symbol: string): Dict {\n        const market = this.market (symbol);\n        return this.fromMarket (market);\n    }\n"
+        + "    fetchOther (symbol: string): Dict {\n        const market = this.market (symbol);\n        return this.handedOn (market);\n    }\n}\n";
+    const out = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-92rg3-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': [ 'market' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('the slot is a lent Option<&Market>; the caller holds the struct and lends it', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn fromMarket\(&self, market: Option<&crate::types::Market>\)/);
+        expect(text).toContain('self.fromMarket(Some(&market))');
+    });
+    test('negative: a slot handed on whole into a list literal keeps Value', () => {
+        const text = out();
+        expect(text).toMatch(/pub fn handedOn\(&self, market: Value\)/);
+    });
+});
+
+describe('ral-92rg R4: a venue Str result keying a map that is only enumerated', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\n"
+        + "export default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    symbolOf (id: Str): Str {\n        const s = this.safeString (this.options, id);\n        return s;\n    }\n"
+        + "    handle (changes: Dict[]): string[] {\n        const updated: Dict = {};\n        for (let i = 0; i < changes.length; i++) {\n            const id = this.safeString (changes[i], 'id');\n            const sym = this.symbolOf (id);\n            if (sym === undefined) {\n                continue;\n            }\n            updated[sym] = true;\n        }\n        return Object.keys (updated);\n    }\n}\n";
+    test('the local is Option<String> and the insert takes its key text', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-92rg4-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toMatch(/pub fn symbolOf\(&self, [^)]*\) -> Option<String>/);
+        expect(out).toContain('let mut sym: Option<String> = self.symbolOf(');
+        expect(out).toContain('updated.insert(sym.as_deref().unwrap_or("null").to_string(), Value::Bool(true));');
+    });
+});

@@ -13451,6 +13451,8 @@ export class RustTranspiler extends BaseTranspiler {
             // and the push on the bucket read is printed natively by arrPush (rustLitKeyBearerReadLocal), not by a ccxt pass
             // ral-56k: and a map only enumerated (never read back by key: btse fetchBalance `totals[code] = ..`): same key text
             if (enumerated && this.rustSafeCurrencyCodeInit(local.initializer)) return this.rustScalarInsertKeyUse(n);
+            // ral-92rg R4: likewise an owned venue `-> Option<String>` result (rustVenueStrCall) keying a map only enumerated
+            if (enumerated && !keyRead && this.rustVenueStrCall(this.unwrapParens(local.initializer))) return this.rustScalarInsertKeyUse(n);
             // ral-61k: the only key reads of the map are the very slot `m[k]` read inside the value of this write `m[k] = f(m[k])`
             if (enumerated && keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rust61kSelfReassignOnlyRead(declaration, name, n)) return this.rustScalarInsertKeyUse(n);
             // ral-62k: every key read of the map is keyed by this very binding (anywhere after its write, e.g. safeBalance
@@ -22923,7 +22925,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return 'map';
             }
             if (method === 'safeList' || method === 'safeListValue') {
-                return args.length < 3 || isArrayLiteralExpression(this.rustSkipWrappers(args[2])) ? 'list' : undefined;
+                return args.length < 3 || isArrayLiteralExpression(this.rustSkipWrappers(args[2])) || this.rust92rgListLiteralDefault(args[2]) ? 'list' : undefined;
             }
             // ral-54i: inside the declared-array write proof only, base `toArray` / `arrayConcat` answer a `Value::Arr` on every path
             if (this.rustDeclaredArrayProof && this.rustAlwaysListProducer(expr)) return 'list';
@@ -22939,6 +22941,18 @@ export class RustTranspiler extends BaseTranspiler {
             if (method === 'split') return 'list';
         }
         return undefined;
+    }
+
+    /** ral-92rg R2: a `safeList` default that is a never-written const of the same function initialised to a ternary whose
+     *  two arms are array literals (gate `getSettlementCurrencies`: `const d = (t === 'swap') ? [ 'usdt' ] : [ 'btc' ]`). */
+    rust92rgListLiteralDefault(arg: Node): boolean {
+        const id: Node = this.rustSkipWrappers(arg);
+        if (id === undefined || !isIdentifier(id)) return false;
+        const declaration: Node = this.rustDeclarationOfIdentifier(id);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name === id || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0 || this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(id)) return false;
+        const init: Node = this.rustSkipWrappers(declaration.initializer);
+        return init !== undefined && isConditionalExpression(init) && isArrayLiteralExpression(this.rustSkipWrappers(init.whenTrue)) && isArrayLiteralExpression(this.rustSkipWrappers(init.whenFalse));
     }
 
     /** True when the only writes to this local inside its own function are
@@ -23680,7 +23694,31 @@ export class RustTranspiler extends BaseTranspiler {
     rust90rMoveBearer(declaration: VariableDeclaration): boolean {
         const init: Node = this.rustSkipWrappers(declaration.initializer);
         if (init === undefined || !isCallExpression(init)) return false;
-        return this.rust90rCompareLeftBearers.has(declaration) || this.rust90rForwardListCalls.has(init);
+        return this.rust90rCompareLeftBearers.has(declaration) || this.rust90rForwardListCalls.has(init) || this.rust92rgSafeListForward(init);
+    }
+
+    /** ral-92rg R2: a call of a sync venue method whose every return is `this.safeList (o, k, d)` with `d` a
+     *  rust92rgListLiteralDefault const: the call result is a list on every path, moved into its bearer. */
+    rust92rgSafeListForward(call: CallExpression): boolean {
+        if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const impl: Node = this.rustScalarCallee(call);
+        if (impl === undefined || !isMethodDeclaration(impl) || impl.body === undefined || this.isAsyncFunction(impl)
+            || RustTranspiler.RUST_BASE_TIER_FILE.test(String(impl.getSourceFile().fileName)) || this.getMethodOverride(impl) !== undefined) return false;
+        let returns = 0;
+        let ok = true;
+        const visit = (n: Node) => {
+            if (!ok || (n !== impl.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                returns++;
+                const r: Node = this.rustSkipWrappers(n.expression);
+                ok = r !== undefined && isCallExpression(r) && isPropertyAccessExpression(r.expression) && r.expression.expression.kind === SyntaxKind.ThisKeyword
+                    && String(r.expression.name.text) === 'safeList' && r.arguments.length === 3 && this.rust92rgListLiteralDefault(r.arguments[2]);
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        impl.body.forEachChild(visit);
+        return ok && returns > 0;
     }
 
     rustReadBearerKindUncached(declaration: any): 'list' | 'map' | false {
@@ -38331,6 +38369,7 @@ export class RustTranspiler extends BaseTranspiler {
                     const declaration: any = this.rustDeclarationOfIdentifier(inner);
                     if (declaration?.kind === SyntaxKind.VariableDeclaration && (declaration.parent.flags & NodeFlags.Const) !== 0 && this.rustIsSafeMarketCall(declaration.initializer)) return;
                 }
+                if (this.rust92rgLoadedMarketReturn(node, n)) return;
                 ok = false;
                 return;
             }
@@ -38340,6 +38379,40 @@ export class RustTranspiler extends BaseTranspiler {
         decision = ok && returns > 0;
         this.rustVenueMarketDecisions.set(node, decision);
         return decision;
+    }
+
+    /** ral-92rg R1: `return x` / `return x as MarketInterface` of a const `x = this.safeDict (this.markets, k)` the
+     *  method's own top-level `if (x === undefined || ..) { throw .. }` rules out before the return: a loaded market
+     *  record, decoded once at the return (`FromRaw`), so callers hold the struct. */
+    rust92rgLoadedMarketReturn(method: MethodDeclaration, ret: Statement): boolean {
+        if (!isReturnStatement(ret) || ret.parent !== method.body) return false;
+        let inner: Node = this.unwrapParens(ret.expression);
+        if (inner !== undefined && isAsExpression(inner) && isTypeReferenceNode(inner.type) && isIdentifier(inner.type.typeName)
+            && /^(?:Market|MarketInterface)$/.test(String(inner.type.typeName.text))) inner = this.unwrapParens(inner.expression);
+        if (inner === undefined || !isIdentifier(inner)) return false;
+        const declaration: Node = this.rustDeclarationOfIdentifier(inner);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0 || declaration.parent.declarations.length !== 1) return false;
+        const init: Node = this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(init.expression.name.text) !== 'safeDict' || init.arguments.length !== 2) return false;
+        const store: Node = this.unwrapParens(init.arguments[0]);
+        if (!isPropertyAccessExpression(store) || store.expression.kind !== SyntaxKind.ThisKeyword || String(store.name.text) !== 'markets') return false;
+        const statements: Statement[] = Array.from(method.body.statements);
+        const declAt = statements.indexOf(declaration.parent.parent as Statement);
+        const retAt = statements.indexOf(ret);
+        if (declAt < 0 || retAt <= declAt) return false;
+        const symbol = this.getChecker().getSymbolAtLocation(inner);
+        const isNullTest = (e: Node): boolean => {
+            const b: Node = this.unwrapParens(e);
+            if (!isBinaryExpression(b)) return false;
+            if (b.operatorToken.kind === SyntaxKind.BarBarToken) return isNullTest(b.left);
+            if (b.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken) return false;
+            const id: Node = this.unwrapParens(b.left);
+            return isIdentifier(id) && this.getChecker().getSymbolAtLocation(id) === symbol && this.literalKindOfNode(this.unwrapParens(b.right)) === 'null';
+        };
+        const throws = (s: Statement): boolean => s !== undefined && (isThrowStatement(s) || (isBlock(s) && s.statements.length === 1 && isThrowStatement(s.statements[0])));
+        return statements.slice(declAt + 1, retAt).some((s: Statement) => isIfStatement(s) && s.elseStatement === undefined && throws(s.thenStatement) && isNullTest(s.expression));
     }
 
     /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
@@ -38531,15 +38604,19 @@ export class RustTranspiler extends BaseTranspiler {
         let forwards = 0;
         let reads = 0;
         let others = 0;
+        let literalSlots = 0;
         const ok = this.rustLocalUsesAll(param, name, true, (n: any) => {
             if (this.isNativeWriteTargetBase(n) || isDeleteExpression(n.parent?.parent)) return false;
             if (this.rustMarketSlotUse(n)) forwards++;
             else if (this.rustMarketReaderArg(n) || this.rustIsNullTestOf(n) || this.rustDictKeyReadUse(n)) reads++;
+            else if (this.rust92rgLiteralValueSlot(n)) literalSlots++;
             else others++;
             return true;
         });
         // a helper that only reads the record (key readers, null tests) borrows it as well as one that forwards it
-        if (!ok || (forwards === 0 && (reads === 0 || others > 0))) return false;
+        // ral-92rg R3: a required slot read by key readers whose only other uses box the record once into a literal value
+        const readsAndBoxes = forwards === 0 && reads > 0 && others === 0 && literalSlots > 0 && param.initializer === undefined;
+        if (!ok || (forwards === 0 && (reads === 0 || others > 0 || (literalSlots > 0 && !readsAndBoxes)))) return false;
         // a REST helper is also called from the venue's ws class: those callers must lend too (the ws file is a root of
         // this program); a ws class this program does not load keeps the helper boxed
         const sibling = this.rustWsSiblingCallSites(method);
@@ -38550,6 +38627,14 @@ export class RustTranspiler extends BaseTranspiler {
             if (args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
             return args[at] === undefined ? param.initializer !== undefined : this.rustMarketArgLends(args[at]);
         });
+    }
+
+    /** ral-92rg R3: `n` is the whole value of a property of an object literal (`{ 'info': market }`): one box of the record. */
+    rust92rgLiteralValueSlot(n: Node): boolean {
+        let top: Node = n;
+        while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || isAsExpression(top.parent))) top = top.parent;
+        const up: Node = top.parent;
+        return up !== undefined && isPropertyAssignment(up) && up.initializer === top && isObjectLiteralExpression(up.parent);
     }
 
     /** The calls of REST method `m` from `ts/src/pro/<id>.ts` (checker-resolved to `m`): none when the ws class does
