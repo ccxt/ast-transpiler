@@ -1143,7 +1143,10 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // coerceStringPtrMethods retypes the base copy and every venue override to `*string`.
 // ral-77g4: `omitZero (stringNumber: string | undefined)` (base/functions/number.ts) answers the
 // string or undefined on every path; its hand-written Go twin (exchange_generic.go) returns *string
-export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision', 'OmitZero' ];
+// currencyToPrecision / networkCodeToId are `: Str` in base/Exchange.ts; every return is a string, a
+// Safe* string or undefined, and the htx override answers the same (its interface line is *string too)
+// handleTimeInForce (Str) returns a safeString result or undefined on every path
+export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision', 'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -5658,6 +5661,9 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
     const goType = ccxtGoWriteSiteLocalGoType (goTranspiler, node.left);
     if ((goType === undefined) || ral90g5OwnsWrite (node)) {
         return undefined;
+    }
+    if ((goType === '*string') && (strPtrFamilyLiteralTemp (goTranspiler, node) !== undefined)) {
+        return goTranspiler.goPointerWriteText (node, identation); // a fresh-local address, no box
     }
     const nilJoin = ccxtGoNilJoinDeclarationType (goTranspiler, node.left) === goType;
     const conversion = ccxtGoWriteSiteConversion (goTranspiler, goType, node.right, nilJoin);
@@ -38503,3 +38509,165 @@ function go92g2LoopListLocal (goTranspiler: GoTranspiler, declaration): boolean 
     };
 }
 // ===== ral-92g2 R2 (end) =====
+
+// ===== base *string family printed natively (begin) =====
+// A method of the *string base family (CCXT_GO_STRING_PTR_METHOD_NAMES: base copy and every override)
+// prints its `*string` signature here, so the ccxt text pass no longer boxes each return: an absent
+// return prints `nil`, a proven *string bare, a Go string local `&x`, anything else SafeStringPtr(..).
+// All or nothing per method: a bare `return;` or a return inside try keeps the printed `any`.
+type StrPtrReturnKind = 'nil' | 'bare' | 'addr' | 'wrap';
+const strPtrFamilyVerdicts = new WeakMap<object, Map<object, StrPtrReturnKind> | null>();
+function strPtrFamilyVerdict(goTranspiler: GoTranspiler, method): Map<object, StrPtrReturnKind> | undefined {
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body?.kind !== SyntaxKind.Block) || goTranspiler.isAsyncFunction(method)) {
+        return undefined;
+    }
+    if (strPtrFamilyVerdicts.has(method)) {
+        return strPtrFamilyVerdicts.get(method) ?? undefined;
+    }
+    strPtrFamilyVerdicts.set(method, null);
+    const name = String(method.name?.text ?? '');
+    const goName = name.charAt(0).toUpperCase() + name.slice(1);
+    if (!CCXT_GO_STRING_PTR_METHOD_NAMES.includes(goName)) {
+        return undefined;
+    }
+    const kinds = new Map<object, StrPtrReturnKind>();
+    for (const statement of collectReturnStatements(method.body)) {
+        for (let up = statement.parent; (up !== undefined) && (up !== method.body); up = up.parent) {
+            if (up.kind === SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        const expression = statement.expression;
+        if (expression === undefined) {
+            return undefined;
+        }
+        if (isAbsentExpression(expression)) {
+            kinds.set(statement, 'nil');
+            continue;
+        }
+        const callee = (expression.kind === SyntaxKind.CallExpression) ? expression.expression : undefined;
+        const familyCall = (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && ((callee.expression?.kind === SyntaxKind.ThisKeyword) || (callee.expression?.kind === SyntaxKind.SuperKeyword))
+            && CCXT_GO_STRING_PTR_METHOD_NAMES.includes(String(callee.name?.text ?? '').charAt(0).toUpperCase() + String(callee.name?.text ?? '').slice(1));
+        const goType = familyCall ? '*string' : ccxtGoReturnExpressionType(goTranspiler, expression);
+        if (goType === '*string') {
+            kinds.set(statement, 'bare');
+        } else if ((goType === 'string') && (expression.kind === SyntaxKind.Identifier)) {
+            kinds.set(statement, 'addr');
+        } else {
+            kinds.set(statement, 'wrap');
+        }
+    }
+    if (kinds.size === 0) {
+        return undefined;
+    }
+    strPtrFamilyVerdicts.set(method, kinds);
+    return kinds;
+}
+function strPtrFamilyEnclosingMethod(node) {
+    for (let up = node?.parent; up !== undefined; up = up.parent) {
+        switch (up.kind) {
+        case SyntaxKind.MethodDeclaration:
+            return up;
+        case SyntaxKind.FunctionDeclaration:
+        case SyntaxKind.FunctionExpression:
+        case SyntaxKind.ArrowFunction:
+        case SyntaxKind.Constructor:
+            return undefined;
+        }
+    }
+    return undefined;
+}
+const strPtrFamilyMethodDefinition = GoTranspiler.prototype.printMethodDefinition;
+GoTranspiler.prototype.printMethodDefinition = function (node, identation) {
+    const printed = strPtrFamilyMethodDefinition.call(this, node, identation);
+    if ((typeof printed !== 'string') || (strPtrFamilyVerdict(this, node) === undefined)) {
+        return printed;
+    }
+    return printed.replace(/(\)\s+)any(\s*)$/, '$1*string$2');
+};
+const strPtrFamilyReturnStatement = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    const method = strPtrFamilyEnclosingMethod(node);
+    const kind = (method !== undefined) ? strPtrFamilyVerdict(this, method)?.get(node) : undefined;
+    if (kind === undefined) {
+        return strPtrFamilyReturnStatement.call(this, node, identation);
+    }
+    const value = (kind === 'nil') ? 'nil' : this.printNode(node.expression, identation).trim();
+    const text = (kind === 'addr') ? '&' + value : ((kind === 'wrap') ? 'SafeStringPtr(' + value + ')' : value);
+    return this.printNodeCommentsIfAny(node, identation, this.getIden(identation) + 'return ' + text);
+};
+// `x = this.currencyToPrecision|networkCodeToId (..)` into a local that stays `any`: the box held the
+// plain string before these returned *string, so store the pointee (nil for a nil pointer)
+const STR_PTR_FAMILY_NEW = [ 'currencyToPrecision', 'networkCodeToId', 'handleTimeInForce' ];
+const strPtrFamilyExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const write = node?.expression;
+    const call = write?.right;
+    const callee = call?.expression;
+    if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken)
+        || (write.left?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !STR_PTR_FAMILY_NEW.includes(String(callee.name?.text ?? ''))) {
+        return strPtrFamilyExpressionStatement.call(this, node, identation);
+    }
+    const declaration = ccxtGoParamDeclarationOf(this, write.left);
+    const declared = this.goDeclaredTypeOfIdentifier(write.left);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declared !== undefined) && (declared !== 'any'))) {
+        return strPtrFamilyExpressionStatement.call(this, node, identation);
+    }
+    const iden = this.getIden(identation);
+    const name = this.printNode(write.left, 0).trim();
+    const value = this.printNode(call, 0).trim();
+    return this.printNodeCommentsIfAny(node, identation, iden + 'if derefPtr := ' + value + '; derefPtr != nil {\n'
+        + iden + '\t' + name + ' = *derefPtr\n' + iden + '} else {\n' + iden + '\t' + name + ' = nil\n' + iden + '}');
+};
+// `x = 'lit'` on a *string local seeded by one of those calls (or a copy of one): the value goes
+// into a fresh `xValue` local whose address x takes, no SafeStringPtr box. Once per block, and only
+// when no identifier `xValue` exists in the method.
+function strPtrFamilySeeded(goTranspiler: GoTranspiler, declaration, depth = 0): boolean {
+    const init = (declaration?.kind === SyntaxKind.VariableDeclaration) ? ral90g4Unparen(declaration.initializer) : undefined;
+    if ((init?.kind === SyntaxKind.Identifier) && (depth < 2)) {
+        return strPtrFamilySeeded(goTranspiler, ccxtGoParamDeclarationOf(goTranspiler, init), depth + 1);
+    }
+    const callee = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+    return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && STR_PTR_FAMILY_NEW.includes(String(callee.name?.text ?? ''));
+}
+function strPtrFamilyLiteralTemp(goTranspiler: GoTranspiler, node): string | undefined {
+    const left = node?.left;
+    if ((left?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.ExpressionStatement) || !ral90g4IsStringLiteral(node.right)) {
+        return undefined;
+    }
+    const declaration = ccxtGoParamDeclarationOf(goTranspiler, left);
+    if (!strPtrFamilySeeded(goTranspiler, declaration) || (goTranspiler.goDeclaredTypeOfIdentifier(left) !== '*string')) {
+        return undefined;
+    }
+    const temp = left.text + 'Value';
+    const method = goTranspiler.goOutermostFunction(node);
+    let clash = false;
+    const visit = (n) => {
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === temp)) {
+            clash = true;
+        }
+        if (!clash) {
+            n.forEachChild(visit);
+        }
+    };
+    method?.forEachChild(visit);
+    const block = node.parent.parent;
+    const sameBlock = (block?.statements ?? []).filter((s) => (s.kind === SyntaxKind.ExpressionStatement)
+        && (s.expression?.kind === SyntaxKind.BinaryExpression) && (s.expression.left?.kind === SyntaxKind.Identifier)
+        && (s.expression.left.text === left.text) && ral90g4IsStringLiteral(s.expression.right));
+    return (clash || (method === undefined) || (sameBlock.length !== 1)) ? undefined : temp;
+}
+const strPtrFamilyPointerWrite = GoTranspiler.prototype.goPointerWriteText;
+GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
+    const temp = strPtrFamilyLiteralTemp(this, node);
+    if (temp === undefined) {
+        return strPtrFamilyPointerWrite.call(this, node, identation);
+    }
+    const value = this.printNode(ral90g4Unparen(node.right), 0).trim();
+    return temp + ' := ' + value + '\n' + this.getIden(identation) + this.printNode(node.left, 0) + ' = &' + temp;
+};
+// ===== base *string family printed natively (end) =====
