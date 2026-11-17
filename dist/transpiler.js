@@ -16759,7 +16759,7 @@ function ccxtGoTupleStringBindingIsProducer(goTranspiler, declaration) {
   }
   const callee = ccxtGoWriteSiteCallee(goTranspiler, init);
   const index = pattern.elements.indexOf(declaration);
-  return index === 0 && CCXT_GO_TUPLE_STRING_PRODUCERS.indexOf(callee) >= 0 || ccxtGoTupleCheckerElementType(goTranspiler, init, index) === "*string";
+  return index === 0 && (CCXT_GO_TUPLE_STRING_PRODUCERS.indexOf(callee) >= 0 || ccxtGoVenuePairOfCall(init)?.type === "*string") || ccxtGoTupleCheckerElementType(goTranspiler, init, index) === "*string";
 }
 function ccxtGoTupleStringJoinType(goTranspiler, declaration) {
   const nilDeclared = declaration?.kind === ts.SyntaxKind.VariableDeclaration && ts.isIdentifier(declaration.name) && isNilDeclaredInitializer(declaration.initializer) && declaration.parent?.parent?.kind === ts.SyntaxKind.VariableStatement && declaration.parent.declarations.length === 1;

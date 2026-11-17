@@ -6914,7 +6914,7 @@ function ccxtGoTupleStringBindingIsProducer (goTranspiler, declaration) {
     }
     const callee = ccxtGoWriteSiteCallee (goTranspiler, init);
     const index = pattern.elements.indexOf (declaration);
-    return ((index === 0) && (CCXT_GO_TUPLE_STRING_PRODUCERS.indexOf (callee) >= 0))
+    return ((index === 0) && ((CCXT_GO_TUPLE_STRING_PRODUCERS.indexOf (callee) >= 0) || (ccxtGoVenuePairOfCall (init)?.type === '*string')))
         || (ccxtGoTupleCheckerElementType (goTranspiler, init, index) === '*string');
 }
 
