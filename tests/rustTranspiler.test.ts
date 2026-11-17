@@ -26250,3 +26250,23 @@ describe('rust venue isGateFuturesContractWithDecimalSize prints -> bool', () =>
         expect(out).toContain('let mut useDecimal: bool = false;');
     });
 });
+
+describe('a nil-declared Str local written from a Strings parameter the checker narrows to never', () => {
+    const run = (name: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    market (symbol: string): string { return symbol; }\n    hold (m: unknown): unknown { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    fetchTickers (symbols: Strings = undefined): unknown {\n        if (symbols !== undefined) {\n            let symbol: Str = undefined;\n            if (Array.isArray (symbols)) {\n                symbol = symbols[0];\n            } else {\n                symbol = symbols;\n            }\n" + use + "        }\n        return undefined;\n    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('bybit fetchPositions: the never write prints None and the local is tested natively', () => {
+        const out = run ('r93rc-never-test', "            if (symbol !== undefined) {\n                return this.hold (1);\n            }\n");
+        expect(out).toContain('let mut symbol: Option<String> = None;');
+        expect(out).toContain('symbol = None;');
+        expect(out).toContain('symbol.is_some()');
+    });
+    test('negative: a local only boxed into a literal stays Value', () => {
+        const out = run ('r93rc-never-boxonly', "            return this.hold ({ 'symbol': symbol });\n");
+        expect(out).toContain('let mut symbol: Value = Value::Null;');
+    });
+});

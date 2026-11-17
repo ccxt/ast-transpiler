@@ -3212,6 +3212,9 @@ export class RustTranspiler extends BaseTranspiler {
             // method (rustVenueTypedCall) is admitted only for a native read (below)
             if (this.rustBaseStrFieldRead(rhs) || this.rustWsUrlRead(rhs) || this.rustVenueTypedCall(rhs) === 'ostr') baseFieldWrite = true;
             if (this.rustPassThroughStrCallIn(rhs)) passThroughWrite = true;
+            // `x = symbols` where the checker narrows the source to `never` (a `Strings` past `!Array.isArray`): no string
+            // ever arrives, the boxed list read back as text was `None` (printed `None`, rustScalarNativeText)
+            if (this.rustNilNeverWrite(rhs)) continue;
             let write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
             // ral-68a R1: `x = p` from an unwritten typed string parameter (`&str` / `Option<&str>` signature slot): the
             // parameter's rebinding holds that string (or Null), read back once as `Option<String>` (rustOptParamText)
@@ -8159,6 +8162,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-wa: the whole right side of an `x = <call>;` statement writing a nil-declared (`let x;`) local: the
      *  venue result moves into the `Option<String>` local as printed (no box, no copy). */
+    /** A same-function identifier as the whole right side of a nil write whose narrowed checker type is `never`. */
+    rustNilNeverWrite(node: Node | undefined): boolean {
+        if (node === undefined || !isIdentifier(node) || node.text === 'undefined' || !this.rustNilVenueWrite(node)) return false;
+        const type: Type | undefined = this.typeOfNodeIfAny(node);
+        return type !== undefined && (type.flags & TypeFlags.Never) !== 0;
+    }
+
     rustNilVenueWrite(node): boolean {
         let current: any = node;
         while (isParenthesizedExpression(current.parent)) current = current.parent;
@@ -10557,6 +10567,7 @@ export class RustTranspiler extends BaseTranspiler {
         // 40b: `x = <expr> as T` writes the operand itself (the assertion prints nothing and converts nothing)
         if (depth === 0 && this.rustScalarAsWrite(node) !== undefined) return this.rustScalarWriteOk(kind, this.rustScalarAsWrite(node), 0);
         if (this.rustOptParamWriteOk(kind, node)) return true;
+        if (depth === 0 && kind.startsWith('o') && this.rustNilNeverWrite(node)) return true;
         if (kind === 'oint' && this.rustLimitCall(node)) return true;
         // ral-67b: a checker-`boolean` logical over same-function locals written into an `Option<bool>` local
         if (kind === 'obool' && depth === 0 && this.rust67bBoolLogicalWrite(node)) return true;
@@ -11196,7 +11207,7 @@ export class RustTranspiler extends BaseTranspiler {
         const optional = kind.startsWith('o');
         const base = optional ? kind.slice(1) : kind;
         const wrap = (t: string) => optional ? `Some(${t})` : t;
-        if (this.literalKindOfNode(node) === 'null') return optional ? 'None' : undefined;
+        if (this.literalKindOfNode(node) === 'null' || (optional && this.rustNilNeverWrite(node))) return optional ? 'None' : undefined;
         if (kind === 'str' && this.rustSbJoinShape(node)) return this.rustSbJoinText(node);
         if (base === 'str' && this.rust68aJoinWrite(node)) return wrap(this.rustSbJoinText(node));
         if (this.rustBaseTypedReturnKind(node) !== undefined && !(kind === 'int' && this.rustVenueParseToInt(node))) return this.rustBaseTypedText(kind, node);
@@ -11375,7 +11386,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const alias: any = this.unwrapParens(right);
         // za: `x = undefined` (an Identifier node) on an optional scalar local writes `None`: nothing to copy
-        if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && this.literalKindOfNode(alias) === 'null') return `${super.printIdentifier(left)} = \u0004None`;
+        if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && (this.literalKindOfNode(alias) === 'null' || this.rustNilNeverWrite(alias))) return `${super.printIdentifier(left)} = \u0004None`;
         if (local !== undefined && isIdentifier(alias) && this.rustNilAliasMoves.has(alias) && this.rustScalarIdentifierKind(alias) === local.kind) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.take()`;
         if (local?.kind === 'ostr' && isIdentifier(alias) && this.rustScalarIdentifierKind(alias) === undefined && this.rustNilValueStrAlias(alias)) return `${super.printIdentifier(left)} = ${super.printIdentifier(alias)}.into_opt_string()`;
         // ral-54e: a loop counter written into an `i64` local is the `Copy` `i64` itself (owned: never cloned)
