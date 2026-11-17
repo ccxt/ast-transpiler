@@ -4083,7 +4083,14 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustLocalUsesAcceptBool(declaration, sourceName: string): boolean {
         return this.rustLocalUsesAll(declaration, sourceName, false, (n) =>
-            this.rustIdentifierUseIsCondition(n) || this.rustBoolParamUseAccepted(n));
+            this.rustIdentifierUseIsCondition(n) || this.rustBoolParamUseAccepted(n) || this.rustBoolTypedReturnUse(n));
+    }
+
+    /** `return x` in a method the typed-return table prints `-> bool`: the local is that return as is. */
+    rustBoolTypedReturnUse(n: Node): boolean {
+        const parent: Node | undefined = n?.parent;
+        if (parent === undefined || !isReturnStatement(parent) || parent.expression !== n) return false;
+        return this.rustMethodTypedReturnKind(findAncestor(parent.parent, isFunctionLike)) === 'bool';
     }
 
     // ── native `bool` parameters ──────────────────────────────────────────────
@@ -6292,6 +6299,9 @@ export class RustTranspiler extends BaseTranspiler {
         parseToInt: [ 'number', 'oint' ], incrementingNonce: [ 'int', 'int' ], symbol: [ 'string', 'str' ],
         findTimeframe: [ 'Str', 'ostr' ], networkIdToCode: [ 'Str', 'ostr' ], requestId: [ 'int', 'int' ],
         isPostOnly: [ 'boolean', 'bool' ],
+        usesPrivateKey: [ 'boolean', 'bool' ],
+        isGateFuturesContractWithDecimalSize: [ 'boolean', 'bool' ],
+        paramsToString: [ 'string', 'str' ],
         // pg: the precision formatters answer `Str` (overrides may spell `string`); every return is a string or undefined
         amountToPrecision: [ 'Str|string', 'ostr' ], priceToPrecision: [ 'Str|string', 'ostr' ], costToPrecision: [ 'Str|string', 'ostr' ],
         feeToPrecision: [ 'Str|string', 'ostr' ], currencyToPrecision: [ 'Str|string', 'ostr' ],
@@ -6488,6 +6498,10 @@ export class RustTranspiler extends BaseTranspiler {
         const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         if (local === kind) return super.printIdentifier(inner);
         if (local !== undefined && `o${local}` === kind) return `Some(${super.printIdentifier(inner)})`;
+        if (kind === 'bool' && local === undefined && this.rustBoolTypedReturnUse(inner)) {
+            const declaration: Node | undefined = this.rustDeclaredNode(inner);
+            if (declaration !== undefined && isVariableDeclaration(declaration) && this.rustDeclarationPrintsNativeBool(declaration)) return super.printIdentifier(inner);
+        }
         const callKind = this.rustBaseTypedReturnKind(inner);
         if (callKind !== undefined && `o${kind}` === callKind) return `${this.rustBaseTypedBareText(this.unwrapParens(inner))}.unwrap_or_default()`;
         const native = this.rustBaseTypedText(kind, inner) ?? (local === undefined ? this.rustScalarNativeText(kind, inner) : undefined);
@@ -13024,6 +13038,8 @@ export class RustTranspiler extends BaseTranspiler {
             // 51k: `s += n.toString ()` with `n` an `i64` local: the decimal text `Display` gave its `Int` box
             if (isCallExpression(right) && right.arguments.length === 0 && isPropertyAccessExpression(right.expression) && String(right.expression.name.text) === 'toString'
                 && isIdentifier(right.expression.expression) && this.rustScalarLocalOf(right.expression.expression)?.kind === 'int') return dry ? '_' : `${name}.push_str(&${super.printIdentifier(right.expression.expression)}.to_string())`;
+            // a call of a method the typed-return table prints `-> String` appends its own text
+            if (isCallExpression(right) && this.rustBaseTypedReturnKind(right) === 'str') return dry ? '_' : `${name}.push_str(&${this.rustBaseTypedBareText(right)})`;
             const joined = this.rustStrPushValueText(node.left, right, dry);
             if (joined !== undefined) return dry ? '_' : `${name}.push_str(&${joined})`;
             if (!isBinaryExpression(right) || right.operatorToken.kind !== SyntaxKind.PlusToken) return undefined;

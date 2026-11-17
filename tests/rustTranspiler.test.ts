@@ -26189,3 +26189,64 @@ describe('a sync ws method types a required string slot a caller fills with its 
         expect(out).toMatch(/fn forgetHash\(&self, messageHash: Value\)/);
     });
 });
+
+describe('rust venue usesPrivateKey prints -> bool', () => {
+    const base = "export default class Exchange {\n    privateKey: string = '';\n    apiKey: string = '';\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    usesPrivateKey (): boolean {\n        const privateKeyDefined = this.privateKey !== undefined && this.privateKey !== '';\n        const apiKeyDefined = this.apiKey !== undefined && this.apiKey !== '';\n        if (privateKeyDefined && apiKeyDefined) {\n            throw new Error ('x');\n        }\n        return privateKeyDefined;\n    }\n"
+        + "    signIt (): string {\n        const usesPrivKey = this.usesPrivateKey ();\n        return usesPrivKey ? this.privateKey : this.apiKey;\n    }\n}\n";
+    test('the returned local is a native bool and the caller reads the bool as is', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rb1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('pub fn usesPrivateKey(&self) -> bool {');
+        expect(out).toMatch(/let mut privateKeyDefined: bool = /);
+        expect(out).toContain('return privateKeyDefined;');
+        expect(out).not.toContain('self.usesPrivateKey().as_bool()');
+    });
+});
+
+describe('rust venue paramsToString prints -> String', () => {
+    const base = "export default class Exchange {\n    parseToInt (x: any): number { return x; }\n    safeString (o: any, k: any, d: any = undefined): string { return o[k] ?? d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    paramsToString (object: any, level: number): string {\n        const depth = this.parseToInt (level);\n        if (typeof object === 'string') {\n            return object;\n        }\n        let returnString: string = '';\n        const keys = Object.keys (object);\n        for (let i = 0; i < keys.length; i++) {\n            const key = this.safeString (keys, i, '');\n            returnString += key;\n            returnString += this.paramsToString (object[key], depth + 1);\n        }\n        return returnString;\n    }\n"
+        + "    signIt (params: any): string {\n        const strSortKey = this.paramsToString (params, 0);\n        return 'a' + strSortKey;\n    }\n}\n";
+    test('the accumulator is a String and the recursive call appends its text', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rb2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toMatch(/pub fn paramsToString\(&self, [^)]*\) -> String \{/);
+        expect(out).toContain('let mut returnString: String = ');
+        expect(out).toContain('returnString.push_str(&self.paramsToString(');
+        expect(out).toContain('let mut strSortKey: String = self.paramsToString(');
+    });
+});
+
+describe('rust venue isGateFuturesContractWithDecimalSize prints -> bool', () => {
+    const base = "export default class Exchange {\n    hold (x: any): any { return x; }\n    safeBool (o: any, k: string, d: boolean = undefined): boolean { return o[k] ?? d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    isGateFuturesContractWithDecimalSize (market: any): boolean {\n        const isSwap = this.safeBool (market, 'swap', false);\n        const enableDecimal = this.safeBool (market, 'enable_decimal', false);\n        return isSwap && enableDecimal;\n    }\n"
+        + "    orderIt (market: any, amount: string) {\n        let useDecimal = false;\n        if (amount === 'x') {\n            useDecimal = this.isGateFuturesContractWithDecimalSize (market);\n        }\n        if (useDecimal) {\n            return this.hold (1);\n        }\n        return this.hold (2);\n    }\n}\n";
+    test('the seeded false local is a native bool written from the typed call', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rb4-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toMatch(/pub fn isGateFuturesContractWithDecimalSize\(&self, [^)]*\) -> bool \{/);
+        expect(out).toContain('let mut useDecimal: bool = false;');
+    });
+});
