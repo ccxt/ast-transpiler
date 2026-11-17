@@ -1700,3 +1700,11 @@ export interface GoTranspiler {
     goBaseCacheField(node: any): string | undefined;
     goBaseCacheInitText(node: any): string | undefined;
 }
+export interface GoTranspiler {
+    goInHoistTerms(node: any, reads: any[]): boolean;
+    goInHoistLeaf(node: any): boolean;
+    goInHoistRead(inNode: any, statement: any): any;
+    goInHoistName(inNode: any): string | undefined;
+    goInHoistCondition(condition: any, statement: any, minimum: number): any[] | undefined;
+    goInHoistPrint(node: any, identation: any, hoisted: any[], print: () => string): string | undefined;
+}

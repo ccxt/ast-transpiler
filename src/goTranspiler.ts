@@ -29384,6 +29384,14 @@ GoTranspiler.prototype.goNilProvenStringDeref = function (node) {
 // what InOp answers; the other terms must be pure leaves, so nothing they do runs in another order.
 // Only Go-string keys (literal or `string`-typed): a `*string` key keeps the existing rules.
 const GO_IN_HOIST_STRING_CALLS = new Set ([ 'indexOf', 'startsWith', 'endsWith', 'includes' ]);
+export interface GoTranspiler {
+    goInHoistTerms(node, reads: any[]): boolean;
+    goInHoistLeaf(node): boolean;
+    goInHoistRead(inNode, statement): any;
+    goInHoistName(inNode): string | undefined;
+    goInHoistCondition(condition, statement, minimum: number): any[] | undefined;
+    goInHoistPrint(node, identation, hoisted: any[], print: () => string): string | undefined;
+}
 
 // every term is a pure leaf, a comparison of pure leaves, a string query on a local, or an `in` read (collected)
 GoTranspiler.prototype.goInHoistTerms = function (node, reads: any[]): boolean {
