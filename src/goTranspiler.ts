@@ -12542,7 +12542,7 @@ const ORDERED_COMPARISON_OPERATORS: { [kind: number]: string } = {
 // still prints this field as a plain Go string. The credential fields are the same
 // kind: go/v4/exchange.go declares them `string` (an absent key is "" not a nil box).
 const GO_STRING_FIELD_NAMES = [ 'Id', 'Name', 'Version', 'Url', 'Hostname', 'UserAgent',
-    'ApiKey', 'Secret', 'Uid', 'Password', 'AccountId', 'PrivateKey', 'WalletAddress' ];
+    'ApiKey', 'Secret', 'Uid', 'Password', 'AccountId', 'PrivateKey', 'WalletAddress', 'Login', 'Twofa' ];
 
 // the hand-written SafeString-family methods (go/v4/exchange_safe.go) return a fresh
 // non-nil pointer whenever the call passes a non-nil default: the value branch takes
@@ -12578,7 +12578,7 @@ const GO_FIELD_CONTAINER_TYPES_NATIVE: { [name: string]: string } = Object.fromE
     ...[
         'Options', 'Has', 'Api', 'TransformedApi', 'RequiredCredentials', 'HttpExceptions', 'Timeframes', 'Features',
         'Exceptions', 'Precision', 'UserAgents', 'TokenBucket', 'CommonCurrencies', 'ProxyDictionaries',
-        'WsClients', 'Clients', 'Limits', 'Fees', 'Status', 'Countries',
+        'WsClients', 'Clients', 'Limits', 'Fees', 'Status', 'Countries', 'Headers',
     ].map((name) => [ name, 'map[string]any' ]),
     ...GO_SYNC_MAP_FIELDS.filter((name) => name !== 'Options').map((name) => [ name, '*sync.Map' ]),
 ]);
@@ -15106,6 +15106,20 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const constant = ((declaration?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
         const table = (constant && (init?.expression?.kind === SyntaxKind.ThisKeyword)) ? this.goMarketTable(init) : undefined;
         return (table === undefined) ? undefined : { add: table.add, owner: init.expression };
+    }
+
+    // `this.<f> = this.omit (this.<f>, ..)` on a hand-written `map[string]any` field: Omit of a map is a fresh
+    // map[string]any (the OmitDict twin), so the field keeps its Go type without an assertion
+    goMapFieldOmitWriteText(node): string | undefined {
+        const right: any = this.goUnwrapParenthesizedNode(node.right);
+        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (this.goFieldContainerTypeNative(node.left) !== 'map[string]any')
+            || (right?.kind !== SyntaxKind.CallExpression) || (right.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (right.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (right.expression.name?.text !== 'omit')
+            || ((right.arguments?.length ?? 0) < 2) || (this.goFieldContainerTypeNative(this.goUnwrapParenthesizedNode(right.arguments[0])) !== 'map[string]any')) {
+            return undefined;
+        }
+        const text = this.printNode(right, 0).trim();
+        return text.startsWith('this.Omit(') ? `${this.printNode(node.left, 0)} = this.OmitDict(${text.slice('this.Omit('.length)}` : undefined;
     }
 
     // `recv.<table> = v` as a statement: the field takes a whole new map (nil, an empty map, or the map
@@ -23406,6 +23420,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         'Balance': 'map[string]any',
         'Urls': 'map[string]any',
         'HttpExceptions': 'map[string]any',
+        'Headers': 'map[string]any',  // the default request headers, `Dictionary<string>` in the TS base
     };
 
     // the market/currency tables are plain `map[string]any` fields of BaseExchange (go/v4/exchange.go),
@@ -27057,7 +27072,7 @@ ${this.getIden(identation)}${returnStatement}`;
             const typedWrite = this.goFirstDefinedArm([() => this.goOrderBookCacheWrite(node), () => this.goBaseCacheInitText(node),
                 () => (((right?.kind === SyntaxKind.ObjectLiteralExpression) && (right.properties?.length ?? 0) === 0 && (this.goWsCacheEmptyLiteral(left) !== undefined))
                     ? `${this.printNode(left, 0)} = ${this.goWsCacheEmptyLiteral(left)}{}` : undefined),
-                () => this.goMarketTableWriteText(node), () => this.goPointerWriteText(node, identation), () => this.goBalanceSafeBalanceWrite(node, identation)]);
+                () => this.goMarketTableWriteText(node), () => this.goMapFieldOmitWriteText(node), () => this.goPointerWriteText(node, identation), () => this.goBalanceSafeBalanceWrite(node, identation)]);
             if (typedWrite !== undefined) {
                 return typedWrite;
             }
