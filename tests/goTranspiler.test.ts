@@ -15391,3 +15391,99 @@ describe('ral-87g5 R1 a bool option local that is its own default', () => {
         expect(out).not.toContain('uta, rest = this.HandleOptionBoolAndParams(');
     });
 });
+
+describe('ral-87g6 omit locals rebound by a joined pair map slot', () => {
+    const run = (body: string) => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    extend (...a) { return {}; }\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    handleOptionBoolAndParams (params: Dict, m: string, o: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n" +
+        body +
+        "}\n";
+        return inst.transpileGo(input).content;
+    };
+    test('a pair write with a literal default keeps the omit local a map', () => {
+        const output = run(
+        "    f (params: Dict = {}) {\n" +
+        "        let paramsOmitted = this.omit (params, 'internal');\n" +
+        "        let paginate = false;\n" +
+        "        [ paginate, paramsOmitted ] = this.handleOptionBoolAndParams (paramsOmitted, 'f', 'paginate', false);\n" +
+        "        if (paginate) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        paramsOmitted = this.omit (paramsOmitted, 'until');\n" +
+        "        return this.safeString (paramsOmitted, 'x');\n" +
+        "    }\n");
+        expect(output).toContain('var paramsOmitted map[string]any = MapTyped(this.Omit(params, \"internal\"))');
+        expect(output).toContain('paginate, paramsOmitted = this.HandleOptionBoolAndParams(paramsOmitted, \"f\", \"paginate\", false)');
+    });
+    test('a variable default (the Nullable twin, a []any holder) keeps the box', () => {
+        const output = run(
+        "    f (d, params: Dict = {}) {\n" +
+        "        let paramsOmitted = this.omit (params, 'internal');\n" +
+        "        let paginate = false;\n" +
+        "        [ paginate, paramsOmitted ] = this.handleOptionBoolAndParams (paramsOmitted, 'f', 'paginate', d);\n" +
+        "        paramsOmitted = this.omit (paramsOmitted, 'until');\n" +
+        "        return this.safeString (paramsOmitted, 'x');\n" +
+        "    }\n");
+        expect(output).toContain('var paramsOmitted any = this.Omit(params, \"internal\")');
+    });
+});
+
+describe('ral-87g6 a pair-rebound omit local re-omitted from another local keeps the box', () => {
+    test('okx createOrderRequest shape', () => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    omit (a, ...k) { return a; }\n" +
+        "    safeString (a, b) { return a; }\n" +
+        "    handleOptionBoolAndParams (params: Dict, m: string, o: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n" +
+        "    f (x, params: Dict = {}) {\n" +
+        "        let paramsOmitted = this.omit (params, 'internal');\n" +
+        "        let paginate = false;\n" +
+        "        [ paginate, paramsOmitted ] = this.handleOptionBoolAndParams (paramsOmitted, 'f', 'paginate', false);\n" +
+        "        if (x) {\n" +
+        "            paramsOmitted = this.omit (params, 'cost');\n" +
+        "        }\n" +
+        "        return this.safeString (paramsOmitted, 'x');\n" +
+        "    }\n" +
+        "}\n";
+        const output = inst.transpileGo(input).content;
+        expect(output).toContain('var paramsOmitted any = this.Omit(params, "internal")');
+    });
+});
+
+describe('ral-87g6 a map copy rebound only by a pair write needs a native use', () => {
+    const run = (tail: string) => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input =
+        "type Dict = { [key: string]: any };\n" +
+        "class T {\n" +
+        "    extend (...a) { return {}; }\n" +
+        "    handleOptionBoolAndParams (params: Dict, m: string, o: string, d: boolean = false): [boolean, Dict] { return [ d, params ]; }\n" +
+        "    f (params: Dict = {}) {\n" +
+        "        let paramsLoop = params;\n" +
+        "        let flag = false;\n" +
+        "        [ flag, paramsLoop ] = this.handleOptionBoolAndParams (paramsLoop, 'f', 'flag', false);\n" +
+        tail +
+        "    }\n" +
+        "}\n";
+        return inst.transpileGo(input).content;
+    };
+    test('a copy only handed to helpers keeps the box', () => {
+        const output = run("        return this.extend ({}, paramsLoop);\n");
+        expect(output).toContain('var paramsLoop any = params');
+    });
+    test('a copy read natively is a map local', () => {
+        const output = run("        if (paramsLoop['x'] === undefined) {\n            return flag;\n        }\n        return this.extend ({}, paramsLoop);\n");
+        expect(output).toContain('var paramsLoop map[string]any = params');
+    });
+});

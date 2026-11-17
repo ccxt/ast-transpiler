@@ -34891,6 +34891,9 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
             if (target !== declaration) {
                 return (target === undefined); // unresolved: fail closed
             }
+            if (ral87g6PairMapWrite(n)) {
+                return ral87g6ForeignOmitWrite(goTranspiler, scope, declaration); // 87g6: the joined pair's map slot
+            }
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
                 const write = ral84g6OmitCall(parent.right);
                 // `x = this.omit (x, ..)` re-omits the local itself, a map by this very proof
@@ -34913,6 +34916,29 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
     }
     ral84g6OmitVerdicts.set(declaration, verdict);
     return verdict;
+}
+// 87g6 (A): `[ v, x ] = this.handleOptionBoolAndParams (.., <literal>)` (and the other hand-written pair twins the
+// tuple-result join prints as `v, x = this.HandleX(..)`): slot 1 is the twin's `map[string]any`, written with no
+// conversion, so a map local may take it. Decided by the nil-seed join's own slot table (tupleJoinWriteType).
+function ral87g6PairMapWrite(n): boolean {
+    const pattern = n?.parent;
+    const assignment = pattern?.parent;
+    return (n?.kind === SyntaxKind.Identifier) && (pattern?.kind === SyntaxKind.ArrayLiteralExpression)
+        && (assignment?.kind === SyntaxKind.BinaryExpression) && (assignment.left === pattern)
+        && (assignment.parent?.kind === SyntaxKind.ExpressionStatement)
+        && (tupleJoinWriteType(assignment, n.text) === GO_SAFE_DICT_LOCAL_TYPE);
+}
+// a local rebound by a pair write may be re-omitted only from itself: `x = this.omit (y, ..)` with y another local asks
+// y's proof, which follows y's producer back to x while x's own verdict is in flight (the re-entry answers the box and
+// the write sites keep that answer: okx createOrderRequest `orderParams`, gate 15588 buildGO)
+function ral87g6ForeignOmitWrite(goTranspiler: GoTranspiler, scope, declaration): boolean {
+    const name = declaration.name.text;
+    return goTranspiler.hasNodeWhere(scope, (n) => {
+        const write = ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)) ? ral84g6OmitCall(n.right) : undefined;
+        const source = write?.arguments[0];
+        return (write !== undefined) && !((source?.kind === SyntaxKind.Identifier) && (source.getText() === name));
+    });
 }
 const ral84g6ShippedDictUnbox = GoTranspiler.prototype.goSafeDictLocalUnbox;
 GoTranspiler.prototype.goSafeDictLocalUnbox = function (declaration) {
@@ -34971,6 +34997,7 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
         return false;
     }
     let rebinds = 0;
+    let pairWrites = 0;
     const unsafe = this.hasNodeWhere(scope, (n) => {
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
             return false;
@@ -34989,13 +35016,21 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
                 return false;
             }
         }
+        if (ral87g6PairMapWrite(n) && ral87g6ForeignOmitWrite(this, scope, declaration)) {
+            return true;
+        }
         if (ral84g6MapWriteIsMap(this, declaration, n, parent)) {
             rebinds += 1;
             return false;
         }
+        if (ral87g6PairMapWrite(n)) {
+            // a pair write alone is not a native use: the copy needs one of its own (nil test, x[k], omit)
+            pairWrites += 1;
+            return false;
+        }
         return ccxtGoProducerUseRebinds(n) || isDestructuringTarget(n) || ccxtGoWriteSiteShippedVeto(this, n, parent, goType);
     });
-    return !unsafe && (rebinds > 0);
+    return !unsafe && ((rebinds > 0) || ((pairWrites > 0) && ral84g6HasNativeUse(this, scope, declaration)));
 };
 
 // ---- 84g7: ternary locals asked while a parameter's GetArg type is being decided -----------------
