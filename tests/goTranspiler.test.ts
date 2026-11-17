@@ -17109,3 +17109,124 @@ describe('ral-92g8 R4 venue string[] producers over a literal-defaulted safeList
         expect(out).toContain('OrderFlags(flags any) any {');
     });
 });
+
+describe('nil-seeded scalar pointers joined through plain copies', () => {
+    const BASE = 'export type Dict = { [key: string]: unknown };\n'
+        + 'export type Str = string | undefined;\n'
+        + 'export type Num = number | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    safeString (a: Dict, k: string, d: Str = undefined): Str { return d; }\n'
+        + '    safeNumber (a: Dict, k: string, d: Num = undefined): Num { return d; }\n'
+        + '    safeDict (a: Dict, k: Str, d: Dict = undefined): Dict { return d; }\n'
+        + '}\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g93-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange, { Dict, Str, Num } from './base/Exchange.js';\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('two string seeds copied into each other take *string with native nil tests', () => {
+        const out = run('    f (p: Dict): Dict {\n'
+            + '        let sell: Str = undefined;\n'
+            + '        let buy: Str = undefined;\n'
+            + "        sell = this.safeString (p, 'sell');\n"
+            + "        buy = this.safeString (p, 'buy');\n"
+            + '        if (buy === undefined) {\n'
+            + '            buy = sell;\n'
+            + '        }\n'
+            + '        if (sell === undefined) {\n'
+            + '            sell = buy;\n'
+            + '        }\n'
+            + "        return { 'buy': buy, 'sell': sell };\n"
+            + '    }\n');
+        expect(out).toContain('var sell *string = nil');
+        expect(out).toContain('var buy *string = nil');
+        expect(out).toContain('if buy == nil {');
+        expect(out).toContain('buy = sell');
+    });
+    test('a number seed copied into another seed takes *float64', () => {
+        const out = run('    f (p: Dict): Dict {\n'
+            + '        let bid: Num = undefined;\n'
+            + "        if (p['x']) {\n"
+            + "            bid = this.safeNumber (p, 'bid');\n"
+            + '        }\n'
+            + '        let mid: Num = undefined;\n'
+            + '        if (bid !== undefined) {\n'
+            + '            mid = bid;\n'
+            + '        }\n'
+            + "        return { 'bid': bid, 'mid': mid };\n"
+            + '    }\n');
+        expect(out).toContain('var bid *float64 = nil');
+        expect(out).toContain('var mid *float64 = nil');
+        expect(out).toContain('if bid != nil {');
+    });
+    test('a pointer seed read as the guarded arm of its own nil test takes the pointer type', () => {
+        const out = run('    f (p: Dict, first: Num): Dict {\n'
+            + '        let expiry: Num = undefined;\n'
+            + "        if (p['x']) {\n"
+            + "            expiry = this.safeNumber (p, 'e');\n"
+            + '        }\n'
+            + '        const end = (expiry !== undefined) ? expiry : first;\n'
+            + "        return { 'end': end };\n"
+            + '    }\n');
+        expect(out).toContain('var expiry *float64 = nil');
+    });
+    test('a string seed in a guarded arm keeps the box', () => {
+        const out = run('    f (p: Dict): Dict {\n'
+            + '        let body: Str = undefined;\n'
+            + "        if (p['x']) {\n"
+            + "            body = this.safeString (p, 'b');\n"
+            + '        }\n'
+            + "        const payload = (body === undefined) ? '' : body;\n"
+            + "        return { 'payload': payload };\n"
+            + '    }\n');
+        expect(out).toContain('var body any = nil');
+    });
+    test('a sibling block const of the same name is not a read of the nil seed', () => {
+        const out = run('    f (p: Dict, xs: string[]): Dict[] {\n'
+            + '        const result = [];\n'
+            + "        if (p['v2']) {\n"
+            + '            for (let i = 0; i < 2; i++) {\n'
+            + '                let base: Str = undefined;\n'
+            + '                let quote: Str = undefined;\n'
+            + "                if (p['x']) {\n"
+            + "                    base = this.safeString (p, 'b');\n"
+            + "                    quote = this.safeString (p, 'q');\n"
+            + '                }\n'
+            + '                if ((base === undefined) || (quote === undefined)) {\n'
+            + '                    continue;\n'
+            + '                }\n'
+            + "                result.push ({ 'symbol': base + '/' + quote, 'base': base, 'quote': quote });\n"
+            + '            }\n'
+            + '        } else {\n'
+            + '            for (let j = 0; j < xs.length; j++) {\n'
+            + '                const quote: string = xs[j];\n'
+            + '                result.push (this.safeDict (p, quote, {}));\n'
+            + '            }\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n');
+        expect(out).toContain('var quote *string = nil');
+    });
+    test('a copy-linked component with a foreign write keeps the box', () => {
+        const out = run('    f (p: Dict): Dict {\n'
+            + '        let a: Str = undefined;\n'
+            + '        let b: Str = undefined;\n'
+            + "        a = this.safeString (p, 'a');\n"
+            + "        b = 'lit';\n"
+            + '        if (a === undefined) {\n'
+            + '            a = b;\n'
+            + '        }\n'
+            + "        return { 'a': a };\n"
+            + '    }\n');
+        expect(out).toContain('var a any = nil');
+    });
+});

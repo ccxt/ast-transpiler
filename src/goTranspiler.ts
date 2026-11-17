@@ -4324,8 +4324,11 @@ function ccxtGoAnnotatedReturnTypes (goTranspiler, node) {
     if ((key === 'Str') || (key === 'Dict') || (key === 'ExchangeOptions') || (key === 'Market') || (key === 'List') || (key === 'Bool')) {
         return CCXT_GO_ANNOTATED_RETURN_NATIVE[key];
     }
-    if (((key === 'Num') || (key === 'Int')) && ccxtGo92NumParseMethod (node)) {
-        return [ CCXT_GO_92_PARSE_POINTER[key] ]; // 92g1 R1 / R2: a parse* `Num` / `Int` is a scalar pointer or nil
+    if ((key === 'Num') && ccxtGo92NumParseMethod (node)) {
+        return ccxtGoNumReturnsAreParseNumber (node) ? [ '*float64' ] : undefined; // a parse* `Num`: *float64 or nil
+    }
+    if ((key === 'Int') && ccxtGo92NumParseMethod (node)) {
+        return [ CCXT_GO_92_PARSE_POINTER[key] ]; // a parse* `Int` is a scalar pointer or nil
     }
     const general = ccxtGoGeneralAnnotatedReturnTypes (node, type, key);
     if (general !== undefined) {
@@ -4818,6 +4821,13 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
     if (scope === undefined) {
         return undefined;
     }
+    const copyComponent = ccxtGo93CopyComponentJoin (goTranspiler, declaration); // nil seeds joined by plain copies
+    if (copyComponent !== null) {
+        return copyComponent;
+    }
+    const copyReadTypes = [];
+    let guardedArmRead = false;
+    let concatRead = false;
     // the join over every later write: all of them must be whole calls whose proven
     // Go return type is the same scalar pointer
     let joinType;
@@ -4835,13 +4845,13 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
         if (readUnproven) {
             return;
         }
-        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === varName) && (n !== name)) {
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === varName) && (n !== name) && !ccxtGo93OtherBinding (goTranspiler, n, declaration)) {
             const parent = n.parent;
             const isWrite = (parent !== undefined) && (parent.kind === ts.SyntaxKind.BinaryExpression)
                 && (parent.left === n) && (parent.operatorToken.kind === ts.SyntaxKind.EqualsToken);
             if (isWrite) {
                 writeCount += 1;
-                const written = goTranspiler.goTypeOfInitializer (parent.right, goTranspiler.printNode (parent.right, 0));
+                const written = ccxtGo93CopyType (goTranspiler, parent.right) ?? goTranspiler.goTypeOfInitializer (parent.right, goTranspiler.printNode (parent.right, 0));
                 parsedNumberWrite = parsedNumberWrite || ccxtGoIsOneArgParseNumber (goTranspiler, parent.right);
                 if ((written === undefined) || ((joinType !== undefined) && (written !== joinType))) {
                     readUnproven = true; // divergent or unprovable write
@@ -4858,6 +4868,12 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
                     literalCompareRead = true;      // 90g1 R2: *string join only (checked below)
                 } else if (ccxtGo90StringPtrArgument (goTranspiler, n)) {
                     stringPtrArgumentRead = true;   // 90g1 R3: *string join with a native read only (checked below)
+                } else if (ccxtGo93ConcatOperand (n)) {
+                    concatRead = true;              // a `+` operand: Add derefScalars, a nil-proven deref prints `*x` (checked below)
+                } else if (ccxtGo93GuardedTernaryArm (goTranspiler, n, declaration)) {
+                    guardedArmRead = true;          // the non-nil arm of `(x !== undefined) ? x : y` (checked below)
+                } else if (ccxtGo93CopyTargetType (goTranspiler, n) !== undefined) {
+                    copyReadTypes.push (ccxtGo93CopyTargetType (goTranspiler, n)); // a copy into a member of the same component
                 } else {
                     readUnproven = true;
                     return;
@@ -4880,6 +4896,15 @@ export function ccxtGoNilDeclaredJoinType (goTranspiler, declaration) {
         return undefined;
     }
     if (NIL_DECLARED_SCALAR_POINTER_TYPES.indexOf (joinType) < 0) {
+        return undefined;
+    }
+    if (copyReadTypes.some ((t) => t !== joinType)) {
+        return undefined;
+    }
+    if (guardedArmRead && ((joinType === '*string') || !nilTestRead)) {
+        return undefined;
+    }
+    if (concatRead && ((joinType !== '*string') || !(nilTestRead || literalCompareRead))) {
         return undefined;
     }
     if (stringOnlyRead && (joinType !== '*string')) {
@@ -38866,11 +38891,19 @@ function goTypedVenueProducerTypeUncached (goTranspiler, node): string | undefin
     if ((alias !== 'Num') || (annotation !== 'Num')) {
         return undefined;
     }
+    return ccxtGoNumReturnsAreParseNumber (node) ? '*float64' : undefined;
+}
+// a `Num` method whose every return is absent or `this.parseNumber (..)` (base ParseNumber returns *float64),
+// with at least one value path: the one proof both the parse* `Num` mapping and the venue Num producer use
+function ccxtGoNumReturnsAreParseNumber (node): boolean {
+    if (node?.body === undefined) {
+        return false;
+    }
     let sawValue = false;
-    for (const r of returns) {
+    for (const r of collectReturnStatements (node.body)) {
         const e = r.expression;
         if (e === undefined) {
-            return undefined;
+            return false;
         }
         if (isAbsentExpression (e)) {
             continue;
@@ -38878,11 +38911,11 @@ function goTypedVenueProducerTypeUncached (goTranspiler, node): string | undefin
         const callee = (e.kind === SyntaxKind.CallExpression) ? e.expression : undefined;
         if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
             || (callee.name?.text !== 'parseNumber')) {
-            return undefined;
+            return false;
         }
         sawValue = true;
     }
-    return sawValue ? '*float64' : undefined;
+    return sawValue;
 }
 // the retyped producer a `this.m (..)` call binds to, with its Go type
 function goTypedVenueCallType (goTranspiler, call): string | undefined {
@@ -39108,3 +39141,190 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     }
     return printReturnStatementBaseTypedVenue.call (this, node, identation);
 };
+
+// ===== nil-seeded scalar pointers joined through plain copies (begin) =====
+// `let a: Num = undefined; let b: Num = undefined; a = this.safeNumber (..); b = a;`: each local alone is refused
+// (a copy is neither a proven write nor a safe read), so the copy-linked nil seeds of one function are joined as one
+// component. Every member is re-checked by the shipped join with the others assumed at the candidate pointer type; the
+// component takes that type only when every member agrees and at least half of them carry a native nil test.
+const CCXT_GO_93_COPY_ASSUMED = new Map<object, string>();
+const CCXT_GO_93_COPY_VERDICTS = new WeakMap<object, string | undefined>();
+function ccxtGo93NilSeedOf (goTranspiler: GoTranspiler, node) {
+    while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression)) {
+        node = node.expression;
+    }
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    const declaration = ccxtGoParamDeclarationOf (goTranspiler, node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || !isNilDeclaredInitializer (declaration.initializer) || (declaration.parent?.declarations?.length !== 1)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.VariableStatement)) {
+        return undefined;
+    }
+    return declaration;
+}
+// `x = y` statement-level copies between two nil seeds of the same function
+function ccxtGo93CopyPair (goTranspiler: GoTranspiler, assignment) {
+    if ((assignment?.kind !== SyntaxKind.BinaryExpression) || (assignment.operatorToken.kind !== SyntaxKind.EqualsToken)
+        || (assignment.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return undefined;
+    }
+    const target = ccxtGo93NilSeedOf (goTranspiler, assignment.left);
+    const source = ccxtGo93NilSeedOf (goTranspiler, assignment.right);
+    if ((target === undefined) || (source === undefined) || (target === source)
+        || (goTranspiler.goEnclosingFunction (target) !== goTranspiler.goEnclosingFunction (source))) {
+        return undefined;
+    }
+    return { target, source };
+}
+function ccxtGo93CopyType (goTranspiler: GoTranspiler, right): string | undefined {
+    const pair = ccxtGo93CopyPair (goTranspiler, right?.parent);
+    return ((pair !== undefined) && (pair.source.parent?.parent !== undefined)) ? CCXT_GO_93_COPY_ASSUMED.get (pair.source) : undefined;
+}
+function ccxtGo93CopyTargetType (goTranspiler: GoTranspiler, read): string | undefined {
+    let node = read;
+    while ((node.parent?.kind === SyntaxKind.ParenthesizedExpression) || (node.parent?.kind === SyntaxKind.AsExpression)) {
+        node = node.parent;
+    }
+    const pair = ((node.parent?.right === node)) ? ccxtGo93CopyPair (goTranspiler, node.parent) : undefined;
+    return (pair !== undefined) ? CCXT_GO_93_COPY_ASSUMED.get (pair.target) : undefined;
+}
+// null: not a copy-linked nil seed (the shipped join decides); otherwise the component's verdict
+function ccxtGo93CopyComponentJoin (goTranspiler: GoTranspiler, declaration): string | undefined | null {
+    if (CCXT_GO_93_COPY_ASSUMED.has (declaration)) {
+        return null;
+    }
+    if (CCXT_GO_93_COPY_VERDICTS.has (declaration)) {
+        return CCXT_GO_93_COPY_VERDICTS.get (declaration);
+    }
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const pairs = [];
+    const visit = (n) => {
+        const pair = ccxtGo93CopyPair (goTranspiler, n);
+        if (pair !== undefined) {
+            pairs.push (pair);
+        }
+        n.forEachChild (visit);
+    };
+    scope?.forEachChild (visit);
+    const members = new Set<object>([ declaration ]);
+    let grew = true;
+    while (grew) {
+        grew = false;
+        for (const p of pairs) {
+            if (members.has (p.target) !== members.has (p.source)) {
+                members.add (p.target);
+                members.add (p.source);
+                grew = true;
+            }
+        }
+    }
+    if (members.size < 2) {
+        return null;
+    }
+    for (const m of members) {
+        CCXT_GO_93_COPY_VERDICTS.set (m, undefined); // seeded: a member's scan re-enters the component
+    }
+    let verdict: string | undefined;
+    for (const candidate of NIL_DECLARED_SCALAR_POINTER_TYPES) {
+        for (const m of members) {
+            CCXT_GO_93_COPY_ASSUMED.set (m, candidate);
+        }
+        let agrees = true;
+        try {
+            for (const m of members) {
+                if (ccxtGoNilDeclaredJoinType (goTranspiler, m) !== candidate) {
+                    agrees = false;
+                    break;
+                }
+            }
+        } finally {
+            for (const m of members) {
+                CCXT_GO_93_COPY_ASSUMED.delete (m);
+            }
+        }
+        if (agrees) {
+            verdict = candidate;
+            break;
+        }
+    }
+    const tested = [ ...members ].filter ((m) => ccxtGo92HasNilTest (goTranspiler, m)).length;
+    if ((verdict !== undefined) && (2 * tested < members.size)) {
+        verdict = undefined;
+    }
+    for (const m of members) {
+        CCXT_GO_93_COPY_VERDICTS.set (m, verdict);
+        if (verdict !== undefined) {
+            CCXT_GO_90_POINTER_JOINS.set (m, verdict); // consumers must see the pointer
+        }
+    }
+    return verdict;
+}
+// the copy write `x = y` of a member types as the component's pointer (assumed while deciding, then the verdict),
+// so the shipped write checks (goLocalIsSafeToType) accept it
+const goTypeOfInitializerBase93Copy = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string): string | undefined {
+    const pair = ccxtGo93CopyPair (this, initializer?.parent);
+    if ((pair !== undefined) && (pair.target.parent !== undefined)) {
+        const assumed = CCXT_GO_93_COPY_ASSUMED.get (pair.source);
+        if (assumed !== undefined) {
+            return assumed;
+        }
+        const decided = CCXT_GO_93_COPY_VERDICTS.get (pair.source);
+        if ((decided !== undefined) && (CCXT_GO_93_COPY_VERDICTS.get (pair.target) === decided)) {
+            return decided;
+        }
+    }
+    return goTypeOfInitializerBase93Copy.call (this, initializer, printedValue);
+};
+// `(x !== undefined) ? x : y` / `(x === undefined) ? y : x`: the arm only runs with x non-nil, so it hands on a
+// non-nil pointer; admitted where the whole conditional is a local's initializer or an object-literal value
+function ccxtGo93GuardedTernaryArm (goTranspiler: GoTranspiler, read, declaration): boolean {
+    let arm = read;
+    while ((arm.parent?.kind === SyntaxKind.ParenthesizedExpression) || (arm.parent?.kind === SyntaxKind.AsExpression)) {
+        arm = arm.parent;
+    }
+    const conditional = arm.parent;
+    if ((conditional?.kind !== SyntaxKind.ConditionalExpression) || (conditional.condition === arm)) {
+        return false;
+    }
+    let test = conditional.condition;
+    while (test?.kind === SyntaxKind.ParenthesizedExpression) {
+        test = test.expression;
+    }
+    if ((test?.kind !== SyntaxKind.BinaryExpression) || (COMPARISON_TOKENS.indexOf (test.operatorToken.kind) < 0)) {
+        return false;
+    }
+    const tested = isUndefinedLiteral (test.right) ? test.left : (isUndefinedLiteral (test.left) ? test.right : undefined);
+    if ((tested?.kind !== SyntaxKind.Identifier) || (ccxtGoParamDeclarationOf (goTranspiler, tested) !== declaration)) {
+        return false;
+    }
+    const negated = (test.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken) || (test.operatorToken.kind === SyntaxKind.ExclamationEqualsToken);
+    if ((negated ? conditional.whenTrue : conditional.whenFalse) !== arm) {
+        return false;
+    }
+    let outer = conditional;
+    while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        outer = outer.parent;
+    }
+    const host = outer.parent;
+    return ((host?.kind === SyntaxKind.VariableDeclaration) && (host.initializer === outer))
+        || ((host?.kind === SyntaxKind.PropertyAssignment) && (host.initializer === outer));
+}
+// an operand of a `+` concatenation (not a compound `+=` on the local itself)
+function ccxtGo93ConcatOperand (read): boolean {
+    let operand = read;
+    while (operand.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        operand = operand.parent;
+    }
+    const parent = operand.parent;
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.PlusToken);
+}
+// a same-named identifier the checker binds to another variable (a sibling block's `const x`, never this seed)
+function ccxtGo93OtherBinding (goTranspiler: GoTranspiler, n, declaration): boolean {
+    const bound = ccxtGoParamDeclarationOf (goTranspiler, n);
+    return (bound !== undefined) && (bound !== declaration)
+        && ((bound.kind === SyntaxKind.VariableDeclaration) || (bound.kind === SyntaxKind.Parameter));
+}
+// ===== nil-seeded scalar pointers joined through plain copies (end) =====
