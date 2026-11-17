@@ -14174,3 +14174,54 @@ describe('Str base producers typed *string', () => {
         expect(output).not.toMatch(/\*typeVar \+|\+ \*typeVar/);
     });
 });
+
+describe('venue [Str|Dict, Dict] tuple producers bind as Go pairs', () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'venue-pair-producers-'));
+    const cwd = process.cwd();
+    afterAll(() => {
+        process.chdir(cwd);
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const head = 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
+        + 'class Exchange {\n    safeString (a: any, b: any, c: any = undefined): Str { return a; }\n    omit (a: any, b: any): Dict { return a; }\n    send (a: any, b: any = undefined): void {}\n}\n'
+        + 'export default class ex extends Exchange {\n';
+    const run = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(tmp, 'tree-'));
+        const dir = path.join(root, 'ts', 'src');
+        fs.mkdirSync(dir, { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'ex.ts'), head + body + '}\n');
+        process.chdir(root);
+        try {
+            const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+            installCcxtGoHooks(inst.goTranspiler);
+            return inst.transpileGoByPath(path.join('ts', 'src', 'ex.ts')).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    const producer = '    handleKind (params: Dict = {}): [Str, Dict] {\n        const kind = this.safeString (params, \'kind\');\n'
+        + '        if (kind === undefined) {\n            return [ \'spot\', params ];\n        }\n        return [ kind, this.omit (params, \'kind\') ];\n    }\n';
+    const user = '    a (params: Dict = {}) {\n        const [ kind, rest ] = this.handleKind (params);\n        this.send (kind, rest);\n    }\n';
+    test('the producer prints the pair result and the caller binds both slots', () => {
+        const output = run(producer + user);
+        expect(output).toContain('HandleKind(optionalArgs ...any) (*string, map[string]any)');
+        expect(output).toContain('kind, rest := this.HandleKind(params)');
+        expect(output).not.toContain('kindrestVariable');
+        expect(output).not.toContain('TupleSlice');
+    });
+    test('an element read keeps the slice producer', () => {
+        const output = run(producer + user + '    b (params: Dict = {}) {\n        const kind = this.handleKind (params)[0];\n        this.send (kind);\n    }\n');
+        expect(output).not.toContain('(*string, map[string]any)');
+    });
+    test('a quoted name (dynamic dispatch) keeps the slice producer', () => {
+        const output = run(producer + user + '    b () {\n        this.send (\'handleKind\');\n    }\n');
+        expect(output).not.toContain('(*string, map[string]any)');
+    });
+    test('a non-pair return keeps the slice producer', () => {
+        const output = run('    handleKind (params: Dict = {}): [Str, Dict] {\n        const r: any = [ undefined, params ];\n        return r;\n    }\n' + user);
+        expect(output).not.toContain('(*string, map[string]any)');
+    });
+});

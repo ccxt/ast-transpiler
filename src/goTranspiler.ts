@@ -9488,7 +9488,8 @@ function ccxtGoVenuePairOf (method) {
 // would print a TupleSlice box) and no string names it (dynamic dispatch)
 function ccxtGoVenuePairCallersDestructure (name) {
     const state: any = CCXT_GO_VENUE_PAIR_STATE;
-    if (state.texts === undefined) {
+    if (state.root !== process.cwd ()) {
+        state.root = process.cwd ();
         state.texts = [];
         const walk = (dir) => {
             for (const entry of (fs.existsSync (dir) ? fs.readdirSync (dir, { 'withFileTypes': true }) : [])) {

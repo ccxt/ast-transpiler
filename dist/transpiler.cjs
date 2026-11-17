@@ -18934,7 +18934,8 @@ function ccxtGoVenuePairOf(method) {
 }
 function ccxtGoVenuePairCallersDestructure(name) {
   const state = CCXT_GO_VENUE_PAIR_STATE;
-  if (state.texts === void 0) {
+  if (state.root !== process.cwd()) {
+    state.root = process.cwd();
     state.texts = [];
     const walk = (dir) => {
       for (const entry of fs2.existsSync(dir) ? fs2.readdirSync(dir, { "withFileTypes": true }) : []) {
