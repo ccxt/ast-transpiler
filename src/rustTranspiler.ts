@@ -6754,6 +6754,7 @@ export class RustTranspiler extends BaseTranspiler {
         const listParam = owner !== undefined && isParameterDeclaration(owner) && owner.type !== undefined && !this.rustParamWritten(owner);
         if (!isVariableDeclaration(owner) && !listParam && !this.rustOptListParamRead(node)) return undefined;
         const tupleBool = this.rustExactBoolTupleRead(node, owner); if (tupleBool !== undefined) return tupleBool;
+        const tupleInt = this.rust87raExactIntTupleRead(node, owner); if (tupleInt !== undefined) return tupleInt;
         const listType: any = this.typeOfNodeIfAny(node.expression);
         if (listType !== undefined && this.rustConstTupleStrSlotRead(node, owner, listType)) return 'ostr';
         if (listType === undefined || !this.getChecker().isArrayType(listType)) return undefined;
@@ -6853,6 +6854,38 @@ export class RustTranspiler extends BaseTranspiler {
         });
         return ok && pushes > 0;
     }
+
+    /** ral-87ra R2: the integer twin of `rustExactBoolTupleRead`: `t[i]` (a literal index) of a never-written `const t = this.m (..)`
+     *  (or `await this.m (..)`) whose every return puts an exact Int-or-Null at slot i (rustExactSlotCallee `int`, as the
+     *  destructured slot rule; lighter `handleAccountIndex` / `handleApiKeyIndex`), the read typed `number`: `Option<i64>`. */
+    rust87raExactIntTupleRead(node: Node, owner: Node): string | undefined {
+        if (!isElementAccessExpression(node) || !isNumericLiteral(node.argumentExpression) || owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined
+            || !isIdentifier(owner.name) || (owner.parent.flags & NodeFlags.Const) === 0 || this.primitiveKindOfType(this.typeOfNodeIfAny(node)) !== 'number') return undefined;
+        const at = Number(node.argumentExpression.text);
+        if (!Number.isInteger(at) || this.rustTestTierSource(node) || !this.rustExactSlotCallee(owner.initializer, at, 'int')) return undefined;
+        const intact = this.rustLocalUsesAll(owner, String(owner.name.text), true, (n: Node) => {
+            const up: Node = n.parent;
+            return up !== undefined && isElementAccessExpression(up) && up.expression === n && isNumericLiteral(up.argumentExpression)
+                && !(isBinaryExpression(up.parent) && up.parent.left === up);
+        });
+        if (!intact) return undefined;
+        // the local it initialises is typed only for a native use (a compare / null test): a box-only local would just move the conversion
+        let top: Node = node;
+        while (top.parent !== undefined && (isParenthesizedExpression(top.parent) || isAsExpression(top.parent))) top = top.parent;
+        const local: Node = top.parent;
+        if (local === undefined || !isVariableDeclaration(local) || local.initializer !== top || !isIdentifier(local.name)) return undefined;
+        let compares = 0;
+        this.rustLocalUsesAll(local, String(local.name.text), true, (n: Node) => {
+            let up: Node = n.parent;
+            while (up !== undefined && isParenthesizedExpression(up)) up = up.parent;
+            if (isBinaryExpression(up) && RustTranspiler.RUST_87RA_COMPARE_OPS.has(up.operatorToken.kind)) compares++;
+            return true;
+        });
+        return compares > 0 ? 'oint' : undefined;
+    }
+
+    private static readonly RUST_87RA_COMPARE_OPS = new Set<SyntaxKind>([ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
+        SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken ]);
 
     /** ral-ug: `t[i]` (a literal index) of a never-written `const t = this.m (..)` whose every return puts an exact
      *  Bool-or-Null at slot i (`handleOptionBoolAndParams[2]`: `checkOptionBool`): `Option<bool>`, as the slot rule. */
@@ -26297,6 +26330,43 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
     }
 
+    /** ral-87ra R1: `const p: Dict = t[k]` (literal index) of a never-rebound `const t = this.m (..)` whose venue callee declares
+     *  slot `k` of its tuple return a bare `Dict` (rustCallDeclaresDictSlot: bitget `handleProductTypeAndParams`, binance pro
+     *  `resolveAuthType`, dydx `createOrderRequest`) and whose every use is a literal-index read: the slot holds that map. */
+    rust87raVenueTupleMapSlotRead(rhs: Node): boolean {
+        if (rhs === undefined || !isElementAccessExpression(rhs) || !isIdentifier(rhs.expression) || this.rustTestTierSource(rhs)) return false;
+        const idx: Node = this.rustSkipWrappers(rhs.argumentExpression);
+        if (idx === undefined || !isNumericLiteral(idx)) return false;
+        const t: Node = this.rustDeclaredNode(rhs.expression);
+        if (t === undefined || !isVariableDeclaration(t) || !isIdentifier(t.name) || (t.parent.flags & NodeFlags.Const) === 0) return false;
+        const call: Node = this.rustSkipWrappers(t.initializer);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (!this.rustCallDeclaresDictSlot(call, Number(idx.text)) && !this.rust87raBaseParamsSlot(call, Number(idx.text))) return false;
+        return this.rustLocalUsesAll(t, String(t.name.text), true, (n: Node) => {
+            const up: Node = n.parent;
+            if (!isElementAccessExpression(up) || up.expression !== n || !isNumericLiteral(this.rustSkipWrappers(up.argumentExpression))) return false;
+            const use: Node = up.parent;
+            return !(isBinaryExpression(use) && use.left === up) && use.kind !== SyntaxKind.DeleteExpression;
+        });
+    }
+
+    /** ral-87ra R3: base `handleTriggerPricesAndParams (symbol, params)` answers its params map (omitted or as passed) at slot 3
+     *  (declared `[Str, Str, Str, Dict]`): a map when the params argument is a proven map local / parameter (ral-51a's head proof). */
+    rust87raBaseParamsSlot(call: CallExpression, at: number): boolean {
+        if (!isPropertyAccessExpression(call.expression)) return false;
+        const name = String(call.expression.name.text);
+        const slot = RustTranspiler.RUST_87RA_BASE_PARAMS_SLOT[name];
+        if (slot === undefined || slot[0] !== at || !this.rustCalleeIsBase(call)) return false;
+        const head: Node = this.rustSkipWrappers(call.arguments[slot[1]]);
+        if (head === undefined || !isIdentifier(head)) return false;
+        const d = this.rustDeclarationOfIdentifier(head);
+        if (d === undefined || (d as Node) === head || (d as VariableDeclaration).name === head) return this.rustProvenMapParam(d);
+        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+    }
+
+    /** ral-87ra R3: base tuple producer name -> [Dict slot, params argument index]. */
+    private static readonly RUST_87RA_BASE_PARAMS_SLOT: { [name: string]: [number, number] } = { handleTriggerPricesAndParams: [ 3, 1 ] };
+
     /** ral-51a: `this.handleRouteAndParams (m, params)` typed by name: a venue member of the enclosing class declared
      *  `handleRouteAndParams (methodName: string, params: Dict = {}): Dict` answers the (route-omitted) params map. */
     rustRouteParamsDictCall(init: any): boolean {
@@ -31889,7 +31959,7 @@ export class RustTranspiler extends BaseTranspiler {
                     || this.rustCurrencyLocalKind(declaration) !== false) return false;
             } else if (!this.rustBaseCallNamed(init, RustTranspiler.RUST_HANDED_DICT_SOURCES) && !this.rustDictTernaryInit(init)
                 // ral-51a: `const p: Dict = t[1]` of a never-rebound `const t = this.handle*AndParams (m, ..)` lent a proven map
-                && !this.rustHandleTupleMapSlotRead(init) && !this.rustRouteParamsDictCall(init) || this.rustBorrowedDictLocal(declaration)) return false;
+                && !this.rustHandleTupleMapSlotRead(init) && !this.rustRouteParamsDictCall(init) && !this.rust87raVenueTupleMapSlotRead(init) || this.rustBorrowedDictLocal(declaration)) return false;
             if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
                 || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
                 || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;

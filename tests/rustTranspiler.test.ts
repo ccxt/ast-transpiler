@@ -24706,3 +24706,58 @@ describe('ral-84h R2: `i + 1` of an always-Int for counter at a declaration is a
         expect(out).not.toContain('let mut iteration: Value');
     });
 });
+
+describe('ral-87ra R1: a Dict slot read off a const venue tuple whose callee declares that slot `Dict`', () => {
+    const emit = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-87ra1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst extend = (...args: any[]) => Object.assign ({}, ...args);\nexport default class Exchange {\n    extend = extend;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    async privatePostA (p: any = {}): Promise<any> { return p; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    resolveAuth (methodName: string, params: Dict = {}): [string, Str, Dict] {\n        const t = this.safeString (params, 'type', 'spot');\n        return [ t, undefined, params ];\n    }\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('binance pro authenticate: `const p: Dict = t[2]` is a Dict lent by reference', () => {
+        const out = emit("    async auth (params: Dict = {}) {\n        const resolved = this.resolveAuth ('authenticate', params);\n        const type = resolved[0];\n        const paramsAuth: Dict = resolved[2];\n        return await this.privatePostA (this.extend ({ 'type': type }, paramsAuth));\n    }\n");
+        expect(out).toContain('let mut paramsAuth: crate::value::Dict = ');
+        expect(out).not.toContain('paramsAuth.clone()');
+    });
+    test('negative: a slot the callee declares `Str` stays as it was', () => {
+        const out = emit("    async auth2 (params: Dict = {}) {\n        const resolved = this.resolveAuth ('authenticate', params);\n        const sub = resolved[1];\n        return await this.privatePostA ({ 'sub': sub });\n    }\n");
+        expect(out).not.toContain('let mut sub: crate::value::Dict');
+    });
+});
+
+describe('ral-87ra R2: an exact-int slot read off a const venue tuple, null-tested, is an Option<i64>', () => {
+    const emit = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-87ra2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n    numberToString (x: any): string { return String (x); }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    handleIndex (params: Dict = {}): [Int, Dict] {\n        const v = this.safeInteger (params, 'accountIndex');\n        return [ v, params ];\n    }\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('lighter preLoad: `const a = t[0]` then `a === undefined` reads the slot as Option<i64>', () => {
+        const out = emit("    preLoad (params: Dict = {}) {\n        const indexAndParams = this.handleIndex (params);\n        const accountIndex = indexAndParams[0];\n        if (accountIndex === undefined) {\n            return undefined;\n        }\n        return this.hold (this.numberToString (accountIndex));\n    }\n");
+        expect(out).toContain('let mut accountIndex: Option<i64> = ');
+        expect(out).toContain('accountIndex.is_none()');
+    });
+    test('negative: a box-only slot read stays Value', () => {
+        const out = emit("    boxOnly (params: Dict = {}) {\n        const indexAndParams = this.handleIndex (params);\n        const accountIndex = indexAndParams[0];\n        return this.hold (accountIndex);\n    }\n");
+        expect(out).toContain('let mut accountIndex: Value = ');
+    });
+});
+
+describe('ral-87ra R3: slot 3 of base handleTriggerPricesAndParams over a proven params map is a Dict', () => {
+    const emit = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-87ra3-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nconst omit = (x: Dict | undefined, ...args: any) => x;\nexport default class Exchange {\n    omit = omit;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleTriggerPricesAndParams (symbol: any, params: Dict, omitParams = true): [Str, Str, Str, Dict] {\n        const triggerPrice = this.safeString (params, 'triggerPrice');\n        const paramsOmitted = (triggerPrice !== undefined) ? this.omit (params, 'triggerPrice') : params;\n        return [ triggerPrice, undefined, undefined, paramsOmitted ];\n    }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('toobit createContractOrderRequest: `const p: Dict = values[3]` is a Dict read by native readers', () => {
+        const out = emit("    async createOrder (symbol: string, params: Dict = {}) {\n        return this.createOrderRequest (symbol, params);\n    }\n    createOrderRequest (symbol: string, params: Dict = {}) {\n        const values = this.handleTriggerPricesAndParams (symbol, params);\n        const triggerPrice = values[0];\n        const paramsTrigger: Dict = values[3];\n        const stopLoss = this.safeDict (paramsTrigger, 'stopLoss');\n        return this.hold ([ triggerPrice, stopLoss ]);\n    }\n");
+        expect(out).toContain('let mut paramsTrigger: crate::value::Dict = ');
+    });
+});
