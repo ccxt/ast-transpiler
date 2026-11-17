@@ -37553,3 +37553,295 @@ GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
     return `${temp} := ${stored}\n${this.getIden(identation)}${name} = &${temp}`;
 };
 // ===== ral-90g5 R1 (end) =====
+
+// ===== ral-90g7 (begin): closure initialisers from ternaries, round 90 =====
+// R1: an absent arm next to a two-argument `this.safeDict (container, key)` arm
+// (`const order = (orderId === undefined) ? undefined : this.safeDict (orders, orderId)`). The literal boxed
+// the untyped nil on one branch and SafeDict's answer (a map, or nil for an absent / non-map member) on the
+// other. The local is declared `map[string]any`: the absent arm is a nil map and the reader arm is the typed
+// twin `this.SafeDictMap (container, key)` (MapTyped of the same SafeDict read, so the same member and nil
+// for the same absent cases). A nil map answers every admitted use exactly like the nil box: `== nil` /
+// `!= nil`, the deref-aware Safe* readers and `x[k]` element reads (goSafeDictUseReadsTheMap). Any other
+// use (a store, a call argument, a return) keeps the box; a local without a nil test is not admitted, so
+// every freed local gains the native nil comparison.
+interface GoTernaryJoin90Parts { goType: string, derefTrue: boolean, derefFalse: boolean, nilTrue?: boolean, nilFalse?: boolean, dictTrue?: boolean, dictFalse?: boolean }
+
+export interface GoTranspiler {
+    goTernaryJoin90DictArm(node): { container, key } | undefined;
+    goTernaryJoin90DictUsesAreNative(declaration): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoin90DictArm = function (node) {
+    const arm = this.goUnwrapParenthesizedNode(node);
+    if ((arm?.kind !== SyntaxKind.CallExpression) || (arm.arguments?.length !== 2)) {
+        return undefined;
+    }
+    return this.goSafeDictLocalArgs(arm);
+};
+
+GoTranspiler.prototype.goTernaryJoin90DictUsesAreNative = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    const ours = (n) => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() === declaration;
+    let nilTests = 0;
+    const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => {
+        if (!ours(n)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        if (this.goIsNilComparisonOperand(current, current.parent)) {
+            nilTests += 1;
+            return true;
+        }
+        // `k in x` prints a comma-ok closure on a typed map (a blob): keep the box there
+        return (current === n) && this.goSafeDictUseReadsTheMap(n)
+            && !((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword));
+    });
+    return (typed === GO_SAFE_DICT_LOCAL_TYPE) && (nilTests > 0);
+};
+
+const goTernaryJoin90PartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoin90PartsUncached.call(this, declaration);
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((ternary?.kind !== SyntaxKind.ConditionalExpression) || (declaration.type !== undefined)) {
+        return undefined;
+    }
+    const isNil = (n) => { const u = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.NullKeyword) || ((u?.kind === SyntaxKind.Identifier) && (u.text === 'undefined')); };
+    const nilTrue = isNil(ternary.whenTrue);
+    const nilFalse = isNil(ternary.whenFalse);
+    if (nilTrue === nilFalse) {
+        return undefined;
+    }
+    if ((this.goTernaryJoin90DictArm(nilTrue ? ternary.whenFalse : ternary.whenTrue) === undefined)
+        || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+        || !this.goTernaryJoin90DictUsesAreNative(declaration)) {
+        return undefined;
+    }
+    return { goType: GO_SAFE_DICT_LOCAL_TYPE, derefTrue: false, derefFalse: false, nilTrue: nilTrue, nilFalse: nilFalse,
+        dictTrue: !nilTrue, dictFalse: !nilFalse } as GoTernaryJoin90Parts;
+};
+
+const goTernaryJoin90Declaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const parts = (goTernaryJoinOwner(declaration?.initializer) === declaration) ? (this.goTernaryJoinParts(declaration) as GoTernaryJoin90Parts) : undefined;
+    if ((parts === undefined) || !(parts.dictTrue || parts.dictFalse)) {
+        return goTernaryJoin90Declaration.call(this, statement, declaration, identation);
+    }
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (statement.declarations?.length !== 1)
+        || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
+        return undefined;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    const branch = (node, dict: boolean) => {
+        if (!dict) {
+            return `${iden}\t${name} = nil`;
+        }
+        const args = this.goTernaryJoin90DictArm(node);
+        return `${iden}\t${name} = this.SafeDictMap(${this.printNode(args.container, 0)}, ${this.printNode(args.key, 0)})`;
+    };
+    return `${iden}var ${name} ${parts.goType}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${branch(ternary.whenTrue, parts.dictTrue === true)}\n${iden}} else {\n${branch(ternary.whenFalse, parts.dictFalse === true)}\n${iden}}`;
+};
+// R2: a `Math.min (a, b)` / `Math.max (a, b)` arm over proven integers next to an integer arm
+// (`const n = (limit === undefined) ? 500 : Math.min (limit, maxLimit)`). Each operand is an int literal,
+// a Go `int` / `int64` local or a `*int64` the condition proves defined on that branch. mathMin boxed an
+// integral float64 there and the other arm an int; every helper read normalizes both to the same number.
+// The local is declared `int64`, the arm prints Go's own `min(..)` / `max(..)` over int64 operands and the
+// other arm widens with `int64(..)`. Only a local with an arithmetic or ordered-comparison use is admitted
+// (that use prints natively on the int64), and a write into a parameter's copy keeps the box (84g7 R2).
+interface GoTernaryJoin90IntParts { goType: string, derefTrue: boolean, derefFalse: boolean, intTrue?: string, intFalse?: string }
+
+export interface GoTranspiler {
+    goTernaryJoin90IntOperand(node, ternary, outcome: boolean): string | undefined;
+    goTernaryJoin90IntArm(node, ternary, outcome: boolean): string | undefined;
+    goTernaryJoin90HasArithmeticUse(declaration): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoin90IntOperand = function (node, ternary, outcome: boolean): string | undefined {
+    const operand = this.goUnwrapParenthesizedNode(node);
+    if ((operand?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(operand.text) && this.goLiteralFitsKind(operand, 'int')) {
+        return operand.text;
+    }
+    if (operand?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    const goType = this.goTernaryJoinArmType(operand);
+    if (goType === 'int64') {
+        return operand.text;
+    }
+    if (goType === 'int') {
+        return `int64(${operand.text})`;
+    }
+    if ((goType === '*int64') && this.goTernaryJoinConditionDefines(ternary.condition, operand.text, outcome)) {
+        return `*${operand.text}`;
+    }
+    return undefined;
+};
+
+GoTranspiler.prototype.goTernaryJoin90IntArm = function (node, ternary, outcome: boolean): string | undefined {
+    const arm = this.goUnwrapParenthesizedNode(node);
+    if (arm?.kind !== SyntaxKind.CallExpression) {
+        return this.goTernaryJoin90IntOperand(arm, ternary, outcome);
+    }
+    const callee = arm.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.Identifier)
+        || (callee.expression.text !== 'Math') || !['min', 'max'].includes(callee.name?.text) || (arm.arguments.length !== 2)) {
+        return undefined;
+    }
+    const operands = arm.arguments.map((a) => this.goTernaryJoin90IntOperand(a, ternary, outcome));
+    if (operands.some((o) => o === undefined) || operands.every((o) => /^[0-9]+$/.test(o))) {
+        return undefined;
+    }
+    return `${callee.name.text}(${operands.join(', ')})`;
+};
+
+const GO_90_ARITHMETIC_TOKENS = [ SyntaxKind.AsteriskToken, SyntaxKind.MinusToken, SyntaxKind.SlashToken, SyntaxKind.LessThanToken,
+    SyntaxKind.GreaterThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanEqualsToken ];
+
+GoTranspiler.prototype.goTernaryJoin90HasArithmeticUse = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    // a binding named like the Go builtin (`Math.min` itself is a property name, not a binding)
+    const shadowsBuiltin = (n) => (n.kind === SyntaxKind.Identifier) && ((n.text === 'min') || (n.text === 'max'))
+        && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n));
+    const used = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (GO_90_ARITHMETIC_TOKENS.indexOf(parent.operatorToken.kind) >= 0);
+    });
+    return used && !this.hasNodeWhere(scope, shadowsBuiltin);
+};
+
+const goTernaryJoin90IntPartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoin90IntPartsUncached.call(this, declaration);
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    // an `Int` / `number` annotation only drives the checker; any other annotation keeps the box
+    const annotation = declaration?.type;
+    const numericAnnotation = (annotation === undefined) || (annotation.kind === SyntaxKind.NumberKeyword)
+        || ((annotation.kind === SyntaxKind.TypeReference) && (annotation.typeName?.kind === SyntaxKind.Identifier) && (annotation.typeName.text === 'Int'));
+    if ((ternary?.kind !== SyntaxKind.ConditionalExpression) || !numericAnnotation) {
+        return undefined;
+    }
+    const isMinMax = (n) => { const u = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.CallExpression) && (u.expression?.expression?.text === 'Math'); };
+    if (!isMinMax(ternary.whenTrue) && !isMinMax(ternary.whenFalse)) {
+        return undefined;
+    }
+    const intTrue = this.goTernaryJoin90IntArm(ternary.whenTrue, ternary, true);
+    const intFalse = this.goTernaryJoin90IntArm(ternary.whenFalse, ternary, false);
+    if ((intTrue === undefined) || (intFalse === undefined) || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+        || this.goTernaryJoinFeedsParameterCopy(declaration) || !this.goTernaryJoin90HasArithmeticUse(declaration)) {
+        return undefined;
+    }
+    return { goType: 'int64', derefTrue: false, derefFalse: false, intTrue: intTrue, intFalse: intFalse } as GoTernaryJoin90IntParts;
+};
+
+const goTernaryJoin90IntDeclaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const parts = (goTernaryJoinOwner(declaration?.initializer) === declaration) ? (this.goTernaryJoinParts(declaration) as GoTernaryJoin90IntParts) : undefined;
+    if ((parts === undefined) || (parts.intTrue === undefined)) {
+        return goTernaryJoin90IntDeclaration.call(this, statement, declaration, identation);
+    }
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (statement.declarations?.length !== 1)
+        || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
+        return undefined;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    return `${iden}var ${name} int64\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${iden}\t${name} = ${parts.intTrue}\n${iden}} else {\n${iden}\t${name} = ${parts.intFalse}\n${iden}}`;
+};
+// R3: 87g7 R2/R3's `*string` join (string / *string / absent arms) also admits a local handed to a base
+// `this.safe*` reader as its key or default (`this.safeString (this.networkAliases, x, x)`): SafeValueN and
+// every typed Safe* twin derefScalar the key and the default, so a *string reads as the string the box held
+// and a nil pointer as the nil box. The local still needs a nil test or a string-literal comparison, which
+// prints natively on the pointer.
+export interface GoTranspiler {
+    goTernaryJoin90SafeReaderArgument(node): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoin90SafeReaderArgument = function (node): boolean {
+    const call = node.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression === node) || (call.arguments.indexOf(node) < 1)) {
+        return false;
+    }
+    const callee = call.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !/^safe(String|Integer|Number|Bool|Value|Dict|List)(Lower|Upper)?$/.test(callee.name?.text ?? '')) {
+        return false;
+    }
+    let fileName = '';
+    try {
+        fileName = this.getChecker().getResolvedSignature(call)?.declaration?.resolve()?.getSourceFile?.()?.fileName ?? '';
+    } catch (e) {
+        return false;
+    }
+    // the reader is declared on base Exchange or in base/functions/type.ts (Exchange's `safeString = safeString`)
+    return CCXT_GO_ELEMENT_1_BASE_FILE.test(fileName) || /[\\/]base[\\/]functions[\\/]type\.ts$/.test(fileName);
+};
+
+const goTernaryJoin90StringNativeRead = GoTranspiler.prototype.goTernaryJoinR87HasNativeRead;
+GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, kind: string): boolean {
+    if ((kind !== 'string') || goTernaryJoin90StringNativeRead.call(this, declaration, kind)) {
+        return goTernaryJoin90StringNativeRead.call(this, declaration, kind);
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    const isNil = (e) => (e?.kind === SyntaxKind.NullKeyword) || ((e?.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
+    let nativeTests = 0;
+    let readerArgs = 0;
+    const foreign = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        if ((current === n) && this.goTernaryJoin90SafeReaderArgument(n)) {
+            readerArgs += 1;
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) >= 0)) {
+            const other = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+            if (isNil(other) || (other?.kind === SyntaxKind.StringLiteral)) {
+                nativeTests += 1;
+                return false;
+            }
+        }
+        return true;
+    });
+    return !foreign && (nativeTests > 0) && (readerArgs > 0);
+};
+// ===== ral-90g7 (end) =====

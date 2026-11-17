@@ -16184,3 +16184,125 @@ describe('ral-90g5 R1 scalar-pointer reader seeds rebound to a native scalar', (
         expect(out).not.toContain('leverageValue');
     });
 });
+
+describe('90g7 R1 absent arm next to a safeDict arm', () => {
+    test('a nil-tested local declares map[string]any and reads through SafeDictMap', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class X {\n'
+            + '    safeDict (a: any, k: any): Dict | undefined { return undefined; }\n'
+            + '    safeString (a: any, k: any): string | undefined { return undefined; }\n'
+            + '    f (networks: Dict, networkCode: string = undefined) {\n'
+            + '        const networkEntry = (networkCode === undefined) ? undefined : this.safeDict (networks, networkCode);\n'
+            + '        if (networkEntry === undefined) {\n'
+            + '            return undefined;\n'
+            + '        }\n'
+            + '        return this.safeString (networkEntry, \'id\');\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar networkEntry map[string]any\n\tif networkCode == nil {\n\t\tnetworkEntry = nil\n\t} else {\n\t\tnetworkEntry = this.SafeDictMap(networks, networkCode)\n\t}');
+        expect(out).toContain('if networkEntry == nil {');
+    });
+    test('a local returned or stored keeps the box', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class X {\n'
+            + '    safeDict (a: any, k: any): Dict | undefined { return undefined; }\n'
+            + '    f (networks: Dict, networkCode: string = undefined) {\n'
+            + '        const networkEntry = (networkCode === undefined) ? undefined : this.safeDict (networks, networkCode);\n'
+            + '        if (networkEntry === undefined) {\n'
+            + '            return undefined;\n'
+            + '        }\n'
+            + '        return [ networks, networkEntry ];\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).not.toContain('var networkEntry map[string]any');
+    });
+});
+
+describe('90g7 R2 Math.min arm over integers', () => {
+    test('an int literal arm next to Math.min of a defined pointer and an int local declares int64 with the Go builtin', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    f (since: Int = undefined, limit: Int = undefined) {\n'
+            + '        const maxLimit = 1000;\n'
+            + '        const duration = 60;\n'
+            + '        const requestLimit = (limit === undefined) ? 500 : Math.min (limit, maxLimit);\n'
+            + '        return duration * requestLimit;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar requestLimit int64\n\tif limit == nil {\n\t\trequestLimit = 500\n\t} else {\n\t\trequestLimit = min(*limit, int64(maxLimit))\n\t}');
+    });
+    test('a local without an arithmetic use keeps the box', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Int = number | undefined;\n'
+            + 'class X {\n'
+            + '    f (since: Int = undefined, limit: Int = undefined) {\n'
+            + '        const requestLimit = (limit === undefined) ? 500 : Math.min (limit, 1000);\n'
+            + '        return { \'limit\': requestLimit };\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).not.toContain('var requestLimit int64');
+    });
+});
+
+function goTranspile90g7(source: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ral-90g7-'));
+    fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export default class Exchange {\n'
+        + '    networkAliases: any = {};\n'
+        + '    safeString (o: any, k: any, d: any = undefined): string | undefined { return undefined; }\n'
+        + '}\n');
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'ex.ts'), source);
+    const cwd = process.cwd();
+    try {
+        process.chdir(dir);
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        return x.transpileGoByPath('ts/src/ex.ts').content;
+    } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe('90g7 R3 *string join handed to a base safe reader', () => {
+    test('a nil-tested string-or-absent local used as a safeString key and default declares *string', () => {
+        const out = goTranspile90g7('import Exchange from \'./base/Exchange.js\';\n'
+            + 'export default class ex extends Exchange {\n'
+            + '    f (raw: string = undefined) {\n'
+            + '        const upper = (raw !== undefined) ? raw.toUpperCase () : undefined;\n'
+            + '        let code = undefined;\n'
+            + '        if (upper !== undefined) {\n'
+            + '            code = this.safeString (this.networkAliases, upper, upper);\n'
+            + '        }\n'
+            + '        return code;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var upper *string\n');
+        expect(out).toContain('\t\tupper = &upperValue\n');
+        expect(out).toContain('if upper != nil {');
+    });
+    test('a local also stored in a map literal keeps the box', () => {
+        const out = goTranspile90g7('import Exchange from \'./base/Exchange.js\';\n'
+            + 'export default class ex extends Exchange {\n'
+            + '    f (raw: string = undefined) {\n'
+            + '        const upper = (raw !== undefined) ? raw.toUpperCase () : undefined;\n'
+            + '        if (upper !== undefined) {\n'
+            + '            return this.safeString (this.networkAliases, upper, upper);\n'
+            + '        }\n'
+            + '        return { \'u\': upper };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).not.toContain('var upper *string');
+    });
+});
