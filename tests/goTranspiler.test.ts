@@ -16052,3 +16052,64 @@ describe('ral-90g3 R4: computed side locals declared in sibling blocks', () => {
         expect (out).toContain ('var bookside any = ');
     });
 });
+
+describe('ral-90g4 R1: a `: string` method returning a tuple-slot local is *string with its caller locals', () => {
+    const venue = (callerBody: string) => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'go90g4r1-'));
+        try {
+            const src = path.join(tmp, 'ts', 'src');
+            fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(src, 'venue.ts'),
+                'class Exchange {\n'
+                + '    id: string = \'\';\n'
+                + '    handleMarketTypeAndParams (m: string, market = undefined, params = {}): [string, object] { return [ m, params ]; }\n'
+                + '    isLinear (a, b = undefined): boolean { return a === b; }\n'
+                + '    safeString (o, k, d = undefined): string | undefined { return d; }\n'
+                + '}\n'
+                + 'export class venue extends Exchange {\n'
+                + '}\n');
+            const file = path.join(src, 'pro', 'venue.ts');
+            fs.writeFileSync(file,
+                'import { venue } from \'../venue\';\n'
+                + 'export class venuepro extends venue {\n'
+                + '    getMarketType (method: string, market, params = {}): string {\n'
+                + '        let type: string = undefined;\n'
+                + '        let rest = {};\n'
+                + '        [ type, rest ] = this.handleMarketTypeAndParams (method, market, params);\n'
+                + '        if (this.isLinear (type, rest)) {\n'
+                + '            type = \'linear\';\n'
+                + '        }\n'
+                + '        return type;\n'
+                + '    }\n'
+                + '    fetchIt (market, urls) {\n'
+                + callerBody
+                + '    }\n'
+                + '}\n');
+            const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('literal-compared caller locals and the callee print *string, literal writes take an address', () => {
+        const out = venue('        const marketType = this.getMarketType (\'fetchIt\', market);\n'
+            + '        if (marketType !== \'spot\') {\n'
+            + '            throw new Error (this.id + \' does not support \' + marketType);\n'
+            + '        }\n'
+            + '        return this.safeString (urls, marketType);\n');
+        expect(out).toContain('GetMarketType(method string, market any, optionalArgs ...any) *string');
+        expect(out).toContain('var typeVar *string = nil');
+        expect(out).toContain('typeVarValue := "linear"');
+        expect(out).toContain('typeVar = &typeVarValue');
+        expect(out).toContain('var marketType *string = this.GetMarketType("fetchIt", market)');
+        expect(out).toContain('marketType == nil || *marketType != "spot"');
+        expect(out).not.toContain('*marketType)');
+    });
+    test('a caller handing the result to an untyped slot keeps every signature any', () => {
+        const out = venue('        const marketType = this.getMarketType (\'fetchIt\', market);\n'
+            + '        return marketType;\n');
+        expect(out).toContain('GetMarketType(method string, market any, optionalArgs ...any) any');
+        expect(out).toContain('var marketType any = this.GetMarketType("fetchIt", market)');
+    });
+});

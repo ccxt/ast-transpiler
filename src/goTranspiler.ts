@@ -37013,3 +37013,313 @@ GoTranspiler.prototype.go90g3StringCharRead = function (node) {
     };
 }
 // ===== ral-90g3 (end) =====
+
+// ===== ral-90g4 (begin) =====
+// R1: a `: string` venue method whose every return hands back ONE nil-declared local, written first by
+// slot 0 of a tuple-string producer (`[ t, p ] = this.handleMarketTypeAndParams (..)`) and then only by
+// string literals, returns that local as `*string`: the absent slot stays a nil pointer (the box held nil),
+// every literal is a non-nil pointer. Admitted only when EVERY call of the method in the tree is a
+// `const x = this.m (..)` local of the declaring file whose reads pass the tuple-string read proof (nil
+// tests, literal compares, `+`, deref'ing key / argument slots) and whose writes are string literals; those
+// locals are declared `*string` too, so no typed-nil pointer ever lands in an `any` box. Literal writes print
+// `xValue := "lit"` + `x = &xValue` (no SafeStringPtr box). Decided from the AST and the checker only.
+interface Ral90g4R1Verdict { local: Node, callers: Node[] }
+const ral90g4R1Verdicts = new WeakMap<object, Ral90g4R1Verdict | null>();
+const ral90g4R1Pending = new Set<object>();
+function ral90g4Unparen(node) {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    return node;
+}
+function ral90g4IsStringLiteral(node): boolean {
+    const n = ral90g4Unparen(node);
+    return (n?.kind === SyntaxKind.StringLiteral) || (n?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+}
+function ral90g4Block(node) {
+    let current = node?.parent;
+    while ((current !== undefined) && (current.kind !== SyntaxKind.Block) && (current.kind !== SyntaxKind.SourceFile)) {
+        current = current.parent;
+    }
+    return current;
+}
+// the references of `declaration` inside its function (checker symbol match); undefined when a closure,
+// a shadowing declaration or a destructuring target makes the walk unprovable
+function ral90g4References(goTranspiler: GoTranspiler, declaration): Node[] | undefined {
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    const name = declaration?.name?.text;
+    if ((scope === undefined) || (typeof name !== 'string') || (NIL_DECLARED_GUARD_NAMES.indexOf(name) >= 0)) {
+        return undefined;
+    }
+    const refs: Node[] = [];
+    let ok = true;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n !== scope) && (FUNCTION_LIKE_KINDS.indexOf(n.kind) >= 0)) {
+            ok = !scopeMentionsIdentifier(n, name);
+            return;
+        }
+        if ((n !== declaration) && ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)) && bindingMentionsName(n.name, name)) {
+            ok = false;
+            return;
+        }
+        if (isIdentifierNamed(n, name) && (n !== declaration.name)) {
+            if (ccxtGoParamDeclarationOf(goTranspiler, n) !== declaration) {
+                ok = false;
+                return;
+            }
+            refs.push(n);
+        }
+        n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    return ok ? refs : undefined;
+}
+// a plain statement-level `x = 'lit'`; at most one per block, so each `xValue :=` is a fresh name there
+function ral90g4LiteralWrite(ref): boolean {
+    const parent = ref.parent;
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === ref) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && ral90g4IsStringLiteral(parent.right);
+}
+function ral90g4WritesAreDistinct(writes: Node[]): boolean {
+    const blocks = new Set<Node>();
+    for (const w of writes) {
+        const block = ral90g4Block(w.parent.parent);
+        if ((block === undefined) || blocks.has(block)) {
+            return false;
+        }
+        blocks.add(block);
+    }
+    return true;
+}
+// the literal writes and the reads of a *string local pass; `extraRead` admits one more read shape
+function ral90g4PointerUsesPass(goTranspiler: GoTranspiler, declaration, refs: Node[], extraRead: (n) => boolean): boolean {
+    const writes: Node[] = [];
+    for (const ref of refs) {
+        if (ral90g4LiteralWrite(ref)) {
+            writes.push(ref);
+            continue;
+        }
+        if (isDestructuringTarget(ref)) {
+            if (!ccxtGoTupleStringIsProducerElement(goTranspiler, ref)) {
+                return false;
+            }
+            continue;
+        }
+        const parent = ref.parent as BinaryExpression;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === ref)
+            && (parent.operatorToken.kind >= ASSIGNMENT_KIND_MIN) && (parent.operatorToken.kind <= ASSIGNMENT_KIND_MAX)) {
+            return false; // another write shape
+        }
+        if (!extraRead(ref) && !ccxtGoTupleStringReadIsSafe(goTranspiler, ref)) {
+            return false;
+        }
+    }
+    const name = declaration.name.text + 'Value';
+    if (goTranspiler.hasNodeWhere(goTranspiler.goEnclosingFunction(declaration), (n) => isIdentifierNamed(n, name))) {
+        return false;
+    }
+    return ral90g4WritesAreDistinct(writes);
+}
+function ral90g4ThisCallName(node): string | undefined {
+    const call = ral90g4Unparen(node);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.questionDotToken !== undefined)) {
+        return undefined;
+    }
+    return call.expression.name?.text;
+}
+function ral90g4R1(goTranspiler: GoTranspiler, method): Ral90g4R1Verdict | undefined {
+    if (method?.kind !== SyntaxKind.MethodDeclaration) {
+        return undefined;
+    }
+    if (ral90g4R1Verdicts.has(method)) {
+        return ral90g4R1Verdicts.get(method) ?? undefined;
+    }
+    if (ral90g4R1Pending.has(method)) {
+        return undefined;
+    }
+    ral90g4R1Pending.add(method);
+    let verdict;
+    try {
+        verdict = ral90g4R1Uncached(goTranspiler, method);
+    } finally {
+        ral90g4R1Pending.delete(method);
+    }
+    ral90g4R1Verdicts.set(method, verdict ?? null);
+    if (verdict !== undefined) {
+        // the shipped tuple-string join now owns the callee local (typed pair read, nil-guarded compares);
+        // answers cached while the verdict was pending are dropped
+        CCXT_GO_TUPLE_STRING_CACHE.set(verdict.local, '*string');
+        for (const declaration of [ verdict.local, ...verdict.callers ]) {
+            goTranspiler.goDeclaredTypeCache.delete(declaration);
+        }
+    }
+    return verdict;
+}
+function ral90g4R1Uncached(goTranspiler: GoTranspiler, method): Ral90g4R1Verdict | undefined {
+    const name = method.name?.text;
+    if ((typeof name !== 'string') || CCXT_GO_PARSE_METHOD.test(name) || (method.body?.kind !== SyntaxKind.Block)
+        || goTranspiler.isAsyncFunction(method) || goTranspiler.goMethodKeepsBaseSignature(method)
+        || (method.type?.kind !== SyntaxKind.StringKeyword) || !ccxtGoGeneralAnnotatedMethodIsClosed(method, name)) {
+        return undefined;
+    }
+    const reserved = ccxtGoReservedMethodNames(method);
+    if ((reserved !== undefined) && (reserved.has(name) || reserved.has(name.charAt(0).toUpperCase() + name.slice(1)))) {
+        return undefined;
+    }
+    const fileName = String(method.getSourceFile?.()?.fileName ?? '');
+    if (!/(^|[\\/])ts[\\/]src[\\/]/.test(fileName) || /(^|[\\/])ts[\\/]src[\\/](base|test)[\\/]/.test(fileName)) {
+        return undefined;
+    }
+    // every return is the same nil-declared local of this method's own body
+    const returns = collectReturnStatements(method.body);
+    let local;
+    for (const statement of returns) {
+        const expression = ral90g4Unparen(statement.expression);
+        const declaration = (expression?.kind === SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf(goTranspiler, expression) : undefined;
+        if ((declaration === undefined) || ((local !== undefined) && (declaration !== local))) {
+            return undefined;
+        }
+        local = declaration;
+    }
+    if ((local?.kind !== SyntaxKind.VariableDeclaration) || (local.name?.kind !== SyntaxKind.Identifier)
+        || !isNilDeclaredInitializer(local.initializer) || (local.parent?.parent?.kind !== SyntaxKind.VariableStatement)
+        || (local.parent.declarations.length !== 1) || (local.parent.parent.parent !== method.body)
+        || (goTranspiler.goEnclosingFunction(local) !== method) || goTranspiler.goTypeNameIsShadowed(method, '*string')) {
+        return undefined;
+    }
+    const refs = ral90g4References(goTranspiler, local);
+    if ((refs === undefined) || !refs.some((ref) => ccxtGoTupleStringIsProducerElement(goTranspiler, ref))) {
+        return undefined;
+    }
+    const isReturn = (ref) => (ref.parent?.kind === SyntaxKind.ReturnStatement) && (ref.parent.expression === ref);
+    if (!ral90g4PointerUsesPass(goTranspiler, local, refs, isReturn)) {
+        return undefined;
+    }
+    // every call in the tree: `const x = this.name (..)` locals of this file only
+    const graph = ccxtGoTsSrcImportGraph(fileName);
+    if (graph === undefined) {
+        return undefined;
+    }
+    const needle = new RegExp('\\.' + name + '\\s*\\(', 'g');
+    let textCalls = 0;
+    for (const [ file, text ] of graph.texts) {
+        const count = (text.match(needle) ?? []).length;
+        if ((count > 0) && (path.resolve(file) !== path.resolve(fileName))) {
+            return undefined;
+        }
+        textCalls += count;
+    }
+    const callers: Node[] = [];
+    let astCalls = 0;
+    let ok = true;
+    const sourceFile = method.getSourceFile();
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === name) && (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression === n)) {
+            astCalls += 1;
+            const call = n.parent;
+            const declaration = call.parent;
+            if ((ral90g4ThisCallName(call) !== name) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== call)
+                || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.declarations?.length !== 1)
+                || goTranspiler.goTypeNameIsShadowed(goTranspiler.goEnclosingFunction(declaration), '*string')) {
+                ok = false;
+                return;
+            }
+            const callerRefs = ral90g4References(goTranspiler, declaration);
+            if ((callerRefs === undefined) || !ral90g4PointerUsesPass(goTranspiler, declaration, callerRefs, () => false)) {
+                ok = false;
+                return;
+            }
+            callers.push(declaration);
+        }
+        n.forEachChild(visit);
+    };
+    sourceFile.forEachChild(visit);
+    if (!ok || (astCalls !== textCalls) || (callers.length === 0)) {
+        return undefined;
+    }
+    return { local: local, callers: callers };
+}
+function ral90g4OwnMethodOf(goTranspiler: GoTranspiler, call) {
+    const name = ral90g4ThisCallName(call);
+    if (name === undefined) {
+        return undefined;
+    }
+    let declaration;
+    try {
+        declaration = goTranspiler.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    return (declaration?.kind === SyntaxKind.MethodDeclaration) && (declaration.name?.text === name) ? declaration : undefined;
+}
+// the R1 *string local (callee or caller) `declaration` is, or undefined
+function ral90g4R1Local(goTranspiler: GoTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    if (isNilDeclaredInitializer(declaration.initializer)) {
+        const method = goTranspiler.goEnclosingFunction(declaration);
+        return ral90g4R1(goTranspiler, method)?.local === declaration;
+    }
+    const method = ral90g4OwnMethodOf(goTranspiler, declaration.initializer);
+    return (method !== undefined) && (ral90g4R1(goTranspiler, method)?.callers.indexOf(declaration) ?? -1) >= 0;
+}
+const ral90g4UpstreamLocalType = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+    const known = ral90g4UpstreamLocalType.call(this, declaration, parsedValue);
+    return ((known === 'any') && ral90g4R1Local(this, declaration)) ? '*string' : known;
+};
+const ral90g4UpstreamDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = ral90g4UpstreamDeclarationList.call(this, node, identation);
+    const declaration = node?.declarations?.[0];
+    if ((typeof printed !== 'string') || (node?.declarations?.length !== 1) || !isNilDeclaredInitializer(declaration?.initializer)
+        || !ral90g4R1Local(this, declaration)) {
+        return printed;
+    }
+    const head = this.getIden(identation) + 'var ' + this.printNode(declaration.name, 0) + ' ';
+    return (printed === head + 'any = ' + this.UNDEFINED_TOKEN) ? (head + '*string = ' + this.UNDEFINED_TOKEN) : printed;
+};
+const ral90g4UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const write = node?.expression;
+    if ((write?.kind === SyntaxKind.BinaryExpression) && ral90g4LiteralWrite(write.left)
+        && ral90g4R1Local(this, ccxtGoParamDeclarationOf(this, write.left))) {
+        const name = this.printNode(write.left, 0).trim();
+        const iden = this.getIden(identation);
+        return iden + name + 'Value := ' + this.printNode(ral90g4Unparen(write.right), 0).trim() + '\n' + iden + name + ' = &' + name + 'Value';
+    }
+    return ral90g4UpstreamExpressionStatement.call(this, node, identation);
+};
+// a `+` operand keeps the Add helper (derefScalar, nil answers nil like the box): the checker's `string`
+// would otherwise license a bare `*x` on a pointer the absent slot leaves nil
+const ral90g4UpstreamDerefable = GoTranspiler.prototype.goDerefableStringOperand;
+GoTranspiler.prototype.goDerefableStringOperand = function (node): boolean {
+    if ((node?.kind === SyntaxKind.Identifier) && ral90g4R1Local(this, ccxtGoParamDeclarationOf(this, node))) {
+        return false;
+    }
+    return ral90g4UpstreamDerefable.call(this, node);
+};
+const ral90g4UpstreamNilProven = GoTranspiler.prototype.goNilProvenStringDeref;
+GoTranspiler.prototype.goNilProvenStringDeref = function (node): boolean {
+    if ((node?.kind === SyntaxKind.Identifier) && ral90g4R1Local(this, ccxtGoParamDeclarationOf(this, node))) {
+        return false;
+    }
+    return ral90g4UpstreamNilProven.call(this, node);
+};
+const ral90g4UpstreamMethodDefinition = GoTranspiler.prototype.printMethodDefinition;
+GoTranspiler.prototype.printMethodDefinition = function (node, identation) {
+    const printed = ral90g4UpstreamMethodDefinition.call(this, node, identation);
+    if ((typeof printed !== 'string') || (ral90g4R1(this, node) === undefined)) {
+        return printed;
+    }
+    return printed.replace(/(\)\s+)any(\s*)$/, '$1*string$2');
+};
+// ===== ral-90g4 (end) =====
