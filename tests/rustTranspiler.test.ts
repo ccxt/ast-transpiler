@@ -25293,3 +25293,55 @@ describe('ral-90rb R4: a returned concatenation of defaulted string reads in a -
         expect(out).not.toContain('let mut joinedResult: Value');
     });
 });
+
+describe('ral-90rc R1: a nil-declared string local written from a ternary whose arm is a typed market field', () => {
+    test('`type = flag ? \'perpetual\' : market[\'type\']` (pro phemex handleOrders) types the local Option<String>', () => {
+        const dir = path.join (rustFixtureRoot, 'r90rc-r1-market-arm');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Market { id: Str; symbol: string; type: string; settle: Str; spot: boolean; info: any }\nexport default class Exchange {\n    markets: Dict = {};\n    market (symbol: Str): Market {\n        return this.markets[symbol];\n    }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    one (symbols: string[]) {\n        let type: Str = undefined;\n        for (let i = 0; i < symbols.length; i++) {\n            const market = this.market (symbols[i]);\n            if (type === undefined) {\n                const isUsdt = market['settle'] === 'USDT';\n                type = isUsdt ? 'perpetual' : market['type'];\n            }\n        }\n        const messageHash = 'orders:' + type;\n        return this.hold (messageHash);\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut type_var: Option<String> = None;');
+        expect(out).toContain('type_var.is_none()');
+        expect(out).toContain('{ Some("perpetual".to_string()) } else { Some((market).market_type.clone()) }');
+        expect(out).not.toContain('let mut type_var: Value');
+    });
+});
+
+describe('ral-90rc R2: a nil-declared Str local in a format! concat whose printed line is already over 400 chars', () => {
+    const run = (name: string, settleDecl: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    safeCurrencyCode (c: Str): Str { return c; }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseMarket (market: Dict): Dict {\n        const baseCurrencyIdentifier = this.safeString (market, 'baseCurrencyIdentifier');\n        const quoteCurrencyIdentifier = this.safeString (market, 'quoteCurrencyIdentifier');\n        const expiryIdentifierString = this.safeString (market, 'expiryIdentifierString');\n        const strikeIdentifierString = this.safeString (market, 'strikeIdentifierString');\n        " + settleDecl + "\n        let symbol = '';\n        settle = this.safeCurrencyCode (this.safeString (market, 'settleId'));\n        if (settle !== undefined) {\n            symbol = baseCurrencyIdentifier + '/' + quoteCurrencyIdentifier + ':' + settle + '-' + expiryIdentifierString + '-' + strikeIdentifierString + '-' + baseCurrencyIdentifier + '-' + quoteCurrencyIdentifier + '-' + expiryIdentifierString;\n        }\n        return this.hold (symbol);\n    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the local is Option<String> and reads in place in the long concat', () => {
+        const out = run ('r90rc-r2-long-concat', 'let settle: Str = undefined;');
+        expect(out).toContain('let mut settle: Option<String> = None;');
+        expect(out).toContain('settle.is_some()');
+        expect(out).toContain('settle.as_deref().unwrap_or("null")');
+        expect(out).not.toContain('let mut settle: Value');
+    });
+});
+
+describe('ral-90rc R3: a nil-declared Str local written from a base credential field', () => {
+    const run = (name: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    secret: string = undefined;\n    options: Dict = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o; }\n    hold (m: any, n: any = undefined): any {\n        return m;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    check (): any {\n        let secret: Str = undefined;\n        if (this.secret !== undefined) {\n            secret = this.secret;\n        } else {\n            secret = this.safeString (this.options, 'l2Secret');\n        }\n" + use + "    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a null-tested local (polymarket ensureL2Credentials) is Option<String>', () => {
+        const out = run ('r90rc-r3-tested', "        const hasL2 = (secret !== undefined);\n        return this.hold (hasL2);\n");
+        expect(out).toContain('let mut secret: Option<String> = None;');
+        expect(out).toContain('secret = self.secret.as_str().map(str::to_owned);');
+        expect(out).toContain('secret.is_some()');
+    });
+    test('negative: a local only boxed into a literal stays Value', () => {
+        const out = run ('r90rc-r3-boxonly', "        return this.hold ({ 'secret': secret });\n");
+        expect(out).toContain('let mut secret: Value = Value::Null;');
+    });
+});

@@ -3139,6 +3139,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNativeStrReturnKind(scope) === 'str' && !this.rustScopeNameNodes(scope, name).some((n: any) => this.rust61xNilStrReturnLocal(n, scope) && this.rustDeclaredNode(n) === declaration)) return undefined;
         let joined: string | undefined = 'null';
         let writes = 0;
+        let baseFieldWrite = false;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             if (isIdentifier(n) && this.rustNilSlotWrite(n) && this.rustDeclaredNode(n) === declaration) {
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return undefined;
@@ -3152,6 +3153,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustDeclaredNode(n) !== declaration) continue;
             const rhs: any = this.unwrapParens(parent.right);
             if (!this.rustNilDecodedWrite(rhs)) writes++;
+            // ral-90rc R3: a write from a base credential field (`x = this.secret`) is admitted only for a native read (below)
+            if (this.rustBaseStrFieldRead(rhs)) baseFieldWrite = true;
             let write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
             // ral-68a R1: `x = p` from an unwritten typed string parameter (`&str` / `Option<&str>` signature slot): the
             // parameter's rebinding holds that string (or Null), read back once as `Option<String>` (rustOptParamText)
@@ -3209,7 +3212,7 @@ export class RustTranspiler extends BaseTranspiler {
             return form !== undefined;
         });
         // without a native read, only repeated native writes (no `Value` decode) or a moving hand-off earn the type
-        if (!ok || (native === 0 && writes <= 1 && !this.rustNilScalarHandOff(declaration, scope, kind, boxed))
+        if (!ok || (native === 0 && (baseFieldWrite || (writes <= 1 && !this.rustNilScalarHandOff(declaration, scope, kind, boxed))))
             || (boxed.length > 0 && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         // boxed uses are checked against the printed method lines
         if (boxed.length > 0) this.rustScalarGuarded.add(declaration);
@@ -3684,8 +3687,20 @@ export class RustTranspiler extends BaseTranspiler {
         // (destructured handle*AndParams slots outside the test tier only: a test-tier reader there reads a `Value` callee)
         const declaration: any = isIdentifier(n) ? this.rustDeclaredNode(n) : undefined;
         const slot = declaration?.kind === SyntaxKind.BindingElement && !this.rustTestTierSource(declaration);
+        // ral-90rc R2: the same for a nil-declared string local's operand (`let x: Str = undefined`, one plain `let`, outside
+        // the test tier): a line the `Value` operand already took over the budget is split by the same build/ pass
+        const nilStr = declaration !== undefined && isVariableDeclaration(declaration) && !this.rustTestTierSource(declaration) && this.rust90rcNilStrDecl(declaration);
         const lines = this.printNode(statement, 0).split('\n');
-        return lines.every((l: string) => column + width(l) <= 400 || (slot && column + l.trim().length > 400));
+        return lines.every((l: string) => column + width(l) <= 400 || ((slot || nilStr) && column + l.trim().length > 400));
+    }
+
+    /** ral-90rc R2: `let x: Str = undefined` (or `: string`), a plain one-declarator `let` statement inside a function. */
+    rust90rcNilStrDecl(declaration: VariableDeclaration): boolean {
+        const list: Node = declaration.parent;
+        if (!isIdentifier(declaration.name) || declaration.type === undefined || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (list.flags & NodeFlags.Const) !== 0 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
+        if (declaration.initializer !== undefined && this.literalKindOfNode(declaration.initializer) !== 'null') return false;
+        return this.primitiveKindOfType(this.typeOfNodeIfAny(declaration.name)) === 'string';
     }
 
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
@@ -5751,6 +5766,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (fresh && isBinaryExpression(node) && this.rustDeclInitPosition(node) && this.rust76eCounterStep(node)) return 'int';
         // ral-52k: a base credential field declared `string` (`this.apiKey`) as an arm of a ternary initializer: a `Str` or `Null`
         if (fresh && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
+        // ral-90rc R3: the same field as the whole right side of `x = this.secret;` into a nil-declared local (rustNilVenueWrite)
+        if (fresh && this.rustNilVenueWrite(node) && this.rustBaseStrFieldRead(node)) return 'ostr';
         // ral-65n: a never-written base-tier parameter declared `Str` / `string` as an arm of a ternary initializer: a `Str` or `Null`
         if (fresh && this.rustTernaryArm(node) && this.rust65nBaseStrParamArm(node)) return 'ostr';
         // ral-53k: `c['code']` of an `Option<Dict>` local (a unified string key) as an arm of a ternary initializer
@@ -11018,7 +11035,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (expressionText !== undefined) return expressionText;
         const marketFieldInit = this.rustMarketFieldScalar(node);
         // ral-73b R1: a never-null `String` field written into an optional string local is that string's `Some`
-        if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : (kind === `o${marketFieldInit.kind}` && marketFieldInit.kind === 'str' && this.rustNilVenueWrite(node) ? `Some(${marketFieldInit.text})` : undefined);
+        if (marketFieldInit !== undefined) return marketFieldInit.kind === kind ? marketFieldInit.text : (kind === `o${marketFieldInit.kind}` && marketFieldInit.kind === 'str' && (this.rustNilVenueWrite(node) || this.rust90rcNilWriteArm(node)) ? `Some(${marketFieldInit.text})` : undefined);
         const boolText = kind === 'bool' && this.literalKindOfNode(node) !== 'boolean' ? this.rustBoolNativeText(node) : undefined; if (boolText !== undefined) return boolText;
         if (kind === 'obool' && this.rust67bBoolLogicalWrite(node)) return wrap(this.printCondition(node, 0).trim());
         if (base === 'str' && this.literalKindOfNode(node) === 'string') return wrap(`${this.quotedStringLiteral(node.text)}.to_string()`);
@@ -11035,7 +11052,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-67b: a cast-receiver length written into a declared-empty `Int` local (`Option<i64>`)
         if (kind === 'oint' && this.rustListLengthInit(node) && this.rust67bCastListLengthRecv(node.expression)) return wrap(this.rustListLengthText(node));
         // ral-52k: a base credential field (`Value` in the struct, `Str` or `Null`) read once as its text
-        if (kind === 'ostr' && this.rustTernaryArm(node) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
+        if (kind === 'ostr' && (this.rustTernaryArm(node) || this.rustNilVenueWrite(node)) && this.rustBaseStrFieldRead(node)) return `${this.printNode(node, 0).trim()}.as_str().map(str::to_owned)`;
         if (kind === 'ostr' && this.rustTernaryArm(node) && this.rust65nBaseStrParamArm(node)) return `${super.printIdentifier(node)}.as_str().map(str::to_owned)`;
         if (kind === 'ostr' && this.rustTernaryArm(node)) { const read = this.rustOptDictStrKeyText(node); if (read !== undefined) return read; }
         if (kind === 'ostr') { const row = this.rustRowFieldStrText(node); if (row !== undefined) return row; }
@@ -16483,7 +16500,10 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-73b R1: or the whole right side of `x = m['k'];` into a nil-declared local (rustNilVenueWrite): the write takes
         // the very field read an initializer would (its `Option` when the local is optional)
         const declInit = isVariableDeclaration(top.parent) && top.parent.initializer === top;
-        const nilWrite = placed && !declInit && !this.rust57kMarketTernaryArm(top) && this.rustNilVenueWrite(top);
+        // ral-90rc R1: or an arm of a ternary that is itself the whole right side of such a nil write (`x = c ? 'lit' : m['type']`):
+        // the arm takes the same field read the direct write takes; the ternary joins it with the other arm's kind
+        const nilArm = placed && !declInit && this.rust90rcNilWriteArm(top);
+        const nilWrite = placed && !declInit && !this.rust57kMarketTernaryArm(top) && (nilArm || this.rustNilVenueWrite(top));
         if (placed && !declInit && !this.rust57kMarketTernaryArm(top) && !nilWrite) return undefined;
         // a `key_read` temporary is owned: the nil write moves its string out (`into_opt_string`, ral-xa's form), no copy
         const keyReadTail = nilWrite ? '.into_opt_string()' : '.as_str().map(str::to_owned)';
@@ -16527,6 +16547,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (field !== undefined) return { kind: 'str', text: `${recv}.${field}.clone()` };
         const optField = RustTranspiler.RUST_MARKET_OPT_STR_FIELDS[key];
         return optField !== undefined ? { kind: 'ostr', text: `${recv}.${optField}.as_deref().map(str::to_owned)` } : undefined;
+    }
+
+    /** ral-90rc R1: `node` (through parens / `as`) is an arm, not the condition, of a ternary that is the whole right side of a
+     *  statement write into a nil-declared local (rustNilVenueWrite). */
+    rust90rcNilWriteArm(node: Node | undefined): boolean {
+        let top: Node | undefined = node;
+        while (top?.parent !== undefined && (isParenthesizedExpression(top.parent) || top.parent.kind === SyntaxKind.AsExpression)) top = top.parent;
+        const cond: Node | undefined = top?.parent;
+        return cond !== undefined && isConditionalExpression(cond) && cond.condition !== top && this.rustNilVenueWrite(cond);
     }
 
     /** ral-57k: an arm of `x = c ? m['quote'] : m['base']` (a statement write into an initialised local, kucoin parseTrade
