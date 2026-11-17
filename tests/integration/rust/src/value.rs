@@ -9,3 +9,8 @@ use crate::helpers::{get_value, Value};
 pub fn get_value_k(obj: &Value, key: &str) -> Value {
     get_value(obj, &Value::Str(key.to_string()))
 }
+
+/// The shared list a list-typed local holds (ccxt-common `value::List`): the
+/// printer types a never-reassigned list local as this alias.
+#[allow(dead_code)]
+pub type List = std::sync::Arc<Vec<Value>>;

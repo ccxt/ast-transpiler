@@ -629,6 +629,12 @@ pub fn is_instance(_v: &Value, _t: &Value) -> bool {
     false
 }
 
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Value::Str(s)
+    }
+}
+
 impl From<&str> for Value {
     fn from(s: &str) -> Self {
         Value::Str(s.to_string())
