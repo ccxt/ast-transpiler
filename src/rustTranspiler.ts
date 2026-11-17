@@ -28624,13 +28624,13 @@ export class RustTranspiler extends BaseTranspiler {
     /** A never-written `const d = this.safeDict (<this.urls[..] read>, '<lit>', {})` of the same function: its literal-key
      *  entries are the url strings (or Null) the `this.urls[..]['<lit>'][..]` chain reads. */
     rustWsUrlsDictAlias(node: Node): boolean {
-        const declaration: any = this.rustDeclaredNode(node);
+        const declaration: Node | undefined = this.rustDeclaredNode(node);
         if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.name === node || declaration.initializer === undefined
             || (declaration.parent?.flags & NodeFlags.Const) === 0 || this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(node)) return false;
-        const init: any = this.unwrapParens(declaration.initializer);
+        const init: Expression = this.unwrapParens(declaration.initializer);
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword
             || String(init.expression.name.text) !== 'safeDict' || init.arguments.length < 2 || !isStringLiteral(init.arguments[1])) return false;
-        const fallback: any = init.arguments[2];
+        const fallback: Expression | undefined = init.arguments[2];
         if (fallback !== undefined && !(isObjectLiteralExpression(fallback) && fallback.properties.length === 0)) return false;
         return this.rustWsUrlRead(init.arguments[0]);
     }
