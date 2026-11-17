@@ -36637,7 +36637,7 @@ function ccxtGo90g2FilledBefore (goTranspiler, use, name: string): boolean {
         return nonNilBlock.call(this, use, name) || (ccxtGo90g2State.on && ccxtGo90g2FilledBefore(this, use, name));
     };
     const keepsMap = GoTranspiler.prototype.goMapLocalUseKeepsMap;
-    GoTranspiler.prototype.goMapLocalUseKeepsMap = function (ref, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string) {
+    GoTranspiler.prototype.goMapLocalUseKeepsMap = function (ref, rebinds: Set<Node>, noDefault: boolean, ws: boolean, name: string) {
         if (keepsMap.call(this, ref, rebinds, noDefault, ws, name)) {
             return true;
         }
