@@ -25871,3 +25871,44 @@ describe('ral-92rc R3: a nil-declared Str local written from awaited venue strin
         expect(out).toContain('let mut url: Value = Value::Null;');
     });
 });
+
+describe('pass-through venue string helpers: `fromEp (ep: Str, market): Str` prints -> Option<String>; its result locals need a native use', () => {
+    const mk = () => {
+        const dir = path.join (rustFixtureRoot, 'r92-pass-through-str');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/phemex.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str, Int } from './base/Exchange.js';\nexport default class phemex extends Exchange {\n    fromEn (en: Str, scale: Int): Str {\n        if (en === undefined || scale === undefined) {\n            return undefined;\n        }\n        return en + 'x';\n    }\n    fromEp (ep: Str, market: Market = undefined): Str {\n        if ((ep === undefined) || (market === undefined)) {\n            return ep;\n        }\n        return this.fromEn (ep, this.safeInteger (market, 'priceScale'));\n    }\n    parseIt (ticker: Dict, market: Market = undefined): Dict {\n        const last = this.fromEp (this.safeString (ticker, 'l'), market);\n        const open = this.fromEp (this.safeString (ticker, 'o'), market);\n        let fee: Dict = undefined;\n        if (last !== undefined) {\n            fee = { 'cost': last };\n        }\n        return { 'open': open, 'fee': fee };\n    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/phemex.ts')).content;
+    };
+    test('the helper returns Option<String>; a local with a native test is typed, a box-only local stays Value', () => {
+        const out = mk();
+        expect(out).toMatch(/fn fromEp\([^)]*\) -> Option<String>/);
+        const t = out.slice(out.indexOf('fn parseIt'));
+        expect(t).toContain('let mut last: Option<String> = ');
+        expect(t).toContain('last.is_some()');
+        expect(t).toContain('let mut open: Value = ');
+    });
+    test('the helper keeps the by-name dispatch arm it had as `-> Value`', () => {
+        const dir = path.join (rustFixtureRoot, 'r92-pass-through-str');
+        const r: any = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/phemex.ts'));
+        expect((r.rustSignatures ?? []).find((s: { name: string }) => s.name === 'from_ep')?.ret).toBe('keptostr');
+    });
+});
+
+describe('string-list ternaries: `c ? this.symbols : symbols` / `c ? [] : outcomes` are optional lists when every use is native', () => {
+    const mk = () => {
+        const dir = path.join (rustFixtureRoot, 'r92-str-list-ternary');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Strings = string[] | undefined;\nexport default class Exchange {\n    symbols: string[] = undefined;\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    limits (symbols: Strings = undefined, params: Dict = {}): Dict {\n        const resolved = (symbols === undefined) ? this.symbols : symbols;\n        if (resolved === undefined) {\n            return {};\n        }\n        const result: Dict = {};\n        for (let i = 0; i < resolved.length; i++) {\n            result[resolved[i]] = 1;\n        }\n        return result;\n    }\n    handed (symbols: Strings = undefined): Dict {\n        const list = (symbols === undefined) ? [] : symbols;\n        return { 'n': list.length, 'list': list };\n    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('native-only uses: Option<List> with is_none / slice reads; a boxed hand-off stays Value', () => {
+        const out = mk();
+        const a = out.slice(out.indexOf('fn limits'), out.indexOf('fn handed'));
+        expect(a).toContain('let mut resolved: Option<crate::value::List> = ');
+        expect(a).toContain('resolved.is_none()');
+        const b = out.slice(out.indexOf('fn handed'));
+        expect(b).toContain('let mut list: Value = ');
+    });
+});

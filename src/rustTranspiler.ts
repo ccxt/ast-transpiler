@@ -3194,6 +3194,7 @@ export class RustTranspiler extends BaseTranspiler {
         let joined: string | undefined = 'null';
         let writes = 0;
         let baseFieldWrite = false;
+        let passThroughWrite = false;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             if (isIdentifier(n) && this.rustNilSlotWrite(n) && this.rustDeclaredNode(n) === declaration) {
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return undefined;
@@ -3210,6 +3211,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-90rc R3: a write from a base credential field (`x = this.secret`), a literal-key `this.urls` read or a venue string
             // method (rustVenueTypedCall) is admitted only for a native read (below)
             if (this.rustBaseStrFieldRead(rhs) || this.rustWsUrlRead(rhs) || this.rustVenueTypedCall(rhs) === 'ostr') baseFieldWrite = true;
+            if (this.rustPassThroughStrCallIn(rhs)) passThroughWrite = true;
             let write = isIdentifier(rhs) && this.literalKindOfNode(rhs) !== 'null' ? (this.rustScalarIdentifierKind(rhs) ?? (this.rustNilValueStrAlias(rhs) ? 'ostr' : undefined)) : this.rustScalarValueKind(rhs, true);
             // ral-68a R1: `x = p` from an unwritten typed string parameter (`&str` / `Option<&str>` signature slot): the
             // parameter's rebinding holds that string (or Null), read back once as `Option<String>` (rustOptParamText)
@@ -3267,6 +3269,8 @@ export class RustTranspiler extends BaseTranspiler {
             return form !== undefined;
         });
         // without a native read, only repeated native writes (no `Value` decode) or a moving hand-off earn the type
+        // a write from a pass-through venue string helper earns the type only with a native read (boxed straight back it moves the conversion)
+        if (ok && native === 0 && passThroughWrite) return undefined;
         if (!ok || (native === 0 && (baseFieldWrite || (writes <= 1 && !this.rustNilScalarHandOff(declaration, scope, kind, boxed))))
             || (boxed.length > 0 && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         // boxed uses are checked against the printed method lines
@@ -5367,6 +5371,8 @@ export class RustTranspiler extends BaseTranspiler {
         const storeOnly = guarded && nativeUses === 0 && boxed === 1 && !handOff;
         // ral-90re R1: a string local boxed into a pushed `this.parseNumber` pair is typed only for a native use elsewhere (a box alone moves the conversion)
         if (ok && nativeUses === 0 && this.rust90rePairAdmitted.has(declaration)) return undefined;
+        // a local fed by a pass-through venue string helper (`fromEp`: returns its own parameter on one path) is typed only for a native use
+        if (ok && nativeUses === 0 && this.rustPassThroughStrCallIn(declaration.initializer)) return undefined;
         // ral-90re R3: a ternary over `String` fields of an owned `safeMarket` local is typed only for a native use (boxed straight back it moves the conversion)
         if (ok && nativeUses === 0 && kind === 'str' && this.rust90reSmktArmTernary(declaration.initializer)) return undefined;
         // ral-84e: a record-arm ternary string is typed only for a native use (boxed straight back it stays the `Value` it is handed as)
@@ -13744,6 +13750,50 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
+    /** `node` is fed by a venue string helper that returns one of its own parameters on some path (phemex `fromEp`): the
+     *  call itself, a reader / parse call taking it whole (not `omitZero`, whose result was typed before), or a call taking
+     *  a local initialised from it. */
+    rustPassThroughStrCallIn(node: Node, depth = 0): boolean {
+        const n: Node | undefined = node === undefined ? undefined : this.unwrapParensNode(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (this.rustNativeStrCalleeKind(n) === 'str' && this.rustPassThroughStrMethod(this.rustScalarCallee(n))) return true;
+        if (depth > 0 || String(n.expression.name.text) === 'omitZero') return false;
+        return n.arguments.some((a: Node) => {
+            const arg: Node = this.unwrapParensNode(a);
+            if (arg !== undefined && isIdentifier(arg)) {
+                const decl: Node | undefined = this.rustDeclaredNode(arg);
+                return decl !== undefined && isVariableDeclaration(decl) && decl.initializer !== undefined && this.rustPassThroughStrCallIn(decl.initializer, 1);
+            }
+            return this.rustPassThroughStrCallIn(arg, 1);
+        });
+    }
+
+    // venue string helpers whose `: Str` return was spelled with their callers already typed elsewhere: only their results need
+    // the native-use proof (other pass-through `Str` helpers keep the decisions they had)
+    private static readonly RUST_PASS_THROUGH_STR_HELPERS: Record<string, string[]> = {
+        'phemex.ts#phemex': [ 'fromEp', 'fromEv', 'fromEr' ], 'pro/phemex.ts#phemex': [ 'fromEp', 'fromEv', 'fromEr' ],
+    };
+
+    rustPassThroughStrMethod(method: Node | undefined): boolean {
+        if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.lastIndexOf('/ts/src/');
+        const cls = method.parent.name;
+        if (at < 0 || cls === undefined) return false;
+        if (!(RustTranspiler.RUST_PASS_THROUGH_STR_HELPERS[`${file.slice(at + '/ts/src/'.length)}#${String(cls.text)}`] ?? []).includes(String(method.name.text))) return false;
+        const params = new Set<Node>(method.parameters);
+        const body: Node = method.body;
+        let found = false;
+        const visit = (n: Node) => {
+            if (found || (n !== body && isFunctionLike(n))) return;
+            const value: Node | undefined = isReturnStatement(n) && n.expression !== undefined ? this.unwrapParensNode(n.expression) : undefined;
+            if (value !== undefined && isIdentifier(value) && params.has(this.rustDeclaredNode(value))) { found = true; return; }
+            n.forEachChild(visit);
+        };
+        body.forEachChild(visit);
+        return found;
+    }
+
     /** ral-90re R3: a ternary initializer one of whose arms is a field read of an owned `safeMarket` (`smkt`) local. */
     rust90reSmktArmTernary(init: Node): boolean {
         const node: Node = this.unwrapParens(init);
@@ -14485,7 +14535,9 @@ export class RustTranspiler extends BaseTranspiler {
         'blofin.ts#blofin': [ 'networkCodeToChainId' ], 'dydx.ts#dydx': [ 'hashMessage' ], 'modetrade.ts#modetrade': [ 'hashMessage' ],
         'polymarket.ts#polymarket': [ 'hashMessage', 'signMessage', 'signHash' ],
         // yd: pro phemex fromEn joins venue phemex fromEn's `-> Option<String>` group; its by-name `from_en` arm stays
-        'pro/phemex.ts#phemex': [ 'fromEn' ],
+        'pro/phemex.ts#phemex': [ 'fromEn', 'fromEp', 'fromEv', 'fromEr' ],
+        // phemex fromEp / fromEv / fromEr: typed `Str` after their by-name arms existed (REST and pro), the arms stay
+        'phemex.ts#phemex': [ 'fromEp', 'fromEv', 'fromEr' ],
         // ral-52k: typed by name (no ts/src declaration change); its by-name arm boxes the `Option<String>` once
         'hyperliquid.ts#hyperliquid': [ 'updateSpotCurrencyCode' ],
     };
@@ -32247,6 +32299,9 @@ export class RustTranspiler extends BaseTranspiler {
         const nil = this.rustOptListNilInit(declaration);
         // ral-80c R1: or a copy of an unwritten parameter whose typed signature slot is `Option<Vec<String>>` / `Vec<String>`
         const strVecAlias = !nil && this.rust80cStrVecParamAlias(init);
+        // a ternary whose two arms are each a string-list source (an unwritten `Strings` parameter, `this.symbols` / `this.ids`,
+        // a string-literal list) holds that list or Null: the optional list, typed only for a native use
+        const listTernary = !nil && !strVecAlias && this.rustStrListTernary(init);
         // ral-80d: a `const x = this.safeValue* (..)` tested with `Array.isArray (x)`: x splits once into the list it holds
         // (`Option<List>`) and the map it holds (`x__map: Option<Dict>`); anything else (Null, scalars) is None in both
         // ral-87rf R1: or a `const x = await this.<implicit endpoint> (..)` (any declared answer: a map, a list, a string) tested
@@ -32261,7 +32316,7 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustSkipWrappers(declaration.initializer)?.kind === SyntaxKind.AwaitExpression && !this.rustTestTierSource(init)
             && this.rustDeclaredEndpointKind(init) === 'list' && String(init.getText()).split('\n')[0].length <= 240;
         const split = split0 && !declaredList;
-        if (!nil && !strVecAlias && !split && !declaredList && !this.rustOptListSource(init)) return false;
+        if (!nil && !strVecAlias && !split && !declaredList && !listTernary && !this.rustOptListSource(init)) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -32380,7 +32435,9 @@ export class RustTranspiler extends BaseTranspiler {
             return extra !== undefined;
         });
         // D11: a list that is only handed on is held too (the handle box replaces the Value box).
-        if (!safe || (nil && (writes === 0 || natives === 0)) || (split && isArrayTests === 0) || (declaredList && natives === 0)) return false;
+        if (!safe || (nil && (writes === 0 || natives === 0)) || (split && isArrayTests === 0) || ((declaredList || listTernary) && natives === 0)) return false;
+        // a list ternary takes no box back (a `Value::Arr` hand-off would only move the conversion)
+        if (listTernary && boxes.some(([, form]) => form !== 'lend')) return false;
         // stack-90r: a split local that takes a ral-90rf R1 map box or R2 rejoin is typed only when it needs at most ONE box in
         // all (map boxes, rejoins and list-arm clone / move boxes; a `&x` lend is no box): one needing more stays the `Value` it was (alpaca cancelAllOrders,
         // tokocrypto fetchTickers, whitebit fetchMyTrades)
@@ -32544,6 +32601,19 @@ export class RustTranspiler extends BaseTranspiler {
             if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'push') return false;
         }
         return true;
+    }
+
+    /** `c ? a : b` where each arm is an unwritten string-list parameter, a base `string[]` field or a string-literal list. */
+    rustStrListTernary(init: Node | undefined): boolean {
+        const node: Node | undefined = init === undefined ? undefined : this.rustSkipWrappers(init);
+        if (node === undefined || !isConditionalExpression(node) || String(node.getText()).split('\n')[0].length > 240) return false;
+        const arm = (e: Expression): boolean => {
+            const a: Node | undefined = this.rustSkipWrappers(e);
+            if (a === undefined) return false;
+            if (isArrayLiteralExpression(a)) return a.elements.every((x: Node) => isStringLiteral(x));
+            return this.rust80cStrVecParamAlias(a as Expression) || this.rust80cBaseStrListField(a as Expression);
+        };
+        return arm(node.whenTrue) && arm(node.whenFalse);
     }
 
     /** ral-80c R1: `this.symbols` / `this.ids`, base fields declared `string[]` (always a list). */
