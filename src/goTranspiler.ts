@@ -4421,8 +4421,8 @@ const CCXT_GO_TS_SRC_IMPORT_CACHE = new Map ();
 
 function ccxtGoGeneralAnnotatedReturnTypes (node, type, key) {
     const name = node.name?.text;
-    if ((typeof name !== 'string') || CCXT_GO_PARSE_METHOD.test (name)) {
-        return undefined; // the parse* family keeps its own mapping
+    if ((typeof name !== 'string') || (CCXT_GO_PARSE_METHOD.test (name) && ((key !== 'string') || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name)))) {
+        return undefined; // the parse* family keeps its own mapping, except a closed venue `string` return
     }
     if ((key === 'Int') && (node.type?.getText () === 'Int')) {
         return CCXT_GO_GENERAL_ANNOTATED_RETURN_NATIVE['Int'];
@@ -38855,7 +38855,8 @@ function goTypedVenueProducerType (goTranspiler, node): string | undefined {
         return GO_TYPED_VENUE_PRODUCER_CACHE.get (node);
     }
     GO_TYPED_VENUE_PRODUCER_CACHE.set (node, undefined);
-    const result = goTypedVenueProducerTypeUncached (goTranspiler, node) ?? (goTypedVenueStringListProducer (goTranspiler, node) ? '[]any' : undefined);
+    const result = goTypedVenueProducerTypeUncached (goTranspiler, node) ?? (goTypedVenueStringListProducer (goTranspiler, node) ? '[]any' : undefined)
+        ?? ((goPagedListProducerLocal (goTranspiler, node) !== undefined) ? '[]any' : undefined);
     GO_TYPED_VENUE_PRODUCER_CACHE.set (node, result);
     return result;
 }
@@ -40199,3 +40200,139 @@ GoTranspiler.prototype.goTernaryJoin93StatementGuarded = function (declaration, 
     return false;
 };
 // ===== ral-93g7 (end) =====
+
+// Venue `any[]` / `Dict[]` producers returning one const list local read from
+// `this.safeList (o, k, [])` / `this.safeListN (o, ks, [])` (never nil), used only by `.length`,
+// element reads / writes and the return: the local and the signature print []any.
+const GO_PAGED_LIST_PRODUCER_CACHE = new WeakMap ();
+function goPagedListReader (initializer): string | undefined {
+    const e = goTypedVenueUnparen (initializer);
+    const callee = (e?.kind === SyntaxKind.CallExpression) ? e.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (e.arguments.length !== 3) || e.arguments.some ((a) => a.kind === SyntaxKind.SpreadElement)) {
+        return undefined;
+    }
+    const fallback = goTypedVenueUnparen (e.arguments[2]);
+    if ((fallback?.kind !== SyntaxKind.ArrayLiteralExpression) || (fallback.elements.length !== 0)) {
+        return undefined;
+    }
+    return { 'safeList': 'SafeListTypedDefault', 'safeListN': 'this.SafeListNSliceDefault' }[callee.name?.text];
+}
+function goPagedListProducerLocal (goTranspiler, node) {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined)) {
+        return undefined;
+    }
+    if (GO_PAGED_LIST_PRODUCER_CACHE.has (node)) {
+        return GO_PAGED_LIST_PRODUCER_CACHE.get (node);
+    }
+    GO_PAGED_LIST_PRODUCER_CACHE.set (node, undefined);
+    const result = goPagedListProducerLocalUncached (goTranspiler, node);
+    GO_PAGED_LIST_PRODUCER_CACHE.set (node, result);
+    return result;
+}
+function goPagedListProducerLocalUncached (goTranspiler, node) {
+    const annotation = node.type?.getText ()?.replace (/\s+/g, '');
+    const name = node.name?.text;
+    const fileName = String (node.getSourceFile?.()?.fileName ?? '');
+    if (((annotation !== 'any[]') && (annotation !== 'Dict[]')) || (typeof name !== 'string') || /(^|[\\/])base[\\/]/.test (fileName)
+        || !/(^|[\\/])ts[\\/]src[\\/]/.test (fileName) || goTranspiler.isAsyncFunction (node)
+        || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name) || goTranspiler.goMethodKeepsBaseSignature?.(node)) {
+        return undefined;
+    }
+    const reserved = ccxtGoReservedMethodNames (node);
+    if ((reserved !== undefined) && (reserved.has (name) || reserved.has (name.charAt (0).toUpperCase () + name.slice (1)))) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    if ((returns.length === 0) || returns.some ((r) => goTypedVenueUnparen (r.expression)?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const declarations = new Set (returns.map ((r) => goTranspiler.goDeclarationOfIdentifier (goTypedVenueUnparen (r.expression))));
+    const declaration = [ ...declarations ][0];
+    if ((declarations.size !== 1) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((declaration.parent?.flags & NodeFlags.Const) === 0) || (goTranspiler.goEnclosingFunction (declaration) !== node)
+        || (goPagedListReader (declaration.initializer) === undefined)) {
+        return undefined;
+    }
+    const local = declaration.name.text;
+    const unsafe = goTranspiler.hasNodeWhere (node.body, (n) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter || n.kind === SyntaxKind.BindingElement)
+            && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === local)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== local) || (n === declaration.name)) {
+            return false;
+        }
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+            return false;
+        }
+        if (goTranspiler.goDeclarationOfIdentifier (n) !== declaration) {
+            return true;
+        }
+        return !(((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name?.text === 'length'))
+            || ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n))
+            || (parent?.kind === SyntaxKind.ReturnStatement));
+    });
+    return unsafe ? undefined : declaration;
+}
+function goPagedListLocalOf (goTranspiler, declaration): boolean {
+    const method = (declaration?.kind === SyntaxKind.VariableDeclaration) ? goTranspiler.goEnclosingFunction (declaration) : undefined;
+    return (method !== undefined) && (goPagedListProducerLocal (goTranspiler, method) === declaration);
+}
+{
+    const listType = GoTranspiler.prototype.goSafeListLocalUnbox;
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        return goPagedListLocalOf (this, declaration) ? GO_SAFE_LIST_LOCAL_TYPE : listType.call (this, declaration);
+    };
+    const listValue = GoTranspiler.prototype.goSafeListUnboxValue;
+    GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
+        if (goPagedListLocalOf (this, declaration)) {
+            const call = goTypedVenueUnparen (declaration.initializer);
+            const args = call.arguments.map ((a, i) => this.printNode (a, i === 0 ? identation : 0).trim ());
+            return goPagedListReader (call) + '(' + args.join (', ') + ')';
+        }
+        return listValue.call (this, declaration, identation);
+    };
+}
+// a paged list local, or a never-rebound caller local holding its producer's result, holds decoded JSON
+// rows: no element is a Go scalar pointer, so an element read needs no DerefScalar
+function goPagedListRowsLocal (goTranspiler, list): boolean {
+    if (list?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration = goTranspiler.goDeclarationOfIdentifier (list);
+    if (goPagedListLocalOf (goTranspiler, declaration)) {
+        return true;
+    }
+    const call = goTypedVenueUnparen (declaration?.initializer);
+    const callee = (call?.kind === SyntaxKind.CallExpression) ? call.expression : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const method = goTranspiler.goMethodDeclarationOfCallee (callee);
+    return (goPagedListProducerLocal (goTranspiler, method) !== undefined)
+        && (goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), list.text, declaration).length === 0);
+}
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return goPagedListRowsLocal (this, list) || pointerFree.call (this, list, depth);
+    };
+    const elementRead = GoTranspiler.prototype.goNativeListElementRead;
+    GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: string, keyNode, keyStr: string): string | undefined {
+        const shipped = elementRead.call (this, node, containerStr, keyNode, keyStr);
+        if ((shipped === undefined) || !goPagedListRowsLocal (this, node?.expression) || (this.goGb08BoundedListRead (node, keyNode) !== undefined)
+            || this.goBoundedLoopListRead (node)) {
+            return shipped;
+        }
+        if (!goPagedListLocalOf (this, this.goDeclarationOfIdentifier (node.expression))) {
+            return `GetValue(${containerStr}, ${keyStr})`; // a caller's unbounded read keeps its helper (no closure)
+        }
+        // the same guarded read without the DerefScalar a pointer element would need
+        const level = this.goStatementLevel;
+        const body = this.getIden (level + 1);
+        return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden (level + 2)}return ${containerStr}[${keyStr}]\n${body}}\n${body}return nil\n${this.getIden (level)}}()`;
+    };
+}
