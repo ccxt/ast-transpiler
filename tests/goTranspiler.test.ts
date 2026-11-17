@@ -16637,3 +16637,144 @@ describe('92g1 string pair slot consumers', () => {
         expect(out).toContain('networkCode = SafeStringPtr(networkCodequeryVariable[0])');
     });
 });
+
+describe ('ral-92g2 R1 string-list reader locals', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type Strings = string[] | undefined;\n' +
+        'export class Exchange {\n' +
+        '    safeList2 (a: any, k1: any, k2: any, d: any = undefined): any[] { return a; }\n' +
+        '    safeListN (a: any, ks: any[], d: any = undefined): any[] { return a; }\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'r92g2-'));
+        try {
+            const src = path.join (tmp, 'ts', 'src');
+            fs.mkdirSync (src, { recursive: true });
+            const file = path.join (src, 'x.ts');
+            fs.writeFileSync (file, PRELUDE + members + '}\n');
+            return new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } }).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    const body = '    f (params: Dict, trigger: boolean): Dict {\n' +
+        '        const request: Dict = {};\n' +
+        '        let types: Strings = this.safeList2 (params, "types", "order_types");\n' +
+        '        if ((types === undefined) && trigger) {\n' +
+        '            types = [ "a", "b" ];\n' +
+        '        }\n' +
+        '        if (types !== undefined) {\n' +
+        '            request["types"] = types.join (",");\n' +
+        '        }\n' +
+        '        const ids = this.safeListN (params, [ "ids", "client_ids" ]);\n' +
+        '        if (ids !== undefined) {\n' +
+        '            request["ids"] = ids.join (",");\n' +
+        '        }\n' +
+        '        return request;\n' +
+        '    }\n';
+    test ('a safeList2 / safeListN local only nil-tested and joined is a []string read by strings.Join', () => {
+        const out = run (body);
+        expect (out).toContain ('var types []string = this.SafeList2Strings(params, "types", "order_types")');
+        expect (out).toContain ('types = []string{"a", "b"}');
+        expect (out).toContain ('strings.Join(types, ",")');
+        expect (out).toContain ('var ids []string = this.SafeListNStrings(params, []any{"ids", "client_ids"})');
+        expect (out).toContain ('strings.Join(ids, ",")');
+    });
+    test ('a local also handed on whole keeps the box', () => {
+        const out = run (body.replace ('return request;', 'request["raw"] = ids;\n        return request;'));
+        expect (out).not.toContain ('var ids []string');
+        expect (out).toContain ('var types []string');
+    });
+});
+
+describe ('ral-92g2 R2 expression-defaulted list locals read by length-bounded loops', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'export class Exchange {\n' +
+        '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): string { return a; }\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'r92g2b-'));
+        try {
+            const src = path.join (tmp, 'ts', 'src');
+            fs.mkdirSync (src, { recursive: true });
+            const file = path.join (src, 'x.ts');
+            fs.writeFileSync (file, PRELUDE + members + '}\n');
+            return new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } }).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    const body = '    f (response: any): Dict {\n' +
+        '        const result: Dict = {};\n' +
+        '        const balances = this.safeList (response, "balances", response);\n' +
+        '        for (let i = 0; i < balances.length; i++) {\n' +
+        '            const balance = this.safeDict (balances, i);\n' +
+        '            result[this.safeString (balance, "asset")] = balance;\n' +
+        '        }\n' +
+        '        return result;\n' +
+        '    }\n';
+    test ('the local is the SafeListSlice slice and its length is len', () => {
+        const out = run (body);
+        expect (out).toContain ('var balances []any = this.SafeListSlice(response, "balances", response)');
+        expect (out).toContain ('i < len(balances)');
+    });
+    test ('a read outside the bounded loop keeps the box', () => {
+        const out = run (body.replace ('return result;', 'result["first"] = this.safeDict (balances, 0);\n        return result;'));
+        expect (out).not.toContain ('var balances []any');
+    });
+});
+
+describe ('ral-92g2 R3 nil-tested safeListN loop lists and aliased length bounds', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'export class Exchange {\n' +
+        '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n' +
+        '    safeListN (a: any, ks: any[], d: any = undefined): any[] { return a; }\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): string { return a; }\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'r92g2c-'));
+        try {
+            const src = path.join (tmp, 'ts', 'src');
+            fs.mkdirSync (src, { recursive: true });
+            const file = path.join (src, 'x.ts');
+            fs.writeFileSync (file, PRELUDE + members + '}\n');
+            return new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } }).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    test ('a no-default safeListN local nil-tested and looped is the SafeListNSlice slice', () => {
+        const out = run ('    f (r: any): Dict {\n' +
+            '        const result: Dict = {};\n' +
+            '        const rows = this.safeListN (r, [ "list", "rows" ]);\n' +
+            '        if (rows === undefined) {\n' +
+            '            return result;\n' +
+            '        }\n' +
+            '        for (let i = 0; i < rows.length; i++) {\n' +
+            '            const row = this.safeDict (rows, i);\n' +
+            '            result[this.safeString (row, "id")] = row;\n' +
+            '        }\n' +
+            '        return result;\n' +
+            '    }\n');
+        expect (out).toContain ('var rows []any = this.SafeListNSlice(r, []any{"list", "rows"})');
+        expect (out).toContain ('if rows == nil {');
+        expect (out).toContain ('i < len(rows)');
+    });
+    test ('a loop bounded by a const length alias reads the SafeListSlice slice', () => {
+        const out = run ('    f (r: any, d: any): Dict {\n' +
+            '        const result: Dict = {};\n' +
+            '        const rows = this.safeList (r, "data", d);\n' +
+            '        const n = rows.length;\n' +
+            '        for (let i = 0; i < n; i++) {\n' +
+            '            const row = this.safeDict (rows, i);\n' +
+            '            result[this.safeString (row, "id")] = row;\n' +
+            '        }\n' +
+            '        return result;\n' +
+            '    }\n');
+        expect (out).toContain ('var rows []any = this.SafeListSlice(r, "data", d)');
+        expect (out).toContain ('var n int = len(rows)');
+    });
+});
