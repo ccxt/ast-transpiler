@@ -25443,3 +25443,110 @@ describe('ral-90re R4: two string locals ordered against each other', () => {
         expect(out).toContain('(match (Some(version.as_str()), Some(held.as_str())) { (Some(__x), Some(__y)) => (match (__x.parse::<f64>(), __y.parse::<f64>()) { (Ok(__p), Ok(__q)) => __p < __q, _ => __x < __y }) || __x == __y, (None, None) => true, _ => false })');
     });
 });
+
+describe('ral-90rf R1: a Dict / List endpoint split by Array.isArray boxes its held map back outside the list arm', () => {
+    const mk = (name: string, ret: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    publicGetTicker (params = {}): Promise<" + ret + "> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const early = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (!Array.isArray (response)) {\n            return this.keep ([ response ]);\n        }\n        return this.keep (response);\n    }\n";
+    const elseArm = "    async m (params = {}) {\n        const response = await this.publicGetTicker (params);\n        if (Array.isArray (response)) {\n            return this.keep (response);\n        } else {\n            return this.keep ({ 'info': response });\n        }\n    }\n";
+    test('tokocrypto fetchTickers: the map held after an exiting negated test is boxed back whole', () => {
+        const out = mk ('ral-90rf-r1a', 'Dict | List', early);
+        expect(out).toContain('let (mut response, response__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match self.public_get_ticker(');
+        expect(out).toContain('if !(response.is_some())');
+        expect(out).toContain('response__map.clone().map_or(Value::Null, Value::Dict)');
+        expect(out).toContain('self.keep(response.map_or(Value::Null, Value::Arr))');
+    });
+    test('alpaca cancelAllOrders: a List endpoint read whole in the else arm', () => {
+        const out = mk ('ral-90rf-r1b', 'List', elseArm);
+        expect(out).toContain('if (response.is_some())');
+        expect(out).toMatch(/response__map(\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)/);
+        expect(out).not.toMatch(/let mut response: Value = /);
+    });
+    test('negative: an endpoint that may answer a string keeps the boxed local', () => {
+        const out = mk ('ral-90rf-r1n', 'Dict | List | string', early);
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+});
+
+describe('ral-90rf R2: a Dict / List endpoint split also rejoins outside both arms and gives Object.keys its map', () => {
+    const mk = (name: string, ret: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    privateGetLeverage (params = {}): Promise<" + ret + "> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const rejoin = "    async m (params = {}) {\n        const response = await this.privateGetLeverage (params);\n        let safeResponse = [];\n        if (Array.isArray (response)) {\n            safeResponse = response;\n        }\n        return this.keep ({ 'info': response, 'rows': safeResponse });\n    }\n";
+    const keys = "    async m (params = {}) {\n        const response = await this.privateGetLeverage (params);\n        if (Array.isArray (response)) {\n            return this.keep (response);\n        } else {\n            const ids = Object.keys (response);\n            return this.keep (ids);\n        }\n    }\n";
+    test('btse fetchLeverage: a whole use after the test rejoins the answer from the half that holds it', () => {
+        const out = mk ('ral-90rf-r2a', 'List', rejoin);
+        expect(out).toContain('(match response { Some(__l) => Value::Arr(__l), None => response__map.map_or(Value::Null, Value::Dict) })');
+        expect(out).not.toMatch(/let mut response: Value = /);
+    });
+    test('whitebit fetchMyTrades: Object.keys in the map arm reads the held map', () => {
+        const out = mk ('ral-90rf-r2b', 'Dict | List', keys);
+        expect(out).toContain('if (response.is_some())');
+        expect(out).toMatch(/response__map(\.clone\(\))?\.map_or\(Value::Null, Value::Dict\)/);
+    });
+    test('negative: a Dict | List | string endpoint read whole after the test stays Value', () => {
+        const out = mk ('ral-90rf-r2n', 'Dict | List | string', rejoin);
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+});
+
+describe('ral-90rf R3: a const answer of a declared Promise<Dict> endpoint tested for null holds Option<Dict>', () => {
+    const mk = (name: string, ret: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    privateGetOrder (params = {}): Promise<" + ret + "> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = "    async m (params = {}) {\n        const response = await this.privateGetOrder (params);\n        if (response === undefined) {\n            return this.hold (params);\n        }\n        return this.safeDict (response, 'order', {});\n    }\n";
+    test('hollaex fetchOrder: the null test reads the optional map', () => {
+        const out = mk ('ral-90rf-r3a', 'Dict', body);
+        expect(out).toMatch(/let mut response: Option<crate::value::Dict> = self\.private_get_order\([\s\S]*?\)\.await\.into_opt_dict\(\);/);
+        expect(out).toContain('if (response.is_none())');
+    });
+    test('negative: a Promise<List> endpoint is not held as a map', () => {
+        const out = mk ('ral-90rf-r3n', 'List', body);
+        expect(out).not.toContain('Option<crate::value::Dict>');
+    });
+});
+
+describe('ral-90rf R4: a const answer of a declared Promise<List> endpoint, null-tested, holds Option<List>', () => {
+    const mk = (name: string, ret: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    keep (o: any): any { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    gammaPublicGetMarkets (params = {}): Promise<" + ret + "> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const body = "    async m (params = {}) {\n        const response = await this.gammaPublicGetMarkets (params);\n        const rawMarkets = (response !== undefined) ? response : [];\n        return this.keep ({ 'markets': rawMarkets });\n    }\n";
+    test('polymarket fetchOutcome: the null test reads is_some() and the arm moves the held list', () => {
+        const out = mk ('ral-90rf-r4a', 'List', body);
+        expect(out).toMatch(/let mut response: Option<crate::value::List> = self\.gamma_public_get_markets\([\s\S]*?\)\.await\.into_opt_list\(\);/);
+        expect(out).toContain('(if (response.is_some()) { response.map_or(Value::Null, Value::Arr) } else { Value::from(vec![]) })');
+    });
+    test('negative: a Promise<Dict> endpoint is not this rule', () => {
+        const out = mk ('ral-90rf-r4n', 'Dict', body);
+        expect(out).not.toContain('into_opt_list()');
+    });
+});
