@@ -303,6 +303,9 @@ function tupleJoinDefaultIsValue (arg) {
     if ((arg?.kind === ts.SyntaxKind.TrueKeyword) || (arg?.kind === ts.SyntaxKind.FalseKeyword)) {
         return true;
     }
+    if (ral87g5SelfDefaultBoolDecl (arg) !== undefined) {
+        return true;                                          // ral-87g5: a bool local defaulting itself
+    }
     const literal = ((arg?.kind === ts.SyntaxKind.PrefixUnaryExpression) && (arg.operator === ts.SyntaxKind.MinusToken))
         ? arg.operand : arg;
     return (literal?.kind === ts.SyntaxKind.NumericLiteral) && /^\d+$/.test (literal.text ?? '');
@@ -7980,6 +7983,10 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     if ((awaitNode === undefined) || (awaitNode.kind !== ts.SyntaxKind.AwaitExpression)) {
         return undefined;
     }
+    const selfDefaultBool = ral87g5AwaitBoolReceive (awaitNode);
+    if (selfDefaultBool !== undefined) {
+        return selfDefaultBool;
+    }
     const text = (printedInitializer ?? '').replace (/\s+/g, ' ').trim ();
     const wsList = ccxtGoWsListStreamReceive (goTranspiler, awaitNode);
     if (wsList !== undefined) {
@@ -11770,6 +11777,9 @@ const CCXT_GO_TUPLE_BOOL_DEFAULT_SLOT = { 'handleOptionBoolAndParams': 3, 'handl
     'handleOptionIntegerAndParams': 3, 'handleOptionIntegerAndParams2': 4 };
 
 function ccxtGoTupleDefaultIsValue (name, arg) {
+    if (!name.startsWith ('handleOptionInteger') && (ral87g5SelfDefaultBoolDecl (arg) !== undefined)) {
+        return true;                            // ral-87g5: a bool local defaulting itself
+    }
     if (name.startsWith ('handleOptionInteger')) {
         const lit = ((arg?.kind === ts.SyntaxKind.PrefixUnaryExpression) && (arg.operator === ts.SyntaxKind.MinusToken)) ? arg.operand : arg;
         return (lit?.kind === ts.SyntaxKind.NumericLiteral) && /^\d+$/.test (lit.text);
@@ -29287,7 +29297,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 arg = arg.operand;
             }
             const literal = (entry.goType === '*bool')
-                ? ((arg?.kind === SyntaxKind.TrueKeyword) || (arg?.kind === SyntaxKind.FalseKeyword))
+                ? ((arg?.kind === SyntaxKind.TrueKeyword) || (arg?.kind === SyntaxKind.FalseKeyword) || (ral87g5SelfDefaultBoolDecl(arg) !== undefined))
                 : ((arg?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(String(arg.text ?? '')));
             if (literal) {
                 return undefined;
@@ -35763,3 +35773,181 @@ function ccxtGo87g2ListLocal (goTranspiler, declaration, mode: 'F' | 'G' | 'I'):
         return inlineEquality.call(this, left, right, leftText, rightText, isEq);
     };
 }
+
+// ---------------------------------------------------------------------------------------------
+// ral-87g5 R1: a bool option local that is its own handleOptionBoolAndParams default.
+//     let uta = false;                      // or: let uta = await this.isUTAEnabled ();
+//     [ uta, rest ] = this.handleOptionBoolAndParams (params, 'm', 'uta', uta);
+// The default argument is a boolean that is never absent, so the call takes the value overload
+// (`defaultValue: boolean`) whose Go twin returns `(bool, map[string]any)`; the local is then a
+// native Go `bool`. Decided from the AST alone: exactly one declaration of the name in the method,
+// initialised by a boolean literal or `await this.isUTAEnabled ()` (Promise<boolean>), and every
+// write is a boolean literal or slot 0 of a bool option call defaulting to the local itself.
+const RAL87G5_BOOL_OPTION_SLOTS = { 'handleOptionBoolAndParams': 3, 'handleOptionBoolAndParams2': 4 };
+const ral87g5SelfDefaultVerdicts = new WeakMap<object, VariableDeclaration | null>();
+
+function ral87g5IsBoolLiteral (node): boolean {
+    return (node?.kind === ts.SyntaxKind.TrueKeyword) || (node?.kind === ts.SyntaxKind.FalseKeyword);
+}
+
+// `await this.isUTAEnabled ()`: BaseExchange.isUTAEnabled is declared Promise<boolean> (and its Go core
+// sends AsyncResult[bool])
+function ral87g5IsUtaAwait (node): boolean {
+    const call = (node?.kind === ts.SyntaxKind.AwaitExpression) ? node.expression : undefined;
+    return (call?.kind === ts.SyntaxKind.CallExpression) && ((call.arguments?.length ?? 0) === 0)
+        && (call.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'isUTAEnabled');
+}
+
+// the bool option call whose default argument is `arg` (an identifier), or undefined
+function ral87g5BoolOptionCallOfDefault (arg) {
+    const call = arg?.parent;
+    const callee = call?.expression;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    const slot = RAL87G5_BOOL_OPTION_SLOTS[String (callee.name?.text)];
+    return ((slot !== undefined) && (call.arguments?.[slot] === arg) && (call.arguments.length === slot + 1)) ? call : undefined;
+}
+
+function ral87g5EnclosingMethod (node) {
+    let scope = node?.parent;
+    while ((scope !== undefined) && !ts.isFunctionLike (scope)) {
+        scope = scope.parent;
+    }
+    return scope;
+}
+
+// `[ x, rest ] = this.handleOptionBoolAndParams (.., x)`: the default argument is the call's own slot-0 target
+function ral87g5DefaultIsOwnTarget (arg): boolean {
+    const call = ral87g5BoolOptionCallOfDefault (arg);
+    const assign = call?.parent;
+    const left = assign?.left;
+    return (assign?.kind === ts.SyntaxKind.BinaryExpression) && (assign.right === call)
+        && (assign.operatorToken.kind === ts.SyntaxKind.EqualsToken) && (left?.kind === ts.SyntaxKind.ArrayLiteralExpression)
+        && (left.elements[0]?.kind === ts.SyntaxKind.Identifier) && (left.elements[0].text === arg.text);
+}
+
+function ral87g5SelfDefaultBoolDecl (arg): VariableDeclaration | undefined {
+    if ((arg?.kind !== ts.SyntaxKind.Identifier) || !ral87g5DefaultIsOwnTarget (arg)) {
+        return undefined;
+    }
+    const name = arg.text;
+    // the outermost function: Go closures share the method's names
+    let method = ral87g5EnclosingMethod (arg);
+    while ((method !== undefined) && (ral87g5EnclosingMethod (method) !== undefined)) {
+        method = ral87g5EnclosingMethod (method);
+    }
+    if (method === undefined) {
+        return undefined;
+    }
+    const declarations = [];
+    const refs = [];
+    const visit = (n) => {
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === name)) {
+            if ((n.parent?.kind === ts.SyntaxKind.VariableDeclaration) && (n.parent.name === n)) {
+                declarations.push (n.parent);
+            } else {
+                refs.push (n);
+            }
+        } else if ((n.kind === ts.SyntaxKind.Parameter) || (n.kind === ts.SyntaxKind.BindingElement)) {
+            if (n.name?.kind !== ts.SyntaxKind.Identifier || n.name.text === name) {
+                declarations.push (n);          // a parameter or binding of the name: not provable here
+            }
+        }
+        n.forEachChild (visit);
+    };
+    method.forEachChild (visit);
+    if (declarations.length !== 1) {
+        return undefined;
+    }
+    const declaration = declarations[0];
+    if (ral87g5SelfDefaultVerdicts.has (declaration)) {
+        return ral87g5SelfDefaultVerdicts.get (declaration) ?? undefined;
+    }
+    let ok = (declaration.kind === ts.SyntaxKind.VariableDeclaration) && (declaration.type === undefined)
+        && (declaration.parent?.parent?.kind === ts.SyntaxKind.VariableStatement)
+        && (declaration.parent.declarations.length === 1)
+        && (ral87g5IsBoolLiteral (declaration.initializer) || ral87g5IsUtaAwait (declaration.initializer));
+    for (const ref of refs) {
+        if (!ok) {
+            break;
+        }
+        const parent = ref.parent;
+        if (ral87g5BoolOptionCallOfDefault (ref) !== undefined) {
+            continue;                           // the default argument itself: a read
+        }
+        if ((parent?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (parent.elements[0] === ref) && (parent.elements.length === 2)
+            && (parent.elements[1]?.kind === ts.SyntaxKind.Identifier)
+            && (parent.parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.parent.left === parent)
+            && (parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+            && (parent.parent.parent?.kind === ts.SyntaxKind.ExpressionStatement)) {
+            const right = parent.parent.right;
+            const slot = (right?.kind === ts.SyntaxKind.CallExpression) ? RAL87G5_BOOL_OPTION_SLOTS[String (right.expression?.name?.text)] : undefined;
+            ok = (slot !== undefined) && (right.arguments[slot]?.kind === ts.SyntaxKind.Identifier) && (right.arguments[slot].text === name)
+                && (ral87g5BoolOptionCallOfDefault (right.arguments[slot]) === right);
+            continue;
+        }
+        if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === ref)) {
+            const op = parent.operatorToken.kind;
+            if ((op === ts.SyntaxKind.EqualsToken) && ral87g5IsBoolLiteral (parent.right) && (parent.parent?.kind === ts.SyntaxKind.ExpressionStatement)) {
+                continue;                       // `uta = true`
+            }
+            ok = (op !== ts.SyntaxKind.EqualsToken) && ((op < ts.SyntaxKind.FirstCompoundAssignment) || (op > ts.SyntaxKind.LastCompoundAssignment));
+            continue;
+        }
+        if ((parent?.kind === ts.SyntaxKind.PrefixUnaryExpression) || (parent?.kind === ts.SyntaxKind.PostfixUnaryExpression)) {
+            ok = (parent.operator === ts.SyntaxKind.ExclamationToken);
+            continue;
+        }
+        if ((parent?.kind === ts.SyntaxKind.ArrayLiteralExpression) || (parent?.kind === ts.SyntaxKind.SpreadElement)
+            || (parent?.kind === ts.SyntaxKind.ShorthandPropertyAssignment) || (parent?.kind === ts.SyntaxKind.DeleteExpression)) {
+            ok = false;
+        }
+    }
+    const verdict = ok ? declaration : undefined;
+    ral87g5SelfDefaultVerdicts.set (declaration, verdict ?? null);
+    return verdict;
+}
+
+// the local's own self-default call must exist, else the literal / await rules already decide it
+function ral87g5SelfDefaultBoolLocal (declaration): boolean {
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const method = ral87g5EnclosingMethod (declaration);
+    let found = false;
+    const visit = (n) => {
+        if (found) {
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === declaration.name.text) && (ral87g5BoolOptionCallOfDefault (n) !== undefined)
+            && (ral87g5SelfDefaultBoolDecl (n) === declaration)) {
+            found = true;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    method?.forEachChild (visit);
+    return found;
+}
+
+function ral87g5AwaitBoolReceive (awaitNode) {
+    const declaration = awaitNode?.parent;
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer !== awaitNode)
+        || !ral87g5IsUtaAwait (awaitNode) || !ral87g5SelfDefaultBoolLocal (declaration)) {
+        return undefined;
+    }
+    return { goType: 'bool', wrap: (recv) => 'PanicOnError(' + recv.trim () + ').(bool)' };
+}
+
+const ral87g5UpstreamLocalType = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+    const known = ral87g5UpstreamLocalType.call(this, declaration, parsedValue);
+    if ((known !== 'any') || !ral87g5IsBoolLiteral(declaration?.initializer) || !ral87g5SelfDefaultBoolLocal(declaration)
+        || this.goTypeNameIsShadowed(this.goEnclosingFunction(declaration), 'bool')) {
+        return known;
+    }
+    return 'bool';
+};

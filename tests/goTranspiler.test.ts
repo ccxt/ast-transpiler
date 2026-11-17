@@ -15356,3 +15356,38 @@ describe('ral-87g4 R1b: an inherited-method local with no native read stays boxe
         }
     });
 });
+
+describe('ral-87g5 R1 a bool option local that is its own default', () => {
+    const fixture = (body: string) => 'type Dict = { [key: string]: any };\nclass X {\n'
+        + '    handleOptionBoolAndParams (params: Dict, methodName: string, optionName: string, defaultValue: any = undefined): [any, Dict] { return [ defaultValue, params ]; }\n'
+        + '    async isUTAEnabled (): Promise<boolean> { return false; }\n'
+        + '    async f (params: Dict = {}) {\n' + body + '        return 2;\n    }\n}\n';
+    test('a literal seed takes the value overload and is a native bool', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const out = x.transpileGo(fixture('        let uta = false;\n        let rest = undefined;\n'
+            + '        [ uta, rest ] = this.handleOptionBoolAndParams (params, \'f\', \'uta\', uta);\n'
+            + '        if (uta) {\n            return 1;\n        }\n')).content;
+        expect(out).toContain('\tvar uta bool = false\n');
+        expect(out).toContain('\tuta, rest = this.HandleOptionBoolAndParams(params, "f", "uta", uta)\n\tif uta {\n');
+    });
+    test('an awaited isUTAEnabled seed is received as a bool', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const out = x.transpileGo(fixture('        let uta = await this.isUTAEnabled ();\n        let rest = undefined;\n'
+            + '        [ uta, rest ] = this.handleOptionBoolAndParams (params, \'f\', \'uta\', uta);\n'
+            + '        if (uta) {\n            return 1;\n        }\n')).content;
+        expect(out).toContain('\tvar uta bool = PanicOnError((<-this.IsUTAEnabled())).(bool)\n');
+        expect(out).toContain('\tuta, rest = this.HandleOptionBoolAndParams(params, "f", "uta", uta)\n');
+    });
+    test('a write of another shape keeps the box and the Nullable twin', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const out = x.transpileGo(fixture('        let uta = false;\n        let rest = undefined;\n'
+            + '        uta = params[\'x\'];\n'
+            + '        [ uta, rest ] = this.handleOptionBoolAndParams (params, \'f\', \'uta\', uta);\n'
+            + '        if (uta) {\n            return 1;\n        }\n')).content;
+        expect(out).toContain('\tvar uta any = false\n');
+        expect(out).not.toContain('uta, rest = this.HandleOptionBoolAndParams(');
+    });
+});
