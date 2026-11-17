@@ -6443,7 +6443,7 @@ describe('native parameter types, Dict/List (D-01)', () => {
         expect(output).toContain('func (this *Test) ParseData(data map[string]any) any {');
         expect(output).toContain('var a any = data["a"]');
         expect(output).toContain('var b any = GetValue(data["b"], "c")');
-        expect(output).toContain('_, ok := data["c"]');
+        expect(output).toContain('_, has1 := data["c"]');
         // the argument expressions are unchanged: the call sites already produced maps
         expect(output).toContain('this.ParseData(this.Extend(this.Order, map[string]any{');
     });
@@ -10545,14 +10545,14 @@ describe ('goWsFrameParam', () => {
             expect (output).toContain ('this.SafeValue(message, "event")');
         });
 
-        test ('an array-framed venue keeps the box even with the Dict annotation', () => {
+        test ('an array-framed venue keeps the box even with the Dict annotation (phemex frames are objects)', () => {
             const output = goPath ('tmp-gowsframeparam-array',
                 "export class Phemex extends Exchange {\n" +
                 "    override handleMessage (client: Client, message: Dict) {\n" +
                 "        return this.safeValue (message, 'event');\n" +
                 "    }\n" +
                 "}\n");
-            expect (output).toContain ('func (this *Phemex) HandleMessage(client any, message any) any {');
+            expect (output).toContain ('func (this *Phemex) HandleMessage(client any, message map[string]any) any {');
             expect (output).toContain ('this.SafeValue(message, "event")');
         });
 
@@ -10603,7 +10603,10 @@ describe ('goWsFrameParam', () => {
                 "        return hasResult;\n" +
                 "    }\n" +
                 "}\n");
-            expect (output).toContain ('func (this *ex) HandleMessage(client any, message any) any {');
+            // a bool initialiser binds the read in front of the declaration: no closure, so the frame types
+            expect (output).toContain ('func (this *ex) HandleMessage(client any, message map[string]any) any {');
+            expect (output).toContain ('_, has1 := message["result"]');
+            expect (output).not.toContain ('func() bool');
         });
 
         test ('a non-handleMessage override keeps the box', () => {
@@ -14172,5 +14175,42 @@ describe('Str base producers typed *string', () => {
         }
         expect(output).toContain('var typeVar *string = this.GetMarketType(m)');
         expect(output).not.toMatch(/\*typeVar \+|\+ \*typeVar/);
+    });
+});
+describe('several `key in dict` reads bound before the statement', () => {
+    const src = (body: string) => 'type Dict = { [key: string]: any };\nclass T {\n    httpExceptions = {};\n    timeframes = {};\n    g () { return true; }\n    f (m, n: number, s: string, params: Dict = {}, timeframe = \'1m\') {\n' + body + '        return 0;\n    }\n}\n';
+    const go = (body: string) => {
+        const inst = new Transpiler({ verbose: false });
+        (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
+        return inst.transpileGo(src(body)).content;
+    };
+    test('an || of two map reads binds both in front of the if', () => {
+        const output = go("        const z = n;\n        // why\n        if (('a' in params) || ('b' in params) || (n > 1)) {\n            return 1;\n        }\n");
+        expect(output).toContain('\t// why\n\t_, has1 := params["a"]\n\t_, has2 := params["b"]\n\tif has1 || has2 || (IsGreaterThan(n, 1)) {');
+        expect(output).not.toContain('func() bool');
+        expect(output).not.toContain('InOp(');
+    });
+    test('an else-if chain binds the reads of every pure test at its head', () => {
+        const output = go("        if ('a' in params) {\n            return 1;\n        } else if (('c' in params) || ('d' in params)) {\n            return 2;\n        }\n");
+        expect(output).toContain('\t_, has2 := params["c"]\n\t_, has3 := params["d"]\n\tif _, ok := params["a"]; ok {');
+        expect(output).toContain('} else if has2 || has3 {');
+    });
+    test('a bool initialiser binds its read, a hand-written map field included', () => {
+        const output = go("        const code = 'x' + 'y';\n        const isMapped = (code in this.httpExceptions);\n        const two = !('a' in params) && ('b' in params);\n        if (isMapped && two) {\n            return 1;\n        }\n");
+        expect(output).toContain('\t_, has1 := this.HttpExceptions[code]\n\tvar isMapped bool = has1');
+        expect(output).toContain('\t_, has2 := params["a"]\n\t_, has3 := params["b"]\n\tvar two bool = !has2 && has3');
+        expect(output).not.toContain('InOp(');
+    });
+    test('a defaulted string parameter key reads natively', () => {
+        const output = go("        if (!(timeframe in this.timeframes)) {\n            return 1;\n        }\n");
+        expect(output).toContain('\t_, has1 := this.Timeframes[timeframe]\n\tif !has1 {');
+        expect(output).not.toContain('InOp(');
+    });
+    test('an impure term, an any receiver or an earlier impure test keeps the existing print', () => {
+        const output = go("        if (('a' in params) || ('b' in params) || this.g ()) {\n            return 1;\n        }\n        const x = ('a' in m);\n        if (this.g ()) {\n            return 2;\n        } else if (('c' in params) || ('d' in params)) {\n            return 3;\n        }\n");
+        expect(output).not.toContain('has1');
+        expect(output).not.toContain('has3');
+        expect(output).not.toContain('has4');
+        expect(output).toContain('InOp(m, "a")');
     });
 });

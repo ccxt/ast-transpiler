@@ -29512,7 +29512,10 @@ GoTranspiler.prototype.printIfStatement = function (node, identation) {
     if ((node?.parent?.kind === SyntaxKind.Block) || (node?.parent?.kind === SyntaxKind.SourceFile)) {
         // the whole else-if chain: its tests run before any of its bodies, so the reads move in front of the head
         const hoisted = [];
-        for (let link: any = node; link?.kind === SyntaxKind.IfStatement; link = link.elseStatement) {
+        // the reads move ahead of every earlier test of the chain too, so each of those must be pure
+        let pure = true;
+        for (let link: any = node; pure && (link?.kind === SyntaxKind.IfStatement); link = link.elseStatement) {
+            pure = this.goInHoistTerms (link.expression, []);
             // one read the shipped init clause already prints stays with it
             const single = (this.goInOpIfInitClause (link.expression) === undefined) ? 1 : 2;
             const reads = this.goInHoistCondition (link.expression, node, single);
@@ -29572,6 +29575,9 @@ GoTranspiler.prototype.goWsFrameInOpHasInitClause = function (inNode, param) {
         head = parent;
         while ((head.parent?.kind === SyntaxKind.IfStatement) && (head.parent.elseStatement === head)) {
             head = head.parent;
+            if (!this.goInHoistTerms (head.expression, [])) {
+                return false; // an impure earlier test keeps the later reads where they are
+            }
         }
         if (head.parent?.kind !== SyntaxKind.Block) {
             return false;

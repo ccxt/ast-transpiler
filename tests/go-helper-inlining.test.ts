@@ -273,7 +273,7 @@ describe('go `key in obj` -> map membership', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('var has bool = (func() bool { _, ok := m["a"]; return ok }())');
+        expect(output).toContain('_, has1 := m["a"]\n\tvar has bool = has1');
         expect(output).toContain('for i := 0; func() bool { _, ok := m["a"]; return ok }(); i++ {');
     });
     test('a parenthesized operand inside || stays a bare bool', () => {
@@ -287,7 +287,7 @@ describe('go `key in obj` -> map membership', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('if (func() bool { _, ok := m["a"]; return ok }()) || (func() bool { _, ok := m["b"]; return ok }()) {');
+        expect(output).toContain('_, has1 := m["a"]\n\t_, has2 := m["b"]\n\tif has1 || has2 {');
         expect(output).not.toContain('EvalTruthy((func() bool');
         expect(output).not.toContain('InOp(');
     });
