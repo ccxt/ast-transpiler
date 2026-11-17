@@ -16210,6 +16210,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0) {
   installCcxtGoUnifiedStringDerefArgs(goTranspiler);
   installCcxtGoUnifiedInt64Params(goTranspiler, unifiedInt64Params);
   installStringPtrParams(goTranspiler);
+  installStringPtrParamProof(goTranspiler);
   const upstream = goTranspiler.goTypeOfInitializer;
   goTranspiler.goTypeOfInitializer = function(initializer, printedValue) {
     const known = upstream.call(this, initializer, printedValue);
@@ -19436,6 +19437,78 @@ function installStringPtrParams(goTranspiler) {
       return wrap[i] ? goStringAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")" : text;
     }).join(", ");
   };
+}
+function installStringPtrParamProof(goTranspiler) {
+  const upstreamOf = goTranspiler.goNativeParameterTypeOf;
+  goTranspiler.goNativeParameterTypeOf = function(param) {
+    return upstreamOf.call(this, param) ?? (goStringPtrParamProven(this, param) ? "*string" : void 0);
+  };
+}
+function goStringPtrParamOnlyDirectCalls(go, tree, name, myClass) {
+  const quoted = new RegExp("['\"`]" + name + "['\"`]");
+  const anyRef = new RegExp("(?<![\\w$])" + name + "(?![\\w$])", "g");
+  const direct = new RegExp("\\bthis\\s*\\.\\s*" + name + "\\s*\\(", "g");
+  const declared = new RegExp("^ {4}(?:(?:async|public|private|protected|override) )*" + name + " \\(", "gm");
+  for (const [file, text] of tree.fileText) {
+    if (!text.includes(name)) {
+      continue;
+    }
+    if (quoted.test(text)) {
+      return false;
+    }
+    if (!go.goTsSrcFileDerivesFrom(tree, file, myClass)) {
+      continue;
+    }
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const refs = (code.match(anyRef) ?? []).length;
+    const calls = (code.match(direct) ?? []).length + (code.match(declared) ?? []).length;
+    if (refs !== calls) {
+      return false;
+    }
+  }
+  return true;
+}
+function goStringPtrParamProven(go, param) {
+  if (param?.kind !== ts.SyntaxKind.Parameter || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || param.questionToken !== void 0 || param.name?.kind !== ts.SyntaxKind.Identifier || !nullableStringParam(go, param)) {
+    return false;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== ts.SyntaxKind.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== ts.SyntaxKind.Identifier) {
+    return false;
+  }
+  const name = fn.name.text;
+  const index = fn.parameters.indexOf(param);
+  const tree = go.goTsSrcTree(fn.getSourceFile());
+  if (tree === void 0 || go.goMethodKeepsBaseSignature(fn) || go.goIsProHandlerMethod(fn) || !go.goHasTreeCallSite(fn) || !goStringPtrParamOnlyDirectCalls(go, tree, name, go.goEnclosingClassName(fn))) {
+    return false;
+  }
+  const isUndefined = (a) => a?.kind === ts.SyntaxKind.Identifier && a.text === "undefined";
+  for (const call of go.goSameFileCallsOf(fn, name)) {
+    const arg = call.arguments?.[index];
+    if (call.runner !== void 0 || arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement) {
+      return false;
+    }
+    if (isUndefined(arg)) {
+      continue;
+    }
+    const t = go.goPrintedArgType(arg);
+    if (t !== "*string" && !(t === "string" && goStringAddressArg(go, arg, arg.text ?? "") !== void 0)) {
+      return false;
+    }
+  }
+  const myClass = go.goEnclosingClassName(fn);
+  const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+  for (const site of tree.callIndex.get(name) ?? []) {
+    if (site.file === myFile || !go.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+      continue;
+    }
+    const arg = (site.args[index] ?? "").trim();
+    const fileText = tree.fileText.get(site.file) ?? "";
+    if (arg !== "undefined" && !go.goTextArgMatchesType(arg, "*string", site.file, tree, site.at) && !go.goSiblingPassesUnifiedString(arg, fileText, site.at)) {
+      return false;
+    }
+  }
+  return go.goParameterBodyTakes(fn, param, "*string");
 }
 function goStringAddressArg(goTranspiler, arg, text) {
   if (arg?.kind !== ts.SyntaxKind.Identifier || !/^[A-Za-z_]\w*$/.test(text)) {
