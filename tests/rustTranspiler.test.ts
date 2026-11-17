@@ -25197,3 +25197,44 @@ describe('ral-87rh R4: a bool local strictly compared with an Option<bool> reade
         expect(out).toContain('== Some(wantActive))');
     });
 });
+
+describe('ral-90ra R1: an element of a proven string-list parameter is an Option<String> (a string-local write target, a string-method receiver)', () => {
+    const emit = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-90ra1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    fetchOutcomes (outcomeSymbols: string[]): any { return undefined; }\n    keep (subscriptions: string[], store: Dict): any { return store; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { const r = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')); lastSigs = r.rustSignatures ?? []; return r.content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    let lastSigs: Array<{ name: string, ret: string }> = [];
+    test('binance pro getAccountTypeFromSubscriptions: compared, then written into a string local', () => {
+        const out = emit("    caller (store: Dict) {\n        const keys = Object.keys (store);\n        const t = this.getAccountTypeFromSubscriptions ([ 'spot', 'margin' ]);\n        return this.hold (t);\n    }\n    getAccountTypeFromSubscriptions (subscriptions: string[]): string {\n        let accountType = '';\n        for (let i = 0; i < subscriptions.length; i++) {\n            const subscription = subscriptions[i];\n            if ((subscription === 'spot') || (subscription === 'margin')) {\n                accountType = subscription;\n                break;\n            }\n        }\n        return accountType;\n    }\n");
+        expect(out).toContain('let mut subscription: Option<String> = ');
+        expect(out).toContain('subscription.as_deref() == Some("spot")');
+        // the method printed `-> Option<String>` with no by-name arm before; a typed returned accumulator keeps that arm set
+        expect(lastSigs.find((x) => x.name === 'get_account_type_from_subscriptions')?.ret).toBe('ostr');
+    });
+    test('kalshi fetchOutcomes: a string-method receiver copied into a Str local', () => {
+        const out = emit("    override fetchOutcomes (outcomeSymbols: string[]) {\n        const tickers: string[] = [];\n        for (let i = 0; i < outcomeSymbols.length; i++) {\n            const outcomeSymbol = outcomeSymbols[i];\n            if (outcomeSymbol.indexOf (':') >= 0) {\n                continue;\n            }\n            let baseTicker: Str = outcomeSymbol;\n            if (outcomeSymbol.endsWith ('-NO')) {\n                baseTicker = outcomeSymbol.slice (0, -3);\n            }\n            tickers.push (baseTicker);\n        }\n        return this.hold (tickers);\n    }\n");
+        expect(out).toContain('let mut outcomeSymbol: Option<String> = ');
+    });
+    test('negative: an element written into a map slot stays Value', () => {
+        const out = emit("    override keep (subscriptions: string[], store: Dict) {\n        for (let i = 0; i < subscriptions.length; i++) {\n            const subscription = subscriptions[i];\n            if (subscription === 'spot') {\n                store['k'] = subscription;\n            }\n        }\n        return store;\n    }\n");
+        expect(out).not.toContain('let mut subscription: Option<String>');
+    });
+});
+
+describe('ral-90ra R1c: an annotated literal-seeded Str accumulator keeps its kept by-name arm', () => {
+    test('nado createOrderAppendix: `let appendix: Str = lit` rewritten by Precise and returned keeps keptostr', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-90ra1c-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeBool (o: any, k: any, d: any = undefined): any { return o; }\n    safeString (o: any, k: any, d: any = undefined): any { return o; }\n    numberToString (x: any): string { return String (x); }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/base/Precise.ts'), "export class Precise {\n    static stringAdd (a: any, b: any): any { return a; }\n    static stringMul (a: any, b: any): any { return a; }\n}\n");
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nexport default class venue extends Exchange {\n    caller (params: Dict = {}) {\n        return this.hold (this.createOrderAppendix (true, params));\n    }\n    createOrderAppendix (isTriggerOrder: boolean, params: Dict = {}): Str {\n        const reduceOnly = this.safeBool (params, 'reduceOnly', false);\n        let orderType = 0;\n        let appendix: Str = '1';\n        if (orderType !== 0) {\n            appendix = Precise.stringAdd (appendix, Precise.stringMul (this.numberToString (orderType), '512'));\n        }\n        if (reduceOnly) {\n            appendix = Precise.stringAdd (appendix, '2048');\n        }\n        if (isTriggerOrder) {\n            appendix = Precise.stringAdd (appendix, '4096');\n        }\n        return appendix;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let sigs: Array<{ name: string, ret: string }> = [];
+        try { sigs = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).rustSignatures ?? []; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(sigs.find((x) => x.name === 'create_order_appendix')?.ret).toBe('keptostr');
+    });
+});
