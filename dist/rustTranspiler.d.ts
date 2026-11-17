@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type BinaryExpression, type BindingElement, type Block, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type VariableDeclaration } from "typescript/unstable/ast";
+import { type BinaryExpression, type BindingElement, type Block, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 /** A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no
  *  dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it can vanish or change mid-scan). */
@@ -2080,6 +2080,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  read reached (a non-map entry or a `None` key reads Null, as `get_value` did on a non-map or a `Null` key). */
     rustUrlsKeyReadUse(n: any): boolean;
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
+    /** `node` is fed by a venue string helper that returns one of its own parameters on some path (phemex `fromEp`): the
+     *  call itself, a reader / parse call taking it whole (not `omitZero`, whose result was typed before), or a call taking
+     *  a local initialised from it. */
+    rustPassThroughStrCallIn(node: Node, depth?: number): boolean;
+    private static readonly RUST_PASS_THROUGH_STR_HELPERS;
+    rustPassThroughStrMethod(method: Node | undefined): boolean;
     /** ral-90re R3: a ternary initializer one of whose arms is a field read of an owned `safeMarket` (`smkt`) local. */
     rust90reSmktArmTernary(init: Node): boolean;
     /** ral-90re R3: `n` reads a local initialised from a ternary whose two arms are `String` fields of a typed market local. */
@@ -3358,6 +3364,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  writes, a `this.` builder that copies plain operands, a pass-through
      *  builder of a built argument. */
     rustBuiltContainerKind(node: any, depth?: number): 'map' | 'list' | undefined;
+    /** ral-92rg R2: a `safeList` default that is a never-written const of the same function initialised to a ternary whose
+     *  two arms are array literals (gate `getSettlementCurrencies`: `const d = (t === 'swap') ? [ 'usdt' ] : [ 'btc' ]`). */
+    rust92rgListLiteralDefault(arg: Node): boolean;
     /** True when the only writes to this local inside its own function are
      *  element writes and container rebuilds (no whole-local write of another
      *  shape): the container it was built as is what it holds at every use. */
@@ -3504,6 +3513,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** stack-90r: the list bearer's initializer is a call (its result is a temporary no other node reads, so moving it out is
      *  the copy without the copy) and the bearer is typed through ral-90rb R2 or ral-90rg R4. Decided from the AST. */
     rust90rMoveBearer(declaration: VariableDeclaration): boolean;
+    /** ral-92rg R2: a call of a sync venue method whose every return is `this.safeList (o, k, d)` with `d` a
+     *  rust92rgListLiteralDefault const: the call result is a list on every path, moved into its bearer. */
+    rust92rgSafeListForward(call: CallExpression): boolean;
     rustReadBearerKindUncached(declaration: any): 'list' | 'map' | false;
     private rustContainerBoxUses;
     private static readonly RUST_CONTAINER_NULL_SAFE_READERS;
@@ -4159,6 +4171,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsUrlVenueSlot(n: any): boolean;
     /** `this.urls[k1][k2]..` (through parens / `as` casts) with literal keys: a url string, or Null when absent. */
     rustWsUrlRead(init: any): boolean;
+    /** A never-written `const d = this.safeDict (<this.urls[..] read>, '<lit>', {})` of the same function: its literal-key
+     *  entries are the url strings (or Null) the `this.urls[..]['<lit>'][..]` chain reads. */
+    rustWsUrlsDictAlias(node: Node): boolean;
     rustWsUrlDeclTooLong(declaration: any): boolean;
     rustWsUrlLocalOf(node: any): boolean;
     printWsUrlLocalDeclaration(declaration: any, varName: string, indent: string): string | undefined;
@@ -4340,6 +4355,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     static rustWsPatternsMeet(a0: Array<string | null>, b0: Array<string | null>): boolean;
     /** The typed kind a resolved value passes as, or undefined. */
     rustWsResolvedKind(x: any): 'book' | 'cache' | 'dict' | 'list' | undefined;
+    /** ral-92rf R2: a resolved `d[k]` (or an unreassigned local bound to it) where `d` is a handler's own `{}` map local whose
+     *  every write is `d[x] = v` with v one resolved kind (cache or dict), read only by `d[..]` and one `Object.keys (d)`,
+     *  and `k` an element of that keys list: the element is present and holds that kind. Decided from the AST. */
+    rust92rfKeyedLocalElementKind(x: Node, depth?: number): 'cache' | 'dict' | undefined;
+    /** ral-92rf R3: `xs[i]` where `xs` is a handler's own `[]` list local whose every write is a statement `xs.push (v)` (v one
+     *  resolved kind, cache or dict), read only by `xs[..]` / `xs.length`, and `i` the unwritten counter of the enclosing
+     *  `for (let i = 0; i < xs.length; i++)` with no push inside that loop: the element is present and holds that kind. */
+    rust92rfLoopListElementKind(n: ElementAccessExpression, constLocal: (id: Node | undefined) => VariableDeclaration | undefined): 'cache' | 'dict' | undefined;
     /** ral-ye: a read of a plain base cache field the class keeps as a map, typed by the field's declaration:
      *  `this.F` whose declared type is a map (`balance: Dict`, `tickers: Dictionary<Ticker>`), or `this.F[k]` right
      *  after a statement of the same block (or an enclosing one) wrote `this.F[k] = v` with v a map (a declared record /
@@ -4680,6 +4703,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust90rfArmOf(n: Node, declaration: VariableDeclaration, fn: Node): 'list' | 'map' | undefined;
     /** ral-80c R1: an unwritten method parameter whose typed signature slot is a string list (decided from the signature table). */
     rust80cStrVecParamAlias(init: Expression | undefined): boolean;
+    /** `c ? a : b` where each arm is an unwritten string-list parameter, a base `string[]` field or a string-literal list. */
+    rustStrListTernary(init: Node | undefined): boolean;
     /** ral-80c R1: `this.symbols` / `this.ids`, base fields declared `string[]` (always a list). */
     rust80cBaseStrListField(node: Expression): boolean;
     /** ral-80c R1: `x.push(v)` statement on an optional list alias. */
@@ -4809,6 +4834,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_LENT_LIST_TYPES;
     private static readonly RUST_LENT_RESPONSE_READERS;
     rustParamIsLentListUncached(param: any): boolean;
+    /** ral-92rf R4: `parseXs (rows: any[] | Dict[] | List, ..)` declared in a REST venue file (`ts/src/<id>.ts`), not async, not
+     *  overriding and not overridden by a ws subclass method of the same name: its first parameter prints `impl Into<crate::Value>`. */
+    rust92rfVenueRowsParam(method: MethodDeclaration, param: ParameterDeclaration, file: string): boolean;
     /** `object`, `Dict` or `any`, optionally `| undefined`: the parser reads its input as a `Value` of any shape. */
     rustLentRecordTypeNode(type: any): boolean;
     /** `Dict[]` / `object[]`, optionally `| undefined`: a list of rows, the same Value list a `List` holds. */
@@ -5294,6 +5322,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-63x: `&str` parameter, every call site in the file passes a string literal at its index, and some
      *  `let x = <param>` declaration of the body reads it whole. */
     rust63xLiteralSeedStrParam(method: any, param: any, rustType: string): boolean;
+    /** A string slot of a sync ws method with no arm whose every caller passes a literal or one of its own
+     *  local (not a parameter): the slot is a typed consumer, so a string local handed to it reads natively. */
+    rust92raStrConsumerParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws
      *  handler arm) and no override, trait slot or typed-return entry. Its string parameters may print typed; should
      *  the return still print `Value`, a string slot is one an arm decodes (rustDispatch.wsArg `str` / `optstr`). */
@@ -5354,6 +5385,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarBoxCopies(u: any): boolean;
     /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
     rustVenueStrSimpleArg(arg: any): boolean;
+    /** Order request builders whose amount / price slots stay as they are (held). */
+    private static readonly RUST_HELD_ORDER_REQUEST;
+    /** `(x as string)` over a simple operand the checker already types `string` / `Str`: a string slot takes the
+     *  operand as it is (the cast changes no value), so the caller converts it once like a bare `x`. */
+    rustVenueStrCastOperand(arg: Node | undefined): Expression | undefined;
     /** The argument node lands in a per-venue string slot of its call. */
     rustVenueStrArgSlot(arg: any): boolean;
     /** Argument text for a per-venue string slot: a typed local or literal natively, any other value read once. */
@@ -5441,6 +5477,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-43e: a venue (not base-tier) method declared `Market` / `MarketInterface`, not async, whose every return is a
      *  `safeMarket` record (the call itself or a `const` struct local bound to it): it hands the struct back as is. */
     rustVenueReturnsMarket(node: any, file: string): boolean;
+    /** ral-92rg R1: `return x` / `return x as MarketInterface` of a const `x = this.safeDict (this.markets, k)` the
+     *  method's own top-level `if (x === undefined || ..) { throw .. }` rules out before the return: a loaded market
+     *  record, decoded once at the return (`FromRaw`), so callers hold the struct. */
+    rust92rgLoadedMarketReturn(method: MethodDeclaration, ret: Statement): boolean;
     /** The `market` parameter of a base market-slot reader, read only by key readers, null tests or `Value` hand-offs. */
     rustMarketSlotParam(param: any): boolean;
     private rustMarketDepth;
@@ -5471,6 +5511,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A per-venue helper's `market: Market` parameter that it forwards to a lent market slot: lent itself when every
      *  caller in its file lends a typed market (or passes `undefined`), so no caller decodes. */
     rustVenueMarketParam(method: any, param: any): boolean;
+    /** ral-92rg R3: `n` is the whole value of a property of an object literal (`{ 'info': market }`): one box of the record. */
+    rust92rgLiteralValueSlot(n: Node): boolean;
     /** The calls of REST method `m` from `ts/src/pro/<id>.ts` (checker-resolved to `m`): none when the ws class does
      *  not call it, undefined when it does but this program does not load the ws file. */
     rustWsSiblingCallSites(method: any): any[] | undefined;
