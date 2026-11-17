@@ -37845,3 +37845,298 @@ GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, ki
     return !foreign && (nativeTests > 0) && (readerArgs > 0);
 };
 // ===== ral-90g7 (end) =====
+
+// ===== ral-90g8 R1 (begin): `(x as Dict)[k]` reads of a map-producer local =====
+// A parseMarket-style local whose callee already prints `map[string]any` (keepsMap) was refused at
+// `(parsed as Dict)['market']`: the cast is TypeScript-only and prints nothing in Go, so the element
+// read under it is the same native map read as `parsed['market']`. Admitted only as a READ: the
+// element access is not an assignment target, a delete or an increment operand.
+function go90g8CastElementRead(node): boolean {
+    let current = node;
+    let parent = current.parent;
+    while ((parent?.kind === SyntaxKind.AsExpression) || (parent?.kind === SyntaxKind.ParenthesizedExpression)
+        || (parent?.kind === SyntaxKind.NonNullExpression)) {
+        if ((parent.kind === SyntaxKind.AsExpression) && (parent.expression !== current)) {
+            return false;
+        }
+        current = parent;
+        parent = current.parent;
+    }
+    if ((current === node) || (parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== current)) {
+        return false;
+    }
+    const above = parent.parent;
+    if ((above?.kind === SyntaxKind.BinaryExpression) && (above.left === parent)
+        && (above.operatorToken.kind >= SyntaxKind.FirstAssignment) && (above.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+        return false;
+    }
+    return (above?.kind !== SyntaxKind.DeleteExpression) && (above?.kind !== SyntaxKind.PostfixUnaryExpression)
+        && (above?.kind !== SyntaxKind.PrefixUnaryExpression);
+}
+// `if (x === undefined) { throw .. }` (no else) earlier in an enclosing block of the use, with x a
+// `const`: past that statement the map is never nil, so handing it on (a store, a push, a call
+// argument) carries the same non-nil map the box carried and a nil-typed map can never leak.
+function go90g8IsThrowBlock(statement): boolean {
+    if (statement?.kind === SyntaxKind.ThrowStatement) {
+        return true;
+    }
+    const last = (statement?.kind === SyntaxKind.Block) ? statement.statements[statement.statements.length - 1] : undefined;
+    return last?.kind === SyntaxKind.ThrowStatement;
+}
+function go90g8IsNilGuardOf(goTranspiler, statement, declaration): boolean {
+    if ((statement?.kind !== SyntaxKind.IfStatement) || (statement.elseStatement !== undefined) || !go90g8IsThrowBlock(statement.thenStatement)) {
+        return false;
+    }
+    let test = statement.expression;
+    while (test?.kind === SyntaxKind.ParenthesizedExpression) {
+        test = test.expression;
+    }
+    if ((test?.kind !== SyntaxKind.BinaryExpression)
+        || ((test.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken) && (test.operatorToken.kind !== SyntaxKind.EqualsEqualsToken))) {
+        return false;
+    }
+    const pairs = [ [ test.left, test.right ], [ test.right, test.left ] ];
+    return pairs.some(([ a, b ]) => (a?.kind === SyntaxKind.Identifier) && goTranspiler.goIsNilLiteral(b)
+        && goTranspiler.goIdentifierRefersToDeclaration(a, declaration));
+}
+function go90g8PastNilThrow(goTranspiler, node): boolean {
+    const declaration = goTranspiler.goDeclarationOfIdentifier(node);
+    const list = declaration?.parent;
+    if ((declaration === undefined) || (list?.kind !== SyntaxKind.VariableDeclarationList) || ((list.flags & 2) === 0)) {
+        return false; // NodeFlags.Const: a `let` could be re-written to undefined after the guard
+    }
+    let child = node;
+    for (let up = node.parent; up !== undefined; child = up, up = up.parent) {
+        if ((up.kind === SyntaxKind.FunctionExpression) || (up.kind === SyntaxKind.ArrowFunction) || (up.kind === SyntaxKind.MethodDeclaration)) {
+            return false;
+        }
+        if ((up.kind === SyntaxKind.Block) || (up.kind === SyntaxKind.SourceFile)) {
+            const index = up.statements.indexOf(child);
+            for (let i = 0; i < index; i++) {
+                if (go90g8IsNilGuardOf(goTranspiler, up.statements[i], declaration)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+const goMarketUseReadsTheValueBase90g8 = GoTranspiler.prototype.goMarketUseReadsTheValue;
+GoTranspiler.prototype.goMarketUseReadsTheValue = function (node, throwingAccessor: boolean, keepsMap = false, handsOn = false): boolean {
+    if (goMarketUseReadsTheValueBase90g8.call(this, node, throwingAccessor, keepsMap, handsOn)) {
+        return true;
+    }
+    if (!keepsMap) {
+        return false;
+    }
+    const handOn = this.goMarketUseHandsTheMapOn(node, node.parent)
+        || ((node.parent?.kind === SyntaxKind.ReturnStatement) && (node.parent.expression === node));
+    return go90g8CastElementRead(node) || (handOn && go90g8PastNilThrow(this, node));
+};
+// ===== ral-90g8 R1 (end) =====
+
+// ===== ral-90g8 R2 (begin): prediction-venue parse*Market producers print map[string]any =====
+// `parseOpinionMarket (raw): Market { return { .. } as unknown as Market; }` is a venue-only producer
+// (no base or sibling declares the name) whose every return the body proves is a map: its Go
+// signature can name the map, exactly like the shipped `parseMarket` producers. The caller's local
+// then follows through the market-local rule (nil test native; hand-offs only past a nil throw, R1).
+function go90g8PredictionMarketProducer(goTranspiler, node): boolean {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined)) {
+        return false;
+    }
+    const name = node.name?.text;
+    if ((typeof name !== 'string') || !/^parse[A-Za-z0-9]*Market$/.test(name) || (GO_MARKET_PRODUCER_METHODS.indexOf(name) >= 0)) {
+        return false;
+    }
+    if (!goTranspiler.goNodeIsInPredictionTree(node) || goTranspiler.isAsyncFunction(node)) {
+        return false;
+    }
+    if (!ccxtGoGeneralAnnotatedMethodIsClosed(node, name)) {
+        return false; // a related file redeclares it: one Go signature for every override
+    }
+    const reserved = ccxtGoReservedMethodNames(node);
+    if ((reserved !== undefined) && (reserved.has(name) || reserved.has(name.charAt(0).toUpperCase() + name.slice(1)))) {
+        return false;
+    }
+    let alias;
+    try {
+        const checker = goTranspiler.getChecker();
+        alias = checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(node))?.getAliasSymbol()?.escapedName;
+    } catch (e) {
+        return false;
+    }
+    return (alias === 'Market') && goTranspiler.goMethodBodyReturnsMap(node);
+}
+const goMarketProducerReturnTypeBase90g8 = GoTranspiler.prototype.goMarketProducerReturnType;
+GoTranspiler.prototype.goMarketProducerReturnType = function (node): string | undefined {
+    const shipped = goMarketProducerReturnTypeBase90g8.call(this, node);
+    if (shipped !== undefined) {
+        return shipped;
+    }
+    return go90g8PredictionMarketProducer(this, node) ? GO_MARKET_LOCAL_TYPE : undefined;
+};
+const goMarketCalleePrintsMapBase90g8 = GoTranspiler.prototype.goMarketCalleePrintsMap;
+GoTranspiler.prototype.goMarketCalleePrintsMap = function (call): boolean {
+    if (goMarketCalleePrintsMapBase90g8.call(this, call)) {
+        return true;
+    }
+    const callee = call?.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    return go90g8PredictionMarketProducer(this, this.goMethodDeclarationOfCallee(callee));
+};
+// ===== ral-90g8 R2 (end) =====
+
+// ===== ral-90g8 R3 (begin): pagination counters advanced by this.sum =====
+// `let page = 1; .. 'page': page .. page = this.sum (page, 1)` (and `offset = this.sum (offset, n)` with
+// n an int local) stays `any`: the Sum write is a call the int rule refuses. Sum of two non-nil ints is
+// that integer (Go `Add` answers the integral sum), so an `int` local holds the same number and the
+// write prints the native `page + 1`. The box held int64 after the first Sum and int before it; both
+// serialise the same in request params (the only hand-offs admitted: map literal values, element
+// stores, async returns). Every other write must be an int literal; reads otherwise as R2 (87g8).
+function go90g8Unparen(node) {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    return node;
+}
+function go90g8SumOfSelf(goTranspiler, right, declaration): boolean {
+    const call = go90g8Unparen(right);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'sum')) {
+        return false;
+    }
+    const [ a, b ] = call.arguments.map(go90g8Unparen);
+    if (!go87g8IsOwnRef(goTranspiler, a, declaration)) {
+        return false;
+    }
+    return go87g8IntLiteral(b) || go90g8OtherIntLocal(goTranspiler, b, declaration);
+}
+// ral-90g8 R4: another local (a loop index, a `len` result) whose own Go declaration is `int`
+function go90g8OtherIntLocal(goTranspiler, node, declaration): boolean {
+    node = go90g8Unparen(node);
+    if ((node?.kind !== SyntaxKind.Identifier) || (node.text === declaration.name.text)) {
+        return false;
+    }
+    const other = goTranspiler.goDeclarationOfIdentifier(node);
+    if ((other === undefined) || (other === declaration)) {
+        return false;
+    }
+    if (goTranspiler.goDeclaredTypeOfIdentifier(node) === 'int') {
+        return true;
+    }
+    // a `for (let i = <int literal>; ..)` index: Go declares it `i := <literal>`, an int, and the
+    // compiler holds every write of it to int
+    return (other.parent?.kind === SyntaxKind.VariableDeclarationList) && (other.parent.parent?.kind === SyntaxKind.ForStatement)
+        && (other.parent.parent.initializer === other.parent) && (other.type === undefined) && go87g8IntLiteral(other.initializer);
+}
+// ral-90g8 R4: no annotation, or the `int` / `number` keyword annotation (both print the same any box)
+function go90g8IntAnnotation(declaration): boolean {
+    const type = declaration.type;
+    if (type === undefined) {
+        return true;
+    }
+    if (type.kind === SyntaxKind.NumberKeyword) {
+        return true;
+    }
+    return (type.kind === SyntaxKind.TypeReference) && (type.typeName?.kind === SyntaxKind.Identifier) && (type.typeName.text === 'int');
+}
+const go90g8SumCounterCache = new WeakMap<object, boolean>();
+function go90g8IsSumCounter(goTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || !go87g8IntLiteral(declaration.initializer) || !go90g8IntAnnotation(declaration)
+        || ((declaration.parent?.flags & ts.NodeFlags.Let) === 0)) {
+        return false;
+    }
+    if (go90g8SumCounterCache.has(declaration)) {
+        return go90g8SumCounterCache.get(declaration);
+    }
+    go90g8SumCounterCache.set(declaration, false);
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return false;
+    }
+    const name = declaration.name.text;
+    let sums = 0;
+    const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
+        if (((n.kind === SyntaxKind.Parameter) || (n.kind === SyntaxKind.VariableDeclaration)) && (n !== declaration)
+            && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent = n.parent;
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+            || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
+            return false;
+        }
+        if (!goTranspiler.goIdentifierRefersToDeclaration(n, declaration)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
+            if (parent.operatorToken.kind !== SyntaxKind.EqualsToken) {
+                return true;
+            }
+            if (go87g8IntLiteral(parent.right) || go90g8OtherIntLocal(goTranspiler, parent.right, declaration)) {
+                return false;
+            }
+            if (go90g8SumOfSelf(goTranspiler, parent.right, declaration)) {
+                sums += 1;
+                return false;
+            }
+            return true;
+        }
+        // the first argument of the Sum write itself
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === n)
+            && (go90g8Unparen(parent.parent)?.kind === SyntaxKind.BinaryExpression || parent.parent?.kind === SyntaxKind.BinaryExpression)) {
+            let up = parent.parent;
+            while (up?.kind === SyntaxKind.ParenthesizedExpression) {
+                up = up.parent;
+            }
+            return !((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken)
+                && go87g8IsOwnRef(goTranspiler, up.left, declaration) && go90g8SumOfSelf(goTranspiler, up.right, declaration));
+        }
+        // a map literal value, an element store `m[k] = x`, or an async return box the same integer
+        if ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === n)
+            && (parent.parent?.kind === SyntaxKind.ObjectLiteralExpression)) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            && (parent.left?.kind === SyntaxKind.ElementAccessExpression)) {
+            return false;
+        }
+        return !((parent?.kind === SyntaxKind.ReturnStatement) && goTranspiler.isAsyncFunction(scope));
+    });
+    const ok = !unsafe && (sums > 0);
+    go90g8SumCounterCache.set(declaration, ok);
+    return ok;
+}
+const goLocalIsSafeToTypeBase90g8 = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goLocalIsSafeToTypeBase90g8.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    return (goType === 'int') && go90g8IsSumCounter(this, declaration);
+};
+// the Sum write of a counter prints as the native int addition
+const printCallExpressionBase90g8 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    let up = node?.parent;
+    while (up?.kind === SyntaxKind.ParenthesizedExpression) {
+        up = up.parent;
+    }
+    if ((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (go90g8Unparen(up.right) === node) && (up.left?.kind === SyntaxKind.Identifier)) {
+        const declaration = this.goDeclarationOfIdentifier(up.left);
+        if ((declaration !== undefined) && go90g8IsSumCounter(this, declaration) && go90g8SumOfSelf(this, node, declaration)
+            && (this.goDeclaredTypeOfIdentifier(up.left) === 'int')) {
+            const [ a, b ] = node.arguments.map((arg) => this.printNode(arg, 0).trim());
+            return `${a} + ${b}`;
+        }
+    }
+    return printCallExpressionBase90g8.call(this, node, identation);
+};
+// ===== ral-90g8 R3 (end), R4 inside =====

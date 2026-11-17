@@ -16306,3 +16306,178 @@ describe('90g7 R3 *string join handed to a base safe reader', () => {
         expect(out).not.toContain('var upper *string');
     });
 });
+
+function goTranspile90g8(source: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ral-90g8-'));
+    fs.mkdirSync(path.join(dir, 'ts', 'src', 'prediction'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'prediction', 'ex.ts'), source);
+    const cwd = process.cwd();
+    try {
+        process.chdir(dir);
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        return x.transpileGoByPath('ts/src/prediction/ex.ts').content;
+    } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe('ral-90g8 R1 map-producer locals read through a cast and handed on past a nil throw', () => {
+    const head = 'interface MarketInterface { id: string; symbol: string; }\n'
+        + 'type Market = MarketInterface | undefined;\n'
+        + 'type Dict = { [key: string]: unknown };\n'
+        + 'export class ex {\n'
+        + '    markets: Dict = {};\n'
+        + '    keep (m: Dict) { return m; }\n'
+        + '    parseMarket (m: string): Market { return { id: m, symbol: m }; }\n';
+    test('a guarded parseMarket local is typed, its nil test and cast element read go native', () => {
+        const out = goTranspile90g8(head
+            + '    f (raw: string) {\n'
+            + '        const parsed = this.parseMarket (raw);\n'
+            + '        if (parsed === undefined) {\n'
+            + '            throw new Error (\'none\');\n'
+            + '        }\n'
+            + '        this.markets[(parsed as Dict)[\'id\']] = parsed;\n'
+            + '        this.keep (parsed);\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var parsed map[string]any = this.ParseMarket(raw)');
+        expect(out).toContain('if parsed == nil {');
+        expect(out).toContain('parsed["id"]');
+    });
+    test('without the nil throw a hand-off keeps the box', () => {
+        const out = goTranspile90g8(head
+            + '    f (raw: string) {\n'
+            + '        const parsed = this.parseMarket (raw);\n'
+            + '        this.markets[(parsed as Dict)[\'id\']] = parsed;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var parsed any = this.ParseMarket(raw)');
+    });
+    test('a let local with the same guard keeps the box', () => {
+        const out = goTranspile90g8(head
+            + '    f (raw: string) {\n'
+            + '        let parsed = this.parseMarket (raw);\n'
+            + '        if (parsed === undefined) {\n'
+            + '            throw new Error (\'none\');\n'
+            + '        }\n'
+            + '        this.markets[(parsed as Dict)[\'id\']] = parsed;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var parsed any = this.ParseMarket(raw)');
+    });
+});
+
+describe('ral-90g8 R2 prediction-venue parse*Market producers print the market map', () => {
+    const head = 'interface MarketInterface { id: string; symbol: string; }\n'
+        + 'type Market = MarketInterface | undefined;\n'
+        + 'type Dict = { [key: string]: unknown };\n'
+        + 'export class ex {\n'
+        + '    markets: Dict = {};\n'
+        + '    parseVenueMarket (raw: string): Market {\n'
+        + '        return { \'id\': raw, \'symbol\': raw } as unknown as Market;\n'
+        + '    }\n';
+    test('the producer signature names the map and a guarded local takes it with a native nil test', () => {
+        const out = goTranspile90g8(head
+            + '    f (raw: string) {\n'
+            + '        const market = this.parseVenueMarket (raw);\n'
+            + '        if (market === undefined) {\n'
+            + '            throw new Error (\'none\');\n'
+            + '        }\n'
+            + '        this.markets[raw] = market;\n'
+            + '        return market;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain(') ParseVenueMarket(raw any) map[string]any {');
+        expect(out).toContain('var market map[string]any = this.ParseVenueMarket(raw)');
+        expect(out).toContain('if market == nil {');
+    });
+    test('a producer whose body returns a non-map keeps the any signature', () => {
+        const out = goTranspile90g8('interface MarketInterface { id: string; }\n'
+            + 'type Market = MarketInterface | undefined;\n'
+            + 'export class ex {\n'
+            + '    parseVenueMarket (raw: Market): Market {\n'
+            + '        return raw;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('ParseVenueMarket(raw any) any {');
+    });
+});
+
+describe('ral-90g8 R3 pagination counters advanced by this.sum', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'export class ex {\n'
+        + '    sum (a: number, b: number): number { return a + b; }\n'
+        + '    async get (r: Dict): Promise<number[]> { return []; }\n';
+    test('a page counter written by this.sum (page, 1) types int and the write goes native', () => {
+        const out = goTranspile87g8(head
+            + '    async f () {\n'
+            + '        let page = 1;\n'
+            + '        while (true) {\n'
+            + '            const rows = await this.get ({ \'page\': page });\n'
+            + '            if (rows.length === 0) {\n'
+            + '                break;\n'
+            + '            }\n'
+            + '            page = this.sum (page, 1);\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var page int = 1');
+        expect(out).toContain('page = page + 1');
+    });
+    test('a counter also compared with a non-literal keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    async f (max: number) {\n'
+            + '        let page = 1;\n'
+            + '        while (page < max) {\n'
+            + '            await this.get ({ \'page\': page });\n'
+            + '            page = this.sum (page, 1);\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var page any = 1');
+    });
+});
+
+describe('ral-90g8 R4 annotated int counters and loop-index writes', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'type int = number;\n'
+        + 'export class ex {\n'
+        + '    sum (a: number, b: number): number { return a + b; }\n'
+        + '    async get (r: Dict): Promise<number[]> { return []; }\n';
+    test('an `: int` offset advanced by a len local types int', () => {
+        const out = goTranspile87g8(head
+            + '    async f () {\n'
+            + '        let offset: int = 0;\n'
+            + '        while (true) {\n'
+            + '            const rows = await this.get ({ \'offset\': offset });\n'
+            + '            const n = rows.length;\n'
+            + '            if (n === 0) {\n'
+            + '                break;\n'
+            + '            }\n'
+            + '            offset = this.sum (offset, n);\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var offset int = 0');
+        expect(out).toContain('offset = offset + n');
+    });
+    test('a page counter also written from a for index types int', () => {
+        const out = goTranspile87g8(head
+            + '    async f (pages: number) {\n'
+            + '        let page = 1;\n'
+            + '        const request: Dict = { \'page\': page };\n'
+            + '        for (let i = 2; i <= pages; i++) {\n'
+            + '            page = i;\n'
+            + '            request[\'page\'] = page;\n'
+            + '        }\n'
+            + '        page = this.sum (page, 1);\n'
+            + '        request[\'page\'] = page;\n'
+            + '        await this.get (request);\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var page int = 1');
+        expect(out).toContain('page = page + 1');
+    });
+});
