@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type ParenthesizedExpression, type PropertyAccessExpression, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
 import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isThrowStatement, isTypeReferenceNode, isUnionTypeNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
 import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
@@ -2544,6 +2544,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rust66cBookCacheRead(declaration.initializer) !== undefined) return `${indent}let mut ${varName}: crate::value::List = ${super.printIdentifier(this.rust66cBookCacheRead(declaration.initializer))}.cache_items()`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rustTypedListField(declaration.initializer)) return `${indent}let mut ${varName}: crate::value::List = self.${String(this.rustSkipWrappers(declaration.initializer).name.text)}.clone()`;
+        // ral-90rg R3: a lent-list alias takes the source's handle (moved: the alias is the source's last use)
+        if (node.declarations.length === 1 && this.rustLentListLocal(declaration) && this.rust90rgLentListAliasSource(declaration.initializer) !== undefined) return `${indent}let mut ${varName}: crate::value::List = ${super.printIdentifier(this.rustSkipWrappers(declaration.initializer))}`;
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
@@ -5327,6 +5329,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'obool' && typedUses === 0 && this.rustHandleOptionLiteralKind(this.rust62pBoolCastOption(this.unwrapParens(declaration.initializer)) ? this.unwrapParens(declaration.initializer).expression : declaration.initializer) === 'obool') return undefined;
         // ral-54x K1: a cased reader `String` with no native use would only be boxed straight back (boxed-straight-back stays `Value`)
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
+        // ral-90rg R2a: a `parseNumber` of a typed float parameter is typed only for a native use (box-only stays `Value`)
+        if (nativeUses === 0 && this.rust90rgParseNumberOfNumParam(this.unwrapParens(declaration.initializer))) return undefined;
         // ral-84h R1: a ternary with an arm read from a defaulted base `Str` parameter is typed only for a native use (box-only stays `Value`)
         const init84h: Node = this.unwrapParens(declaration.initializer);
         if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: Node) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
@@ -5359,7 +5363,9 @@ export class RustTranspiler extends BaseTranspiler {
             && !(strKind && copied === 0 && nativeUses > 0 && !this.rust76fSourceMethodWrite(declaration, scope))) return undefined;
         // ral-52n: a box that is an argument of a `number`-typed parameter reads back through `as_f64()`, so an Int default
         // and its Float spelling hand the callee the same `f64`
-        if ((boxed > 0 && !this.rustNumParamBoxesOnly(declaration) || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)) return undefined;
+        // ral-90rg R2b: unless every use reads the number only through `as_f64` (rust90rgFloatOnlyUses): there `Int(0)` and `0.0` agree
+        if ((boxed > 0 && !this.rustNumParamBoxesOnly(declaration) || (expressionUses && !this.rustCompareOnlyNumUses(declaration))) && this.rustReaderIntDefaultNum(declaration.initializer)
+            && !this.rust90rgFloatOnlyUses(declaration, 0)) return undefined;
         // a reader-default string re-boxed anywhere but a moving `return` would copy where the `Value` moved
         const readerTouched = this.rustReaderDefaultTouched(declaration);
         // a reader string copied at a box is lent there (`Value::from(x.as_deref())`: the copy the `Value` clone made)
@@ -6759,7 +6765,20 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = isIdentifier(arg) ? this.rustScalarIdentifierKind(arg) : this.rustScalarValueKind(arg, true);
         // ral-84g R1: a venue method already printed `-> Option<String>` (rustVenueStrCall: every venue declaration of the name
         // declares a string return) boxes into a `Str` or `Null` at the argument, never an `Int`
-        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg);
+        // ral-87rg R2: an unwritten parameter whose typed signature slot is `f64` / `Option<f64>` (rustOptParamKind, from the
+        // signature table) is rebound from that float, so its `Value` is a `Float` or `Null`: `parse_number` hands it through
+        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg) || this.rust90rgParseNumberOfNumParam(call);
+    }
+
+    /** ral-87rg R2 (ral-90rg: split out): `this.parseNumber (p)` of an unwritten parameter whose typed signature slot is `f64` /
+     *  `Option<f64>` (rustOptParamKind). Its result local is typed only for a native use (rustScalarNeedsNativeUse): boxed
+     *  straight back it stays the `Value` it is handed as. */
+    rust90rgParseNumberOfNumParam(call: Node): boolean {
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'parseNumber') return false;
+        const arg: Node = this.unwrapParens(call.arguments[0]);
+        if (!isIdentifier(arg) || this.rustScalarIdentifierKind(arg) !== undefined) return false;
+        return [ 'num', 'onum' ].includes(this.rustOptParamKind(arg) ?? '');
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
@@ -7496,6 +7515,38 @@ export class RustTranspiler extends BaseTranspiler {
         const p: any = decl?.parameters?.[idx];
         if (p === undefined || p.type === undefined || p.dotDotDotToken !== undefined) return false;
         return p.type.kind === SyntaxKind.NumberKeyword;
+    }
+
+    /** ral-90rg R2b: every use of a number local reads it only as an `f64`: a nullish test (`x === undefined`), an argument of
+     *  `Math.floor|round|ceil|pow` (the runtime helpers convert through `as_f64` and answer `Float`), or an arm of the ternary
+     *  initializer of another `const` whose own uses are the same (two levels at most). An `Int` default and its `Float`
+     *  spelling then give the same result, so a `safeNumber (.., <int literal>)` reader local may be typed `Option<f64>`.
+     *  Decided from the TypeScript AST only. */
+    rust90rgFloatOnlyUses(declaration: Node, depth: number): boolean {
+        if (depth > 2 || declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const list: Node = declaration.parent;
+        if (list === undefined || (list.flags & NodeFlags.Const) === 0) return false;
+        let uses = 0;
+        const ok = this.rustScalarUsesAll(declaration, String(declaration.name.text), (n: Node) => {
+            uses++;
+            let top: Node = n;
+            while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+            const up: Node = top.parent;
+            if (up === undefined) return false;
+            if (isBinaryExpression(up) && this.isEqualityOp(up.operatorToken.kind)) {
+                const other: Node = up.left === top ? up.right : up.left;
+                return this.literalKindOfNode(this.unwrapParens(other)) === 'null';
+            }
+            if (isCallExpression(up) && up.expression !== top && this.rustMathFloatShape(up) && String((up.expression as PropertyAccessExpression).name.text) !== 'abs') return true;
+            if (isConditionalExpression(up) && (up.whenTrue === top || up.whenFalse === top)) {
+                let init: Node = up;
+                while (init.parent !== undefined && isParenthesizedExpression(init.parent)) init = init.parent;
+                const owner: Node = init.parent;
+                return owner !== undefined && isVariableDeclaration(owner) && owner.initializer === init && this.rust90rgFloatOnlyUses(owner, depth + 1);
+            }
+            return false;
+        });
+        return ok && uses > 0;
     }
 
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
@@ -8727,6 +8778,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (isBinaryExpression(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
             const other = parent.left === n ? parent.right : parent.left;
             if (this.rustScalarLiteralTest(kind, other) !== undefined) return 'test';
+            // ral-90rg R2: a never-written safeCurrencyCode local strictly compared with a checker-string `Value` partner: the
+            // ral-70f compare arm prints `x.as_deref() == p.as_str()` (a non-`Str` partner and `None` never meet, as is_equal)
+            if (kind === 'ostr' && this.rust90rgCurrencyCodeLocal(this.rustDeclaredNode(n)) && (parent.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken || parent.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken)
+                && this.primitiveKindOfType(this.typeOfNodeIfAny(this.unwrapParens(other))) === 'string' && this.printsValueExpression(this.unwrapParens(other)) && this.rustScalarLocalOf(this.unwrapParens(other)) === undefined) return 'native';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
         // ral-46d: an `Option<bool>` leaf of a logical the printer emits as a native `bool` (a narrowed bool local's initializer,
@@ -9888,6 +9943,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (init.arguments.length !== 2 || (name !== 'safeString' && name !== 'safeStringLower' && name !== 'safeStringUpper')) return false;
         if (name !== 'safeString' && this.rustOptReaderName(init)?.key === undefined) return false;
         // never written after its declaration (an assigned local was never narrowed by the pass)
+        return !this.rust70fWritten(declaration);
+    }
+
+    /** ral-90rg R2: a `const x = this.safeCurrencyCode (id)` (one argument, the base method: printed `-> Option<String>`) that is
+     *  never written after its declaration. */
+    rust90rgCurrencyCodeLocal(declaration: Node): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustTestTierSource(declaration)) return false;
+        const init: Node = this.unwrapParens(declaration.initializer);
+        if (!this.rustUdReaderStr(init) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
+            || String(init.expression.name.text) !== 'safeCurrencyCode' || init.arguments.length !== 1) return false;
         return !this.rust70fWritten(declaration);
     }
 
@@ -12243,7 +12308,7 @@ export class RustTranspiler extends BaseTranspiler {
         // the comparison ccxt's string-equality pass printed from the boxed pair (a non-`Str` partner and `None` never meet)
         if ((lk === undefined) !== (rk === undefined) && equality && partnerTest === undefined && (op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken)) {
             const [ typed, other, k ] = lk === undefined ? [ right, left, rk ] : [ left, right, lk ];
-            if (k === 'ostr' && isIdentifier(typed) && this.rust70fReaderLocal(this.rustDeclaredNode(typed), true) && this.primitiveKindOfType(this.typeOfNodeIfAny(other)) === 'string' && this.printsValueExpression(other)) {
+            if (k === 'ostr' && isIdentifier(typed) && (this.rust70fReaderLocal(this.rustDeclaredNode(typed), true) || this.rust90rgCurrencyCodeLocal(this.rustDeclaredNode(typed))) && this.primitiveKindOfType(this.typeOfNodeIfAny(other)) === 'string' && this.printsValueExpression(other)) {
                 if (dry) return '_';
                 const mine = `${super.printIdentifier(typed)}.as_deref()`;
                 const theirs = `${this.printNode(other, 0).trim()}.as_str()`;
@@ -22497,6 +22562,43 @@ export class RustTranspiler extends BaseTranspiler {
     /** `this.<m>(…)` whose every return is a fresh untagged
      *  container of `kind` — the method's own body, no venue override (the
      *  checker resolves the most derived declaration for `this`). */
+    /** ral-90rg R4: `inner` is a `this.m (..)` call returned whole from `owner` (a base-tier method), `m` a base method no venue
+     *  declares (rustVenueReturnTypesHas), not dispatched virtually, not typed, not async, not `owner`: the implementation (the
+     *  same-named member with a body when the checker resolves a bodiless overload, as ral-55i reads it), else undefined. */
+    rust90rgBaseTailForward(owner: Node, inner: Node): MethodDeclaration | undefined {
+        if (owner === undefined || inner === undefined || !isCallExpression(inner) || !isPropertyAccessExpression(inner.expression)
+            || inner.expression.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(inner.expression.name)) return undefined;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(owner.getSourceFile().fileName))) return undefined;
+        const name = String(inner.expression.name.text);
+        const target: Node = this.rustScalarCallee(inner);
+        if (target === undefined || !isMethodDeclaration(target) || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(target.getSourceFile().fileName))) return undefined;
+        const impl: MethodDeclaration = target.body !== undefined ? target : Array.from((target.parent as ClassDeclaration)?.members ?? []).find((m: Node) => isMethodDeclaration(m)
+            && m.body !== undefined && isIdentifier(m.name) && String(m.name.text) === name) as MethodDeclaration;
+        if (impl === undefined || impl === owner || this.isAsyncFunction(impl) || this.rustVenueReturnTypesHas(inner, name)
+            || this.rustVirtualDispatch?.[this.toSnakeCaseName(name)] !== undefined || this.rustTypedUnified.has(name) || this.rustTypedSignature(impl) !== undefined) return undefined;
+        return impl;
+    }
+
+    /** ral-90rg R4: every `return` of `impl` (closures skipped) is an array literal (a tuple producer: `return [ v, params ]`). Only a
+     *  literal: a forwarded list pass-through (parseTrades -> filterBySymbolSinceLimit) stays with the lent-list rule, which moves
+     *  the list instead of copying it out. */
+    rust90rgImplReturnsList(impl: MethodDeclaration): boolean {
+        let returns = 0;
+        let ok = true;
+        const visit = (node: Node) => {
+            if (!ok) return;
+            if (node !== impl.body && isFunctionLike(node)) return;
+            if (isReturnStatement(node)) {
+                returns++;
+                if (!isArrayLiteralExpression(this.rustSkipWrappers(node.expression))) ok = false;
+                return;
+            }
+            node.forEachChild(visit);
+        };
+        impl.body.forEachChild(visit);
+        return ok && returns > 0;
+    }
+
     rustCallBuildsContainer(call: any, kind: 'map' | 'list', depth = 0): boolean {
         if (depth > 2) return false;
         // A pass-through builder hands back its own first argument (it only adds
@@ -22536,7 +22638,11 @@ export class RustTranspiler extends BaseTranspiler {
                     if (own === declaration) return;
                 }
                 returns++;
-                if (this.rustBuiltContainerKind(node.expression, depth + 1) !== kind) ok = false;
+                // ral-90rg R4: a base method's `return this.m (..)` tail forward to another base method (handleMarginModeAndParams ->
+                // handleOptionStringAndParams) yields what that callee builds: no proof depth for the hop
+                if (this.rustBuiltContainerKind(node.expression, depth + 1) === kind) return;
+                const forward = kind === 'list' ? this.rust90rgBaseTailForward(declaration, inner) : undefined;
+                if (forward === undefined || !this.rust90rgImplReturnsList(forward)) ok = false;
                 return;
             }
             // A store write (`this.orderbooks[sym] = book`, `this.tickers = ..`)
@@ -27665,6 +27771,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean {
         if (this.rustTypedListField(init)) return true;
+        if (this.rust90rgLentListAliasSource(init) !== undefined) return true;
         if (this.rust66cBookCacheRead(init) !== undefined) return true;
         if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression)) return false;
         const callee: any = init.expression;
@@ -27684,6 +27791,25 @@ export class RustTranspiler extends BaseTranspiler {
         // the ral-57i table rustBaseArraySliceCall), so `.into_list()` takes exactly that list
         if (method === 'arraySlice') return !this.rustTestTierSource(init) && this.rustBaseArraySliceCall(init);
         return this.rustDefaultedListRead(init);
+    }
+
+    /** ral-90rg R3: `init` is (through wrappers) a read of a never-reassigned `const xs = <never-empty base list source>` of the same
+     *  function (a `marketSymbols (.., false, ..)` result and the like, rustLentListSource without this rule) that is the whole
+     *  initializer of a `const` declaration at the source's last use: the source's declaration, else undefined. Structural only
+     *  (never asks rustLentListLocal of the source, so the source's own decision can ask about this alias). */
+    rust90rgLentListAliasSource(init: Node): VariableDeclaration | undefined {
+        const node: Node = this.rustSkipWrappers(init);
+        if (node === undefined || !isIdentifier(node)) return undefined;
+        let top: Node = node;
+        while ((isAsExpression(top.parent) || isParenthesizedExpression(top.parent)) && (top.parent as ParenthesizedExpression).expression === top) top = top.parent;
+        const alias: Node = top.parent;
+        if (alias === undefined || !isVariableDeclaration(alias) || alias.initializer !== top || !isIdentifier(alias.name) || (alias.parent.flags & NodeFlags.Const) === 0) return undefined;
+        const source: Node = this.rustDeclaredNode(node);
+        if (source === undefined || !isVariableDeclaration(source) || source === alias || !isIdentifier(source.name) || (source.parent.flags & NodeFlags.Const) === 0) return undefined;
+        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(alias) || !this.rustLocalLastUse(node, source)) return undefined;
+        const sourceInit: Node = this.rustSkipWrappers(source.initializer);
+        if (sourceInit === undefined || isIdentifier(sourceInit) || !this.rustLentListSource(sourceInit)) return undefined;
+        return source;
     }
 
     /** ral-48e: `xs[i]['k'] = v` (a statement) on a `[]`-defaulted list local, `i` an i64 counter or a non-negative integer
@@ -27824,6 +27950,12 @@ export class RustTranspiler extends BaseTranspiler {
             }
             if (isReturnStatement(up) && up.expression === n) {
                 boxes.push([n, 'move']);
+                return true;
+            }
+            // ral-90rg R3: the whole initializer of a `const ys: string[] = xs` alias at this local's last use, the alias itself a lent
+            // list (rust90rgLentListAliasSource): the handle moves into it (`let mut ys: crate::value::List = xs;`), no box
+            if (at === n && isVariableDeclaration(up) && up.initializer === n && this.rust90rgLentListAliasSource(n) === declaration && this.rustLentListLocal(up)) {
+                natives++;
                 return true;
             }
             if (at === n && (this.rustLentListSlot(up, n) || this.rustLentVenueSlot(up, n) !== undefined)) {

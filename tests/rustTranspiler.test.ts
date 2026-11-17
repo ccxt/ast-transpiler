@@ -25550,3 +25550,115 @@ describe('ral-90rf R4: a const answer of a declared Promise<List> endpoint, null
         expect(out).not.toContain('into_opt_list()');
     });
 });
+
+describe('ral-90rg R2: parseNumber of a typed float parameter, typed for its native use only', () => {
+    test('amountNum read through unwrap_or is an Option<f64>; a parseNumber local only boxed into a literal stays Value', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rg2-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    parseNumber (x: any, d: Num = undefined): Num { return x; }\n    parseToInt (x: any): number { return x; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    async transfer (code: string, amount: number, fromAccount: string, toAccount: string, params: Dict = {}): Promise<any> {\n        const amountNum = this.parseNumber (amount);\n        const amountValue = (amountNum === undefined) ? 0 : amountNum;\n        const scaled = this.parseToInt (amountValue * 100);\n        const parsedAmount = this.parseNumber (amount);\n        return await this.privatePostX ({ 'scaled': scaled, 'amount': parsedAmount });\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['transfer'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut amountNum: Option<f64> = self\.parseNumber\(amount[^;]*\.as_f64\(\);/);
+        expect(out).toContain('amountNum.unwrap_or(');
+        // negative: boxed straight back into the literal, the local keeps the `Value` it is handed as
+        expect(out).toMatch(/let mut parsedAmount: Value = /);
+    });
+});
+
+describe('ral-90rg R2b: an Int-defaulted safeNumber read only as an f64', () => {
+    test('decimals = safeNumber (c, k, 0) feeding Math.pow through a defaulting ternary is an Option<f64>', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rg2b-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export type Num = number | undefined;\nexport default class Exchange {\n    safeNumber (o: any, k: any, d: Num = undefined): Num { return o; }\n    hold (x: any): any { return x; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    scale (currency: any) {\n        const decimalsNum = this.safeNumber (currency, 'decimals', 0);\n        const decimalsNumber = (decimalsNum === undefined) ? 0 : decimalsNum;\n        const factor = (Math.pow (10, decimalsNumber));\n        return this.hold (factor);\n    }\n"
+                + "    other (currency: any) {\n        const kept = this.safeNumber (currency, 'decimals', 0);\n        return this.hold (kept);\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/let mut decimalsNum: Option<f64> = /);
+        expect(out).toContain('let mut decimalsNumber: f64 = decimalsNum.unwrap_or(0.0);');
+        expect(out).toContain('f64::powf(10.0, decimalsNumber)');
+        // negative: boxed back as a `Value` the Int default would re-box as a Float: stays `Value`
+        expect(out).toMatch(/let mut kept: Value = /);
+    });
+});
+
+describe('ral-90rg R2: a safeCurrencyCode local strictly compared with a string Value partner', () => {
+    test('parsedCurrency compared with a market field is an Option<String> compared through as_deref', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rg-r2-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export type Str = string | undefined;\nexport interface Info { base: string; [key: string]: any }\nexport default class Exchange {\n    info (o: any): Info { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeCurrencyCode (currencyId: Str, currency: any = undefined): Str { return currencyId; }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Info } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    side (position: any, base: string) {\n        let side = 'net';\n        const posCcy = this.safeString (position, 'posCcy');\n        const parsedCurrency = this.safeCurrencyCode (posCcy);\n        if (parsedCurrency !== undefined) {\n            const info: Info = this.info (position);\n            side = (info['base'] === parsedCurrency) ? 'long' : 'short';\n        }\n        return side;\n    }\n"
+                + "    kept (position: any) {\n        const code = this.safeCurrencyCode (this.safeString (position, 'c'));\n        return { 'code': code };\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut parsedCurrency: Option<String> = ');
+        expect(out).toContain('parsedCurrency.as_deref()');
+        expect(out).not.toContain('let mut parsedCurrency: Value');
+    });
+});
+
+describe('ral-90rg R3: a const alias of a never-empty marketSymbols list at its last use', () => {
+    test('symbolsList: string[] = symbolsNormalized moves the List handle; both are crate::value::List', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rg-r3-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export type Strings = string[] | undefined;\nexport default class Exchange {\n    marketSymbols (symbols: Strings = undefined, type: string = undefined, allowEmpty: boolean = true): string[] { return symbols; }\n    filterByArray (o: any, k: any, v: any): any { return o; }\n    tickers: any = {};\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    pick (symbols: Strings = undefined) {\n        const symbolsNormalized = this.marketSymbols (symbols, undefined, false);\n        const symbolsList: string[] = symbolsNormalized;\n        let n = 0;\n        for (let i = 0; i < symbolsList.length; i++) {\n            n = n + 1;\n        }\n        return this.filterByArray (this.tickers, 'symbol', symbolsList);\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut symbolsNormalized: crate::value::List = ');
+        expect(out).toContain('let mut symbolsList: crate::value::List = symbolsNormalized;');
+        expect(out).toContain('symbolsList.len()');
+    });
+});
+
+describe('ral-90rg R4: a base method returning another base method call whose implementation builds a list', () => {
+    test('handleMarginModeAndParams -> handleOptionStringAndParams (overloaded) is a list: its result local is a read-only Vec<Value>', () => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rg-r4-'));
+        const files: Record<string, string> = {
+            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n"
+                + "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: string): [string, Dict];\n"
+                + "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue?: Str): [Str, Dict];\n"
+                + "    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] {\n        return [ defaultValue, params ];\n    }\n"
+                + "    handleMarginModeAndParams (methodName: string, params: Dict = {}, defaultValue: Str = undefined): [Str, Dict] {\n        return this.handleOptionStringAndParams (params, methodName, 'marginMode', defaultValue);\n    }\n}\n",
+            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+                + "    pick (orderParams: Dict) {\n        const marginResult = this.handleMarginModeAndParams ('createOrders', orderParams);\n        const currentMarginMode = marginResult[0];\n        return currentMarginMode;\n    }\n}\n",
+        };
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        expect(out).toContain('let mut marginResult: Vec<Value> = ');
+        expect(out).toContain('marginResult.get(0)');
+    });
+});
