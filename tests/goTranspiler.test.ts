@@ -15574,3 +15574,167 @@ describe('87g7 R3 absent arm next to a string arm', () => {
         expect(out).toContain('(lowercaseRawType != nil && *lowercaseRawType == "fund")');
     });
 });
+
+function goTranspile87g8(source: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ral-87g8-'));
+    fs.mkdirSync(path.join(dir, 'ts', 'src'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ts', 'src', 'ex.ts'), source);
+    const cwd = process.cwd();
+    try {
+        process.chdir(dir);
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        return x.transpileGoByPath('ts/src/ex.ts').content;
+    } finally {
+        process.chdir(cwd);
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+describe('ral-87g8 R1 map-producer locals redeclared in disjoint sibling blocks', () => {
+    const head = 'interface MarketInterface { id: string; symbol: string; }\n'
+        + 'type Market = MarketInterface | undefined;\n'
+        + 'export class ex {\n'
+        + '    parseMarket (m: any): Market { return { id: m, symbol: m }; }\n';
+    test('two same-named parseMarket locals in sibling loops each type as a map with a native nil test', () => {
+        const out = goTranspile87g8(head
+            + '    f (a: any[], b: any[]) {\n'
+            + '        const result = [];\n'
+            + '        for (let i = 0; i < a.length; i++) {\n'
+            + '            const parsed = this.parseMarket (a[i]);\n'
+            + '            if (parsed !== undefined) {\n'
+            + '                result.push (parsed);\n'
+            + '            }\n'
+            + '        }\n'
+            + '        for (let j = 0; j < b.length; j++) {\n'
+            + '            const parsed = this.parseMarket (b[j]);\n'
+            + '            if (parsed !== undefined) {\n'
+            + '                result.push (parsed);\n'
+            + '            }\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).not.toContain('var parsed any');
+        expect(out).toContain('if parsed != nil {');
+    });
+    test('a nested same-named shadow still keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    f (a: any[]) {\n'
+            + '        const result = [];\n'
+            + '        for (let i = 0; i < a.length; i++) {\n'
+            + '            const parsed = this.parseMarket (a[i]);\n'
+            + '            if (parsed !== undefined) {\n'
+            + '                const parsed = this.parseMarket (a[0]);\n'
+            + '                result.push (parsed);\n'
+            + '            }\n'
+            + '        }\n'
+            + '        return result;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var parsed any');
+    });
+});
+
+describe('ral-87g8 R2 int literal counters', () => {
+    test('a counter written only by literals and self increments types int with native writes and compare', () => {
+        const out = goTranspile87g8('export class ex {\n'
+            + '    f (list: string[]): boolean {\n'
+            + '        let remaining = 0;\n'
+            + '        for (let i = 0; i < list.length; i++) {\n'
+            + '            if (list[i] === \'a\') {\n'
+            + '                remaining = remaining + 1;\n'
+            + '            }\n'
+            + '            remaining += 2;\n'
+            + '        }\n'
+            + '        return (remaining === 0);\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var remaining int = 0');
+        expect(out).toContain('remaining = remaining + 1');
+        expect(out).toContain('remaining += 2');
+        expect(out).toContain('(remaining == 0)');
+    });
+    test('a counter handed to a call or returned from a sync method keeps the box', () => {
+        const out = goTranspile87g8('export class ex {\n'
+            + '    g (n: number): number { return n; }\n'
+            + '    f (list: string[]): number {\n'
+            + '        let count = 0;\n'
+            + '        for (let i = 0; i < list.length; i++) {\n'
+            + '            count += 1;\n'
+            + '        }\n'
+            + '        this.g (count);\n'
+            + '        return count;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var count any = 0');
+    });
+});
+
+describe('ral-87g8 R3 inherited venue-method results only with a native use', () => {
+    const parent = 'export class base {\n'
+        + '    safeString (o: any, k: string): string | undefined { return undefined; }\n'
+        + '    parseTimeInForce (t: string | undefined): string | undefined {\n'
+        + '        return this.safeString ({ \'GTC\': \'GTC\' }, t);\n'
+        + '    }\n'
+        + '}\n';
+    test('a *string result compared with a literal takes the pointer and the compare goes native', () => {
+        const out = goTranspile87g8(parent
+            + 'export class ex extends base {\n'
+            + '    f (o: any) {\n'
+            + '        const timeInForce = this.parseTimeInForce (this.safeString (o, \'tif\'));\n'
+            + '        const postOnly = (timeInForce === \'PO\');\n'
+            + '        return { \'postOnly\': postOnly, \'timeInForce\': timeInForce };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var timeInForce *string = this.ParseTimeInForce(');
+        expect(out).toContain('*timeInForce == "PO"');
+    });
+    test('a result that only feeds a map literal keeps the box', () => {
+        const out = goTranspile87g8(parent
+            + 'export class ex extends base {\n'
+            + '    f (o: any) {\n'
+            + '        const timeInForce = this.parseTimeInForce (this.safeString (o, \'tif\'));\n'
+            + '        return { \'timeInForce\': timeInForce };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var timeInForce any = this.ParseTimeInForce(');
+    });
+});
+
+describe('ral-87g8 R4 int counters compared against an Int bound', () => {
+    test('a retry counter ordered-compared with an Int option types int', () => {
+        const out = goTranspile87g8('type Int = number | undefined;\n'
+            + 'export class ex {\n'
+            + '    f (list: string[], maxRetries: Int) {\n'
+            + '        let errors = 0;\n'
+            + '        for (let i = 0; i < list.length; i++) {\n'
+            + '            errors += 1;\n'
+            + '            if (errors > maxRetries) {\n'
+            + '                throw new Error (\'x\');\n'
+            + '            }\n'
+            + '            if (list[i] === \'ok\') {\n'
+            + '                errors = 0;\n'
+            + '            }\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var errors int = 0');
+        expect(out).toContain('errors += 1');
+    });
+    test('an equality against an Int operand keeps the box', () => {
+        const out = goTranspile87g8('type Int = number | undefined;\n'
+            + 'export class ex {\n'
+            + '    f (list: string[], maxRetries: Int) {\n'
+            + '        let errors = 0;\n'
+            + '        for (let i = 0; i < list.length; i++) {\n'
+            + '            errors += 1;\n'
+            + '            if (errors === maxRetries) {\n'
+            + '                throw new Error (\'x\');\n'
+            + '            }\n'
+            + '        }\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var errors any = 0');
+    });
+});

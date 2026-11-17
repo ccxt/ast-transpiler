@@ -36127,3 +36127,387 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
     const whenFalse = branch(ternary.whenFalse, parts.emptyFalse === true, parts.addressFalse === true, parts.nilFalse === true);
     return `${iden}var ${name} ${parts.goType}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${whenTrue}\n${iden}} else {\n${whenFalse}\n${iden}}`;
 };
+
+// ===== ral-87g8 R1 (begin): map-producer locals redeclared in disjoint sibling blocks =====
+// `goDeclaredLocalTypeIfSafe` refuses a market/parse* map local whenever another declaration of the
+// same name exists in the function. A `const parsed = this.parseMarket (..)` repeated in disjoint
+// blocks (gemini fetchMarketsFromAPI: three loops) binds distinct checker symbols and prints distinct
+// Go `var`s in distinct Go blocks, so the values never mix. The caller's own skipUse already resolves
+// each use through the checker; here only same-named let/const declarations whose enclosing blocks are
+// disjoint from ours are ignored. The rule runs only for the map type and only when at least one use
+// of OUR declaration is a nil comparison (prints natively as `x != nil` on the typed map), so every
+// freed local gains a native use; nested shadows and parameters still refuse.
+function go87g8BlockScoped(decl): boolean {
+    const list = decl?.parent;
+    return (list?.kind === SyntaxKind.VariableDeclarationList) && ((list.flags & (ts.NodeFlags.Let | ts.NodeFlags.Const)) !== 0)
+        && (decl.name?.kind === SyntaxKind.Identifier);
+}
+function go87g8EnclosingBlock(node) {
+    let current = node?.parent;
+    while ((current !== undefined) && (current.kind !== SyntaxKind.Block) && (current.kind !== SyntaxKind.SourceFile)) {
+        current = current.parent;
+    }
+    return current;
+}
+function go87g8Contains(outer, inner): boolean {
+    for (let current = inner; current !== undefined; current = current.parent) {
+        if (current === outer) {
+            return true;
+        }
+    }
+    return false;
+}
+const goDeclaredLocalTypeIfSafeBase87g8 = GoTranspiler.prototype.goDeclaredLocalTypeIfSafe;
+GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType: string, readsTheValue: (n: Node) => boolean, skipUse?: (n: Node) => boolean): string | undefined {
+    const shipped = goDeclaredLocalTypeIfSafeBase87g8.call(this, declaration, goType, readsTheValue, skipUse);
+    if ((shipped !== undefined) || (goType !== GO_MARKET_LOCAL_TYPE) || (skipUse === undefined) || !go87g8BlockScoped(declaration)) {
+        return shipped;
+    }
+    const sourceName = declaration.name.text as string;
+    const scope = this.goEnclosingFunction(declaration);
+    const ownBlock = go87g8EnclosingBlock(declaration);
+    if ((scope === undefined) || (ownBlock === undefined) || (ownBlock === scope)) {
+        return undefined;
+    }
+    let siblings = 0;
+    let nilTests = 0;
+    const unsafe = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
+            return true;
+        }
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
+            const otherBlock = go87g8EnclosingBlock(n);
+            if (!go87g8BlockScoped(n) || (otherBlock === undefined) || (otherBlock === scope)
+                || go87g8Contains(otherBlock, ownBlock) || go87g8Contains(ownBlock, otherBlock)) {
+                return true; // nested or function-level: a real shadow
+            }
+            siblings += 1;
+            return false;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== sourceName) || (n === declaration.name)) {
+            return false;
+        }
+        if ((n.parent?.kind === SyntaxKind.VariableDeclaration) && (n.parent.name === n)) {
+            return false; // a sibling's own name, counted above
+        }
+        if (skipUse(n)) {
+            return false; // property name, or the checker resolves it to another binding
+        }
+        if (!go87g8Contains(ownBlock, n)) {
+            return true;
+        }
+        if (this.goIsNilComparisonOperand(n, n.parent)) {
+            nilTests += 1;
+        }
+        return !readsTheValue(n);
+    });
+    if (unsafe || (siblings === 0) || (nilTests === 0) || this.goTypeNameIsShadowed(scope, goType)) {
+        return undefined;
+    }
+    return goType;
+};
+// ===== ral-87g8 R1 (end) =====
+
+// ===== ral-87g8 R2 (begin): int literal counters =====
+// `let errors = 0; .. errors += 1; .. errors = 0; .. if (errors > max)` stays `any` because the
+// compound write (and `x = x + 1`) vetoes goLocalIsSafeToType. The box only ever held a Go `int`
+// (the literal, and Add of two ints answers an int), so an `int` local holds the same value. Admitted
+// only when every write is a non-negative integer literal, `x += <int literal>`, `x -= <int literal>`
+// or `x = x +/- <int literal>`, no ++/--, no destructuring, and at least one read is an ordered or
+// equality comparison against a number, or a self write (both print native on the typed local). Writes print natively:
+// `x += 1` / `x = x + 1`.
+function go87g8IntLiteral(node): boolean {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    return (node?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(node.text);
+}
+function go87g8IsOwnRef(goTranspiler, node, declaration): boolean {
+    return (node?.kind === SyntaxKind.Identifier) && (node.text === declaration.name.text)
+        && goTranspiler.goIdentifierRefersToDeclaration(node, declaration);
+}
+function go87g8CounterWriteOk(goTranspiler, assignment, declaration): boolean {
+    const op = assignment.operatorToken.kind;
+    if ((op === SyntaxKind.PlusEqualsToken) || (op === SyntaxKind.MinusEqualsToken)) {
+        return go87g8IntLiteral(assignment.right);
+    }
+    if (op !== SyntaxKind.EqualsToken) {
+        return false;
+    }
+    let right = assignment.right;
+    while (right?.kind === SyntaxKind.ParenthesizedExpression) {
+        right = right.expression;
+    }
+    if (go87g8IntLiteral(right)) {
+        return true;
+    }
+    return (right?.kind === SyntaxKind.BinaryExpression)
+        && ((right.operatorToken.kind === SyntaxKind.PlusToken) || (right.operatorToken.kind === SyntaxKind.MinusToken))
+        && go87g8IsOwnRef(goTranspiler, right.left, declaration) && go87g8IntLiteral(right.right);
+}
+// ral-87g8 R4: the checker types the operand as a number (optionally `| undefined`, i.e. `Int`)
+function go87g8NumberOperand(goTranspiler, node): boolean {
+    let type = undefined;
+    try {
+        type = goTranspiler.getChecker().getTypeAtLocation(node);
+    } catch (e) {
+        return false;
+    }
+    if (type === undefined) {
+        return false;
+    }
+    const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [ type ];
+    return parts.some((t) => (t.flags & TypeFlags.NumberLike) !== 0)
+        && parts.every((t) => (t.flags & (TypeFlags.NumberLike | TypeFlags.Undefined)) !== 0);
+}
+const go87g8CounterCache = new WeakMap<object, boolean>();
+function go87g8IsIntCounter(goTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || !go87g8IntLiteral(declaration.initializer) || (declaration.type !== undefined)
+        || ((declaration.parent?.flags & ts.NodeFlags.Let) === 0)) {
+        return false;
+    }
+    if (go87g8CounterCache.has(declaration)) {
+        return go87g8CounterCache.get(declaration);
+    }
+    go87g8CounterCache.set(declaration, false);
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return false;
+    }
+    const name = declaration.name.text;
+    let writes = 0;
+    let comparisons = 0;
+    let selfWrites = 0;
+    const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
+        if ((n.kind === SyntaxKind.Parameter || n.kind === SyntaxKind.VariableDeclaration) && (n !== declaration)
+            && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true; // keep it simple: no other binding of the name
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent = n.parent;
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+            || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression)
+            || (parent?.kind === SyntaxKind.SpreadElement) || (parent?.kind === SyntaxKind.ShorthandPropertyAssignment)
+            || (parent?.kind === SyntaxKind.ArrayLiteralExpression)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
+            const op = parent.operatorToken.kind;
+            if ((op >= SyntaxKind.FirstAssignment) && (op <= SyntaxKind.LastAssignment)) {
+                writes += 1;
+                if (!go87g8IntLiteral(parent.right)) {
+                    selfWrites += 1; // `x += 1` / `x = x + 1`: native int arithmetic
+                }
+                return !go87g8CounterWriteOk(goTranspiler, parent, declaration);
+            }
+        }
+        if (parent?.kind === SyntaxKind.BinaryExpression) {
+            const op = parent.operatorToken.kind;
+            const other = (parent.left === n) ? parent.right : parent.left;
+            if ((op === SyntaxKind.GreaterThanToken) || (op === SyntaxKind.GreaterThanEqualsToken)
+                || (op === SyntaxKind.LessThanToken) || (op === SyntaxKind.LessThanEqualsToken)
+                || (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                if (go87g8IntLiteral(other)) {
+                    comparisons += 1;
+                    return false;
+                }
+                // ral-87g8 R4: an ORDERED comparison against another number operand always compiles on an
+                // `int` local (printWideningComparison prints `int64(x) > y` / `float64(x) ..`, else the
+                // any-taking helper); equality would print `x == y` across Go types, so it still refuses
+                if ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsEqualsToken)
+                    && go87g8NumberOperand(goTranspiler, other)) {
+                    comparisons += 1;
+                    return false;
+                }
+                // another operand may print int64 / float64 / any: `int` against it would not compile
+                return true;
+            }
+            // `x = x + 1` reads the local on the right of its own write: admitted by the write check
+            if ((op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken) && (parent.left === n)
+                && (parent.parent?.kind === SyntaxKind.BinaryExpression) && (parent.parent.right === parent)
+                && go87g8IsOwnRef(goTranspiler, parent.parent.left, declaration)) {
+                return false;
+            }
+            return true;
+        }
+        // a hand-off into an `any` slot boxes the same int the box held: a map literal value, or the
+        // result of an async method (sent as AsyncResult[any]). Call arguments and sync returns may
+        // meet an int64 / float64 Go parameter or result: refuse.
+        return !(((parent?.kind === SyntaxKind.ReturnStatement) && goTranspiler.isAsyncFunction(scope))
+            || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === n)
+                && (parent.parent?.kind === SyntaxKind.ObjectLiteralExpression)));
+    });
+    const ok = !unsafe && (writes > 0) && ((comparisons > 0) || (selfWrites > 0));
+    go87g8CounterCache.set(declaration, ok);
+    return ok;
+}
+const goLocalIsSafeToTypeBase87g8 = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goLocalIsSafeToTypeBase87g8.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    return (goType === 'int') && go87g8IsIntCounter(this, declaration);
+};
+// the compound / self writes of a counter print natively on the int local
+const goNativeCompoundAssignmentBase87g8 = GoTranspiler.prototype.goNativeCompoundAssignment;
+GoTranspiler.prototype.goNativeCompoundAssignment = function (op, leftNode, leftText: string, rightNode, rightText: string): string | undefined {
+    const shipped = goNativeCompoundAssignmentBase87g8.call(this, op, leftNode, leftText, rightNode, rightText);
+    if (shipped !== undefined) {
+        return shipped;
+    }
+    const declaration = (leftNode?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(leftNode) : undefined;
+    if ((declaration === undefined) || !go87g8IsIntCounter(this, declaration) || !go87g8IntLiteral(rightNode)) {
+        return undefined;
+    }
+    if ((op !== SyntaxKind.PlusEqualsToken) && (op !== SyntaxKind.MinusEqualsToken)) {
+        return undefined;
+    }
+    return `${leftText.trim()} ${(op === SyntaxKind.PlusEqualsToken) ? '+=' : '-='} ${rightText.trim()}`;
+};
+// ===== ral-87g8 R2 (end) =====
+
+// ===== ral-87g8 R3 (begin): inherited parse* / venue-method results, only with a native use =====
+// Rework of 84g8 R2+R3 (not stacked: 8 of 43 freed locals had a native use). The type derivation is
+// unchanged: the checker resolves the callee to a parent venue class whose emitted Go signature
+// (ccxtGoFamilyMethodReturnType, the predicate printMethodDefinition uses) is `*string`, `string` or
+// `map[string]any`. New: the result is kept only when the local's own uses (resolved through the
+// checker) include an operation that prints native on that Go type: a nil or string-literal equality
+// for `*string` (`x != nil && *x == "PO"`), a string-literal equality or a `+` operand for `string`,
+// and for the map an element read / write `x[k]`, an `in` test or a nil comparison. A local that only
+// feeds a map literal or a call argument keeps the box.
+function go87g8LiteralOrNil(node): boolean {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    return (node?.kind === SyntaxKind.StringLiteral) || (node?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+        || (node?.kind === SyntaxKind.NullKeyword) || (node?.kind === SyntaxKind.UndefinedKeyword)
+        || ((node?.kind === SyntaxKind.Identifier) && (node.text === 'undefined'));
+}
+function go87g8UseIsNative(n, goType: string): boolean {
+    let node = n;
+    let parent = node.parent;
+    while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = parent;
+        parent = parent.parent;
+    }
+    if (parent?.kind === SyntaxKind.BinaryExpression) {
+        const op = parent.operatorToken.kind;
+        const other = (parent.left === node) ? parent.right : parent.left;
+        const equality = (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
+            || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken);
+        if (equality && go87g8LiteralOrNil(other)) {
+            return (goType !== 'map[string]any') || !((other.kind === SyntaxKind.StringLiteral) || (other.kind === SyntaxKind.NoSubstitutionTemplateLiteral));
+        }
+        if ((goType === 'string') && (op === SyntaxKind.PlusToken)) {
+            return true;
+        }
+        if ((goType === 'map[string]any') && (op === SyntaxKind.InKeyword) && (parent.right === node)) {
+            return true;
+        }
+        return false;
+    }
+    return (goType === 'map[string]any') && (parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node);
+}
+function go87g8NativeUseGate(goTranspiler, initializer, goType: string | undefined): string | undefined {
+    const declaration = initializer?.parent;
+    if ((goType === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== initializer)
+        || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return undefined;
+    }
+    const name = declaration.name.text;
+    const native = goTranspiler.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+        && goTranspiler.goIdentifierRefersToDeclaration(n, declaration) && go87g8UseIsNative(n, goType));
+    return native ? goType : undefined;
+}
+// ===== ral-87g8 R3a (begin): inherited string-mapper results =====
+// `const status = this.parseOrderStatus (..)` in a pro / derived class whose callee lives in the
+// REST parent class: ccxtGoFamilyCallType only looks at the enclosing class, so the local stays
+// `any`. The checker's resolved declaration is the method the Go call promotes to (the pro struct
+// embeds the REST one); when ccxtGoFamilyMethodReturnType proves that method's emitted signature is
+// `*string`, the local holds exactly that pointer.
+function goInheritedFamilyCallType87g8(goTranspiler, initializer, printedValue: string): string | undefined {
+    const callee = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (initializer.questionDotToken !== undefined)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !CCXT_GO_FAMILY_METHOD.test(String(callee.name?.text ?? ''))) {
+        return undefined;
+    }
+    const name = callee.name.text as string;
+    const value = (printedValue ?? '').trim();
+    const open = value.indexOf('(');
+    if ((open <= 0) || !goTranspiler.isWholePrintedCall(value, open)
+        || (value.substring(0, open) !== 'this.' + name.charAt(0).toUpperCase() + name.slice(1))) {
+        return undefined;
+    }
+    let resolved = undefined;
+    try {
+        resolved = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    const owner = resolved?.parent;
+    if ((resolved?.kind !== SyntaxKind.MethodDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
+        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange'].indexOf(String(owner.name?.text ?? '')) >= 0)) {
+        return undefined;
+    }
+    return (ccxtGoFamilyMethodReturnType(goTranspiler, resolved) === CCXT_GO_FAMILY_RETURN_TYPE) ? CCXT_GO_FAMILY_RETURN_TYPE : undefined;
+}
+const goTypeOfInitializerBase87g8R3a = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTypeOfInitializerBase87g8R3a.call(this, initializer, printedValue);
+    return (known !== undefined) ? known : go87g8NativeUseGate(this, initializer, goInheritedFamilyCallType87g8(this, initializer, printedValue));
+};
+// ===== ral-87g8 R3a (end) =====
+// ===== ral-87g8 R3b (begin): inherited annotated-method results =====
+// Same shape as R2 for any other venue method the parent class's Go signature already names
+// (`createSubaccount` -> string, a REST `editOrderRequest` -> map[string]any): the signature comes
+// from ccxtGoFamilyMethodReturnType (printMethodDefinition is rewritten with exactly that
+// predicate), so the child's local holds that type. Only plain value types are taken; the usual
+// write / use scan of getGoLocalType still runs on the result.
+const GO_84G8_INHERITED_RESULT_TYPES = [ 'string', '*string', 'map[string]any' ];
+function goInheritedAnnotatedCallType87g8(goTranspiler, initializer, printedValue: string): string | undefined {
+    const callee = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (initializer.questionDotToken !== undefined)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (typeof callee.name?.text !== 'string') || CCXT_GO_FAMILY_METHOD.test(callee.name.text)) {
+        return undefined;
+    }
+    const name = callee.name.text as string;
+    const value = (printedValue ?? '').trim();
+    const open = value.indexOf('(');
+    if ((open <= 0) || !goTranspiler.isWholePrintedCall(value, open)
+        || (value.substring(0, open) !== 'this.' + name.charAt(0).toUpperCase() + name.slice(1))) {
+        return undefined;
+    }
+    let resolved = undefined;
+    try {
+        resolved = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    const owner = resolved?.parent;
+    if ((resolved?.kind !== SyntaxKind.MethodDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
+        || (owner === enclosingClassDeclaration(initializer)) || (['Exchange', 'BaseExchange', 'PredictionExchange'].indexOf(String(owner.name?.text ?? '')) >= 0)) {
+        return undefined;
+    }
+    const goType = ccxtGoFamilyMethodReturnType(goTranspiler, resolved);
+    return (GO_84G8_INHERITED_RESULT_TYPES.indexOf(goType) >= 0) ? goType : undefined;
+}
+const goTypeOfInitializerBase87g8R3b = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTypeOfInitializerBase87g8R3b.call(this, initializer, printedValue);
+    return (known !== undefined) ? known : go87g8NativeUseGate(this, initializer, goInheritedAnnotatedCallType87g8(this, initializer, printedValue));
+};
+// ===== ral-87g8 R3b (end) =====
+// ===== ral-87g8 R3 (end) =====
