@@ -6951,6 +6951,15 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustAnyStrPushElem(node) ? 'ostr' : undefined;
     }
 
+    /** `xs[i]` of a never-written `xs: string[]` parameter (not optional): every element the checker types `string`. */
+    rust93raStrListParamElem(node: Node): boolean {
+        if (!isElementAccessExpression(node) || !isIdentifier(node.expression)) return false;
+        const owner: Node | undefined = this.rustDeclaredNode(node.expression);
+        if (owner === undefined || !isParameterDeclaration(owner) || owner.initializer !== undefined || owner.questionToken !== undefined || this.rustParamWritten(owner)) return false;
+        const type: TypeNode | undefined = owner.type;
+        return type !== undefined && isArrayTypeNode(type) && type.elementType.kind === SyntaxKind.StringKeyword;
+    }
+
     /** ral-56e: `const xs = this.m (..)` where `m` is a method of the same class declared `number[]` whose body builds
      *  one `const r: number[] = []` filled only by `r.push (i)` of a plain int for-counter and answers `return r`; a
      *  declaration's literal-index `xs[k]` is then an `Int` or (out of range) `Null`: `Option<i64>`. Non-test sources. */
@@ -11234,7 +11243,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'ostr' && (this.rustElementReadScalarKind(node) !== undefined || this.rustInlineHandleStrSlot(node))) {
             const read = this.printNode(node, 0).trim();
             const tail = '.cloned().unwrap_or(Value::Null)';
-            return read.endsWith(tail) ? `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)` : undefined;
+            if (read.endsWith(tail)) return `${read.slice(0, -tail.length)}.and_then(Value::as_str).map(str::to_owned)`;
+            // a `string[]` parameter element read through the runtime reader (an owned `Value`): its text once
+            return this.rust93raStrListParamElem(node) ? `${read}.as_str().map(str::to_owned)` : undefined;
         }
         if (kind === 'obool' && this.rustElementReadScalarKind(node) === 'obool') {
             const read = this.printNode(node, 0).trim();
@@ -37392,7 +37403,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-ve: except a `url: string` parameter every caller fills with a `this.urls[..]` read (the arm decodes it once)
         const urlOnly = this.rustVenueUrlParam(method, param);
         const noArmStr = !group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && this.rust63xNoArmStrMethod(method);
-        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && !noArmStr) return undefined;
+        const dictBuilder = !group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && !noArmStr && (this.rust93raWsDictBuilder(method, param) || this.rust93raWsLocalStrSlot(method, param));
+        if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && !noArmStr && !dictBuilder) return undefined;
         const hidden: any = this.getMethodOverride(method);
         if (!group && hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
         if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
@@ -37407,6 +37419,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
         if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType))) return undefined;
+        if (dictBuilder && (rustType !== '&str' || !this.rust93raStrArgsTyped(method, param))) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
         for (const call of this.rustVenueStrCallSites(method)) {
@@ -37467,6 +37480,49 @@ export class RustTranspiler extends BaseTranspiler {
             if (local === undefined || !(isVariableDeclaration(local) || isBindingElement(local)) || local.name === arg) return false;
         }
         return locals > 0;
+    }
+
+    /** A sync ws request builder (declared `Dict` return, no override, no trait slot) whose required `string`
+     *  parameter only seeds the request: its by-name / handler arm decodes the text once (rustDispatch.wsArg `str`). */
+    rust93raWsDictBuilder(method: MethodDeclaration, param: ParameterDeclaration): boolean {
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.StringKeyword || !isIdentifier(param.name)) return false;
+        if (!isIdentifier(method.name) || this.toSnakeCaseName(String(method.name.text)) in (this.rustVirtualDispatch ?? {})) return false;
+        const ret: Node | undefined = method.type;
+        if (ret === undefined || !isTypeReferenceNode(ret) || !isIdentifier(ret.typeName) || String(ret.typeName.text) !== 'Dict') return false;
+        const hidden: Node | undefined = this.getMethodOverride(method);
+        if (hidden !== undefined && hidden !== method) return false;
+        // the parameter is only read as a whole value of the built literal (no other read, never written)
+        const name = String(param.name.text);
+        if (this.rustLocalIsReassigned(param, name)) return false;
+        return this.rustLocalUsesAll(param, name, true, (n: Node) => this.rust92rgLiteralValueSlot(n));
+    }
+
+    /** A required `string` slot of a sync ws method (no override, no trait slot) some caller fills with one of its own
+     *  locals: typed, so that local's hand-off reads natively (the arm decodes the text once, rustDispatch.wsArg `str`). */
+    rust93raWsLocalStrSlot(method: MethodDeclaration, param: ParameterDeclaration): boolean {
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.StringKeyword || !isIdentifier(param.name)) return false;
+        if (!isIdentifier(method.name) || this.toSnakeCaseName(String(method.name.text)) in (this.rustVirtualDispatch ?? {})) return false;
+        const hidden: Node | undefined = this.getMethodOverride(method);
+        if (hidden !== undefined && hidden !== method) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        return this.rustVenueStrCallSites(method).some((call: CallExpression) => {
+            const arg: Node | undefined = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            const local: Node | undefined = arg !== undefined && isIdentifier(arg) ? this.rustDeclaredNode(arg) : undefined;
+            return local !== undefined && (isVariableDeclaration(local) || isBindingElement(local)) && local.name !== arg;
+        });
+    }
+
+    /** Every same-file caller passes a string literal or a checker-`string` identifier / element read at the slot. */
+    rust93raStrArgsTyped(method: MethodDeclaration, param: ParameterDeclaration): boolean {
+        const at = Array.from(method.parameters).indexOf(param);
+        const calls = this.rustVenueStrCallSites(method);
+        return calls.length > 0 && calls.every((call: CallExpression) => {
+            const arg: Node | undefined = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            if (arg === undefined) return false;
+            if (arg.kind === SyntaxKind.StringLiteral || arg.kind === SyntaxKind.NoSubstitutionTemplateLiteral) return true;
+            if (!isIdentifier(arg) && !isElementAccessExpression(arg)) return false;
+            return this.primitiveKindOfType(this.typeOfNodeIfAny(arg)) === 'string';
+        });
     }
 
     /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws
