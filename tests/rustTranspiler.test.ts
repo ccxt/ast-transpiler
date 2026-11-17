@@ -25811,3 +25811,63 @@ describe('ral-92rb R2: a required per-venue `any[]` parameter is a lent list slo
         expect(out).toContain('self.handleRows(&rows)');
     });
 });
+
+describe('ral-92rc R1: a nil-declared Str local written from literal-key this.urls reads', () => {
+    const run = (name: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: Dict | string }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls: Dict = {};\n    client (url: Str): Str { return url; }\n    hold (m: unknown, n: unknown = undefined): unknown {\n        return m;\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    unWatch (spot: boolean): unknown {\n        let url: Str = undefined;\n        if (spot) {\n            url = this.urls['api']['ws']['spot'];\n        } else {\n            url = this.urls['api']['ws']['swap'];\n        }\n" + use + "    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a url handed to client (mexc unWatchTicker) is Option<String> lent as_deref', () => {
+        const out = run ('r92rc-r1-client', "        const client = this.client (url);\n        return this.hold (client);\n");
+        expect(out).toContain('let mut url: Option<String> = None;');
+        expect(out).toContain('"spot").as_str().map(str::to_owned);');
+        expect(out).toContain('self.client(url.as_deref())');
+    });
+    test('negative: a url only boxed into a literal stays Value', () => {
+        const out = run ('r92rc-r1-boxonly', "        return this.hold ({ 'url': url });\n");
+        expect(out).toContain('let mut url: Value = Value::Null;');
+    });
+});
+
+describe('ral-92rc R2: url locals read through a safeDict alias of a this.urls entry', () => {
+    const run = (name: string, fallback: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: Dict | string }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urls: Dict = {};\n    safeDict (o: unknown, k: string, d: Dict = undefined): Dict { return d; }\n    client (url: Str): Str { return url; }\n    hold (m: unknown): unknown { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    watchBook (swap: boolean): unknown {\n        const wsUrls = this.safeDict (this.urls['api'], 'ws'" + fallback + ");\n        let url: Str = undefined;\n        if (swap) {\n            url = wsUrls['futurePublic'];\n        } else {\n            url = wsUrls['public'];\n        }\n        return this.hold (this.client (url));\n    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('bitrue watchOrderBook: the url is Option<String> lent as_deref', () => {
+        const out = run ('r92rc-r2-alias', ", {}");
+        expect(out).toContain('let mut url: Option<String> = None;');
+        expect(out).toContain('.get("public").cloned().unwrap_or(Value::Null).as_str().map(str::to_owned);');
+        expect(out).toContain('self.client(url.as_deref())');
+    });
+    test('negative: a non-empty fallback map keeps the url Value', () => {
+        const out = run ('r92rc-r2-fallback', ", { 'public': 'x' }");
+        expect(out).toContain('let mut url: Value = Value::Null;');
+    });
+});
+
+describe('ral-92rc R3: a nil-declared Str local written from awaited venue string methods', () => {
+    const run = (name: string, use: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: Dict | string }\nexport type Str = string | undefined;\nexport default class Exchange {\n    client (url: Str): Str { return url; }\n    hold (m: unknown): unknown { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async getUtaUrl (): Promise<string> {\n        return 'wss://a';\n    }\n    async negotiate (privateChannel: boolean): Promise<string> {\n        return privateChannel ? 'wss://p' : 'wss://q';\n    }\n    async watchBalance (uta: boolean): Promise<unknown> {\n        let url: Str = undefined;\n        if (uta) {\n            url = await this.getUtaUrl ();\n        } else {\n            url = await this.negotiate (true);\n        }\n" + use + "    }\n}\n");
+        return new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('kucoin watchBalance: the url is Option<String> lent as_deref to client', () => {
+        const out = run ('r92rc-r3-client', "        return this.hold (this.client (url));\n");
+        expect(out).toContain('let mut url: Option<String> = None;');
+        expect(out).toContain('.await.as_str().map(str::to_owned);');
+        expect(out).toContain('self.client(url.as_deref())');
+    });
+    test('negative: a url only boxed into a literal stays Value', () => {
+        const out = run ('r92rc-r3-boxonly', "        return this.hold ({ 'url': url });\n");
+        expect(out).toContain('let mut url: Value = Value::Null;');
+    });
+});
