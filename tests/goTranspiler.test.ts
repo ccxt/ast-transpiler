@@ -15280,3 +15280,79 @@ describe('go 87g3 awaited client futures reads', () => {
         expect (out).toContain ('var future any = ');
     });
 });
+
+describe('ral-87g4 R1: a ws class calling a REST parent method types the result from the parent', () => {
+    test('a pro-tree local of a parent `: string` method prints string and concatenates natively', () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'go87g4r1-'));
+        try {
+            const src = path.join(tmp, 'ts', 'src');
+            fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(src, 'venue.ts'),
+                'class Exchange {\n'
+                + '    id: string = \'\';\n'
+                + '}\n'
+                + 'export class venue extends Exchange {\n'
+                + '    getSubAccountId (id: string): string {\n'
+                + '        if (id === undefined) {\n'
+                + '            return \'main\';\n'
+                + '        }\n'
+                + '        return \'sub\';\n'
+                + '    }\n'
+                + '}\n');
+            const file = path.join(src, 'pro', 'venue.ts');
+            fs.writeFileSync(file,
+                'import { venue } from \'../venue\';\n'
+                + 'export class venuepro extends venue {\n'
+                + '    hashes (id: string, marketId: string) {\n'
+                + '        const subAccountId = this.getSubAccountId (id);\n'
+                + '        return subAccountId + \'-\' + marketId;\n'
+                + '    }\n'
+                + '}\n');
+            const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            const out = t.transpileGoByPath(file).content;
+            expect(out).toContain('var subAccountId string = this.GetSubAccountId(id)');
+            expect(out).not.toContain('var subAccountId any');
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+});
+
+describe('ral-87g4 R1b: an inherited-method local with no native read stays boxed', () => {
+    test('a parent `: string` result only handed to a call argument keeps any', () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'go87g4r1b-'));
+        try {
+            const src = path.join(tmp, 'ts', 'src');
+            fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(src, 'venue.ts'),
+                'class Exchange {\n'
+                + '    id: string = \'\';\n'
+                + '    watch (url: any): any { return url; }\n'
+                + '}\n'
+                + 'export class venue extends Exchange {\n'
+                + '    getSubAccountId (id: string): string {\n'
+                + '        if (id === undefined) {\n'
+                + '            return \'main\';\n'
+                + '        }\n'
+                + '        return \'sub\';\n'
+                + '    }\n'
+                + '}\n');
+            const file = path.join(src, 'pro', 'venue.ts');
+            fs.writeFileSync(file,
+                'import { venue } from \'../venue\';\n'
+                + 'export class venuepro extends venue {\n'
+                + '    hashes (id: string) {\n'
+                + '        const subAccountId = this.getSubAccountId (id);\n'
+                + '        return this.watch (subAccountId);\n'
+                + '    }\n'
+                + '}\n');
+            const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            const out = t.transpileGoByPath(file).content;
+            expect(out).toContain('var subAccountId any = this.GetSubAccountId(id)');
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+});

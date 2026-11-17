@@ -3884,8 +3884,117 @@ export function ccxtGoFamilyCallType (goTranspiler, initializer, printedValue) {
     if (value.substring (0, open) !== expectedCallee) {
         return undefined; // renamed / delegated call: not this class's own method
     }
-    const methodNode = findClassMethod (enclosingClassDeclaration (initializer), name);
-    return ccxtGoFamilyMethodReturnType (goTranspiler, methodNode);
+    const own = findClassMethod (enclosingClassDeclaration (initializer), name);
+    if (own !== undefined) {
+        return ccxtGoFamilyMethodReturnType (goTranspiler, own);
+    }
+    const inherited = ccxtGoInheritedVenueMethod (goTranspiler, initializer);
+    const goType = (inherited !== undefined) ? ccxtGoFamilyMethodReturnType (goTranspiler, inherited) : undefined;
+    return ((goType !== undefined) && ccxtGoLocalHasNativeUse (goTranspiler, initializer, goType)) ? goType : undefined;
+}
+
+// ral-87g4: the declaration `const x = <initializer>` has at least one read the typed local prints as a
+// native Go operation (string `+` / compare, bool condition, map element / delete / `in`, slice index /
+// length, pointer nil test); a local only handed to `any` parameters or map-literal values stays boxed
+function ccxtGoLocalHasNativeUse (goTranspiler, initializer, goType) {
+    const SK = ts.SyntaxKind;
+    let declaration = initializer.parent;
+    while (declaration?.kind === SK.ParenthesizedExpression) {
+        declaration = declaration.parent;
+    }
+    if ((declaration?.kind !== SK.VariableDeclaration) || (declaration.name?.kind !== SK.Identifier)) {
+        return false;
+    }
+    const scope = (typeof goTranspiler.goEnclosingFunction === 'function') ? goTranspiler.goEnclosingFunction (declaration) : undefined;
+    let checker;
+    try {
+        checker = goTranspiler.getChecker ();
+    } catch (e) {
+        return false;
+    }
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    const symbol = checker.getSymbolAtLocation (declaration.name);
+    const isCompare = (op) => (op === SK.EqualsEqualsEqualsToken) || (op === SK.ExclamationEqualsEqualsToken) || (op === SK.EqualsEqualsToken) || (op === SK.ExclamationEqualsToken);
+    const native = (node) => {
+        let current = node;
+        let parent = current.parent;
+        while (parent?.kind === SK.ParenthesizedExpression) {
+            current = parent;
+            parent = current.parent;
+        }
+        if (parent === undefined) {
+            return false;
+        }
+        if (goType === 'bool') {
+            if (((parent.kind === SK.IfStatement) || (parent.kind === SK.WhileStatement)) && (parent.expression === current)) {
+                return true;
+            }
+            if ((parent.kind === SK.ConditionalExpression) && (parent.condition === current)) {
+                return true;
+            }
+            if ((parent.kind === SK.PrefixUnaryExpression) && (parent.operator === SK.ExclamationToken)) {
+                return true;
+            }
+            return (parent.kind === SK.BinaryExpression) && ((parent.operatorToken.kind === SK.AmpersandAmpersandToken) || (parent.operatorToken.kind === SK.BarBarToken)
+                || (isCompare (parent.operatorToken.kind) && [ parent.left, parent.right ].some ((side) => (side.kind === SK.TrueKeyword) || (side.kind === SK.FalseKeyword))));
+        }
+        if ((goType === 'string') || (goType === '*string')) {
+            if (parent.kind !== SK.BinaryExpression) {
+                return false;
+            }
+            const other = (parent.left === current) ? parent.right : parent.left;
+            if (isCompare (parent.operatorToken.kind)) {
+                return ts.isStringLiteral (other) || ts.isNoSubstitutionTemplateLiteral (other) || ((goType === '*string') && isAbsentExpression (other));
+            }
+            return (goType === 'string') && (parent.operatorToken.kind === SK.PlusToken);
+        }
+        if ((goType === 'map[string]any') || (goType === '[]any')) {
+            if ((parent.kind === SK.ElementAccessExpression) && (parent.expression === current)) {
+                return true;
+            }
+            if ((goType === '[]any') && (parent.kind === SK.PropertyAccessExpression) && (parent.expression === current) && (parent.name?.text === 'length')) {
+                return true;
+            }
+            return (goType === 'map[string]any') && (parent.kind === SK.BinaryExpression) && (parent.operatorToken.kind === SK.InKeyword) && (parent.right === current);
+        }
+        return false;
+    };
+    let found = false;
+    const visit = (node) => {
+        if (found) {
+            return;
+        }
+        if ((node.kind === SK.Identifier) && (node !== declaration.name) && (node.text === declaration.name.text)
+            && (checker.getSymbolAtLocation (node) === symbol) && native (node)) {
+            found = true;
+            return;
+        }
+        node.forEachChild (visit);
+    };
+    scope.forEachChild (visit);
+    return found;
+}
+
+// ral-87g4: a ws / prediction class calling a method its REST parent declares (`this.getSubAccountId (..)`
+// in pro/grvt.ts) binds in Go to the embedded parent's method, whose emitted signature the same predicate
+// decides on the REST run. Resolved through the checker; base-class declarations are left to their own rules.
+function ccxtGoInheritedVenueMethod (goTranspiler, initializer) {
+    let declaration;
+    try {
+        declaration = goTranspiler.getChecker ().getResolvedSignature (initializer)?.declaration?.resolve ();
+    } catch (e) {
+        return undefined;
+    }
+    if (declaration?.kind !== ts.SyntaxKind.MethodDeclaration) {
+        return undefined;
+    }
+    const fileName = String (declaration.getSourceFile?. ()?.fileName ?? '');
+    if (!/(^|[\\/])ts[\\/]src[\\/][^\\/]+\.ts$/.test (fileName)) {
+        return undefined; // only a REST venue file: base / pro / prediction declarations keep their own rules
+    }
+    return declaration;
 }
 
 // ---------------------------------------------------------------------------
