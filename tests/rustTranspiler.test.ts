@@ -25763,3 +25763,51 @@ describe('a sync ws `string` method with no arm types a string slot every caller
         expect(out).not.toContain('self.getCategory(name.as_deref())');
     });
 });
+
+describe('ral-92rb R1: a `(x as string)` caller fills a per-venue string slot', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    options: any;\n    numberToString (x: any): string { return String (x); }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    extend (...args: any[]): any { return args[0]; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    setEntry (accIdx: string, keyIdx: string, entry: any) {\n        this.options[accIdx] = this.extend (this.safeDict (this.options, keyIdx, {}), entry);\n    }\n    viaCast (accountIndex: string | undefined, apiKeyIndex: string | undefined) {\n        this.setEntry ((accountIndex as string), (apiKeyIndex as string), { 'a': 1 });\n    }\n    viaLocal (n: number) {\n        const strIndex = this.numberToString (n);\n        this.setEntry (strIndex, strIndex, { 'b': 2 });\n    }\n    createOrderRequest (symbol: string, amount: string) {\n        return { 's': symbol, 'a': amount };\n    }\n    viaHeld (symbol: string, amount: string | undefined) {\n        return this.createOrderRequest (symbol, (amount as string));\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-92rb1-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the slot prints &str and the string local handed to it is typed', () => {
+        expect(out).toContain('fn setEntry(&self, accIdx: &str, keyIdx: &str, entry: Value)');
+        expect(out).toContain('self.setEntry(accountIndex.as_str().unwrap_or_default(), apiKeyIndex.as_str().unwrap_or_default(), ');
+        expect(out).toContain('let mut strIndex: Option<String> = ');
+        expect(out).toContain('self.setEntry(strIndex.as_deref().unwrap_or_default(), strIndex.as_deref().unwrap_or_default(), ');
+    });
+    test('an order request builder keeps its held amount slot', () => {
+        expect(out).toContain('fn createOrderRequest(&self, symbol: &str, amount: Value)');
+    });
+});
+
+describe('ral-92rb R2: a required per-venue `any[]` parameter is a lent list slot', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/Exchange.ts': "export default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n}\n",
+        'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    frame (msg: any) {\n        const data = this.safeValue (msg, 'data');\n        let rows = [];\n        if (Array.isArray (data)) {\n            rows = data;\n        } else {\n            rows = [ data ];\n        }\n        this.handleRows (rows);\n        this.handleMore (rows);\n    }\n    handleRows (rows: any[]) {\n        return rows.length;\n    }\n    handleMore (rows: any[]) {\n        return rows[0];\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-92rb2-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the slot takes impl Into<crate::Value> and the list local is lent', () => {
+        expect(out).toContain('fn handleRows(&self, rows: impl Into<crate::Value>)');
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).toContain('self.handleRows(&rows)');
+    });
+});
