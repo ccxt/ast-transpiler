@@ -15170,3 +15170,64 @@ describe('87g1 R4 *string join handed to a parameter that only feeds safe reader
         expect(out).toContain('var statusId any = nil');
     });
 });
+
+describe ('ral-87g2 reader-result locals', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'type List = any[];\n' +
+        'export class Exchange {\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n' +
+        '    extend (a: any, b: any): Dict { return a; }\n';
+    const run = (members: string, dir: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'r87g2-'));
+        try {
+            const src = path.join (tmp, dir);
+            fs.mkdirSync (src, { recursive: true });
+            const file = path.join (src, 'x.ts');
+            fs.writeFileSync (file, PRELUDE + members + '}\n');
+            return new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } }).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    test ('F: a list local rebound only to an array literal and read natively is a []any', () => {
+        const body = '    f (message: Dict, one: Dict): any {\n        let xs = this.safeList (message, "args");\n        if (xs === undefined) {\n            xs = [ one ];\n        }\n        let n = 0;\n        for (let i = 0; i < xs.length; i++) {\n            const row = this.safeDict (xs, i);\n            n = n + 1;\n        }\n        return n;\n    }\n';
+        const out = run (body, 'ts/src/pro');
+        expect (out).toContain ('var xs []any = SafeListTyped(message, "args")');
+        expect (out).toContain ('xs == nil');
+        expect (out).toContain ('len(xs)');
+        // with a `[]` default the nil test would see the dropped default: keep the box
+        expect (run (body.replace ('"args")', '"args", [])'), 'ts/src/pro')).not.toContain ('var xs []any');
+        // a rebinding to another value keeps the box
+        expect (run (body.replace ('xs = [ one ];', 'xs = one[\'k\'];'), 'ts/src/pro')).not.toContain ('var xs []any');
+    });
+    test ('G: a list local written by index and read natively is a []any', () => {
+        const body = '    f (response: Dict, cursor: string): any {\n        const xs = this.safeList (response, "data", []);\n        const length = xs.length;\n        if (cursor !== undefined) {\n            xs[0] = this.extend (this.safeDict (xs, 0, {}), { "c": cursor });\n        }\n        return length;\n    }\n';
+        const out = run (body, 'ts/src');
+        expect (out).toContain ('var xs []any = SafeListTyped(response, "data")');
+        expect (out).toContain ('len(xs)');
+        // without a native read the local keeps the box
+        expect (run (body.replace ('xs.length', '3'), 'ts/src')).not.toContain ('var xs []any');
+        // the base class keeps its box
+        expect (run (body, 'ts/src/base')).not.toContain ('var xs []any');
+    });
+    test ('I: a no-default list local rebound through sortBy inside its nil guard and read natively is a []any', () => {
+        const pre = '    sortBy (a: any, k: any): any[] { return a; }\n';
+        const body = pre + '    f (message: Dict): any {\n        let xs = this.safeList (message, "data");\n        let n = 0;\n        if (xs !== undefined) {\n            xs = this.sortBy (xs, "t");\n            for (let i = 0; i < xs.length; i++) {\n                n = n + 1;\n            }\n        }\n        return n;\n    }\n';
+        const out = run (body, 'ts/src/pro');
+        expect (out).toContain ('var xs []any = SafeListTyped(message, "data")');
+        expect (out).toContain ('len(xs)');
+        // outside the nil guard the transform would see a nil slice instead of the nil box: keep the box
+        expect (run (body.replace ('if (xs !== undefined) {\n            xs = this.sortBy (xs, "t");', 'xs = this.sortBy (xs, "t");\n        if (xs !== undefined) {'), 'ts/src/pro')).not.toContain ('var xs []any');
+    });
+    test ('H: handleOption locals read only against true, `as Bool` wrapped or declared in sibling blocks, are bool', () => {
+        const pre = '    handleOption (m: string, o: string, d: any = undefined) { return d; }\n';
+        const body = pre + '    f (a: boolean): any {\n        if (a) {\n            const ck = this.handleOption ("watchX", "ck", true);\n            if (ck === true) {\n                return 1;\n            }\n        } else {\n            const ck = this.handleOption ("watchX", "ck", true) as boolean;\n            if (ck === true) {\n                return 2;\n            }\n        }\n        return 0;\n    }\n';
+        const out = run (body, 'ts/src/pro');
+        expect (out.split ('var ck bool = this.HandleOption("watchX", "ck", true) == true').length).toBe (3);
+        expect (out).not.toContain ('IsEqual(ck, true)');
+        // another read keeps the box
+        expect (run (body.replace ('ck === true) {\n                return 2', 'ck === 3) {\n                return 2'), 'ts/src/pro').split ('var ck bool = ').length).toBe (2);
+    });
+});
