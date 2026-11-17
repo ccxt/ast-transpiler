@@ -22208,7 +22208,7 @@ var GO_STRUCT_BOX_TYPES = { "Trade": "TradeToMap", "TransferEntry": "TransferEnt
 var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
 var GO_MARKET_LOCAL_TYPE = "map[string]any";
 var GO_MARKET_PRODUCER_METHODS = ["parseMarket", "getMarketFromSymbols", "getMarketFromClientAndMessage"];
-var GO_ANY_FRAMED_VENUES = /* @__PURE__ */ new Set(["bitfinex", "toobit", "coincheck", "phemex", "sxbet", "gemini"]);
+var GO_ANY_FRAMED_VENUES = /* @__PURE__ */ new Set(["bitfinex", "toobit", "coincheck", "sxbet", "gemini"]);
 var GO_MARKET_MAP_CALLS = ["Market", "SafeMarket", "SafeMarketStructure", "Extend", "DeepExtend", "MapTyped", "MarketTyped"];
 var GO_MARKET_MAP_BASE_CALLS = [
   "getMarketFromSymbols",
@@ -37229,6 +37229,194 @@ GoTranspiler.prototype.goNilProvenStringDeref = function(node) {
     return false;
   }
   return true;
+};
+var GO_IN_HOIST_STRING_CALLS = /* @__PURE__ */ new Set(["indexOf", "startsWith", "endsWith", "includes"]);
+GoTranspiler.prototype.goInHoistTerms = function(node, reads) {
+  const inner = this.goUnwrapParenthesizedNode(node);
+  if (inner?.kind === SyntaxKind5.PrefixUnaryExpression) {
+    return inner.operator === SyntaxKind5.ExclamationToken && this.goInHoistTerms(inner.operand, reads);
+  }
+  if (inner?.kind === SyntaxKind5.BinaryExpression) {
+    const op = inner.operatorToken?.kind;
+    if (op === SyntaxKind5.AmpersandAmpersandToken || op === SyntaxKind5.BarBarToken) {
+      return this.goInHoistTerms(inner.left, reads) && this.goInHoistTerms(inner.right, reads);
+    }
+    if (op === SyntaxKind5.InKeyword) {
+      reads.push(inner);
+      return true;
+    }
+    if ([
+      SyntaxKind5.EqualsEqualsToken,
+      SyntaxKind5.EqualsEqualsEqualsToken,
+      SyntaxKind5.ExclamationEqualsToken,
+      SyntaxKind5.ExclamationEqualsEqualsToken,
+      SyntaxKind5.LessThanToken,
+      SyntaxKind5.LessThanEqualsToken,
+      SyntaxKind5.GreaterThanToken,
+      SyntaxKind5.GreaterThanEqualsToken
+    ].includes(op)) {
+      return this.goInHoistLeaf(inner.left) && this.goInHoistLeaf(inner.right);
+    }
+    return false;
+  }
+  return this.goInHoistLeaf(inner);
+};
+GoTranspiler.prototype.goInHoistLeaf = function(node) {
+  const inner = this.goUnwrapParenthesizedNode(node);
+  if (inner?.kind === SyntaxKind5.CallExpression && inner.expression?.kind === SyntaxKind5.PropertyAccessExpression && inner.expression.expression?.kind === SyntaxKind5.Identifier && GO_IN_HOIST_STRING_CALLS.has(inner.expression.name?.text)) {
+    return (inner.arguments ?? []).every((a) => this.goPureLeaf(a));
+  }
+  if (inner?.kind === SyntaxKind5.ElementAccessExpression && this.goPureLeaf(inner.expression) && this.goPureLeaf(inner.argumentExpression)) {
+    return true;
+  }
+  return this.goPureLeaf(inner);
+};
+GoTranspiler.prototype.goInHoistRead = function(inNode, statement) {
+  let read = this.goIfInOpRead(inNode, statement);
+  if (read === void 0) {
+    const key = this.goUnwrapParenthesizedNode(inNode.left);
+    const dict = this.goUnwrapParenthesizedNode(inNode.right);
+    let decl;
+    try {
+      decl = key?.kind === SyntaxKind5.Identifier ? this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve() : void 0;
+    } catch (e) {
+      decl = void 0;
+    }
+    if (decl?.kind === SyntaxKind5.Parameter && this.goGetArgParameterType(decl) === "string" && this.goEnclosingFunction(key) === decl.parent && !this.goLocalIsRebound(decl.parent, decl.name)) {
+      const dictText = this.printNode(dict, 0);
+      const mapType = (dict?.kind === SyntaxKind5.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : void 0) ?? this.goInOpDictMapType(dict, dictText);
+      read = mapType === "map[string]any" ? { inNode, dictText, "keyText": this.printNode(key, 0) } : void 0;
+    }
+  }
+  return read !== void 0 && read.inNode === inNode && /^[A-Za-z_][\w.]*$/.test(read.dictText) && /^(?:[A-Za-z_]\w*|"[^"\\]*")$/.test(read.keyText) ? read : void 0;
+};
+GoTranspiler.prototype.goInHoistName = function(inNode) {
+  let fn = this.goEnclosingFunction(inNode);
+  while (fn !== void 0 && fn.kind !== SyntaxKind5.MethodDeclaration && fn.kind !== SyntaxKind5.SourceFile) {
+    fn = this.goEnclosingFunction(fn);
+  }
+  if (fn === void 0) {
+    return void 0;
+  }
+  const all = this.goDescendantsOf(fn).filter((n) => n.kind === SyntaxKind5.BinaryExpression && n.operatorToken?.kind === SyntaxKind5.InKeyword);
+  const name = "has" + String(all.indexOf(inNode) + 1);
+  return all.indexOf(inNode) < 0 || this.goNameIsUsed(fn, name) ? void 0 : name;
+};
+GoTranspiler.prototype.goInHoistCondition = function(condition, statement, minimum) {
+  const reads = [];
+  if (condition === void 0 || !this.goInHoistTerms(condition, reads)) {
+    return void 0;
+  }
+  const proven = [];
+  for (const r of reads) {
+    const read = this.goInHoistRead(r, statement);
+    if (read !== void 0) {
+      const name = this.goInHoistName(r);
+      if (name === void 0) {
+        return void 0;
+      }
+      proven.push({ ...read, name });
+    }
+  }
+  return proven.length >= minimum ? proven : void 0;
+};
+GoTranspiler.prototype.goInHoistPrint = function(node, identation, hoisted, print) {
+  const saved = this.goInOpSubstitution;
+  this.goInOpSubstitution = new Map(hoisted.map((h) => [h.inNode, h.name]));
+  let printed;
+  try {
+    printed = print();
+  } finally {
+    this.goInOpSubstitution = saved;
+  }
+  if (typeof printed !== "string") {
+    return void 0;
+  }
+  for (const h of hoisted) {
+    printed = printed.split("(" + h.name + ")").join(h.name);
+    if (!new RegExp("\\b" + h.name + "\\b").test(printed)) {
+      return void 0;
+    }
+  }
+  const iden = this.getIden(identation);
+  const lines = hoisted.map((h) => `${iden}_, ${h.name} := ${h.dictText}[${h.keyText}]
+`).join("");
+  const lead = this.printLeadingComments(node, identation);
+  return printed.startsWith(lead) ? lead + lines + printed.substring(lead.length) : void 0;
+};
+var goInHoistIfShipped = GoTranspiler.prototype.printIfStatement;
+GoTranspiler.prototype.printIfStatement = function(node, identation) {
+  if (node?.parent?.kind === SyntaxKind5.Block || node?.parent?.kind === SyntaxKind5.SourceFile) {
+    const hoisted = [];
+    let pure = true;
+    for (let link = node; pure && link?.kind === SyntaxKind5.IfStatement; link = link.elseStatement) {
+      pure = this.goInHoistTerms(link.expression, []);
+      const single = this.goInOpIfInitClause(link.expression) === void 0 ? 1 : 2;
+      const reads = this.goInHoistCondition(link.expression, node, single);
+      if (reads !== void 0) {
+        hoisted.push(...reads);
+      }
+    }
+    if (hoisted.length > 0) {
+      const text = this.goInHoistPrint(node, identation, hoisted, () => goInHoistIfShipped.call(this, node, identation));
+      if (text !== void 0) {
+        return text;
+      }
+    }
+  }
+  return goInHoistIfShipped.call(this, node, identation);
+};
+var goInHoistVarShipped = GoTranspiler.prototype.printVariableStatement;
+GoTranspiler.prototype.printVariableStatement = function(node, identation) {
+  const declarations = node?.declarationList?.declarations ?? [];
+  const declaration = declarations[0];
+  if (declarations.length === 1 && declaration.name?.kind === SyntaxKind5.Identifier && declaration.initializer !== void 0 && (node.parent?.kind === SyntaxKind5.Block || node.parent?.kind === SyntaxKind5.SourceFile)) {
+    const hoisted = this.goInHoistCondition(declaration.initializer, node, 1);
+    const shipped = hoisted !== void 0 ? goInHoistVarShipped.call(this, node, identation) : void 0;
+    const head = typeof shipped === "string" ? /^\s*var (\w+) bool = /m.exec(shipped) : null;
+    if (head !== null) {
+      const text = this.goInHoistPrint(node, identation, hoisted, () => goInHoistVarShipped.call(this, node, identation));
+      const retyped = text?.replace(new RegExp("^(\\s*)var " + head[1] + " any = ", "m"), "$1var " + head[1] + " bool = ");
+      if (retyped !== void 0 && retyped.includes("var " + head[1] + " bool = ")) {
+        return retyped;
+      }
+    }
+    if (shipped !== void 0) {
+      return shipped;
+    }
+  }
+  return goInHoistVarShipped.call(this, node, identation);
+};
+var goInHoistFrameShipped = GoTranspiler.prototype.goWsFrameInOpHasInitClause;
+GoTranspiler.prototype.goWsFrameInOpHasInitClause = function(inNode, param) {
+  if (goInHoistFrameShipped.call(this, inNode, param)) {
+    return true;
+  }
+  let child = inNode;
+  let parent = inNode.parent;
+  while (parent?.kind === SyntaxKind5.ParenthesizedExpression || parent?.kind === SyntaxKind5.PrefixUnaryExpression || parent?.kind === SyntaxKind5.BinaryExpression && (parent.operatorToken?.kind === SyntaxKind5.AmpersandAmpersandToken || parent.operatorToken?.kind === SyntaxKind5.BarBarToken)) {
+    child = parent;
+    parent = parent.parent;
+  }
+  let head;
+  if (parent?.kind === SyntaxKind5.IfStatement && parent.expression === child) {
+    head = parent;
+    while (head.parent?.kind === SyntaxKind5.IfStatement && head.parent.elseStatement === head) {
+      head = head.parent;
+      if (!this.goInHoistTerms(head.expression, [])) {
+        return false;
+      }
+    }
+    if (head.parent?.kind !== SyntaxKind5.Block) {
+      return false;
+    }
+  } else if (parent?.kind === SyntaxKind5.VariableDeclaration && parent.initializer === child && parent.parent?.declarations?.length === 1 && parent.parent?.parent?.parent?.kind === SyntaxKind5.Block) {
+    head = parent.parent.parent;
+  } else {
+    return false;
+  }
+  const reads = [];
+  return this.goInHoistTerms(child, reads) && this.goInHoistName(inNode) !== void 0 && (head.kind !== SyntaxKind5.IfStatement || reads.length >= 2);
 };
 
 // src/javaTranspiler.ts

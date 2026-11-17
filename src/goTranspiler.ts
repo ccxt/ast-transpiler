@@ -12715,7 +12715,7 @@ const GO_MARKET_PRODUCER_METHODS = [ 'parseMarket', 'getMarketFromSymbols', 'get
 
 // venues whose ws frames decode to a JSON array or to bare text: their handleMessage frame keeps
 // the `any` box even when the annotation says Dict, so the Go dispatch only types object frames
-const GO_ANY_FRAMED_VENUES = new Set([ 'bitfinex', 'toobit', 'coincheck', 'phemex', 'sxbet', 'gemini' ]);
+const GO_ANY_FRAMED_VENUES = new Set([ 'bitfinex', 'toobit', 'coincheck', 'sxbet', 'gemini' ]);
 
 // base accessors/builders whose generated Go result is already the market dictionary
 const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Extend', 'DeepExtend', 'MapTyped', 'MarketTyped' ];
@@ -29646,4 +29646,228 @@ GoTranspiler.prototype.goNilProvenStringDeref = function (node) {
         return false;
     }
     return true;
+};
+
+// ---- several `key in dict` reads in one condition or `const x = <reads>` -------------------
+// A Go comma-ok read is a statement, so a condition holding two or more proven reads, or a bool
+// initialiser holding any, binds each read just before the statement (`_, hasN := m[k]`) and tests
+// the names. Map reads have no side effect and a nil map reads absent, so reading them up front is
+// what InOp answers; the other terms must be pure leaves, so nothing they do runs in another order.
+// Only Go-string keys (literal or `string`-typed): a `*string` key keeps the existing rules.
+const GO_IN_HOIST_STRING_CALLS = new Set ([ 'indexOf', 'startsWith', 'endsWith', 'includes' ]);
+export interface GoTranspiler {
+    goInHoistTerms(node, reads: any[]): boolean;
+    goInHoistLeaf(node): boolean;
+    goInHoistRead(inNode, statement): any;
+    goInHoistName(inNode): string | undefined;
+    goInHoistCondition(condition, statement, minimum: number): any[] | undefined;
+    goInHoistPrint(node, identation, hoisted: any[], print: () => string): string | undefined;
+}
+
+// every term is a pure leaf, a comparison of pure leaves, a string query on a local, or an `in` read (collected)
+GoTranspiler.prototype.goInHoistTerms = function (node, reads: any[]): boolean {
+    const inner: any = this.goUnwrapParenthesizedNode (node);
+    if (inner?.kind === SyntaxKind.PrefixUnaryExpression) {
+        return (inner.operator === SyntaxKind.ExclamationToken) && this.goInHoistTerms (inner.operand, reads);
+    }
+    if (inner?.kind === SyntaxKind.BinaryExpression) {
+        const op = inner.operatorToken?.kind;
+        if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
+            return this.goInHoistTerms (inner.left, reads) && this.goInHoistTerms (inner.right, reads);
+        }
+        if (op === SyntaxKind.InKeyword) {
+            reads.push (inner);
+            return true;
+        }
+        if ([ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
+            SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken ].includes (op)) {
+            return this.goInHoistLeaf (inner.left) && this.goInHoistLeaf (inner.right);
+        }
+        return false;
+    }
+    return this.goInHoistLeaf (inner);
+};
+
+GoTranspiler.prototype.goInHoistLeaf = function (node): boolean {
+    const inner: any = this.goUnwrapParenthesizedNode (node);
+    if ((inner?.kind === SyntaxKind.CallExpression) && (inner.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (inner.expression.expression?.kind === SyntaxKind.Identifier) && GO_IN_HOIST_STRING_CALLS.has (inner.expression.name?.text)) {
+        return (inner.arguments ?? []).every ((a) => this.goPureLeaf (a));
+    }
+    // `m[k]` of pure leaves: a map read (or GetValue) has no side effect and cannot panic
+    if ((inner?.kind === SyntaxKind.ElementAccessExpression) && this.goPureLeaf (inner.expression) && this.goPureLeaf (inner.argumentExpression)) {
+        return true;
+    }
+    return this.goPureLeaf (inner);
+};
+
+// the proven read of one `in` node: a Go map receiver and a Go-string key (no deref)
+GoTranspiler.prototype.goInHoistRead = function (inNode, statement): any {
+    let read = this.goIfInOpRead (inNode, statement);
+    if (read === undefined) {
+        // a defaulted `string` parameter (`timeframe = '1m'`) binds through GetArgString: a Go string key
+        const key: any = this.goUnwrapParenthesizedNode (inNode.left);
+        const dict: any = this.goUnwrapParenthesizedNode (inNode.right);
+        let decl: any;
+        try {
+            decl = (key?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined ()?.getSymbolAtLocation (key)?.valueDeclaration?.resolve () : undefined;
+        } catch (e) {
+            decl = undefined;
+        }
+        if ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType (decl) === 'string')
+            && (this.goEnclosingFunction (key) === decl.parent) && !this.goLocalIsRebound (decl.parent, decl.name)) {
+            const dictText = this.printNode (dict, 0);
+            const mapType = ((dict?.kind === SyntaxKind.Identifier) ? this.goPrintedTypeOfExpression (dict, dictText) : undefined) ?? this.goInOpDictMapType (dict, dictText);
+            read = (mapType === 'map[string]any') ? { inNode, dictText, 'keyText': this.printNode (key, 0) } : undefined;
+        }
+    }
+    // only plain receivers and keys: nothing the hoist reads early may depend on a guard of the condition
+    return ((read !== undefined) && (read.inNode === inNode) && /^[A-Za-z_][\w.]*$/.test (read.dictText)
+        && /^(?:[A-Za-z_]\w*|"[^"\\]*")$/.test (read.keyText)) ? read : undefined;
+};
+
+// the binding name of a read: `has<N>`, N its position among the method's `in` reads (unique per Go func)
+GoTranspiler.prototype.goInHoistName = function (inNode): string | undefined {
+    let fn: any = this.goEnclosingFunction (inNode);
+    while ((fn !== undefined) && (fn.kind !== SyntaxKind.MethodDeclaration) && (fn.kind !== SyntaxKind.SourceFile)) {
+        fn = this.goEnclosingFunction (fn);
+    }
+    if (fn === undefined) {
+        return undefined;
+    }
+    const all = this.goDescendantsOf (fn).filter ((n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword));
+    const name = 'has' + String (all.indexOf (inNode) + 1);
+    return ((all.indexOf (inNode) < 0) || this.goNameIsUsed (fn, name)) ? undefined : name;
+};
+
+// the hoisted reads of one condition (two or more for an if/else-if test, one or more for a bool
+// initialiser) or undefined when the condition keeps the existing emission
+GoTranspiler.prototype.goInHoistCondition = function (condition, statement, minimum: number): any[] | undefined {
+    const reads: any[] = [];
+    if ((condition === undefined) || !this.goInHoistTerms (condition, reads)) {
+        return undefined;
+    }
+    const proven = [];
+    for (const r of reads) {
+        const read = this.goInHoistRead (r, statement);
+        if (read !== undefined) {
+            const name = this.goInHoistName (r);
+            if (name === undefined) {
+                return undefined;
+            }
+            proven.push ({ ...read, name });
+        }
+    }
+    return (proven.length >= minimum) ? proven : undefined;
+};
+
+// print `node` with the reads substituted, then put the `_, hasN := m[k]` lines (and the leading comments) in front
+GoTranspiler.prototype.goInHoistPrint = function (node, identation, hoisted: any[], print: () => string): string | undefined {
+    const saved = this.goInOpSubstitution;
+    this.goInOpSubstitution = new Map (hoisted.map ((h) => [ h.inNode, h.name ]));
+    let printed;
+    try {
+        printed = print ();
+    } finally {
+        this.goInOpSubstitution = saved;
+    }
+    if (typeof printed !== 'string') {
+        return undefined;
+    }
+    for (const h of hoisted) {
+        printed = printed.split ('(' + h.name + ')').join (h.name);
+        if (!new RegExp ('\\b' + h.name + '\\b').test (printed)) {
+            return undefined; // a read some other rule printed itself: the binding would be unused
+        }
+    }
+    const iden = this.getIden (identation);
+    const lines = hoisted.map ((h) => `${iden}_, ${h.name} := ${h.dictText}[${h.keyText}]\n`).join ('');
+    const lead = this.printLeadingComments (node, identation);
+    return printed.startsWith (lead) ? lead + lines + printed.substring (lead.length) : undefined;
+};
+
+const goInHoistIfShipped = GoTranspiler.prototype.printIfStatement;
+GoTranspiler.prototype.printIfStatement = function (node, identation) {
+    if ((node?.parent?.kind === SyntaxKind.Block) || (node?.parent?.kind === SyntaxKind.SourceFile)) {
+        // the whole else-if chain: its tests run before any of its bodies, so the reads move in front of the head
+        const hoisted = [];
+        // the reads move ahead of every earlier test of the chain too, so each of those must be pure
+        let pure = true;
+        for (let link: any = node; pure && (link?.kind === SyntaxKind.IfStatement); link = link.elseStatement) {
+            pure = this.goInHoistTerms (link.expression, []);
+            // one read the shipped init clause already prints stays with it
+            const single = (this.goInOpIfInitClause (link.expression) === undefined) ? 1 : 2;
+            const reads = this.goInHoistCondition (link.expression, node, single);
+            if (reads !== undefined) {
+                hoisted.push (...reads);
+            }
+        }
+        if (hoisted.length > 0) {
+            const text = this.goInHoistPrint (node, identation, hoisted, () => goInHoistIfShipped.call (this, node, identation));
+            if (text !== undefined) {
+                return text;
+            }
+        }
+    }
+    return goInHoistIfShipped.call (this, node, identation);
+};
+
+const goInHoistVarShipped = GoTranspiler.prototype.printVariableStatement;
+GoTranspiler.prototype.printVariableStatement = function (node, identation) {
+    const declarations = node?.declarationList?.declarations ?? [];
+    const declaration: any = declarations[0];
+    if ((declarations.length === 1) && (declaration.name?.kind === SyntaxKind.Identifier) && (declaration.initializer !== undefined)
+        && ((node.parent?.kind === SyntaxKind.Block) || (node.parent?.kind === SyntaxKind.SourceFile))) {
+        const hoisted = this.goInHoistCondition (declaration.initializer, node, 1);
+        const shipped = (hoisted !== undefined) ? goInHoistVarShipped.call (this, node, identation) : undefined;
+        // the uses read the local through the declaration the shipped print types: keep its `bool`
+        const head = (typeof shipped === 'string') ? /^\s*var (\w+) bool = /m.exec (shipped) : null;
+        if (head !== null) {
+            const text = this.goInHoistPrint (node, identation, hoisted, () => goInHoistVarShipped.call (this, node, identation));
+            const retyped = text?.replace (new RegExp ('^(\\s*)var ' + head[1] + ' any = ', 'm'), '$1var ' + head[1] + ' bool = ');
+            if ((retyped !== undefined) && retyped.includes ('var ' + head[1] + ' bool = ')) {
+                return retyped;
+            }
+        }
+        if (shipped !== undefined) {
+            return shipped;
+        }
+    }
+    return goInHoistVarShipped.call (this, node, identation);
+};
+
+// a frame read in a position the hoist above prints natively keeps the frame typed
+const goInHoistFrameShipped = GoTranspiler.prototype.goWsFrameInOpHasInitClause;
+GoTranspiler.prototype.goWsFrameInOpHasInitClause = function (inNode, param) {
+    if (goInHoistFrameShipped.call (this, inNode, param)) {
+        return true;
+    }
+    let child: any = inNode;
+    let parent: any = inNode.parent;
+    while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression)
+        || ((parent?.kind === SyntaxKind.BinaryExpression) && ((parent.operatorToken?.kind === SyntaxKind.AmpersandAmpersandToken) || (parent.operatorToken?.kind === SyntaxKind.BarBarToken)))) {
+        child = parent;
+        parent = parent.parent;
+    }
+    let head: any;
+    if ((parent?.kind === SyntaxKind.IfStatement) && (parent.expression === child)) {
+        head = parent;
+        while ((head.parent?.kind === SyntaxKind.IfStatement) && (head.parent.elseStatement === head)) {
+            head = head.parent;
+            if (!this.goInHoistTerms (head.expression, [])) {
+                return false; // an impure earlier test keeps the later reads where they are
+            }
+        }
+        if (head.parent?.kind !== SyntaxKind.Block) {
+            return false;
+        }
+    } else if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)
+        && (parent.parent?.declarations?.length === 1) && (parent.parent?.parent?.parent?.kind === SyntaxKind.Block)) {
+        head = parent.parent.parent;
+    } else {
+        return false;
+    }
+    const reads: any[] = [];
+    return this.goInHoistTerms (child, reads) && (this.goInHoistName (inNode) !== undefined)
+        && ((head.kind !== SyntaxKind.IfStatement) || (reads.length >= 2));
 };
