@@ -578,6 +578,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-52i: `other` (a variable declaration) and `declaration` sit in two blocks of one function, neither inside the other. */
     rustDisjointBinding(other: any, declaration: any): boolean;
     rustLocalUsesAcceptBool(declaration: any, sourceName: string): boolean;
+    /** `return x` in a method the typed-return table prints `-> bool`: the local is that return as is. */
+    rustBoolTypedReturnUse(n: Node): boolean;
     private rustBoolParamDecisions;
     rustParamPrintsBool(param: any): boolean;
     rustParamPrintsBoolUncached(param: any): boolean;
@@ -920,6 +922,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseFunctionCall(node: any, name: string): boolean;
     /** An argument in a byte parameter (`impl Into<Value>`) of a hand-written consumer, outside the test crate. */
     rustBytesSlot(node: any): boolean;
+    /** `this.arraySlice (b, s, e)` of a byte-buffer local `b` with integer-literal bounds `0 <= s <= e`: the runtime copies
+     *  `b[min(s, len) .. min(e, len)]` into a fresh list, so the slice is itself a byte buffer. Answers `b`'s identifier. */
+    rustBytesSliceSource(node: any): Node | undefined;
+    /** `this.packb (..)` / `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
+     *  (`packb` always a list, `ethAbiEncode` a list or `Null` on an unsupported type). Only a local initializer takes
+     *  it, unboxed once into the `Bytes` handle (`Null` reads as no bytes, as every byte slot reads it). */
+    rustBoxedBytesProducer(node: Node): boolean;
     rustBytesBareText(node: any, identation?: number): string;
     /** Call hook: a producer call is the `Bytes` itself in a byte slot, boxed once anywhere else. */
     printRustBytesCall(node: any, identation: any): string | undefined;
@@ -986,6 +995,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  printed off the temp list exactly as the destructured slot 0 (`.and_then(Value::as_str).map(str::to_owned)`). */
     rustInlineHandleStrSlot(node: any): boolean;
     rustElementReadScalarKind(node: any): string | undefined;
+    /** `xs[i]` of a never-written `xs: string[]` parameter (not optional): every element the checker types `string`. */
+    rust93raStrListParamElem(node: Node): boolean;
     /** ral-56e: `const xs = this.m (..)` where `m` is a method of the same class declared `number[]` whose body builds
      *  one `const r: number[] = []` filled only by `r.push (i)` of a plain int for-counter and answers `return r`; a
      *  declaration's literal-index `xs[k]` is then an `Int` or (out of range) `Null`: `Option<i64>`. Non-test sources. */
@@ -1225,6 +1236,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueLocalHandedOn(declaration: any): boolean;
     /** ral-wa: the whole right side of an `x = <call>;` statement writing a nil-declared (`let x;`) local: the
      *  venue result moves into the `Option<String>` local as printed (no box, no copy). */
+    /** A same-function identifier as the whole right side of a nil write whose narrowed checker type is `never`. */
+    rustNilNeverWrite(node: Node | undefined): boolean;
     rustNilVenueWrite(node: any): boolean;
     private static readonly RUST_NIL_ELEM_STR_KEYS;
     /** ral-xa: `m['symbol']` as the whole right side of `x = m['k'];` into a nil-declared local, printed as an owned
@@ -1297,6 +1310,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  the first character of the `Str` (`Null` for `None`, empty or out of range), so the test is
      *  `x.as_deref().unwrap_or("").starts_with("c")` (ccxt's narrowStrNullLocals pass printed this). */
     rust70fFirstCharTest(node: BinaryExpression): string | undefined;
+    /** `s[i] === 'c'` / `!==` (one-character literal, either side) on a `String` scalar local, `i` an integer literal or an
+     *  `i64` / `Option<i64>` local: the boxed `get_value` read was the i-th char (`Null` when out of range, negative or `None`),
+     *  so the test is `s.chars().nth(i) == Some('c')`. */
+    rust93reStrCharTest(node: Node): string | undefined;
+    /** `x.toString ()` (no argument) whose receiver `x` is the bare identifier. */
+    rust93reIntToStringRecv(n: Node): boolean;
     /** ral-70f: `n` sits inside the left side (target chain) of an assignment. */
     rust70fInWriteTarget(n: Node): boolean;
     rust70fOperandBox(n: Node): boolean;
@@ -1672,6 +1691,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-50e: the `key` parameter (slot 1) of the generated base `safeDict`: prints `impl Into<crate::Value>` and binds
      *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustSafeDictKeyParam(param: any): boolean;
+    private static readonly RUST_LENT_PRECISION_SLOTS;
+    /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
+     *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
+    rustPriceSlotParam(param: Node | undefined): boolean;
+    /** `n` is the value (argument 1) of `this.price|amount|costToPrecision (s, n)` whose resolved body takes the lent price slot. */
+    rustPriceSlotArg(n: Node | undefined): boolean;
     /** ral-50e: a local read only as base `safeDict` keys (its `any` checker type comes from an `any` operand such as
      *  `response.length`): an `i64` the printer proved passes there as the Int its box held, so the checker's `any` is moot. */
     rustSafeDictKeyOnlyLocal(declaration: any): boolean;
@@ -2168,6 +2193,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Use forms of the expression shapes: `native` (operand / receiver printed by the shape), `targ`
      *  (typed-signature argument), `err` (error message) or `box` (alias, key, push, initializer). */
     rustScalarExpressionUseForm(n: any, kind: string): string | undefined;
+    /** `(x as string).length` (through parentheses) on a string local: the length prints from the local itself. */
+    rust93reCastLengthRecv(cast: Node): boolean;
     /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
     rustCastSplitRecv(cast: any): boolean;
     /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
@@ -3567,7 +3594,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptAliasSourceKind(rhs: any, fn: any): 'dict' | 'list' | undefined;
     /** ral-61i: `let x = undefined` / `let x: T;` (a statement, one declarator) written only as statements `x = await this.<endpoint> (..)`
      *  of REST endpoints declared `Promise<Dict>` (or `x = undefined`): the optional map the declared-endpoint rule holds. */
-    rustDeclaredDictEndpointLet(d: any): boolean;
+    rustDeclaredDictEndpointLet(d: any, comparisonsRead?: boolean): boolean;
     /** ral-65i: a statement `x = this.extend (x, {..})`: base runtime `extend`, two arguments, the head the local itself, the
      *  operand an object literal that does not name x (decided from the call node and the callee declaration). */
     rust65iSelfExtendLiteral(up: any, d: any): boolean;
@@ -3894,6 +3921,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust65iDeclaredDictEndpointWrite(rhs: any): boolean;
     /** ral-kc: `await this.<endpoint> (..)` whose abstract declaration spells `Promise<Dict>` / `Promise<List>`. */
     rustDeclaredEndpointWrite(rhs: any): boolean;
+    /** `this.safeDict (x, k, x)` / `this.safeList (x, k, x)` whose default is its own receiver, x a `let` filled only by endpoints
+     *  declared `Promise<Dict>` (ral-61i, a syntactic proof) or a never-rewritten const answer of an endpoint declared of the
+     *  read's kind: the answer is the container read at k or x itself, so that kind or Null on every path. */
+    rustSelfDefaultedRead(call: Node, kind: 'dict' | 'list' | 'api'): boolean;
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean;
     /** The optional form's local behind an identifier, else undefined. */
@@ -4317,6 +4348,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_WS_NIL_HASH;
     /** The hash patterns of `n`: segments are literal text or `null` (any text). */
     rustWsHashPatterns(n: any, depth: number, seen: Set<Node>): Array<Array<string | null>>;
+    /** The appended parts of `x = x + a + b` (x the local `declaration` names, left-nested `+`), in order; undefined for
+     *  any other right side. */
+    rust93rfSelfAppendTail(assign: BinaryExpression, declaration: VariableDeclaration): Node[] | undefined;
     /** ral-47h: the dispatch keys a handler local `const x = this.safeString (message, 'f')` can hold, or undefined.
      *  Proof: x is never reassigned; `message` is the handler's unwritten second parameter; the handler is a method of a
      *  ws venue class whose every `this.<handler>` mention is a value of the one `const methods = { 'k': this.h, .. }`
@@ -5325,6 +5359,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A string slot of a sync ws method with no arm whose every caller passes a literal or one of its own
      *  local (not a parameter): the slot is a typed consumer, so a string local handed to it reads natively. */
     rust92raStrConsumerParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
+    /** A sync ws request builder (declared `Dict` return, no override, no trait slot) whose required `string`
+     *  parameter only seeds the request: its by-name / handler arm decodes the text once (rustDispatch.wsArg `str`). */
+    rust93raWsDictBuilder(method: MethodDeclaration, param: ParameterDeclaration): boolean;
+    /** A required `string` slot of a sync ws method (no override, no trait slot) some caller fills with one of its own
+     *  locals: typed, so that local's hand-off reads natively (the arm decodes the text once, rustDispatch.wsArg `str`). */
+    rust93raWsLocalStrSlot(method: MethodDeclaration, param: ParameterDeclaration): boolean;
+    /** Every same-file caller passes a string literal or a checker-`string` identifier / element read at the slot. */
+    rust93raStrArgsTyped(method: MethodDeclaration, param: ParameterDeclaration): boolean;
     /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws
      *  handler arm) and no override, trait slot or typed-return entry. Its string parameters may print typed; should
      *  the return still print `Value`, a string slot is one an arm decodes (rustDispatch.wsArg `str` / `optstr`). */

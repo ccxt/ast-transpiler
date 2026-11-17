@@ -2059,3 +2059,14 @@ export interface GoTranspiler {
     go92g7HasNumericUse(declaration: any): boolean;
     go92g7IsBaseSum(call: any): boolean;
 }
+export interface GoTranspiler {
+    go93g4PointerOperands(call: any, self?: Node): string[] | undefined;
+    go93g4HasNumericUse(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goOrderBookCacheLocal(declaration: any): boolean;
+    goOrderBookCacheLocalCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goTernaryJoin93StatementGuarded(declaration: any, ident: any): boolean;
+}
