@@ -9072,7 +9072,7 @@ function ccxtGoTupleBoolCallIsNullable (node) {
 function ccxtGoTupleResultCall (node) {
     const callee = node?.expression;
     return (node?.kind === ts.SyntaxKind.CallExpression) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
-        && CCXT_GO_TUPLE_RESULT_METHODS.includes (callee.name?.text)
+        && (CCXT_GO_TUPLE_RESULT_METHODS.includes (callee.name?.text) || (ccxtGoVenuePairOfCall (node) !== undefined))
         && ((callee.expression?.kind === ts.SyntaxKind.ThisKeyword) || (callee.expression?.kind === ts.SyntaxKind.SuperKeyword)
             || isIdentifierNamed (callee.expression, 'exchange'))
         && !ccxtGoTupleBoolCallIsNullable (node);
@@ -9081,7 +9081,8 @@ function ccxtGoTupleResultCall (node) {
 // the call is a pair twin with a pointer slot 0 and resolves to the BaseExchange declaration
 function ccxtGoPairSlot0 (goTranspiler, call) {
     const name = call?.expression?.name?.text;
-    const slot = CCXT_GO_PAIR_SLOT_0[name];
+    const venue = ccxtGoVenuePairOfCall (call);
+    const slot = CCXT_GO_PAIR_SLOT_0[name] ?? ((venue?.type === '*string') ? '*string' : undefined);
     if ((slot === undefined) || !ccxtGoTupleResultCall (call)) {
         return undefined;
     }
@@ -9350,7 +9351,7 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
 }
 
 function ccxtGoTupleResultFirst (call) {
-    return CCXT_GO_TUPLE_RESULT_ELEMENT_0[call.expression.name.text] ?? 'SafeStringPtr';
+    return CCXT_GO_TUPLE_RESULT_ELEMENT_0[call.expression.name.text] ?? ccxtGoVenuePairOfCall (call)?.first ?? 'SafeStringPtr';
 }
 
 // `TupleSlice(<call>)` -> `<call>`, undefined for any other text
@@ -9374,7 +9375,9 @@ function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, firs
     const names = [ '_', '_' ];
     for (let i = 1; i < lines.length; i++) {
         const l = lines[i].trim ().replace (/\bccxt\.(SafeStringPtr|MapTyped|GetValue|GetValueBool)\(/g, '$1(')
-            .replace (/\bGetValueBool\((\w+), 0, false\)$/, 'GetValueBool(GetValue($1, 0))');
+            .replace (/\bGetValueBool\((\w+), 0, false\)$/, 'GetValueBool(GetValue($1, 0))')
+            // a slot an earlier hook already reads by index is the same element
+            .replace (/^((?:var \w+ \S+ = |\w+ = )(?:SafeStringPtr|MapTyped)\()(\w+Variable)\[(\d)\]\)$/, '$1GetValue($2, $3))');
         const m = declare
             ? (/^var (\w+) (?:\*string|bool|map\[string\]any) = (SafeStringPtr|GetValueBool|MapTyped)\(GetValue\((\w+), (\d)\)\)$/.exec (l)
                 ?? (untypedOk ? /^(\w+) := ()GetValue\((\w+), (\d)\)$/.exec (l) : null))
@@ -9435,7 +9438,131 @@ function ccxtGoJoinedParamsLocal (goTranspiler, node) {
     return !rebound && (scope !== undefined);
 }
 
+// ===== venue [Str|Dict, Dict] tuple producers bind as a Go (T, map[string]any) pair =====
+// A sync venue method annotated `[ Str, Dict ]` / `[ Dict, Dict ]` whose every own return is a two-element literal joins the
+// tuple-result family: it prints `(*string|map[string]any, map[string]any)`, destructuring callers bind `a, b := call`.
+const CCXT_GO_VENUE_PAIR_STATE = { 'go': undefined, 'methods': new WeakMap () };
+const CCXT_GO_VENUE_PAIR_SLOT_0 = { 'Str': { 'type': '*string', 'first': 'SafeStringPtr' }, 'Dict': { 'type': 'map[string]any', 'first': 'MapTyped' } };
+
+function ccxtGoVenuePairOf (method) {
+    const cache = CCXT_GO_VENUE_PAIR_STATE.methods;
+    if (cache.has (method)) {
+        return cache.get (method);
+    }
+    cache.set (method, undefined);
+    const file = String (method?.getSourceFile?.()?.fileName ?? '');
+    const type = method?.type;
+    const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
+    const slot0 = (type?.kind === ts.SyntaxKind.TupleType) && (type.elements.length === 2) && (ref (type.elements[1]) === 'Dict')
+        ? CCXT_GO_VENUE_PAIR_SLOT_0[ref (type.elements[0])] : undefined;
+    if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.body === undefined) || (slot0 === undefined)
+        || !/(?:^|[\\/])ts[\\/]src[\\/]/.test (file) || /[\\/](?:base|test|abstract)[\\/]/.test (file)
+        || (method.modifiers ?? []).some ((m) => (m.kind === ts.SyntaxKind.AsyncKeyword) || (m.kind === ts.SyntaxKind.StaticKeyword))
+        || CCXT_GO_TUPLE_RESULT_METHODS.includes (method.name?.text)) {
+        return undefined;
+    }
+    if (!ccxtGoVenuePairCallersDestructure (method.name?.text)) {
+        return undefined;
+    }
+    let pairs = 0;
+    let ok = true;
+    const visit = (n) => {
+        if (!ok || ts.isFunctionLike (n) || (n.kind === ts.SyntaxKind.ClassDeclaration) || (n.kind === ts.SyntaxKind.ClassExpression)) {
+            return;
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            const e = n.expression;
+            ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === 2) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement);
+            pairs += 1;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    method.body.forEachChild (visit);
+    const result = (ok && (pairs > 0)) ? slot0 : undefined;
+    cache.set (method, result);
+    return result;
+}
+
+// every call of the name in ts/src is a `[ .. ] = this.m (..)` / `super.m (..)` destructuring (a kept tuple or an element read
+// would print a TupleSlice box) and no string names it (dynamic dispatch)
+function ccxtGoVenuePairCallersDestructure (name) {
+    const state: any = CCXT_GO_VENUE_PAIR_STATE;
+    if (state.texts === undefined) {
+        state.texts = [];
+        const walk = (dir) => {
+            for (const entry of (fs.existsSync (dir) ? fs.readdirSync (dir, { 'withFileTypes': true }) : [])) {
+                const full = path.join (dir, entry.name);
+                if (entry.isDirectory ()) { walk (full); } else if (entry.name.endsWith ('.ts')) { state.texts.push (fs.readFileSync (full, 'utf8')); }
+            }
+        };
+        walk (path.join ('ts', 'src'));
+        state.verdicts = new Map ();
+    }
+    if ((typeof name !== 'string') || (state.texts.length === 0)) {
+        return false;
+    }
+    if (!state.verdicts.has (name)) {
+        const any = new RegExp ('[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()|[^\\w.]' + name + ' \\(', 'g');
+        const call = new RegExp ('\\.' + name + ' \\(', 'g');
+        const destructured = new RegExp ('\\] = (?:this|super)\\.' + name + ' \\(', 'g');
+        let calls = 0;
+        let bound = 0;
+        let stray = 0;
+        for (const text of state.texts) {
+            calls += (text.match (call) ?? []).length;
+            bound += (text.match (destructured) ?? []).length;
+            // a quoted name passed as the methodName option key of a handle*AndParams call is not a dispatch
+            const keys = (text.match (new RegExp ('\\.handle\\w+ \\([^\\n]*?[\'"]' + name + '[\'"]', 'g')) ?? []).length;
+            stray += (text.match (any) ?? []).length - keys;
+        }
+        const declarations = state.texts.reduce ((n, t) => n + (t.match (new RegExp ('\\n    ' + name + ' \\(', 'g')) ?? []).length, 0);
+        state.verdicts.set (name, (calls > 0) && (calls === bound) && (stray === declarations));
+    }
+    return state.verdicts.get (name);
+}
+
+// the venue pair a `this.m (..)` / `super.m (..)` call resolves to
+function ccxtGoVenuePairOfCall (call) {
+    const go = CCXT_GO_VENUE_PAIR_STATE.go;
+    const callee = call?.expression;
+    if ((go === undefined) || (call?.kind !== ts.SyntaxKind.CallExpression) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || ((callee.expression?.kind !== ts.SyntaxKind.ThisKeyword) && (callee.expression?.kind !== ts.SyntaxKind.SuperKeyword))) {
+        return undefined;
+    }
+    try {
+        const declaration = go.getChecker ()?.getResolvedSignature (call)?.declaration?.resolve ();
+        return (declaration === undefined) ? undefined : ccxtGoVenuePairOf (declaration);
+    } catch (e) {
+        return undefined;
+    }
+}
+
+// `return [ a, b ]` of a venue pair: each slot bare when the printer already declared it the slot type, else unwrapped
+function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
+    const m = /^(\s*return )(.*?)(\s*)$/s.exec (printed);
+    const expr = node.expression;
+    if ((m === null) || (expr?.kind !== ts.SyntaxKind.ArrayLiteralExpression) || (expr.elements.length !== 2)) {
+        return undefined;
+    }
+    const slot = (e, type, wrap) => {
+        const text = goTranspiler.printNode (e, 0).trim ();
+        const decl = (e.kind === ts.SyntaxKind.Identifier) ? goTranspiler.goDeclarationOfIdentifier?.(e) : undefined;
+        const declared = (e.kind !== ts.SyntaxKind.Identifier) ? undefined : ((decl?.kind === ts.SyntaxKind.Parameter)
+            ? (goTranspiler.goLocalIsRebound?.(goTranspiler.goEnclosingFunction?.(e), decl.name) ? undefined : goTranspiler.goGetArgParameterType?.(decl))
+            : goTranspiler.goDeclaredTypeOfIdentifier?.(e));
+        return ((declared === type) || ((type === 'map[string]any') && ccxtGoJoinedParamsLocal (goTranspiler, e))) ? text : wrap + '(' + text + ')';
+    };
+    return m[1] + slot (expr.elements[0], pair.type, pair.first) + ', ' + slot (expr.elements[1], 'map[string]any', 'MapTyped') + m[3];
+}
+
 function installCcxtGoTupleResults (goTranspiler) {
+    CCXT_GO_VENUE_PAIR_STATE.go = goTranspiler;
+    const printFunctionType = goTranspiler.printFunctionType;
+    goTranspiler.printFunctionType = function (node) {
+        const pair = (node?.kind === ts.SyntaxKind.MethodDeclaration) ? ccxtGoVenuePairOf (node) : undefined;
+        return (pair !== undefined) ? '(' + pair.type + ', map[string]any)' : printFunctionType.call (this, node);
+    };
     const printCall = goTranspiler.printCallExpression;
     goTranspiler.printCallExpression = function (node, identation) {
         const printed = printCall.call (this, node, identation);
@@ -9520,9 +9647,16 @@ function installCcxtGoTupleResults (goTranspiler) {
             method = method.parent;
         }
         const name = method?.name?.text;
-        if ((typeof printed !== 'string') || (method?.kind !== ts.SyntaxKind.MethodDeclaration) || !CCXT_GO_TUPLE_RESULT_METHODS.includes (name)
+        if ((typeof printed !== 'string') || (method?.kind !== ts.SyntaxKind.MethodDeclaration)
             || CCXT_GO_ELEMENT_1_BASE_FILE.test (node.getSourceFile ().fileName)) {
             return printed;
+        }
+        const venuePair = CCXT_GO_TUPLE_RESULT_METHODS.includes (name) ? undefined : ccxtGoVenuePairOf (method);
+        if ((venuePair === undefined) && !CCXT_GO_TUPLE_RESULT_METHODS.includes (name)) {
+            return printed;
+        }
+        if (venuePair !== undefined) {
+            return ccxtGoVenuePairReturn (this, node, printed, venuePair) ?? printed;
         }
         const expr = node.expression;
         const m = /^(\s*return )(.*?)(\s*)$/s.exec (printed);
