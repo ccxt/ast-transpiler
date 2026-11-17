@@ -25112,28 +25112,6 @@ describe('ral-87rg R1: a handleParamBool / handleParamString params slot written
     });
 });
 
-describe('ral-87rg R2: parseNumber of a typed float parameter is an Option<f64>', () => {
-    test('`this.parseNumber (amount)` with `amount: number` in a typed unified signature reads once as_f64; an untyped one stays boxed', () => {
-        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-87rg2-'));
-        const files: Record<string, string> = {
-            'ts/src/base/Exchange.ts': "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    parseNumber (x: any, d: Num = undefined): Num { return x; }\n    hold (x: any): any { return x; }\n    async privatePostX (p: any = {}): Promise<any> { return p; }\n}\n",
-            'ts/src/venue.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
-                + "    async transfer (code: string, amount: number, fromAccount: string, toAccount: string, params: Dict = {}): Promise<any> {\n        const amountNum = this.parseNumber (amount);\n        const amountValue = (amountNum === undefined) ? 0 : amountNum;\n        return await this.privatePostX ({ 'amount': amountValue });\n    }\n"
-                + "    helper (raw: any) {\n        const other = this.parseNumber (raw);\n        const otherValue = (other === undefined) ? 0 : other;\n        return this.hold (otherValue);\n    }\n}\n",
-        };
-        for (const [rel, text] of Object.entries (files)) {
-            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
-            fs.writeFileSync (path.join (root, rel), text);
-        }
-        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['transfer'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
-        t.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts'));
-        const out = t.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
-        expect(out).toMatch(/let mut amountNum: Option<f64> = self\.parseNumber\(amount[^;]*\.as_f64\(\);/);
-        // negative: an `any` parameter may carry an `Int`, which parse_number hands through: the local keeps its box
-        expect(out).toMatch(/let mut other: Value = /);
-    });
-});
-
 describe('ral-87rg R4: sortBy of a base aggregate result is a list', () => {
     test('`this.sortBy (this.aggregate (x), 0)` types the local as a List; sortBy of an any stays boxed', () => {
         const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-87rg4-'));

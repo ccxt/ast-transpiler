@@ -6669,9 +6669,7 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = isIdentifier(arg) ? this.rustScalarIdentifierKind(arg) : this.rustScalarValueKind(arg, true);
         // ral-84g R1: a venue method already printed `-> Option<String>` (rustVenueStrCall: every venue declaration of the name
         // declares a string return) boxes into a `Str` or `Null` at the argument, never an `Int`
-        // ral-87rg R2: an unwritten parameter whose typed signature slot is `f64` / `Option<f64>` (rustOptParamKind, from the
-        // signature table) is rebound from that float, so its `Value` is a `Float` or `Null`: `parse_number` hands it through
-        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg) || (kind === undefined && [ 'num', 'onum' ].includes(this.rustOptParamKind(arg) ?? ''));
+        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg);
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
