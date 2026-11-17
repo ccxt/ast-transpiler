@@ -7403,6 +7403,20 @@ describe('go GetValue on GetArgMap-bound parameters', () => {
     });
 });
 describe('`key in dict` as a native two-value map read', () => {
+    test('a `*string` key at the tail of an && chain reads natively behind the outer conjuncts', () => {
+        const src = 'type Str = string | undefined;\ntype Dict = { [key: string]: any };\nclass T {\n    markets = {};\n    options = {};\n    safeString (d: any, k: any): Str { return undefined; }\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }\n    f (meta: Dict, a: boolean) {\n        const id = this.safeString (meta, \'id\');\n        if ((id !== undefined) && a && (id in this.markets)) {\n            return 1;\n        }\n        const base = this.safeString (meta, \'base\');\n        const m = this.safeDict (this.options, \'m\', {});\n        if ((base as string) in m) {\n            return 2;\n        }\n        return 0;\n    }\n}\n';
+        const output = new Transpiler({ verbose: false }).transpileGo(src).content;
+        expect(output).toContain('if _, ok := this.Markets[*id]; ok {');
+        expect(output).toContain('if base != nil {');
+        expect(output).toContain('if _, ok := m[*base]; ok {');
+        expect(output).not.toContain('InOp(');
+    });
+    test('an else branch and an any receiver keep the helper', () => {
+        const src = 'type Str = string | undefined;\ntype Dict = { [key: string]: any };\nclass T {\n    markets = {};\n    options = {};\n    safeString (d: any, k: any): Str { return undefined; }\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }\n    f (meta: Dict, a: boolean, x) {\n        const id = this.safeString (meta, \'id\');\n        if (a && !(id in this.markets)) {\n            return 1;\n        }\n        if ((id !== undefined) && a && (id in this.markets)) {\n            return 2;\n        } else {\n            return 3;\n        }\n        if ((id !== undefined) && a && (id in x)) {\n            return 4;\n        }\n    }\n}\n';
+        const output = new Transpiler({ verbose: false }).transpileGo(src).content;
+        expect(output).toContain('if (id != nil) && EvalTruthy(a) && (InOp(this.Markets, id)) {');
+        expect(output).toContain('InOp(x, id)');
+    });
     const getArg = () => {
         const inst = new Transpiler({ verbose: false });
         (inst as any).goTranspiler.CCXT_GO_GETARG_DECLARED_TYPES = { 'Dict': 'map[string]any' };
@@ -8456,6 +8470,24 @@ describe('the base pair twins bind natively at every call site', () => {
         const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        if (value !== undefined) {\n            const paramsOmitted = this.omit (paramsOption1, 'o2');\n            return [ value, paramsOmitted ];\n        }\n        return this.handleOptionAndParams (paramsOption1, 'run', 'o2');\n");
         expect(output).toContain('valueparamsOption1Variable[1]');
         expect(output).not.toContain('GetValue(valueparamsOption1Variable, 1)');
+    });
+    test('the value slot of a base handleOptionAndParams holder reads by index', () => {
+        const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        this.checkAddress (value);\n        return paramsOption1;\n");
+        expect(output).toContain('value := valueparamsOption1Variable[0]');
+        expect(output).not.toContain('GetValue(valueparamsOption1Variable, 0)');
+    });
+    test('a same-named venue method keeps the value slot on GetValue', () => {
+        const venue = path.join(tmp, 'ts', 'src', 'venue.ts');
+        fs.mkdirSync(path.dirname(venue), { 'recursive': true });
+        fs.writeFileSync(venue, 'type Dict = { [key: string]: any };\nexport default class venue {\n'
+            + '    handleOptionAndParams (params: object, a: string, b: string): [any, Dict] { const v: any = this.f (params); return [ v, params ]; }\n'
+            + '    f (p: any): any { return p; }\n'
+            + '    checkAddress (a: any): void {}\n'
+            + "    run (params: Dict = {}) {\n        const [ value, rest ] = this.handleOptionAndParams (params, 'run', 'o1');\n        this.checkAddress (value);\n        return rest;\n    }\n}\n");
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        const output = inst.transpileGoByPath(venue).content;
+        expect(output).not.toContain('value := valuerestVariable[0]');
     });
     test('the base callerMethodName probe reads inline and map free', () => {
         const output = run('');
@@ -13981,5 +14013,164 @@ describe('go proven return families (config provenReturnFamilies)', () => {
     test('an unproven family method throws', () => {
         const ts = 'class X {\n    parseThing (o) {\n        return o.x;\n    }\n}\n';
         expect (() => fam.transpileGo(ts)).toThrow (/provenReturnFamilies/);
+    });
+});
+
+describe('a never-rebound Go string handed to a *string parameter takes its address', () => {
+    const run = (): string => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'string-address-arg-'));
+        const cwd = process.cwd();
+        try {
+            const target = path.join(dir, 'ts', 'src', 'ex.ts');
+            fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target,
+                'type Str = string | undefined;\nclass Exchange {}\nexport default class ex extends Exchange {\n' +
+                "    req (side: Str, amount) {\n        if (side === undefined) { return amount; }\n        return side + 'x';\n    }\n" +
+                '    top (side: string, amount) {\n        const a = this.req (side, amount);\n        return a;\n    }\n' +
+                "    run () {\n        this.top ('buy', 1);\n        this.top2 ('sell', 2);\n    }\n" +
+                "    top2 (side: string, amount) {\n        side = side + 'y';\n        return this.req (side, amount);\n    }\n}\n");
+            process.chdir(dir);
+            const x = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes (x.goTranspiler);
+            return x.transpileGoByPath(path.join('ts', 'src', 'ex.ts')).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('&x for an unwritten string parameter, SafeStringPtr for a rebound one', () => {
+        const out = run();
+        expect(out).toContain('func (this *ex) Req(side *string, amount any) any {');
+        expect(out).toContain('var a any = this.Req(&side, amount)');
+        expect(out).toContain('return this.Req(SafeStringPtr(side), amount)');
+    });
+});
+
+describe('string[] parameters whose callers hand over the []any the printer builds', () => {
+    const run = (body: string) => new Transpiler({ verbose: false }).transpileGo(
+        "type Dict = { [key: string]: any };\n" +
+        "class Base { ok (a: any): any { return a; } }\n" +
+        "class T extends Base {\n" + body + "}\n").content;
+    test('array-literal callers type the parameter []any and its length is len', () => {
+        const out = run(
+            "    hashCount (hashes: string[]): number { return hashes.length; }\n" +
+            "    go (h: string): number { return this.hashCount ([ h ]); }\n");
+        expect(out).toContain('HashCount(hashes []any)');
+        expect(out).toContain('len(hashes)');
+        expect(out).not.toContain('GetArrayLength(hashes)');
+    });
+    test('an element read keeps the parameter boxed', () => {
+        const out = run(
+            "    firstHash (hashes: string[]): any { return hashes[0]; }\n" +
+            "    go (h: string): any { return this.firstHash ([ h ]); }\n");
+        expect(out).toContain('FirstHash(hashes any)');
+    });
+    test('an unproven caller keeps the helper', () => {
+        const out = run(
+            "    hashCount (hashes: string[]): number { return hashes.length; }\n" +
+            "    go (raw: any): number { return this.hashCount (raw); }\n");
+        expect(out).toContain('HashCount(hashes any)');
+        expect(out).toContain('GetArrayLength(hashes)');
+    });
+});
+
+describe('go *string-key store on a map local kept non-nil until the write', () => {
+    const root = path.join(__dirname, 'files', 'tmp-g5-tree');
+    const emit = (body: string): string => {
+        fs.rmSync(root, { recursive: true, force: true });
+        fs.mkdirSync(path.join(root, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts', 'src', 'base', 'Exchange.ts'),
+            "export type Dict = { [key: string]: any };\n" +
+            "export class Exchange {\n" +
+            "    safeString (o: any, k: any, d: any = undefined): string { return o[k]; }\n" +
+            "    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n" +
+            "    extend (a: any, b: any = undefined): Dict { return a; }\n" +
+            "    deepExtend (a: any, b: any = undefined): Dict { return a; }\n" +
+            "    mergeBalanceAccount (result: Dict, code: string, account: Dict): Dict { return result; }\n" +
+            "    keep (o: any): void { }\n" +
+            "}\n");
+        fs.writeFileSync(path.join(root, 'ts', 'src', 'ex.ts'),
+            "import { Exchange, Dict } from './base/Exchange';\n" +
+            "export class ex extends Exchange {\n" +
+            "    parse (rows: any[]) {\n" + body + "    }\n" +
+            "}\n");
+        const cwd = process.cwd();
+        try {
+            process.chdir(root);
+            return new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/ex.ts').content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    const loop = (pre: string, store: string): string =>
+        "        let result: Dict = {};\n" + pre +
+        "        for (let i = 0; i < rows.length; i++) {\n" +
+        "            const code = this.safeString (rows[i], 'c');\n" +
+        "            " + store + "\n" +
+        "        }\n" +
+        "        return result;\n";
+
+    test('a map read by a base safe reader before the store is guarded native', () => {
+        const output = emit(loop('', "const seen = this.safeString (result, code);\n            result[code] = {};"));
+        expect(output).toContain('if code != nil {');
+        expect(output).toContain('result[*code] = map[string]any{}');
+        expect(output).not.toContain('AddElementToObject(result');
+    });
+
+    test('an extend rebind keeps the map non-nil', () => {
+        const output = emit(loop("        result = this.extend (result, {});\n", "result[code] = {};"));
+        expect(output).toContain('result[*code] = map[string]any{}');
+    });
+
+    test('a deepExtend rebind (may return nil) keeps the helper', () => {
+        const output = emit(loop("        result = this.deepExtend (result, {});\n", "result[code] = {};"));
+        expect(output).toContain('AddElementToObject(result, code,');
+    });
+
+    test('a map handed to another call before the store keeps the helper', () => {
+        const output = emit(loop("        this.keep (result);\n", "result[code] = {};"));
+        expect(output).toContain('AddElementToObject(result, code,');
+    });
+
+    test('an untyped value keeps the helper', () => {
+        const output = emit(loop('', "const seen = this.safeString (result, code);\n            result[code] = rows[i];"));
+        expect(output).toContain('AddElementToObject(result, code,');
+    });
+});
+
+describe('Str base producers typed *string', () => {
+    const name = 'tmp-str-producers-tree';
+    afterAll(() => {
+        fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+    });
+    test('a getMarketType local compares natively and its concat keeps Add', () => {
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(src, { recursive: true });
+        fs.writeFileSync(path.join(src, 'ex.ts'),
+            "export class ex {\n" +
+            "    getMarketType (method: string): string {\n" +
+            "        return method;\n" +
+            "    }\n" +
+            "    use (m: string) {\n" +
+            "        const type = this.getMarketType (m);\n" +
+            "        if (type !== 'spot') {\n" +
+            "            return 'no ' + type;\n" +
+            "        }\n" +
+            "        return 'ok';\n" +
+            "    }\n" +
+            "}\n");
+        const cwd = process.cwd();
+        let output;
+        try {
+            process.chdir(path.join(__dirname, 'files', name));
+            const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(inst.goTranspiler);
+            output = inst.transpileGoByPath('ts/src/ex.ts').content;
+        } finally {
+            process.chdir(cwd);
+        }
+        expect(output).toContain('var typeVar *string = this.GetMarketType(m)');
+        expect(output).not.toMatch(/\*typeVar \+|\+ \*typeVar/);
     });
 });

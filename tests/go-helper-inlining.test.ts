@@ -336,7 +336,7 @@ describe('go `key in obj` -> map membership', () => {
         "            }\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('if func() bool {\n\t\t\tif sym == nil {\n\t\t\t\treturn false\n\t\t\t}\n\t\t\t_, ok := m[*sym]\n\t\t\treturn ok\n\t\t}() {');
+        expect(output).toContain('if sym != nil {\n\t\t\tif _, ok := m[*sym]; ok {');
         expect(output).not.toContain('InOp(');
     });
     test('a *string key keeps the statement indentation in a declaration', () => {
@@ -460,7 +460,7 @@ describe('go `key in obj` -> map membership', () => {
         expect(output).toContain('InOp(m, k)');
         expect(output).not.toContain('[*k]');
     });
-    test('a guard on another name keeps the closure', () => {
+    test('a guard on another name adds the key nil test before the read', () => {
         const ts = pointerKeyFixture(
         "        const m = { 'a': 1 }\n" +
         "        const k = this.safeString(item, 'k')\n" +
@@ -469,8 +469,8 @@ describe('go `key in obj` -> map membership', () => {
         "            return 1\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('func() bool');
-        expect(output).not.toContain('if _, ok := m[*k]');
+        expect(output).toContain('if (j != nil) && (k != nil) {');
+        expect(output).toContain('if _, ok := m[*k]; ok {');
     });
     test('a hand-written map field outside the table keeps InOp', () => {
         const ts = pointerKeyFixture(

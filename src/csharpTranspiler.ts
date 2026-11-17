@@ -8026,7 +8026,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
-            return this.csharpLoopIndexListRead(expression, argumentExpression); // counter proven in range by its loop
+            return this.csharpLoopIndexListRead(expression, argumentExpression) // counter proven in range by its loop
+                ?? this.csharpDeclaredStringIdentifierIndexRead(node, expression, argumentExpression);
         }
         const key = (argumentExpression as any).text;
         const builtFromLiteral = this.csharpLiteralDeclaresKey(node, expression, key, isNumberKey);
@@ -8174,6 +8175,21 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const receiver = this.printNode(expression, 0);
         return `(${receiver} != null && ${index} < ${receiver}.Length ? ${receiver}[${index}].ToString () : null)`;
+    }
+
+    // `s[i]` on a declared `string`/`string?` local with an `int`-declared index: GetValue's string branch is
+    // `str[Convert.ToInt32(key)].ToString()` behind its null test, with no bounds test, so the native read is
+    // the same expression (both throw past the end). Identifier receiver and key only, plain reads only.
+    csharpDeclaredStringIdentifierIndexRead(node, expression, argumentExpression): string | undefined {
+        if (!isIdentifier(expression) || !isIdentifier(argumentExpression) || !this.csharpIsPlainRead(node)) {
+            return undefined;
+        }
+        const declared = this.csharpStringReceiverType(expression);
+        if ((declared !== 'string' && declared !== 'string?') || this.csharpDeclaredKeyType(argumentExpression) !== 'int') {
+            return undefined;
+        }
+        const receiver = this.printNode(expression, 0);
+        return `(${receiver} != null ? ${receiver}[${this.printNode(argumentExpression, 0)}].ToString () : null)`;
     }
 
     // The C# collection type a local read was DECLARED with: printed by this printer, or recorded by

@@ -9183,7 +9183,9 @@ describe ('java plain base cache maps', () => {
 
         test('without a declared plain cache every site keeps the helper', () => {
             expect(methodText(bare, 'w1')).toContain('Helpers.addElementToObject(this.tickers, "a", v)');
-            expect(methodText(bare, 'r1')).toContain('Helpers.GetValue(this.tickers, ((String)sym))');
+            // the hash-map field table alone proves the `as string` read (its guarded get, not the plain-cache form)
+            expect(methodText(bare, 'r1')).toContain('(sym == null || this.tickers == null ? null : this.tickers.get(((String)sym)))');
+            expect(methodText(bare, 'r1')).not.toContain('this.tickers.get(sym)');
         });
     });
 });
@@ -10381,5 +10383,75 @@ describe('Promise.all over a list in the ts/src tiers', () => {
 
     test('the test tier keeps the helper', () => {
         expect(testTier).toContain('Helpers.promiseAll(tasks)');
+    });
+});
+
+describe('GetValue on a map read keyed by a guarded list read or an asserted string key', () => {
+    const withResolver = (types: { [name: string]: string }, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => types[declaration?.name?.text];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const input =
+    "class T {\\n" +
+    "    tickers: any = {};\\n" +
+    "    test(trades: any, ids: string[], symbol: string): void {\\n" +
+    "        for (let i = 0; i < ids.length; i++) {\\n" +
+    "            this.something (trades[ids[i]]);\\n" +
+    "        }\\n" +
+    "        this.something (this.tickers[symbol as string]);\\n" +
+    "    }\\n" +
+    "    something(...args: any[]): void {}\\n" +
+    "}";
+    test('declared Map + List<String> counter key, asserted field key: guarded native get', () => {
+        withResolver({ 'trades': 'Map<String, Object>', 'ids': 'List<String>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            const key = '(ids == null || i < 0 || i >= ids.size() ? null : ids.get(i))';
+            expect(output).toContain(`(trades == null || ${key} == null ? null : trades.get(${key}))`);
+            expect(output).toContain('(symbol == null || this.tickers == null ? null : ((java.util.Map<?, ?>)this.tickers).get(((String)symbol)))');
+            expect(output).not.toContain('Helpers.GetValue(');
+        });
+    });
+    test('Object receiver or Object key list keeps the helper', () => {
+        withResolver({ 'ids': 'List<Object>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(trades, ');
+        });
+        withResolver({ 'trades': 'Map<String, Object>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(trades, ');
+        });
+    });
+});
+
+describe('java native multiply/replace on printer-proven operands', () => {
+    const transpiler = newJavaTranspiler();
+    const body = (code: string) => "class T {\n    f(s: string, x: string, y: string): any {\n        " + code + "\n    }\n}";
+    test('a parseInt that prints Long.parseLong is a long operand of native `*`', () => {
+        const output = transpiler.transpileJava(body("const t = parseInt (s) * 1000;\n        return t;")).content;
+        expect(output).toContain('(Long.parseLong(((String)s)) * 1000L)');
+        expect(output).not.toContain('Helpers.multiply(');
+    });
+    test('parseFloat keeps Helpers.multiply (integral double product re-boxes as Long)', () => {
+        const output = transpiler.transpileJava(body("const t = parseFloat (s) * 1000;\n        return t;")).content;
+        expect(output).toContain('Helpers.multiply(');
+    });
+    test('replace on a String-declared receiver with a concat pattern is a guarded quoted replaceFirst', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'h' ? 'String' : undefined);
+            const output = transpiler.transpileJava(body("const h = this.f (s, x, y);\n        const g = h.replace ('.' + x, '');\n        const k = s.replace ('.' + x, '');\n        const m = h.replace (x, '');\n        return [ g, k, m ];")).content;
+            expect(output).toContain('(h == null ? null : ((String)h).replaceFirst(java.util.regex.Pattern.quote(("." + x)), ""))');
+            expect(output).toContain('Helpers.replace((String)s, ');
+            expect(output).toContain('Helpers.replace((String)h, (String)x, ');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
     });
 });

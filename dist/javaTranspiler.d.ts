@@ -293,6 +293,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printOptionsHandoffRead(node: any): string | undefined;
     javaDeclaredListElementRead(node: any, isCounter: any): string;
     javaDeclaredMapElementRead(node: any): string;
+    javaStringListKeyedMapRead(node: any): string | undefined;
+    javaAssertedKeyMapFieldRead(receiver: any, key: any): string | undefined;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
     javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
@@ -369,6 +371,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaRepeatableIntegerExpression(node: any, depth: number): boolean;
     javaPrimitiveCounterIndex(node: any): boolean;
     javaProvableNumericKind(node: any, allowDeclaredLocals?: boolean, widened?: boolean): string | undefined;
+    javaNativeParseKind(node: any): string | undefined;
+    javaBaseParseToIntCall(node: any): boolean;
     javaDeclaredNumericLocalKind(node: any): string | undefined;
     javaDeclaredNumericTypeKind(javaType: any): string | undefined;
     javaOperandIsNonNullNumber(node: any): boolean;
@@ -455,7 +459,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaSliceLiteralBound(node: any): any;
     javaSliceBoundExpression(value: any, length: any): string;
     nativeSliceCallIfProvable(node: any, name: any): string;
-    printReplaceCall(_node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
+    javaReplaceNonNullStringArgument(node: any, printed: any): boolean;
+    javaNativeStringReplaceCall(node: any, name: any, parsedArg: any, parsedArg2: any): string | undefined;
+    printReplaceCall(node: any, _identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     printReplaceAllCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
     javaIsAtomOperand(node: any): boolean;
     javaIsRepeatableBound(node: any): boolean;

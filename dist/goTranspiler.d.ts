@@ -1282,6 +1282,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilComparisonOf(node: any, ident: any, loose: any, strict: any): boolean;
     goStatementAlwaysExits(statement: any): boolean;
     goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
+    goMapLocalIsNonNilUntilWrite(node: any): boolean;
+    goMapLocalUseKeepsNonNil(use: any, writeSite: any, scope: any): boolean;
+    goIsFreshNonNilMapExpression(expr: any): boolean;
+    goIsSelfMapRebind(expr: any, use: any): boolean;
+    goBaseThisCallName(call: any): string | undefined;
+    goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
+    goIsBaseMapReaderCall(call: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
     goIsNonPointerValue(valueNode: any): boolean;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
@@ -1315,6 +1322,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInOpSubstitutedText(node: any): string | undefined;
     goInOpIfInitClause(node: any): string | undefined;
     goInOpGuardedNestedIf(node: any, identation: any): string | undefined;
+    goInOpChainNestedIf(node: any, identation: any): string | undefined;
     goIfInOpRead(condition: any, statement?: any): any;
     GO_NATIVE_MAP_FIELDS: {
         [name: string]: string;

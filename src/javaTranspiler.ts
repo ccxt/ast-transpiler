@@ -5035,7 +5035,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // and the null test reads the bare name
         const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
         if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
-            return undefined; // the guard prints the key twice
+            return this.javaStringListKeyedMapRead(node); // the guard prints the key twice
         }
         if (this.javaKeyPrintsPrimitive(operand)) {
             return undefined; // a java primitive cannot take the `instanceof` test
@@ -5055,6 +5055,40 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
     }
 
+    // `m[keys[i]]` on a declared Map, keys a declared List<String> read at a counter: the key is the
+    // guarded native list read (a String or null, side-effect free), so it can print twice in the
+    // helper's null-key test; a Map get then is the helper's Map branch
+    javaStringListKeyedMapRead(node): string | undefined {
+        const key = node.argumentExpression;
+        if (!isElementAccessExpression(key) || !this.javaPrimitiveCounterIndex(key.argumentExpression)
+            || !/^(java\.util\.)?(List|ArrayList)<String>$/.test(this.javaDeclaredTypeOf(key.expression) ?? '')) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (!keyText.startsWith('(') || keyText.includes('Helpers.')) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        return this.javaNullGuardedGet(target, keyText, keyText);
+    }
+
+    // `this.<hash map field>[k as string]`: the assertion only narrows, so the null test reads the bare name
+    javaAssertedKeyMapFieldRead(receiver, key): string | undefined {
+        const name = receiver?.name?.text;
+        if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_HASH_MAP_FIELDS, name)
+            || (!isAsExpression(key) && !isParenthesizedExpression(key))) {
+            return undefined;
+        }
+        const operand = this.unwrapParenthesized(key);
+        if (!isAsExpression(operand) || operand.type?.kind !== SyntaxKind.StringKeyword
+            || !isIdentifier(operand.expression) || !this.javaIdentifierPrintsDeclaredName(operand.expression)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const read = this.javaBaseDeclaredMapCacheField(receiver) ? target : `((java.util.Map<?, ?>)${target})`;
+        return `(${this.printNode(operand.expression, 0)} == null || ${target} == null ? null : ${read}.get(${this.printNode(key, 0)}))`;
+    }
+
     // `this.<field>[k]` on a hand-written base map field (JAVA_FIELD_TYPES): the helper's Map branch is
     // the native `get`. The helper answers null for a null receiver or key, so both stay guarded; the
     // receiver and key are side-effect free. An unguarded read has no parens so a checkcast binds it.
@@ -5066,7 +5100,8 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return this.javaHashMapFieldReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
+            return this.javaHashMapFieldReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key)
+                ?? this.javaAssertedKeyMapFieldRead(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -6692,6 +6727,10 @@ export class JavaTranspiler extends BaseTranspiler {
             if (this.javaBaseIntCall(node)) {
                 return 'int';
             }
+            const parse = this.javaNativeParseKind(node) ?? (this.javaBaseParseToIntCall(node) ? 'long' : undefined);
+            if (parse !== undefined) {
+                return parse;
+            }
             if (widened) {
                 return undefined;
             }
@@ -6707,6 +6746,33 @@ export class JavaTranspiler extends BaseTranspiler {
             return 'int';
         }
         return undefined;
+    }
+
+    // `parseInt(x)` / `parseFloat(x)` the printer spells Long.parseLong / Double.parseDouble /
+    // `((Number)x).longValue()`: a primitive (the parse throws before any null could reach the operator)
+    javaNativeParseKind(node): string | undefined {
+        const callee = isIdentifier(node?.expression) ? node.expression.text : undefined;
+        if (callee !== 'parseInt' && callee !== 'parseFloat') {
+            return undefined;
+        }
+        const printed = this.javaTry(() => this.printNativeScalarParse(node, callee) ?? this.printStringTypedParse(node, callee));
+        if (typeof printed !== 'string') {
+            return undefined;
+        }
+        if (callee === 'parseInt') {
+            return /^(Long\.parseLong\(|\(\(Number\))/.test(printed) ? 'long' : undefined;
+        }
+        return printed.startsWith('Double.parseDouble(') ? 'double' : undefined;
+    }
+
+    // `this.parseToInt(x)` resolving into the base Exchange: BaseExchange.java returns
+    // `Double.parseDouble(..).longValue()` boxed, which throws rather than answer null
+    javaBaseParseToIntCall(node): boolean {
+        if (this.javaThisCallName(node) !== 'parseToInt') {
+            return false;
+        }
+        const fileName = this.javaTry(() => this.javaCalleeFileName(node)) ?? '';
+        return /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(fileName);
     }
 
     // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed numeric, but a
@@ -8242,8 +8308,41 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${name} == null ? null : ${cast}.${method}(${argumentsText}))`;
     }
 
-    printReplaceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+    // a never-null Java String argument: a string literal, or a `+` with a string-literal side that
+    // printed as javac concat (not Helpers.add)
+    javaReplaceNonNullStringArgument(node, printed): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || isStringLiteral(n)) {
+            return n !== undefined;
+        }
+        return isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken
+            && (isStringLiteral(this.unwrapParenthesized(n.left)) || isStringLiteral(this.unwrapParenthesized(n.right)))
+            && typeof printed === 'string' && printed.startsWith('(') && !printed.startsWith('((');
+    }
+
+    // `s.replace (a, b)` on a String-declared local: Helpers.replace is a literal first-occurrence
+    // replace with null -> null on the receiver; both arguments must be never-null Strings
+    javaNativeStringReplaceCall(node, name, parsedArg, parsedArg2): string | undefined {
+        const receiver = isPropertyAccessExpression(node?.expression) ? node.expression.expression : undefined;
+        const args = node?.arguments;
+        if (receiver === undefined || !isIdentifier(receiver) || args?.length !== 2 || name !== receiver.text
+            || this.javaDeclaredStringType(receiver) !== true
+            || !this.javaReplaceNonNullStringArgument(args[0], parsedArg) || !this.javaReplaceNonNullStringArgument(args[1], parsedArg2)) {
+            return undefined;
+        }
+        // two literals are the embedding layer's literal-replace passes
+        if (isStringLiteral(this.unwrapParenthesized(args[0])) && isStringLiteral(this.unwrapParenthesized(args[1]))) {
+            return undefined;
+        }
+        const plain = (arg, chars) => isStringLiteral(this.unwrapParenthesized(arg)) && !chars.test(this.unwrapParenthesized(arg).text);
+        const pattern = plain(args[0], /[\\^$.|?*+()[\]{}]/) ? parsedArg : `java.util.regex.Pattern.quote(${parsedArg})`;
+        const replacement = plain(args[1], /[$\\]/) ? parsedArg2 : `java.util.regex.Matcher.quoteReplacement(${parsedArg2})`;
+        return `(${name} == null ? null : ((String)${name}).replaceFirst(${pattern}, ${replacement}))`;
+    }
+
+    printReplaceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return this.javaNativeStringReplaceCall(node, name, parsedArg, parsedArg2)
+            ?? `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {

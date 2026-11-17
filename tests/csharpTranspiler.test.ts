@@ -6438,6 +6438,33 @@ describe ('csharp declared string index reads', () => {
 
     const body = (lines: string) => 'class T {\n    f (id: string, rows: any, i: number) {\n' + lines + '\n    }\n}';
 
+    describe('csharp int-counter read on a declared string local', () => {
+        const loop = (decl: string) => 'class T {\n    f (id: string) {\n' + decl + '\n        for (let i = 0; i < 3; i++) {\n            const c = id[i];\n        }\n    }\n}';
+        const printedWithKey = (source: string, declared: string | undefined, key: string | undefined) => {
+            const transpiler = new Transpiler(config);
+            const cs: any = (transpiler as any).csharpTranspiler;
+            if (declared !== undefined) {
+                cs.csharpStringReceiverType = (receiver: any) => (receiver?.text === 'id' ? declared : undefined);
+            }
+            if (key !== undefined) {
+                cs.csharpLocalTypeOf = (node: any) => (node?.text === 'i' ? key : undefined);
+            }
+            return transpiler.transpileCSharp(source).content;
+        };
+
+        test('an int counter on a string? receiver reads the char with the helper null test', () => {
+            const out = printedWithKey(loop(''), 'string?', 'int');
+            expect(out).toContain('(id != null ? id[i].ToString () : null)');
+            expect(out).not.toContain('getValue(id, i)');
+        });
+
+        test('an object receiver or a non-int key keeps the helper', () => {
+            expect(printedWithKey(loop(''), undefined, 'int')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), 'string?', 'Int64?')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), 'List<object>', 'int')).not.toContain('.ToString ()');
+        });
+    });
+
     describe('csharp literal-index read on a declared string local', () => {
         test('a string? receiver reads through the indexer with the helper null and range tests', () => {
             const out = printed(body('        return id[0];'), 'string?');
