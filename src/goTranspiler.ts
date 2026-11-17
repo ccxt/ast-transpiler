@@ -19679,12 +19679,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // a `[]any` element is an untyped slot: the guarded native read (bounds check plus
         // DerefScalar closure) answers what base's GetValue did in one call, so leave such a
         // parameter boxed and keep base's print. A `[]string` element is already a Go string.
-        if ((annotated === GO_SAFE_LIST_LOCAL_TYPE) && this.goBodyReadsElement(fn.body, param.name.text)) {
+        const readsElement = (annotated === GO_SAFE_LIST_LOCAL_TYPE) && this.goBodyReadsElement(fn.body, param.name.text);
+        if (readsElement && !fn.name.text.startsWith('parse')) {
             return undefined;
         }
-        return (this.goParameterCallSitesPassType(fn, index, annotated)
+        const typed = (this.goParameterCallSitesPassType(fn, index, annotated)
             && this.goParameterBodyTakes(fn, param, annotated)) ? annotated : undefined;
+        if ((typed !== undefined) && readsElement) {
+            this.goSliceParamsKeepingGetValue.add(param); // a parse* row list: its element reads keep GetValue
+        }
+        return typed;
     }
+
+    goSliceParamsKeepingGetValue = new Set<any>();
 
     // the slice type an array-annotated parameter prints, undefined for every other annotation
     goAnnotatedSliceParameterType(param): string | undefined {
@@ -19798,13 +19805,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const element = checker.getIndexTypeOfType(type, IndexKind.Number);
-        if ((element === undefined) || !(element.flags & TypeFlags.Object)) {
+        // an `any[]` / `number[]` slot boxes every element as `any` too, so it is the same `[]any`
+        const anyElement = (element !== undefined) && ((element.flags & (TypeFlags.Any | TypeFlags.Number)) !== 0);
+        if ((element === undefined) || (!(element.flags & TypeFlags.Object) && !anyElement)) {
             return undefined;
         }
         if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]any')) {
             throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
         }
         return '[]any';
+    }
+
+    goSliceParamKeepsGetValue(decl: any): boolean {
+        if (this.goIsUnifiedAnySliceParameterNode(decl)) {
+            return true;
+        }
+        if (decl?.kind === SyntaxKind.Parameter) {
+            this.goNativeParameterType(decl); // fills goSliceParamsKeepingGetValue
+        }
+        return this.goSliceParamsKeepingGetValue.has(decl);
     }
 
     // the parameter node a unified `[]any` slot belongs to: its element reads keep GetValue, the native
@@ -27931,7 +27950,7 @@ ${tryBodyBlock}
         }
         const readBase: any = node?.expression;
         if ((readBase?.kind === SyntaxKind.Identifier)
-            && this.goIsUnifiedAnySliceParameterNode(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
+            && this.goSliceParamKeepsGetValue(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
             return undefined;
         }
         const bounded = this.goGb08BoundedListRead(node, keyNode);

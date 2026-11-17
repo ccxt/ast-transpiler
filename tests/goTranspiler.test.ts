@@ -11777,6 +11777,28 @@ describe ('goGeneralParamRules', () => {
             const out = go(PRELUDE);
             expect(out).not.toContain('orders []any');
         });
+        test('an any[] table slot prints []any and the native length', () => {
+            const ts = 'class Exchange {\n    getCacheIndex (orderbook: any, deltas: any[]): number {\n        return deltas.length;\n    }\n}\n';
+            const out = go(ts, { 'unifiedSliceParams': { 'getCacheIndex': { 1: '[]any' } } });
+            expect(out).toContain('deltas []any');
+            expect(out).toContain('len(deltas)');
+            expect(go(ts)).not.toContain('deltas []any');
+        });
+        test('a venue parse* row list with element reads is typed when every caller passes a []any', () => {
+            const ts = 'class Exchange {}\nclass ex extends Exchange {\n' +
+                '    parseRows (rows: Dict[], params: Dict = {}): Dict[] {\n        const out: Dict[] = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.extend (rows[i], params));\n        }\n        return out;\n    }\n' +
+                '    extend (a: any, b: any): Dict {\n        return {};\n    }\n' +
+                '    run (): Dict[] {\n        const rows: Dict[] = [];\n        rows.push ({});\n        return this.parseRows (rows);\n    }\n}\n';
+            const out = go('type Dict = { [key: string]: any };\n' + ts);
+            expect(out).toContain('ParseRows(rows []any');
+            expect(out).toContain('len(rows)');
+        });
+        test('a parse* row list whose caller passes a box stays any', () => {
+            const ts = 'class Exchange {}\nclass ex extends Exchange {\n' +
+                '    parseRows (rows: any[]): number {\n        return rows[0];\n    }\n' +
+                '    run (x: any): number {\n        return this.parseRows (x);\n    }\n}\n';
+            expect(go(ts)).not.toContain('rows []any');
+        });
         test('an element read of the slot keeps GetValue', () => {
             const ts = PRELUDE.replace('return orders.length;', 'return orders[0];');
             const out = go(ts, { 'unifiedSliceParams': { 'createOrders': { 0: '[]any' } } });
