@@ -411,6 +411,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSiblingStrBoxesMove(declaration: any, scope: any): boolean;
     /** Static kind of a write's right-hand side: `null`, or the `Option` payload it yields exactly. */
     rustNilWriteKind(rhs: any): string | undefined;
+    /** ral-90rh R4: `m['k']` off a typed (`struct`) market local whose field is a `String` (kind `ostr`) or an `Option<bool>`
+     *  (kind `obool`): the field text (`(m).market_type`, `(m).linear`), else undefined. */
+    rust90rhMarketFieldPartner(partner: Node | undefined, kind: string): string | undefined;
+    /** ral-90rh R3: a declaration initializer `s.indexOf ('<non-empty literal>')`, `s` a bare identifier the checker types
+     *  `string` and no scalar rule types (it prints as `Value`). */
+    rust90rhValueIndexOf(expr: Node | undefined): boolean;
+    /** ral-90rh R1: `n - k` / `k - n` with `n` an `Option<i64>` local seeded by `parseInt (s)` and `k` an int literal: the
+     *  printed name of `n` and the `i64` text over its payload `__b`. */
+    rust90rhOintShiftBound(expr: Node | undefined): {
+        name: string;
+        text: string;
+    } | undefined;
+    /** ral-90rh R1: a declaration initializer `parseInt (s)` (one bare identifier argument, checker type `string`; no multiply form). */
+    rust90rhParseIntInit(expr: Node | undefined): boolean;
     /** ral-68b: `parseInt (s)` with one argument whose checker type is `string`, or that call times an integer literal. */
     rust68bParseIntWrite(expr: any): boolean;
     /** za: a ternary whose arms are an `undefined` and a boolean literal (either order). */
@@ -506,6 +520,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilOptStrConcatUse(n: any): boolean;
     /** ral-56x K1: `return x` of a literal-seeded string local (never a parameter alias) in a `-> Option<String>` method. */
     rust56xStrReturnLocal(n: any, fn: any): boolean;
+    /** ral-90rb R4: every leaf of a `+` chain is a string literal or an identifier whose declaration is a `const` initialised from a
+     *  base `safeString*` read with a string-literal default (checker `string`, never `undefined`). Decided from the AST. */
+    rust90bStrConcatInit(node: Node): boolean;
     /** ral-61x: `return x` of the method's own nil-declared `let x: Str = undefined` local (an accumulator the body writes):
      *  as an `Option<String>` it is the payload itself, as a `Value` a checker-string `Value` (converts either way). */
     rust61xNilStrReturnLocal(n: any, fn: any): boolean;
@@ -522,6 +539,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust56xFormatPartner(other: any): boolean;
     /** The `as_deref().unwrap_or("null")` read of a concat operand keeps its statement within the 400-char line budget. */
     rustOptStrConcatFits(n: any): boolean;
+    /** ral-90rc R2: `let x: Str = undefined` (or `: string`), a plain one-declarator `let` statement inside a function. */
+    rust90rcNilStrDecl(declaration: VariableDeclaration): boolean;
     /** A write that decodes a `Value` result (a call, or a ternary over one). */
     rustNilDecodedWrite(rhs: any): boolean;
     /** `[ x, .. ] = <list>` as its own statement: `x` is written from a tuple slot. */
@@ -717,6 +736,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustMarketLentLocals;
     /** ral-70f: ral-70f reader locals whose last use walk accepted every use (rustScalarLocalKindCore). */
     private rust70fWalkOk;
+    /** ral-90re R1: locals whose use walk took a pushed `parseNumber` pair box only through rust90reParsedPairElement. */
+    private rust90rePairAdmitted;
     rustScalarLocalKindUncached(declaration: any): string | undefined;
     rustScalarLocalKindCore(declaration: any): string | undefined;
     rustAnyBoolTestedLocal(declaration: any): boolean;
@@ -948,6 +969,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-68f: a base safeString-family reader call (not safeCurrencyCode) with no default argument (rust64bReaderLocal's call test). */
     rust68fNoDefaultReader(init: any): boolean;
     rustParseNumberStrCall(call: any): boolean;
+    /** ral-87rg R2 (ral-90rg: split out): `this.parseNumber (p)` of an unwritten parameter whose typed signature slot is `f64` /
+     *  `Option<f64>` (rustOptParamKind). Its result local is typed only for a native use (rustScalarNeedsNativeUse): boxed
+     *  straight back it stays the `Value` it is handed as. */
+    rust90rgParseNumberOfNumParam(call: Node): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
     /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
@@ -1001,6 +1026,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarBareLastWrite(node: any): boolean;
     /** Some use of the local is the source of an assignment or of another declaration. */
     rustScalarFeedsWrite(declaration: any): boolean;
+    /** ral-90ra R1: `rustScalarFeedsWrite`, except that a plain `y = x;` statement or a `let y: Str = x;` declaration whose
+     *  target `y` is a local (one declarator, same function) the checker types `string` is allowed: that target is decided by
+     *  the same scalar solve (a string local copied from an `Option<String>` reads the same Str / Null the `Value` held). */
+    rust90raFeedsForeignWrite(declaration: VariableDeclaration, scope: Node): boolean;
     /** Some statement of the parameter's function assigns the parameter itself. */
     rustParamWritten(param: any): boolean;
     rustReaderDefaultKind(name: string, args: any[], fresh: boolean): string | undefined;
@@ -1068,6 +1097,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNumParamBoxesOnly(declaration: any): boolean;
     /** The parameter `arg` binds in `call` is declared `number` (not `int`), so it prints as an `f64`. */
     rustNumParamArg(call: any, arg: any): boolean;
+    /** ral-90rg R2b: every use of a number local reads it only as an `f64`: a nullish test (`x === undefined`), an argument of
+     *  `Math.floor|round|ceil|pow` (the runtime helpers convert through `as_f64` and answer `Float`), or an arm of the ternary
+     *  initializer of another `const` whose own uses are the same (two levels at most). An `Int` default and its `Float`
+     *  spelling then give the same result, so a `safeNumber (.., <int literal>)` reader local may be typed `Option<f64>`.
+     *  Decided from the TypeScript AST only. */
+    rust90rgFloatOnlyUses(declaration: Node, depth: number): boolean;
     /** A number reader whose default may be an `Int` (an int literal, or anything not proven a float). */
     rustReaderIntDefaultNum(init: any): boolean;
     rustScalarUsesAll(declaration: any, name: string, acceptUse: (n: any) => boolean): boolean;
@@ -1122,6 +1157,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  argument of `xs.push (..)` (`result.push (this.safeMarketStructure ({ 'quote': quote }))`): the pushed source prints
      *  `self.m(..)`, so ccxt's native-push pass reads that call's text and never this operand's box. */
     rustPushSelfCallArgUse(n: any, push: any, kind: string | undefined): boolean;
+    /** ral-90re R1: a string local boxed as the one argument of a base-tier `this.parseNumber (x)` that is a direct element of
+     *  the array literal pushed whole (`rows.push ([ this.parseNumber (price), this.parseNumber (size) ])`): the element prints
+     *  `self.parse_number(<box>, &[])` inside `Value::from(vec![..])`, a source ccxt's rustVecPushInline takes whatever its
+     *  elements print (as rustCopyPushPairElement), and the box converts the very `Str` / `Null` the `Value` local held. */
+    rust90reParsedPairElement(n: Node, push: CallExpression, kind: string | undefined): boolean;
     /** 40d: a Copy number that is a direct element of the array literal pushed whole (`rows.push ([ price, amount ])`):
      *  the element prints `Value::from(x)` (the Int / Float / Null its box held, no copy) inside `Value::from(vec![..])`,
      *  which ccxt's rustVecPushInline (build/rustTranspiler.ts) already treats as a marker-free source whatever the
@@ -1371,6 +1411,13 @@ export declare class RustTranspiler extends BaseTranspiler {
         key: string;
         write: boolean;
     } | undefined;
+    /** ral-90b: `k in client.subscriptions` after a write of that field reads the handle's snapshot when every write of
+     *  `client.subscriptions` in the method is a whole statement `client.subscriptions[k] = v` / `delete client.subscriptions[k]`:
+     *  both print through the handle (`add_subscription` / `remove_subscription`), which update the snapshot's key set with the
+     *  live client's, so the key test sees what the live read did. Decided from the AST. */
+    rust90bHandleSyncedInTest(node: Node, plan: {
+        bindPos: number;
+    }): boolean;
     /** ral-80b: a `const client = this.client (url)` local whose declaration has not printed yet. A scalar decision made
      *  ahead of the method's print (a key local's use walk) would otherwise see `declOk` false and refuse every handle
      *  key use; the declaration prints `let mut client: Value = self.client(..)` on one line (the declOk test) when its
@@ -1459,6 +1506,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-70f: a non-test local declared `this.safeString (o, k)` (any key) or `this.safeStringLower|Upper (o, 'lit')`, two
      *  arguments, base reader (rust64bReaderLocal): the boxed reader is `Str` or `Null`, exactly its `_opt` twin. */
     rust70fReaderLocal(declaration: Node, cast?: boolean): boolean;
+    /** ral-90rg R2: a `const x = this.safeCurrencyCode (id)` (one argument, the base method: printed `-> Option<String>`) that is
+     *  never written after its declaration. */
+    rust90rgCurrencyCodeLocal(declaration: Node): boolean;
     rust70fWritten(declaration: VariableDeclaration): boolean;
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean;
@@ -2030,6 +2080,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  read reached (a non-map entry or a `None` key reads Null, as `get_value` did on a non-map or a `Null` key). */
     rustUrlsKeyReadUse(n: any): boolean;
     /** uh: the use's local is initialised by `c ? 'a' : 'b'` (both arms string literals). */
+    /** ral-90re R3: a ternary initializer one of whose arms is a field read of an owned `safeMarket` (`smkt`) local. */
+    rust90reSmktArmTernary(init: Node): boolean;
+    /** ral-90re R3: `n` reads a local initialised from a ternary whose two arms are `String` fields of a typed market local. */
+    rust90reMarketFieldTernaryLocal(n: Node): boolean;
     rustStrLiteralTernaryLocal(n: any): boolean;
     /** ral-64k: `n` is the whole key of an element read `book[n]` (through `( .. as T)` wrappers) that initialises a local,
      *  on a typed ws order-book local whose use there is its `Value` box: `get_value` takes the key as `impl ValueKey`
@@ -2041,6 +2095,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust65kTypedResultKey(n: any): boolean;
     /** ral-64k: the read of a `bkey` use: `get_value(&<book box>, k.as_str() | k.as_deref())`. */
     print64kBookKeyRead(node: any): string | undefined;
+    /** ral-90rh R2: `n` is the identifier of a `n as string` that is a whole element-access key. */
+    rust90rhCastKey(n: Node | undefined): boolean;
     /** Element-access hook: the native read of an `okey` use. */
     printOkeyRead(node: any): string | undefined;
     private static readonly RUST_SCALAR_VALUE_OPERAND_OPS;
@@ -2441,6 +2497,9 @@ export declare class RustTranspiler extends BaseTranspiler {
         kind: string;
         text: string;
     } | undefined;
+    /** ral-90rc R1: `node` (through parens / `as`) is an arm, not the condition, of a ternary that is the whole right side of a
+     *  statement write into a nil-declared local (rustNilVenueWrite). */
+    rust90rcNilWriteArm(node: Node | undefined): boolean;
     /** ral-57k: an arm of `x = c ? m['quote'] : m['base']` (a statement write into an initialised local, kucoin parseTrade
      *  `feeCurrency`) whose other arm is a field read of the same kind off the same typed market local: the ternary is that
      *  one kind, each arm the very `key_read` the boxed form printed (`None` where it held Null). */
@@ -2682,6 +2741,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     isWriteBackBindRead(read: Node): boolean;
     /** ral-52e: `const e = xs[k]; e['f'] = v; ..; xs[k] = e;` -- the bind is followed only by top-level writes on `e` and then the
      *  source's own write-back at the same receiver and key text, so a cloned element read writes the same element back. */
+    /** ral-90rd R1: the bind `const v = m[k]` is itself a typed container local (its own decision, re-entrancy guarded), so it never
+     *  prints the `let mut v: Value = ..` line ccxt's write-back pass keys on: a mutation of `v` adds no write-back to `m`. */
+    rust90rdTypedRowBind(bind: Node): boolean;
     rustExplicitWriteBackBind(read: any): boolean;
     /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
      *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
@@ -3073,6 +3135,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(node: any, identation: any, name?: any): string;
+    private rust90rdJoinReads;
+    /** ral-90rd R2: `x.join ('lit')`, a single string-literal separator, the call in a read position (not a callee, chain head
+     *  or write target). */
+    rust90rdListJoinUse(access: Expression): boolean;
+    /** ral-90rd R2: the join of a typed list local the borrowed-container rule admitted at this call. */
+    printBorrowedListJoin(node: CallExpression): string | undefined;
     printJoinCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     /** ral-42f: `parts.join('-')` where `parts` is a never-reassigned local `this.arraySlice(<string[] local>, ..)`: every element is a
      *  `Value::Str`, so the helper's stringify is the identity (the form ccxt rustStringNatives printed after the fact). */
@@ -3261,6 +3329,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.<m>(…)` whose every return is a fresh untagged
      *  container of `kind` — the method's own body, no venue override (the
      *  checker resolves the most derived declaration for `this`). */
+    /** ral-90rg R4: `inner` is a `this.m (..)` call returned whole from `owner` (a base-tier method), `m` a base method no venue
+     *  declares (rustVenueReturnTypesHas), not dispatched virtually, not typed, not async, not `owner`: the implementation (the
+     *  same-named member with a body when the checker resolves a bodiless overload, as ral-55i reads it), else undefined. */
+    rust90rgBaseTailForward(owner: Node, inner: Node): MethodDeclaration | undefined;
+    /** ral-90rg R4: every `return` of `impl` (closures skipped) is an array literal (a tuple producer: `return [ v, params ]`). Only a
+     *  literal: a forwarded list pass-through (parseTrades -> filterBySymbolSinceLimit) stays with the lent-list rule, which moves
+     *  the list instead of copying it out. */
+    rust90rgImplReturnsList(impl: MethodDeclaration): boolean;
     rustCallBuildsContainer(call: any, kind: 'map' | 'list', depth?: number): boolean;
     /** A store write's value that can never be a container: a scalar literal, or a checker-primitive
      *  (`string`/`number`/`boolean`) expression. Writing it into a `this.` store tags no returned container.
@@ -3421,6 +3497,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The container kind a local is declared as, or undefined (no proof). */
     rustReadBearerKind(node: any): 'list' | 'map' | undefined;
     rustReadBearerKindOfDeclaration(declaration: any): 'list' | 'map' | false;
+    /** stack-90r: list bearers admitted by a compare-left element read (ral-90rb R2) and calls typed a list through a base tail
+     *  forward (ral-90rg R4): the declarations whose `Vec<Value>` copy is printed as a move instead. */
+    private rust90rCompareLeftBearers;
+    private rust90rForwardListCalls;
+    /** stack-90r: the list bearer's initializer is a call (its result is a temporary no other node reads, so moving it out is
+     *  the copy without the copy) and the bearer is typed through ral-90rb R2 or ral-90rg R4. Decided from the AST. */
+    rust90rMoveBearer(declaration: VariableDeclaration): boolean;
     rustReadBearerKindUncached(declaration: any): 'list' | 'map' | false;
     private rustContainerBoxUses;
     private static readonly RUST_CONTAINER_NULL_SAFE_READERS;
@@ -4014,6 +4097,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentListLocal(declaration: any): boolean;
     /** A call that yields a string list on every path (never `undefined`). */
     rustLentListSource(init: any): boolean;
+    /** ral-90rg R3: `init` is (through wrappers) a read of a never-reassigned `const xs = <never-empty base list source>` of the same
+     *  function (a `marketSymbols (.., false, ..)` result and the like, rustLentListSource without this rule) that is the whole
+     *  initializer of a `const` declaration at the source's last use: the source's declaration, else undefined. Structural only
+     *  (never asks rustLentListLocal of the source, so the source's own decision can ask about this alias). */
+    rust90rgLentListAliasSource(init: Node): VariableDeclaration | undefined;
     /** ral-48e: `xs[i]['k'] = v` (a statement) on a `[]`-defaulted list local, `i` an i64 counter or a non-negative integer
      *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
      *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
@@ -4574,6 +4662,22 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  the test tier. Whatever the endpoint answers, the split form keeps the list it held (`Some`) and the map it held, so an
      *  `Array.isArray (x)` test reads `is_some()` and every list-arm use reads the held list. */
     rust87rfEndpointSplitSource(declaration: Node, init: Node): boolean;
+    /** ral-90rf R1: the implicit endpoint is declared (ts/src/abstract) to answer `Promise<Dict>`, `Promise<List>` or
+     *  `Promise<Dict | List>`: outside its list arm the answer is the map the split holds (`__map`). */
+    rust90rfMapOrListEndpoint(init: Node): boolean;
+    /** ral-90rf R4: `n` is the last read of the declaration apart from reads inside `test` (no read after it, none in the
+     *  rest of its statement, no loop between it and the declaration). */
+    rust90rfLastBesidesTest(n: Node, test: Node, declaration: VariableDeclaration): boolean;
+    /** ral-90rf R4: some `Array.isArray (x)` of this declaration in its function. */
+    rust90rfArrayTested(declaration: VariableDeclaration): boolean;
+    /** ral-90rf R4: `x !== undefined` / `undefined !== x` (parenthesised or not) on this declaration. */
+    rust90rfPresentTestOf(cond: Node, declaration: VariableDeclaration): boolean;
+    /** ral-90rf R1: a whole read of the local: a `this.m (..)` argument at a `Value` slot, `return x`, an object-literal value
+     *  or a list-literal element. */
+    rust90rfWholeBoxUse(n: Node): boolean;
+    /** ral-90rf R1: which arm of an `Array.isArray (x)` test (or its negation) a use of `x` sits in: inside the if / ternary
+     *  branch, or after an `if` with no else whose branch always exits (the rest of the block is the other arm). */
+    rust90rfArmOf(n: Node, declaration: VariableDeclaration, fn: Node): 'list' | 'map' | undefined;
     /** ral-80c R1: an unwritten method parameter whose typed signature slot is a string list (decided from the signature table). */
     rust80cStrVecParamAlias(init: Expression | undefined): boolean;
     /** ral-80c R1: `this.symbols` / `this.ids`, base fields declared `string[]` (always a list). */

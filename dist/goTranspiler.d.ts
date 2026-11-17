@@ -1,6 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind } from 'typescript/unstable/ast';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
+import * as tsAst from 'typescript/unstable/ast';
 export declare const ts: any;
 export declare function urlsDescribeStringProducer(initializer: any): boolean;
 export declare function installNilDeclaredTupleJoins(goTranspiler: any): void;
@@ -2019,4 +2020,34 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goTernaryJoinR87HasNativeRead(declaration: any, kind: string): boolean;
+}
+export interface GoTranspiler {
+    go90g3SideKeys(key: any): string[] | undefined;
+    go90g3ComputedSideLocal(declaration: any): {
+        book: tsAst.Identifier;
+        key: tsAst.Identifier;
+        sides: string[];
+    } | undefined;
+    go90g3ComputedSideCache: WeakMap<object, {
+        book: tsAst.Identifier;
+        key: tsAst.Identifier;
+        sides: string[];
+    } | null>;
+    go90g3PromiseLocal(declaration: any): boolean;
+    go90g3StringCharRead(node: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90DictArm(node: any): {
+        container: any;
+        key: any;
+    } | undefined;
+    goTernaryJoin90DictUsesAreNative(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90IntOperand(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90IntArm(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90HasArithmeticUse(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90SafeReaderArgument(node: any): boolean;
 }
