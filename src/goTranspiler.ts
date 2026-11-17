@@ -33823,7 +33823,7 @@ GoTranspiler.prototype.goReusableFutureLocal = function (declaration) {
         const operand: any = node.expression;
         if (operand?.kind === SyntaxKind.Identifier) {
             const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve?.();
-            if (this.goReusableFutureLocal(declaration) && (this.goDeclaredTypeOfIdentifier(operand) === '*Future')) {
+            if ((this.goReusableFutureLocal(declaration) || this.goClientFutureLocal(declaration)) && (this.goDeclaredTypeOfIdentifier(operand) === '*Future')) {
                 return `(<-${this.printNode(operand, 0)}.Await())`;
             }
         }
@@ -34328,6 +34328,7 @@ function ccxtGoUnwrapTypeOnly (node) {
 export interface GoTranspiler {
     goClientFuturesTable(node): boolean;
     goClientFutureReadKey(initializer): Node | undefined;
+    goClientFutureCheckerStringKey(key): boolean;
     goClientFutureLocal(declaration): boolean;
     goClientFutureLocalCache: WeakMap<object, boolean>;
 }
@@ -34364,7 +34365,25 @@ GoTranspiler.prototype.goClientFutureReadKey = function (initializer) {
     if ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) {
         return key;
     }
+    // 87g3 R1: a key the checker types `string` that Go still boxes (an untyped parameter, a *string reader
+    // result) reads through the typed FutureTyped twin, which keys like FutureGet (subsKey) but answers *Future
+    if ((key.kind === SyntaxKind.Identifier) && this.goClientFutureCheckerStringKey(key)) {
+        return key;
+    }
     return undefined;
+};
+GoTranspiler.prototype.goClientFutureCheckerStringKey = function (key) {
+    const type = this.checkerOrUndefined()?.getTypeAtLocation(key);
+    if (type === undefined) {
+        return false;
+    }
+    if ((type.flags & TypeFlags.String) !== 0) {
+        return true;
+    }
+    // 87g3 R2: `string | undefined` (a Str reader result): FutureTyped's subsKey answers nil for a nil key, like FutureGet
+    const parts = type.isUnionType() ? type.getTypes() : [];
+    return parts.some((t) => (t.flags & TypeFlags.String) !== 0)
+        && parts.every((t) => (t.flags & (TypeFlags.String | TypeFlags.Undefined | TypeFlags.Null)) !== 0);
 };
 GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
@@ -34402,6 +34421,9 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
                     && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent)) {
                     return false;
                 }
+                if ((parent?.kind === SyntaxKind.AwaitExpression) && (parent.expression === n)) {
+                    return false; // 87g3 R2: prints the native receive `(<-f.Await())`
+                }
                 return !this.goIsNilComparisonOperand(n, parent);
             });
         }
@@ -34425,6 +34447,9 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
         if ((node?.declarations?.length === 1) && this.goClientFutureLocal(declaration)) {
             const key = this.goClientFutureReadKey(declaration.initializer);
             if (this.getGoLocalType(declaration, '') === '*Future') {
+                if ((key.kind !== SyntaxKind.StringLiteral) && !this.goIsStringKeyExpression(key)) {
+                    return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.(ClientInterface).FutureTyped(${this.printNode(key, 0)})`;
+                }
                 return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.Futures[${this.printNode(key, 0)}]`;
             }
         }

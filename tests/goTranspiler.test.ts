@@ -15231,3 +15231,52 @@ describe ('ral-87g2 reader-result locals', () => {
         expect (run (body.replace ('ck === true) {\n                return 2', 'ck === 3) {\n                return 2'), 'ts/src/pro').split ('var ck bool = ').length).toBe (2);
     });
 });
+
+describe('go 87g3 client futures read with a boxed string key', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'go87g3-'));
+    const src = path.join (root, 'ts', 'src');
+    fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+    fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+    fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeValue (o, k, d = undefined) { return o; }\n}\n");
+    fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n}\n");
+    const goPath = (body: string) => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport Client from '../base/ws/Client';\n" + body);
+        return new Transpiler ({ verbose: false, go: {} }).transpileGoByPath (file).content;
+    };
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    test ('a string-typed parameter key reads the typed FutureTyped twin', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async loadSnapshot (client: Client, messageHash: string) {\n        if (messageHash in client.futures) {\n            const future = this.safeValue (client.futures, messageHash);\n            future.resolve (true);\n        }\n    }\n}\n");
+        expect (out).toContain ('var future *Future = client.(ClientInterface).FutureTyped(messageHash)');
+        expect (out).toContain ('future.Resolve(true)');
+    });
+    test ('an untyped key keeps the box', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async loadSnapshot (client: Client, messageHash) {\n        const future = client.futures[messageHash];\n        future.resolve (true);\n    }\n}\n");
+        expect (out).toContain ('var future any = ');
+        expect (out).toContain ('future.(*Future).Resolve(true)');
+    });
+});
+
+describe('go 87g3 awaited client futures reads', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'go87g3b-'));
+    const src = path.join (root, 'ts', 'src');
+    fs.mkdirSync (path.join (src, 'base', 'ws'), { recursive: true });
+    fs.mkdirSync (path.join (src, 'pro'), { recursive: true });
+    fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeValue (o, k, d = undefined) { return o; }\n    safeString (o, k, d = undefined): string | undefined { return o; }\n}\n");
+    fs.writeFileSync (path.join (src, 'base', 'ws', 'Client.ts'), "export default class Client {\n    futures: any = {};\n    subscriptions: any = {};\n}\n");
+    const goPath = (body: string) => {
+        const file = path.join (src, 'pro', 'ex.ts');
+        fs.writeFileSync (file, "import { Exchange } from '../base/Exchange';\nimport Client from '../base/ws/Client';\n" + body);
+        return new Transpiler ({ verbose: false, go: {} }).transpileGoByPath (file).content;
+    };
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    test ('a nil-tested, awaited futures read keyed by a string-or-undefined reader result declares *Future', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async auth (client: Client, message) {\n        const messageHash = this.safeString (message, 'oid');\n        const future = this.safeValue (client.futures, messageHash);\n        if (future !== undefined) {\n            return await future;\n        }\n        return undefined;\n    }\n}\n");
+        expect (out).toContain ('var future *Future = client.(ClientInterface).FutureTyped(messageHash)');
+        expect (out).toContain ('(<-future.Await())');
+    });
+    test ('an awaited futures read handed out keeps the box', () => {
+        const out = goPath ("export class ex extends Exchange {\n    async auth (client: Client, message) {\n        const future = this.safeValue (client.futures, 'a');\n        await future;\n        return future;\n    }\n}\n");
+        expect (out).toContain ('var future any = ');
+    });
+});
