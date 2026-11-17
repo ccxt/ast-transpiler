@@ -34097,7 +34097,7 @@ export class RustTranspiler extends BaseTranspiler {
     // The base `filterBy*` helpers take their optional `Int` / `Str` parameters as positional `Option<i64>` /
     // `Option<&str>` (with any optional parameter before them as a positional `Value`); the rest stay in the slice.
 
-    private static readonly RUST_TYPED_FILTER_METHODS = new Set([ 'filterBySinceLimit', 'filterBySymbolSinceLimit', 'filterBySymbolsSinceLimit', 'filterByArray', 'filterByValueSinceLimit' ]);
+    private static readonly RUST_TYPED_FILTER_METHODS = new Set([ 'filterBySinceLimit', 'filterBySymbolSinceLimit', 'filterBySymbolsSinceLimit', 'filterByArray', 'filterByValueSinceLimit', 'filterByCurrencySinceLimit' ]);
 
     private static readonly RUST_TYPED_FILTER_TYPES: Record<string, string> = { Int: 'Option<i64>', Str: 'Option<&str>' };
 

@@ -26119,3 +26119,26 @@ describe('ral-92rg R4: a venue Str result keying a map that is only enumerated',
         expect(out).toContain('updated.insert(sym.as_deref().unwrap_or("null").to_string(), Value::Bool(true));');
     });
 });
+
+describe('rust typed filterByCurrencySinceLimit', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Int = number | undefined;\nexport type Str = string | undefined;\nexport interface Dictionary<T> { [key: string]: T }\nexport interface Currency { code: string }\nexport default class Exchange {\n    toArray (x: any): any[] { return Object.values (x); }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    filterByValueSinceLimit (array: object[] | undefined, field: string, value: any = undefined, since: Int = undefined, limit: Int = undefined, key = 'timestamp', tail = false): any[] {\n        if (array === undefined) {\n            return [];\n        }\n        const parsedArray: any[] = this.toArray (array);\n        return parsedArray;\n    }\n    filterByCurrencySinceLimit (array: object[] | undefined, code: Str = undefined, since: Int = undefined, limit: Int = undefined, tail = false): any[] {\n        return this.filterByValueSinceLimit (array, 'currency', code, since, limit, 'timestamp', tail);\n    }\n    parseLedger (data: any[], currency: Currency = undefined, since: Int = undefined, limit: Int = undefined): any[] {\n        const result = [];\n        for (let i = 0; i < data.length; i++) {\n            result.push (data[i]);\n        }\n        const code = (currency !== undefined) ? currency['code'] : undefined;\n        return this.filterByCurrencySinceLimit (result, code, since, limit);\n    }\n}\n",
+    };
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-fcsl-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the code / since / limit slots are positional Option<&str> / Option<i64>', () => {
+        expect(base).toContain('filterByCurrencySinceLimit(&self, array: impl Rows, code: Option<&str>, since: Option<i64>, limit: Option<i64>, optional_args: &[Value])');
+    });
+    test('a ternary code local handed to the typed slot is Option<String>, passed as_deref', () => {
+        expect(base).toMatch(/let mut code: Option<String> = /);
+        expect(base).toMatch(/self\.filterByCurrencySinceLimit\([^;]*code\.as_deref\(\)/);
+    });
+});
