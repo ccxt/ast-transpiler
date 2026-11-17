@@ -17456,3 +17456,105 @@ describe('map-row lists: a literal-key row read is the map index', () => {
         expect(out).toContain('entry["v"]');
     });
 });
+
+describe('ral-93g4 native sum / min over nil-guarded *int64 operands', () => {
+    const head = 'type Int = number | undefined;\n'
+        + 'class BaseExchange {\n'
+        + '    sum (a: number, b: number): number { return a + b; }\n'
+        + '    milliseconds (): number { return 0; }\n'
+        + '    safeInteger (o: object, k: string, d: Int = undefined): Int { return d; }\n'
+        + '    parseToInt (x: number): number { return x; }\n'
+        + '}\n'
+        + 'export class ex extends BaseExchange {\n';
+    test('a guarded *int64 plus an int64 prints `*a + b`, and its min against another guarded pointer types int64', () => {
+        const out = goTranspile87g8(head
+            + '    f (params = {}) {\n'
+            + '        const request = {};\n'
+            + '        const since = this.safeInteger (params, \'since\');\n'
+            + '        const until = this.safeInteger (params, \'until\');\n'
+            + '        if (since !== undefined) {\n'
+            + '            let endTime = this.sum (since, 7776000000);\n'
+            + '            if (until !== undefined) {\n'
+            + '                endTime = Math.min (endTime, until);\n'
+            + '            }\n'
+            + '            request[\'endTime\'] = endTime;\n'
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var endTime int64 = *since + 7776000000');
+        expect(out).toContain('endTime = min(endTime, *until)');
+        expect(out).not.toContain('this.Sum(');
+    });
+    test('an unguarded *int64 operand keeps the boxed sum', () => {
+        const out = goTranspile87g8(head
+            + '    f (params = {}) {\n'
+            + '        const since = this.safeInteger (params, \'since\');\n'
+            + '        const endTime = this.sum (since, 1000);\n'
+            + '        return endTime > 5;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('this.Sum(since, 1000)');
+    });
+});
+
+describe('ral-93g4 sum writes into a *int64 local', () => {
+    test('a sum written into a pointer local keeps the boxed call', () => {
+        const out = goTranspile87g8('type Int = number | undefined;\n'
+            + 'class BaseExchange {\n'
+            + '    sum (a: number, b: number): number { return a + b; }\n'
+            + '    seconds (): number { return 0; }\n'
+            + '    safeInteger (o: object, k: string, d: Int = undefined): Int { return d; }\n'
+            + '}\n'
+            + 'export class ex extends BaseExchange {\n'
+            + '    f (params = {}) {\n'
+            + '        const delta = this.safeInteger (params, \'delta\', 3600);\n'
+            + '        let expiration = this.safeInteger (params, \'expiration\');\n'
+            + '        if (expiration === undefined) {\n'
+            + '            const now = this.seconds ();\n'
+            + '            expiration = this.sum (now, delta);\n'
+            + '        }\n'
+            + '        return { \'expiration\': expiration };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('this.Sum(now, delta)');
+    });
+});
+
+describe('ral-93g4 a native sum declaration keeps int64', () => {
+    test('an int64 local plus one declares int64 without a numeric use', () => {
+        const out = goTranspile87g8('type Int = number | undefined;\n'
+            + 'class BaseExchange {\n'
+            + '    sum (a: number, b: number): number { return a + b; }\n'
+            + '    parseToInt (x: number): number { return x; }\n'
+            + '}\n'
+            + 'export class ex extends BaseExchange {\n'
+            + '    f (options = {}, n: number = 0) {\n'
+            + '        const previousValue = this.parseToInt (n);\n'
+            + '        const newValue = this.sum (previousValue, 1);\n'
+            + '        options[\'id\'] = newValue;\n'
+            + '        return newValue;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toMatch(/var newValue int64 = previousValue \+ 1/);
+    });
+});
+
+describe('ral-93g4 min in a ternary arm', () => {
+    test('a guarded Math.min arm keeps mathMin', () => {
+        const out = goTranspile87g8('type Int = number | undefined;\n'
+            + 'class BaseExchange {\n'
+            + '}\n'
+            + 'export class ex extends BaseExchange {\n'
+            + '    f (limit: Int = undefined) {\n'
+            + '        const limitResolved: Int = (limit === undefined) ? undefined : Math.min (limit, 1000);\n'
+            + '        const request = {};\n'
+            + '        if (limitResolved !== undefined) {\n'
+            + '            request[\'limit\'] = limitResolved;\n'
+            + '        }\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('mathMin(limit, 1000)');
+    });
+});

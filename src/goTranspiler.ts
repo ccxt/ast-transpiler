@@ -39503,3 +39503,145 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     }
     return printVariableDeclarationListMapRows.call (this, node, identation);
 };
+
+// ===== ral-93g4 (begin): this.sum / Math.min / Math.max over non-nil *int64 operands =====
+// An operand that is a nil-guarded `*int64` (or a defaulted safeInteger) reads as its pointee:
+// Add / mathMin derefScalar it and answer the same int64, so the call prints `*a + b` / `min(*a, b)`.
+export interface GoTranspiler {
+    go93g4PointerOperands(call, self?: Node): string[] | undefined;
+    go93g4HasNumericUse(declaration): boolean;
+}
+
+// `self` is the local a write `x = this.sum (x, p)` is deciding: its own read is the int64 being proven
+GoTranspiler.prototype.go93g4PointerOperands = function (call, self = undefined): string[] | undefined {
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (!this.go92g7IsBaseSum(call) && (this.go92g7MinMaxName(call) === undefined))) {
+        return undefined;
+    }
+    const parts = call.arguments.map((operand) => {
+        if (operand.kind === SyntaxKind.SpreadElement) {
+            return undefined;
+        }
+        const printed = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)).trim();
+        if ((self !== undefined) && (operand.kind === SyntaxKind.Identifier)
+            && (this.checkerOrUndefined()?.getSymbolAtLocation(operand)?.valueDeclaration?.resolve() === self)) {
+            return { 'pointer': false, 'text': printed };
+        }
+        // a local reads by the type its declaration printed, never by a verdict still in flight
+        if (operand.kind === SyntaxKind.Identifier) {
+            const declared = this.goDeclaredTypeOfIdentifier(operand);
+            if (declared === 'int64') {
+                return { 'pointer': false, 'text': printed };
+            }
+            return ((declared === '*int64') && this.goPointerNumberIsNonNil(operand)) ? { 'pointer': true, 'text': '*' + printed } : undefined;
+        }
+        // a nested arithmetic operand may print as a helper box in this position: keep the boxed sum
+        if ((operand.kind === SyntaxKind.BinaryExpression) || (operand.kind === SyntaxKind.ParenthesizedExpression)) {
+            return undefined;
+        }
+        const kind = this.goOperandStaticType(operand, printed);
+        // an int constant converts to the int64 partner exactly while it is a safe integer
+        if ((kind === 'int64') || ((kind === 'const-int') && Number.isSafeInteger(this.goNumericConstantValue(operand)))) {
+            return { 'pointer': false, 'text': this.go92g7OperandText(operand, 0) };
+        }
+        const inner = this.goUnwrapPrintedAssertions(operand);
+        if ((inner?.kind !== SyntaxKind.Identifier) && !this.goDefaultedSafeIntegerCall(inner)) {
+            return undefined;
+        }
+        return this.goInt64Operand(inner, printed);
+    });
+    if (parts.some((p) => p === undefined) || !parts.some((p) => p.pointer)) {
+        return undefined;
+    }
+    return parts.map((p) => p.text);
+};
+
+// the 92g7 numeric uses, plus a sum / min / max hand-off whose call prints native through a pointer partner
+GoTranspiler.prototype.go93g4HasNumericUse = function (declaration): boolean {
+    if (this.go92g7HasNumericUse(declaration)) {
+        return true;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    return this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        const call = n.parent;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2) || (call.arguments.indexOf(n) < 0)
+            || (!this.go92g7IsBaseSum(call) && (this.go92g7MinMaxName(call) === undefined))) {
+            return false;
+        }
+        const other = this.goUnwrapPrintedAssertions(call.arguments[1 - call.arguments.indexOf(n)]);
+        if (other?.kind === SyntaxKind.Identifier) {
+            return (this.goDeclaredTypeOfIdentifier(other) === '*int64') && this.goPointerNumberIsNonNil(other);
+        }
+        return this.goDefaultedSafeIntegerCall(other);
+    });
+};
+
+const printCallExpressionBase93g4 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    const texts = this.go93g4PointerOperands(node);
+    if (texts === undefined) {
+        return printCallExpressionBase93g4.call(this, node, identation);
+    }
+    const up = node.parent;
+    // a write into a pointer local keeps the box: the pointer write form wraps a boxed value only
+    if ((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken) && (up.right === node)
+        && (up.left?.kind === SyntaxKind.Identifier) && String(this.goDeclaredTypeOfIdentifier(up.left) ?? '').startsWith('*')) {
+        return printCallExpressionBase93g4.call(this, node, identation);
+    }
+    const minMax = this.go92g7MinMaxName(node);
+    let arm = up;
+    while (arm?.kind === SyntaxKind.ParenthesizedExpression) {
+        arm = arm.parent;
+    }
+    // a ternary arm keeps the box: the joined closure's nil tests key on the boxed arm
+    if ((minMax !== undefined) && (arm?.kind === SyntaxKind.ConditionalExpression)) {
+        return printCallExpressionBase93g4.call(this, node, identation);
+    }
+    if (minMax !== undefined) {
+        return `${minMax}(${texts[0]}, ${texts[1]})`;
+    }
+    if ((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken) && (up.right === node)
+        && (up.left?.kind === SyntaxKind.Identifier) && !['int64', 'int'].includes(this.goDeclaredTypeOfIdentifier(up.left))) {
+        return printCallExpressionBase93g4.call(this, node, identation);
+    }
+    const text = texts.join(' + ');
+    const bare = (up?.kind === SyntaxKind.VariableDeclaration) || (up?.kind === SyntaxKind.ReturnStatement) || (up?.kind === SyntaxKind.ParenthesizedExpression)
+        || (up?.kind === SyntaxKind.PropertyAssignment) || (up?.kind === SyntaxKind.ElementAccessExpression)
+        || ((up?.kind === SyntaxKind.CallExpression) && (up.expression !== node))
+        || ((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken) && (up.right === node));
+    return bare ? text : `(${text})`;
+};
+
+const goTypeOfInitializerBase93g4 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const declaration = initializer?.parent;
+    if ((initializer?.kind === SyntaxKind.CallExpression) && (declaration?.kind === SyntaxKind.VariableDeclaration)
+        && (declaration.initializer === initializer) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && !(printedValue ?? '').trim().startsWith('this.Sum(') && !(printedValue ?? '').trim().startsWith('mathM')
+        && (((this.go93g4PointerOperands(initializer) !== undefined) && (this.go92g7IsBaseSum(initializer) || this.go93g4HasNumericUse(declaration)))
+            || (this.go92g7IsBaseSum(initializer) && (this.go92g7Int64Operands(initializer) !== undefined)))) {
+        // a native sum is the int64 the boxed call held (the ccxt pass typed `this.Sum(..).(int64)` the same way)
+        return 'int64';
+    }
+    const write = initializer?.parent;
+    if ((initializer?.kind === SyntaxKind.CallExpression) && (write?.kind === SyntaxKind.BinaryExpression) && (write.right === initializer)
+        && (write.operatorToken.kind === SyntaxKind.EqualsToken) && (write.left?.kind === SyntaxKind.Identifier)) {
+        const self = this.checkerOrUndefined()?.getSymbolAtLocation(write.left)?.valueDeclaration?.resolve();
+        if ((self !== undefined) && (this.go92g7IsBaseSum(initializer) || (this.go92g7MinMaxName(initializer) !== undefined))
+            && (self.kind === SyntaxKind.VariableDeclaration) && (self.initializer !== undefined)
+            && (this.goTypeOfInitializer(self.initializer, this.printNode(self.initializer, 0)) === 'int64')
+            && (this.go93g4PointerOperands(initializer, self) !== undefined)) {
+            return 'int64';
+        }
+    }
+    return goTypeOfInitializerBase93g4.call(this, initializer, printedValue);
+};
+// ===== ral-93g4 (end) =====
