@@ -16876,3 +16876,76 @@ describe('base Str precision / network helpers return *string', () => {
         }
     });
 });
+
+describe('ral-92g7 native sum / min / max over int64 operands', () => {
+    const head = 'type Int = number | undefined;\n'
+        + 'class BaseExchange {\n'
+        + '    sum (a: number, b: number): number { return a + b; }\n'
+        + '    seconds (): number { return 0; }\n'
+        + '    parseTimeframe (t: string): number { return 60; }\n'
+        + '    parseToInt (x: number): number { return x; }\n'
+        + '}\n'
+        + 'export class ex extends BaseExchange {\n';
+    test('a sum of two int64 locals prints `a + b` and its min prints the builtin', () => {
+        const out = goTranspile87g8(head
+            + '    f (since: number, limit: number, tf: string) {\n'
+            + '        const request = {};\n'
+            + '        const duration = this.parseTimeframe (tf);\n'
+            + '        const fromTimestamp = this.parseToInt (since / 1000);\n'
+            + '        const n = this.parseToInt (limit);\n'
+            + '        const distance = (n - 1) * duration;\n'
+            + '        const toTimestamp = this.sum (fromTimestamp, distance);\n'
+            + '        const currentTimestamp = this.seconds ();\n'
+            + '        const to = Math.min (toTimestamp, currentTimestamp);\n'
+            + '        request[\'to\'] = to;\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var toTimestamp int64 = fromTimestamp + distance');
+        expect(out).toContain('min(toTimestamp, currentTimestamp)');
+        expect(out).not.toContain('mathMin(');
+        expect(out).not.toContain('this.Sum(');
+    });
+    test('a min local with an ordered use types int64, one with only a store stays boxed', () => {
+        const out = goTranspile87g8(head
+            + '    f (a: number, b: number) {\n'
+            + '        const x = this.parseToInt (a);\n'
+            + '        const y = this.parseToInt (b);\n'
+            + '        const lo = Math.min (x, y);\n'
+            + '        const hi = Math.max (x, 5);\n'
+            + '        const request = { \'hi\': hi };\n'
+            + '        if (lo > 3) {\n'
+            + '            return request;\n'
+            + '        }\n'
+            + '        return undefined;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var lo int64 = min(x, y)');
+        expect(out).toContain('lo > 3');
+        expect(out).toContain('var hi any = max(x, 5)');
+    });
+    test('a max local handed to a sum with an int64 partner types int64', () => {
+        const out = goTranspile87g8(head
+            + '    f (s: number, l: number) {\n'
+            + '        const request = {};\n'
+            + '        const since = this.parseToInt (s);\n'
+            + '        const span = this.parseToInt (l) * 1000;\n'
+            + '        const sinceResolved = Math.max (since - 1, 0);\n'
+            + '        request[\'start\'] = sinceResolved;\n'
+            + '        request[\'end\'] = this.sum (sinceResolved, span);\n'
+            + '        return request;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var sinceResolved int64 = max(since - 1, 0)');
+        expect(out).toContain('sinceResolved + span');
+    });
+    test('a sum operand that is a sum keeps its grouping', () => {
+        const out = goTranspile87g8(head
+            + '    f (a: number) {\n'
+            + '        const x = this.parseToInt (a);\n'
+            + '        return this.sum (x, 1) * 2;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('Multiply((x + 1), 2)');
+    });
+});
