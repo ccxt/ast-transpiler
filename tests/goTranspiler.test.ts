@@ -16113,3 +16113,74 @@ describe('ral-90g4 R1: a `: string` method returning a tuple-slot local is *stri
         expect(out).toContain('var marketType any = this.GetMarketType("fetchIt", market)');
     });
 });
+
+describe('ral-90g5 R1 scalar-pointer reader seeds rebound to a native scalar', () => {
+    const head = 'type Dict = { [key: string]: any };\n'
+        + 'type Int = number | undefined;\n'
+        + 'type Num = number | undefined;\n'
+        + 'type Bool = boolean | undefined;\n'
+        + 'export class ex {\n'
+        + '    safeInteger (o: Dict, k: string, d: Int = undefined): Int { return o[k]; }\n'
+        + '    safeNumber (o: Dict, k: string, d: Num = undefined): Num { return o[k]; }\n'
+        + '    safeBool (o: Dict, k: string, d: Bool = undefined): Bool { return o[k]; }\n';
+    test('an integer seed written a literal and nil-tested keeps its *int64 type', () => {
+        const out = goTranspile87g8(head
+            + '    f (params: Dict, cross: boolean) {\n'
+            + '        let leverage = this.safeInteger (params, \'leverage\');\n'
+            + '        if (cross) {\n'
+            + '            leverage = 0;\n'
+            + '        }\n'
+            + '        if (leverage === undefined) {\n'
+            + '            throw new Error (\'x\');\n'
+            + '        }\n'
+            + '        return { \'leverage\': leverage };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var leverage *int64 = this.SafeInteger(params, "leverage")');
+        expect(out).toContain('leverageValue := int64(0)');
+        expect(out).toContain('leverage = &leverageValue');
+        expect(out).toContain('if leverage == nil {');
+    });
+    test('a bool seed rebound from a bool local keeps *bool', () => {
+        const out = goTranspile87g8(head
+            + '    f (raw: Dict, n: number) {\n'
+            + '        const all = (n > 1);\n'
+            + '        let resolved = this.safeBool (raw, \'resolved\');\n'
+            + '        if ((resolved === undefined) && (n > 0)) {\n'
+            + '            resolved = all;\n'
+            + '        }\n'
+            + '        return { \'resolved\': resolved };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var resolved *bool = this.SafeBool(raw, "resolved")');
+        expect(out).toContain('resolvedValue := all');
+        expect(out).toContain('resolved = &resolvedValue');
+    });
+    test('a seed without a nil test keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    f (fees: Dict, contract: boolean) {\n'
+            + '        let maker = this.safeNumber (fees, \'maker\');\n'
+            + '        if (contract) {\n'
+            + '            maker = 0.0;\n'
+            + '        }\n'
+            + '        return { \'maker\': maker };\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).not.toContain('var maker *float64');
+        expect(out).not.toContain('makerValue');
+    });
+    test('a seed handed to a call keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    g (x: Dict | Int) { return x; }\n'
+            + '    f (params: Dict) {\n'
+            + '        let leverage = this.safeInteger (params, \'leverage\');\n'
+            + '        if (leverage === undefined) {\n'
+            + '            leverage = 1;\n'
+            + '        }\n'
+            + '        return this.g (leverage);\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).not.toContain('var leverage *int64');
+        expect(out).not.toContain('leverageValue');
+    });
+});

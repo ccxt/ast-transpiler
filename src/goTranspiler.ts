@@ -5648,7 +5648,7 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
         return undefined;
     }
     const goType = ccxtGoWriteSiteLocalGoType (goTranspiler, node.left);
-    if (goType === undefined) {
+    if ((goType === undefined) || ral90g5OwnsWrite (node)) {
         return undefined;
     }
     const nilJoin = ccxtGoNilJoinDeclarationType (goTranspiler, node.left) === goType;
@@ -37323,3 +37323,233 @@ GoTranspiler.prototype.printMethodDefinition = function (node, identation) {
     return printed.replace(/(\)\s+)any(\s*)$/, '$1*string$2');
 };
 // ===== ral-90g4 (end) =====
+
+// ===== ral-90g5 R1 (begin): scalar-pointer reader seeds rebound to a native scalar =====
+// `let x = this.safeInteger (o, k)` (likewise safeInteger2 / safeNumber* / safeBool*, no default)
+// declares a Go pointer (*int64 / *float64 / *bool) the reader returns. The shipped scan refuses the
+// local as soon as one write is a plain scalar (`x = 0`, `x = latestBlockHeight + 20`, `x = true`):
+// such a write prints `x = <value>`, which does not compile on a pointer. Here a write whose printed
+// value is the pointee's own Go type (or an untyped constant of it) keeps the pointer by storing the
+// value in a fresh local and taking its address (`xValue := int64(0); x = &xValue`), so the value is
+// never nil, as in the box. Admitted only when every other occurrence of the local (resolved through
+// the checker) is a nil test (`x === undefined`), a value of an object literal / element store (the
+// request and structure maps already hold *int64 / *float64 / *bool from the readers), or a write
+// of nil; at least one nil test must exist, which prints natively on the typed pointer.
+const RAL90G5_POINTEE: { [ptr: string]: string } = { '*int64': 'int64', '*float64': 'float64', '*bool': 'bool', '*string': 'string' };
+const RAL90G5_READERS = [ 'safeInteger', 'safeInteger2', 'safeNumber', 'safeNumber2', 'safeBool', 'safeBool2', 'safeString', 'safeString2', 'safeStringLower', 'safeStringUpper' ];
+const ral90g5Verdicts = new WeakMap<object, string | null>();
+// the temp each admitted write stores its value in (`xValue`, `xValue2`, ...), in source order
+const ral90g5WriteTemps = new WeakMap<object, string>();
+function ral90g5UnwrapNode(n) {
+    let current = n;
+    while ((current?.kind === SyntaxKind.ParenthesizedExpression) || (current?.kind === SyntaxKind.AsExpression)) {
+        current = current.expression;
+    }
+    return current;
+}
+function ral90g5IsNil(n): boolean {
+    const u = ral90g5UnwrapNode(n);
+    return (u?.kind === SyntaxKind.NullKeyword) || (u?.kind === SyntaxKind.UndefinedKeyword) || ((u?.kind === SyntaxKind.Identifier) && (u.text === 'undefined'));
+}
+// the Go pointee a write's value prints as: a literal of the pointee kind, or an expression whose
+// printed Go type is the pointee; undefined otherwise
+function ral90g5WriteValueKind(goTranspiler, right, pointee: string): 'const' | 'typed' | undefined {
+    const value = ral90g5UnwrapNode(right);
+    if (value === undefined) {
+        return undefined;
+    }
+    if (pointee === 'string') {
+        if ((value.kind === SyntaxKind.StringLiteral) || (value.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return 'const';
+        }
+    } else if (pointee === 'bool') {
+        if ((value.kind === SyntaxKind.TrueKeyword) || (value.kind === SyntaxKind.FalseKeyword)) {
+            return 'const';
+        }
+    } else if (value.kind === SyntaxKind.NumericLiteral) {
+        const text = value.text.replaceAll('_', '');
+        if (!Number.isFinite(Number(text))) {
+            return undefined;
+        }
+        return ((pointee === 'float64') || /^[0-9]+$/.test(text)) ? 'const' : undefined;
+    }
+    if (goTranspiler.hasNodeWhere(value, (n) => n.kind === SyntaxKind.AwaitExpression)) {
+        return undefined;
+    }
+    let printed: string;
+    try {
+        printed = goTranspiler.goWithExprDepth(1, () => goTranspiler.printNode(value, 0));
+    } catch (e) {
+        return undefined;
+    }
+    if (printed.includes('\n')) {
+        return undefined;
+    }
+    const staticType = goTranspiler.goOperandStaticType(value, printed);
+    if (staticType === pointee) {
+        return 'typed';
+    }
+    if ((value.kind !== SyntaxKind.Identifier) && (goTranspiler.goTypeOfInitializer(value, printed) === pointee)) {
+        return 'typed';
+    }
+    return undefined;
+}
+function ral90g5ReaderCall(initializer): boolean {
+    const call = ral90g5UnwrapNode(initializer);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const name = call.expression.name?.text;
+    if (RAL90G5_READERS.indexOf(name) < 0) {
+        return false;
+    }
+    // the plain reader keys: (o, k) or (o, k1, k2) for the 2-twins; a default slot changes the Go return
+    const keys = name.endsWith('2') ? 3 : 2;
+    return call.arguments?.length === keys;
+}
+// the pointer type the rule admits for the declaration, or undefined
+function ral90g5PointerSeed(goTranspiler, declaration, goType: string): string | undefined {
+    if ((RAL90G5_POINTEE[goType] === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations?.length !== 1)
+        || !ral90g5ReaderCall(declaration.initializer)) {
+        return undefined;
+    }
+    const cached = ral90g5Verdicts.get(declaration);
+    if (cached !== undefined) {
+        return (cached === goType) ? cached : undefined;
+    }
+    ral90g5Verdicts.set(declaration, null); // re-entry while the scan below prints a write: refuse
+    const checker = goTranspiler.checkerOrUndefined();
+    const scope = goTranspiler.goOutermostFunction(declaration);
+    if ((checker === undefined) || (scope === undefined)) {
+        return undefined;
+    }
+    const pointee = RAL90G5_POINTEE[goType];
+    const name = declaration.name.text;
+    let nilTests = 0;
+    let scalarWrites = 0;
+    let unsafe = false;
+    const writes: BinaryExpression[] = [];
+    const tempSpelled = new RegExp('^' + name + 'Value\\d*$');
+    goTranspiler.hasNodeWhere(scope, (n) => {
+        if (unsafe || (n.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        if (tempSpelled.test(n.text)) {
+            unsafe = true; // a source name already spelled like the temps
+            return false;
+        }
+        if ((n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parentOf = n.parent;
+        if (((parentOf?.kind === SyntaxKind.PropertyAccessExpression) && (parentOf.name === n))
+            || ((parentOf?.kind === SyntaxKind.PropertyAssignment) && (parentOf.name === n))) {
+            return false; // a member name, not the local
+        }
+        const target = checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve();
+        if (target !== declaration) {
+            // the same name bound elsewhere in the Go func: the printed names would meet
+            if ((target !== undefined) && (target.kind !== SyntaxKind.PropertyDeclaration) && (target.kind !== SyntaxKind.MethodDeclaration)) {
+                unsafe = true;
+            }
+            return false;
+        }
+        let current = n;
+        while ((current.parent?.kind === SyntaxKind.ParenthesizedExpression) || (current.parent?.kind === SyntaxKind.AsExpression)) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === current)
+            && (parent.operatorToken.kind === SyntaxKind.EqualsToken) && (current === n)) {
+            if (parent.parent?.kind !== SyntaxKind.ExpressionStatement) {
+                unsafe = true;
+                return false;
+            }
+            if (ral90g5IsNil(parent.right)) {
+                return false;
+            }
+            if (ral90g5WriteValueKind(goTranspiler, parent.right, pointee) === undefined) {
+                unsafe = true;
+                return false;
+            }
+            scalarWrites++;
+            writes.push(parent);
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) >= 0)) {
+            const other = ral90g5UnwrapNode((parent.left === current) ? parent.right : parent.left);
+            if (ral90g5IsNil(other)) {
+                nilTests++;
+                return false;
+            }
+            // a *string against a string literal prints `x != nil && *x == "lit"`, as for any SafeString local
+            if ((pointee === 'string') && ((other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NoSubstitutionTemplateLiteral))) {
+                nilTests++;
+                return false;
+            }
+            unsafe = true;
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === current)
+            && (parent.parent?.kind === SyntaxKind.ObjectLiteralExpression)) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === current) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            && (parent.left?.kind === SyntaxKind.ElementAccessExpression) && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            return false;
+        }
+        unsafe = true;
+        return false;
+    });
+    const ok = !unsafe && (nilTests > 0) && (scalarWrites > 0) && !goTranspiler.goTypeNameIsShadowed(scope, goType);
+    if (ok) {
+        const printedName = goTranspiler.printNode(declaration.name, 0);
+        writes.sort((x, y) => x.pos - y.pos).forEach((w, i) => ral90g5WriteTemps.set(w, printedName + 'Value' + ((i === 0) ? '' : String(i + 1))));
+    }
+    ral90g5Verdicts.set(declaration, ok ? goType : null);
+    return ok ? goType : undefined;
+}
+const goLocalIsSafeToTypeBase90g5 = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goLocalIsSafeToTypeBase90g5.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    return ral90g5PointerSeed(this, declaration, goType) !== undefined;
+};
+// a write the rule stores through its own temp (the write-site family must not box it first)
+function ral90g5OwnsWrite(node): boolean {
+    return ral90g5WriteTemps.has(node);
+}
+// the write `x = <scalar>` on an admitted local: `xValue := <scalar>` then `x = &xValue`
+const goPointerWriteTextBase90g5 = GoTranspiler.prototype.goPointerWriteText;
+GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
+    if (!ral90g5OwnsWrite(node)) {
+        return goPointerWriteTextBase90g5.call(this, node, identation);
+    }
+    const left = node?.left;
+    if ((left?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.ExpressionStatement) || ral90g5IsNil(node.right)) {
+        return undefined;
+    }
+    const declaration = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
+    const verdict = (declaration !== undefined) ? ral90g5Verdicts.get(declaration) : undefined;
+    if ((verdict === undefined) || (verdict === null) || (this.goDeclaredTypeOfIdentifier(left) !== verdict)) {
+        return undefined;
+    }
+    const pointee = RAL90G5_POINTEE[verdict];
+    const kind = ral90g5WriteValueKind(this, node.right, pointee);
+    if (kind === undefined) {
+        return undefined;
+    }
+    const value = this.goWithExprDepth(1, () => this.printNode(ral90g5UnwrapNode(node.right), 0)).trim();
+    const name = this.printNode(left, 0);
+    const temp = ral90g5WriteTemps.get(node);
+    if (temp === undefined) {
+        return undefined;
+    }
+    const stored = (kind === 'const') && ((pointee === 'int64') || (pointee === 'float64')) ? `${pointee}(${value})` : value;
+    return `${temp} := ${stored}\n${this.getIden(identation)}${name} = &${temp}`;
+};
+// ===== ral-90g5 R1 (end) =====
