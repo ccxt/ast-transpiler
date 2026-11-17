@@ -36521,3 +36521,240 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node) {
     }
     return CCXT_GO_90_POINTER_JOINS.get (declaration);
 };
+// ===== ral-90g2: reader-result locals (continues 87g2) =====
+// J. a no-default `safeDict` / `safeDict2` local (SafeMapTyped answers nil exactly where the box held nil) may be read
+// as a map past two more nil guards than `if (x !== undefined) { .. }`: the `else` arm of `if (x === undefined || ..)`
+// and every statement after `if (x === undefined || ..) { ..; return | throw | continue | break }` in an enclosing
+// block. A no-default local is never rebound (goMapLocalUseKeepsMap refuses every write), so the guard still holds
+// at the use. Decided from the AST only.
+const ccxtGo90g2State = { on: false };
+function ccxtGo90g2TestsNil (goTranspiler, condition, name: string): boolean {
+    const inner = goTranspiler.goUnwrapParenthesizedNode(condition);
+    if (inner?.kind !== SyntaxKind.BinaryExpression) {
+        return false;
+    }
+    const op = inner.operatorToken?.kind;
+    if (op === SyntaxKind.BarBarToken) {
+        return ccxtGo90g2TestsNil(goTranspiler, inner.left, name) || ccxtGo90g2TestsNil(goTranspiler, inner.right, name);
+    }
+    if ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)) {
+        return false;
+    }
+    const isNil = (n): boolean => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+    const isName = (n): boolean => (ccxtGoUnwrapTypeOnly(n)?.kind === SyntaxKind.Identifier) && (ccxtGoUnwrapTypeOnly(n).text === name);
+    return (isName(inner.left) && isNil(inner.right)) || (isNil(inner.left) && isName(inner.right));
+}
+function ccxtGo90g2ExitsBlock (statement): boolean {
+    const last = (statement?.kind === SyntaxKind.Block) ? statement.statements[statement.statements.length - 1] : statement;
+    return (last !== undefined) && ((last.kind === SyntaxKind.ReturnStatement) || (last.kind === SyntaxKind.ThrowStatement)
+        || (last.kind === SyntaxKind.ContinueStatement) || (last.kind === SyntaxKind.BreakStatement));
+}
+function ccxtGo90g2GuardedNonNil (goTranspiler, use, name: string): boolean {
+    for (let child = use, cur = use.parent; cur !== undefined; child = cur, cur = cur.parent) {
+        if ((cur.kind === SyntaxKind.IfStatement) && (cur.elseStatement === child) && ccxtGo90g2TestsNil(goTranspiler, cur.expression, name)) {
+            return true;
+        }
+        if ((cur.kind === SyntaxKind.Block) || (cur.kind === SyntaxKind.CaseClause) || (cur.kind === SyntaxKind.DefaultClause)) {
+            const statements = cur.statements;
+            const index = statements.indexOf(child);
+            for (let i = 0; i < index; i++) {
+                const s = statements[i];
+                if ((s.kind === SyntaxKind.IfStatement) && (s.elseStatement === undefined) && ccxtGo90g2TestsNil(goTranspiler, s.expression, name)
+                    && ccxtGo90g2ExitsBlock(s.thenStatement)) {
+                    return true;
+                }
+            }
+        }
+        if (isFunctionLike(cur)) {
+            return false;
+        }
+    }
+    return false;
+}
+{
+    const nonNilBlock = GoTranspiler.prototype.goInsideNonNilBlock;
+    GoTranspiler.prototype.goInsideNonNilBlock = function (use, name: string) {
+        return nonNilBlock.call(this, use, name) || (ccxtGo90g2State.on && ccxtGo90g2GuardedNonNil(this, use, name));
+    };
+}
+// ===== ral-90g2 (end) =====
+// K. the same no-default safeDict local may be filled where it was nil: `x = {}` (no spread), `x = this.account ()`,
+// `x = this.extend (..)` / `this.deepExtend (..)` (base-class methods; each Go body returns a fresh non-nil
+// map[string]any). Such a write keeps the map type, and every statement after the fill in its block, and after an
+// `if (x === undefined || ..) { ..; x = <fill>; .. }` whose then-block fills it unconditionally, sees a non-nil map.
+const CCXT_GO_90G2_FILL_CALLS = [ 'account', 'extend', 'deepExtend' ];
+function ccxtGo90g2NeverNilMap (goTranspiler, value): boolean {
+    const node = ccxtGoUnwrapTypeOnly(value);
+    if (node?.kind === SyntaxKind.ObjectLiteralExpression) {
+        return !node.properties.some((p) => p.kind === SyntaxKind.SpreadAssignment);
+    }
+    if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (CCXT_GO_90G2_FILL_CALLS.indexOf(node.expression.name?.text) < 0)) {
+        return false;
+    }
+    try {
+        const symbol: TsSymbol | undefined = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(node.expression.name);
+        const decls = symbol?.declarations ?? [];
+        return (decls.length > 0) && decls.every((d) => /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(d?.resolve?.()?.getSourceFile?.()?.fileName ?? '')));
+    } catch (e) {
+        return false;
+    }
+}
+function ccxtGo90g2FillStatement (goTranspiler, statement, name: string): boolean {
+    if (statement?.kind !== SyntaxKind.ExpressionStatement) {
+        return false;
+    }
+    const write = goTranspiler.goUnwrapParenthesizedNode(statement.expression);
+    return (write?.kind === SyntaxKind.BinaryExpression) && (write.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (ccxtGoUnwrapTypeOnly(write.left)?.kind === SyntaxKind.Identifier) && (ccxtGoUnwrapTypeOnly(write.left).text === name)
+        && ccxtGo90g2NeverNilMap(goTranspiler, write.right);
+}
+function ccxtGo90g2FilledBefore (goTranspiler, use, name: string): boolean {
+    for (let child = use, cur = use.parent; cur !== undefined; child = cur, cur = cur.parent) {
+        if ((cur.kind === SyntaxKind.Block) || (cur.kind === SyntaxKind.CaseClause) || (cur.kind === SyntaxKind.DefaultClause)) {
+            const statements = cur.statements;
+            const index = statements.indexOf(child);
+            for (let i = 0; i < index; i++) {
+                const s = statements[i];
+                if (ccxtGo90g2FillStatement(goTranspiler, s, name)) {
+                    return true;
+                }
+                if ((s.kind === SyntaxKind.IfStatement) && ccxtGo90g2TestsNil(goTranspiler, s.expression, name)
+                    && (s.thenStatement?.kind === SyntaxKind.Block) && s.thenStatement.statements.some((t) => ccxtGo90g2FillStatement(goTranspiler, t, name))) {
+                    return true;
+                }
+            }
+        }
+        if (isFunctionLike(cur)) {
+            return false;
+        }
+    }
+    return false;
+}
+{
+    const nonNilBlock = GoTranspiler.prototype.goInsideNonNilBlock;
+    GoTranspiler.prototype.goInsideNonNilBlock = function (use, name: string) {
+        return nonNilBlock.call(this, use, name) || (ccxtGo90g2State.on && ccxtGo90g2FilledBefore(this, use, name));
+    };
+    const keepsMap = GoTranspiler.prototype.goMapLocalUseKeepsMap;
+    GoTranspiler.prototype.goMapLocalUseKeepsMap = function (ref, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string) {
+        if (keepsMap.call(this, ref, rebinds, noDefault, ws, name)) {
+            return true;
+        }
+        const write = ref.parent;
+        return ccxtGo90g2State.on && noDefault && (write?.kind === SyntaxKind.BinaryExpression) && (write.left === ref) && (write.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (write.parent?.kind === SyntaxKind.ExpressionStatement) && ccxtGo90g2NeverNilMap(this, write.right);
+    };
+}
+// J/K verdict: the extensions above answer only for a declaration the shipped rule leaves boxed, and such a local is
+// typed only when (a) it is never handed whole into another map (`m[k] = x`: a typed map value that may be nil is
+// stored through AddElementToObject, where the boxed value was stored natively) and (b) it has a native use on the map:
+// an element read or an element write of a literal / non-pointer value.
+function ccxtGo90g2MapVerdictOk (goTranspiler, declaration): boolean {
+    const scope = goTranspiler.goTopFunction(declaration);
+    const checker: Checker | undefined = goTranspiler.checkerOrUndefined();
+    const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+    if ((scope === undefined) || (own === undefined)) {
+        return false;
+    }
+    let natives = 0;
+    const escapes = goTranspiler.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n === declaration.name) || (n.text !== declaration.name.text)
+            || (((n.parent?.kind === SyntaxKind.PropertyAccessExpression) || (n.parent?.kind === SyntaxKind.PropertyAssignment)) && (n.parent.name === n))) {
+            return false;
+        }
+        if (checker.getSymbolAtLocation(n) !== own) {
+            return false;
+        }
+        let outer = n;
+        while ((outer.parent !== undefined) && ((outer.parent.kind === SyntaxKind.ParenthesizedExpression) || (outer.parent.kind === SyntaxKind.AsExpression)
+            || (outer.parent.kind === SyntaxKind.NonNullExpression)) && (outer.parent.expression === outer)) {
+            outer = outer.parent;
+        }
+        const parent = outer.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === outer) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (ccxtGoUnwrapTypeOnly(parent.left)?.kind === SyntaxKind.ElementAccessExpression)
+            && (ccxtGoUnwrapTypeOnly(ccxtGoUnwrapTypeOnly(parent.left).expression)?.kind !== SyntaxKind.PropertyAccessExpression)) {
+            return true; // handed into another local map (a `this.x[k] = v` field store prints the helper either way)
+        }
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === outer)) {
+            const store = parent.parent;
+            if ((store?.kind === SyntaxKind.BinaryExpression) && (store.left === parent) && (store.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                const value = ccxtGoUnwrapTypeOnly(store.right);
+                if ((value?.kind === SyntaxKind.Identifier) && (value.text === 'undefined')) {
+                    natives++;
+                } else if ((value !== undefined) && goTranspiler.goMapWriteValueIsNotPointer(value)) {
+                    natives++;
+                }
+            } else if (!goTranspiler.isGoElementAccessAssignmentTarget(parent)) {
+                natives++;
+            }
+        }
+        return false;
+    });
+    return !escapes && (natives > 0);
+}
+{
+    const uncached = GoTranspiler.prototype.goSafeDictMapLocalUncached;
+    GoTranspiler.prototype.goSafeDictMapLocalUncached = function (declaration) {
+        const previous = ccxtGo90g2State.on;
+        ccxtGo90g2State.on = false;
+        try {
+            const shipped = uncached.call(this, declaration);
+            if (shipped !== undefined) {
+                return shipped;
+            }
+            ccxtGo90g2State.on = true;
+            const extended = uncached.call(this, declaration);
+            ccxtGo90g2State.on = false;
+            if ((extended === undefined) || !ccxtGo90g2MapVerdictOk(this, declaration)) {
+                this.goMapLocalRebindWrites.delete(declaration);
+                return undefined;
+            }
+            return extended;
+        } finally {
+            ccxtGo90g2State.on = previous;
+        }
+    };
+}
+// ===== ral-90g2 K (end) =====
+// L. `xs.join (sep)` on a safeList-seeded list local prints `Join(xs, sep)` for the box and for a []any alike (Join's
+// parameter is `any`; its []any arm is the very arm the box reached), so it may stay once the local is typed. It is
+// only a hand-off, so it is admitted only when the same declaration also has a native `.length` or element read.
+function ccxtGo90g2ListNativeRead (goTranspiler, declaration): boolean {
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = goTranspiler.checkerOrUndefined();
+    const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+    if ((scope === undefined) || (own === undefined)) {
+        return false;
+    }
+    return goTranspiler.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n === declaration.name) || (n.text !== declaration.name.text) || (checker.getSymbolAtLocation(n) !== own)) {
+            return false;
+        }
+        const outer = ccxtGoSafeCollectionTypeOnlyWrapper(n);
+        const parent = outer.parent;
+        return ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === outer) && (parent.name?.text === 'length'))
+            || ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === outer) && !goTranspiler.isGoElementAccessAssignmentTarget(parent));
+    });
+}
+{
+    const listReads = GoTranspiler.prototype.goSafeListUseReadsTheList;
+    GoTranspiler.prototype.goSafeListUseReadsTheList = function (node) {
+        if (listReads.call(this, node)) {
+            return true;
+        }
+        const outer = ccxtGoSafeCollectionTypeOnlyWrapper(node);
+        const member = outer.parent;
+        if ((member?.kind !== SyntaxKind.PropertyAccessExpression) || (member.expression !== outer) || (member.name?.text !== 'join')
+            || (member.parent?.kind !== SyntaxKind.CallExpression) || (member.parent.expression !== member) || (member.parent.arguments.length !== 1)) {
+            return false;
+        }
+        const declaration = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeListLocalArgs(declaration.initializer) === undefined)) {
+            return false;
+        }
+        return ccxtGo90g2ListNativeRead(this, declaration);
+    };
+}
+// ===== ral-90g2 L (end) =====

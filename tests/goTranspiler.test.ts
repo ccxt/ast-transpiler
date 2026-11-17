@@ -15834,3 +15834,57 @@ describe('90g1 nil-seed pointer joins', () => {
         expect(out).toContain('var errorMessage any = nil');
     });
 });
+
+describe ('ral-90g2 reader-result locals', () => {
+    const PRELUDE =
+        'type Dict = { [key: string]: any };\n' +
+        'export class Exchange {\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): string { return a; }\n';
+    const run = (members: string, dir: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'r90g2-'));
+        try {
+            const src = path.join (tmp, dir);
+            fs.mkdirSync (src, { recursive: true });
+            const file = path.join (src, 'x.ts');
+            fs.writeFileSync (file, PRELUDE + members + '}\n');
+            return new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } }).transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    test ('J: a no-default safeDict local read in the else of its nil test is a map', () => {
+        const body = '    f (orders: Dict, id: string, reason: string): any {\n        const prev = this.safeDict (orders, id);\n        if ((prev === undefined) || (reason === "x")) {\n            return 0;\n        } else {\n            prev["cost"] = 1;\n            return this.safeString (prev, "id");\n        }\n    }\n';
+        expect (run (body, 'ts/src/pro')).toContain ('var prev map[string]any = ');
+        // outside the guarded arm the write would meet a nil map: keep the box
+        expect (run (body.replace ('return 0;', 'id = "z";').replace ('        } else {\n            prev["cost"] = 1;', '        }\n        prev["cost"] = 1;\n        {'), 'ts/src/pro')).not.toContain ('var prev map[string]any = ');
+    });
+    test ('J: a no-default safeDict local read after an early-return nil guard is a map', () => {
+        const body = '    f (orders: Dict, id: string): any {\n        const prev = this.safeDict (orders, id);\n        if (prev === undefined) {\n            return undefined;\n        }\n        prev["cost"] = 1;\n        return this.safeString (prev, "id");\n    }\n';
+        expect (run (body, 'ts/src/pro')).toContain ('var prev map[string]any = ');
+        // a guard that does not leave the block proves nothing
+        expect (run (body.replace ('return undefined;', 'id = "y";'), 'ts/src/pro')).not.toContain ('var prev map[string]any = ');
+    });
+    test ('L: a safeList local joined and read by length is a []any', () => {
+        const body = '    safeList (a: any, k: any, d: any = undefined): any[] { return a; }\n    f (params: Dict): any {\n        const ids = this.safeList (params, "ids", []);\n        if (ids.length > 0) {\n            return "[" + ids.join (",") + "]";\n        }\n        return "";\n    }\n';
+        const out = run (body, 'ts/src');
+        expect (out).toContain ('var ids []any = SafeListTyped(params, "ids")');
+        expect (out).toContain ('Join(ids, ",")');
+        // a join without a native read keeps the box
+        expect (run (body.replace ('ids.length > 0', 'params !== undefined'), 'ts/src')).not.toContain ('var ids []any');
+    });
+    test ('K: a no-default safeDict local filled with a fresh map where it was nil is a map', () => {
+        const body = '    account (): Dict { return {}; }\n    f (result: Dict, code: string, reload: boolean): any {\n        let acc = this.safeDict (result, code);\n        if ((acc === undefined) || reload) {\n            acc = {};\n            acc["total"] = 1;\n        }\n        acc["free"] = 2;\n        this.safeString (acc, "free");\n        return acc;\n    }\n';
+        const out = run (body, 'ts/src/pro');
+        expect (out).toContain ('var acc map[string]any = ');
+        expect (out).toContain ('acc = map[string]any{}');
+        // a fill that depends on another condition proves nothing after the if
+        expect (run (body.replace ('acc = {};', 'if (reload) {\n                acc = {};\n            }'), 'ts/src/pro')).not.toContain ('var acc map[string]any = ');
+        // a write of a value that may be nil keeps the box
+        expect (run (body.replace ('acc = {};', 'acc = this.safeDict (result, "x");'), 'ts/src/pro')).not.toContain ('var acc map[string]any = ');
+        // handed whole into another local map: the typed store would print the helper where the box stored natively
+        expect (run (body.replace ('this.safeString (acc, "free");', 'result[code] = acc;'), 'ts/src/pro')).not.toContain ('var acc map[string]any = ');
+        // no native read or write of the map: keep the box
+        expect (run (body.replace ('acc["free"] = 2;', '').replace ('acc["total"] = 1;', ''), 'ts/src/pro')).not.toContain ('var acc map[string]any = ');
+    });
+});
