@@ -37294,7 +37294,9 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
         && ral90g4R1Local(this, ccxtGoParamDeclarationOf(this, write.left))) {
         const name = this.printNode(write.left, 0).trim();
         const iden = this.getIden(identation);
-        return iden + name + 'Value := ' + this.printNode(ral90g4Unparen(write.right), 0).trim() + '\n' + iden + name + ' = &' + name + 'Value';
+        // the statement's own leading / trailing comments survive, as in the base printExpressionStatement
+        return this.printNodeCommentsIfAny(node, identation,
+            iden + name + 'Value := ' + this.printNode(ral90g4Unparen(write.right), 0).trim() + '\n' + iden + name + ' = &' + name + 'Value');
     }
     return ral90g4UpstreamExpressionStatement.call(this, node, identation);
 };
