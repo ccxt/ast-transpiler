@@ -18571,6 +18571,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-52e: `const e = xs[k]; e['f'] = v; ..; xs[k] = e;` -- the bind is followed only by top-level writes on `e` and then the
      *  source's own write-back at the same receiver and key text, so a cloned element read writes the same element back. */
+    /** ral-90rd R1: the bind `const v = m[k]` is itself a typed container local (its own decision, re-entrancy guarded), so it never
+     *  prints the `let mut v: Value = ..` line ccxt's write-back pass keys on: a mutation of `v` adds no write-back to `m`. */
+    rust90rdTypedRowBind(bind: Node): boolean {
+        return isVariableDeclaration(bind) && !this.rustBorrowedPending.has(bind) && this.rustBorrowedLocalKind(bind) === 'dict';
+    }
+
     rustExplicitWriteBackBind(read: any): boolean {
         const declaration: any = read.parent;
         if (!isIdentifier(declaration.name) || !isElementAccessExpression(read) || !isIdentifier(read.expression)) return false;
@@ -21058,8 +21064,28 @@ export class RustTranspiler extends BaseTranspiler {
         return this.printTrim(node, name) ?? `trim(&${name})`;
     }
 
+    private rust90rdJoinReads = new WeakSet<Node>();
+
+    /** ral-90rd R2: `x.join ('lit')`, a single string-literal separator, the call in a read position (not a callee, chain head
+     *  or write target). */
+    rust90rdListJoinUse(access: Expression): boolean {
+        const call: Node = access.parent;
+        return isPropertyAccessExpression(access) && isCallExpression(call) && call.expression === access && String(access.name.text) === 'join' && call.arguments.length === 1
+            && this.rustNativeStringLiteralArg(call.arguments[0]) !== undefined && !this.rustScalarInNestedWrite(access.expression, true);
+    }
+
+    /** ral-90rd R2: the join of a typed list local the borrowed-container rule admitted at this call. */
+    printBorrowedListJoin(node: CallExpression): string | undefined {
+        if (!this.rust90rdJoinReads.has(node)) return undefined;
+        const access: any = node.expression;
+        const declaration: any = this.rustDeclarationOfIdentifier(access.expression);
+        if (declaration === undefined || this.rustBorrowedLocalKind(declaration) !== 'list' || this.rustOptContainerLocals.has(declaration)) return undefined;
+        const literal = this.rustNativeStringLiteralArg(node.arguments[0]);
+        return `Value::Str(${this.printNode(access.expression, 0).trim()}.iter().map(crate::runtime::stringify_param).collect::<Vec<String>>().join("${literal}").into())`;
+    }
+
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
-        return this.printOptListJoin(node) ?? this.printLentListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name)
+        return this.printBorrowedListJoin(node) ?? this.printOptListJoin(node) ?? this.printLentListJoin(node) ?? this.printStrVecParamJoin(node) ?? this.printVecJoin(node) ?? this.printNativeStringJoin(node, name)
             ?? this.printStrSliceJoin(node) ?? `join(&${name}, &${parsedArg})`;
     }
 
@@ -23665,6 +23691,7 @@ export class RustTranspiler extends BaseTranspiler {
         let paramsBoxes = 0;
         let declaredEndpointWrites = 0;
         let castLengths = 0;
+        const joinUses: Node[] = [];
         let nullWrites = 0;
         let endpointBoxes = 0;
         let literal76bWrites = 0;
@@ -23785,6 +23812,13 @@ export class RustTranspiler extends BaseTranspiler {
                 const use: any = lenAt.parent.parent;
                 return use?.kind !== SyntaxKind.PrefixUnaryExpression && use?.kind !== SyntaxKind.PostfixUnaryExpression
                     && !(isBinaryExpression(use) && use.left === lenAt.parent && rustIsAssignmentOperator(use.operatorToken.kind));
+            }
+            // ral-90rd R2: `x.join ('lit')` on a never-null list local joins the held list in place (printBorrowedListJoin): each
+            // element's `stringify_param` text, the per-element text the runtime `join` helper takes off the boxed list
+            if (from === 'list' && isPropertyAccessExpression(up) && up.expression === n && this.rust90rdListJoinUse(up)) {
+                joinUses.push(up.parent);
+                lengths++;
+                return ++reads > 0;
             }
             if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') {
                 lengths++;
@@ -23997,6 +24031,8 @@ export class RustTranspiler extends BaseTranspiler {
         if ((selfOmitWrites > 0 || omitInitRewrites) && this.rustHandedDictLocal(declaration)) return undefined;
         const neverNullRewrites = writes > 0 && writes === sameKindWrites && from === 'dict' && init !== undefined && (this.rustContainerInitNeverNull(init, 'map') || omitInitRewrites);
         const optional = nilDeclared || nullTests > 0 || (writes > 0 && !neverNullRewrites) || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0 || optMapInit;
+        // ral-90rd R2: the native join reads a never-null list only
+        if (joinUses.length > 0 && (optional || from !== 'list')) return undefined;
         if (jwtLends > 0 && optional) return undefined;
         // ral-40h: an alias takes the plain container only (an optional one would copy at the box)
         if (aliasBoxes > 0 && (optional || reads === 0 && aliasBoxes === boxedElementUses.length)) return undefined;
@@ -24038,6 +24074,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-wh: index reads lend the plain container only (the optional form keeps Null apart); each line stays within 400
         if (indexReadUses.length > 0 && (optional || from === 'api' || indexReadUses.some((n: any) => !this.rustBoxLineOk(n.parent)))) return undefined;
         for (const n of indexReadUses) this.rustBorrowedIndexReads.add(n.parent);
+        for (const c of joinUses) this.rust90rdJoinReads.add(c);
         if (optional) {
             // Null stays distinct from an empty container: the local holds `Option<Dict>` / `Option<List>`.
             if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optMapInit && !this.rustOptContainerSourceOk(init, from))) return undefined;
@@ -24254,7 +24291,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(at) && at.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(at.left) && isIdentifier(at.left.expression)
                 && at.left.expression.text === n.text && this.isNodeInsideNode(up, at.right) && this.rustListIndexLiteralWrite(at.left.expression)) ownWrite = at;
         }
-        if ((this.isWriteBackBindRead(up) && !(top === up && this.rustExplicitWriteBackBind(up))) || !this.isNativeAccessPositionSafe(up, ownWrite) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top, ownWrite)))) return false;
+        // ral-90rd R1: a bind `const v = m[k]` whose checker type is a declared record (`Dictionary<Dict>` / `Dict[]` receiver)
+        // prints its held `Option<Dict>` form, which ccxt's Value-bind write-back pass never matches (ral-49e), so a mutation of
+        // the bind after it changes no write-back whatever the receiver's form
+        const ownKeysRowBind = top === up && isVariableDeclaration(use) && use.initializer === top && isIdentifier(use.name) && this.rustOwnKeysTypedRowRead(up)
+            && (this.rustOwnKeysElementKey(n, this.rustSkipWrappers(up.argumentExpression)) || this.rust90rdTypedRowBind(use));
+        if ((this.isWriteBackBindRead(up) && !(top === up && (this.rustExplicitWriteBackBind(up) || ownKeysRowBind))) || !this.isNativeAccessPositionSafe(up, ownWrite) || (top !== up && (this.isWriteBackBindRead(top) || !this.isNativeAccessPositionSafe(top, ownWrite)))) return false;
         const key: any = this.rustSkipWrappers(up.argumentExpression);
         if (key === undefined || isStringLiteralLikeNode(key)) return false;
         if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0;

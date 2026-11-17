@@ -17553,7 +17553,8 @@ describe('ral-49e: an element of a map local\'s own Object.keys list keys that m
     test('kraken fetchLedger: the key borrows off the list and reads the Dictionary<Dict> row', () => {
         const out = run(body(': Dictionary<Dict>'));
         expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
-        expect(out).toContain('get_value(&ledger, key.as_deref())');
+        // ral-90rd R1: the Dictionary<Dict> map is now a typed Dict, so the row reads off it natively
+        expect(out).toContain('crate::value::KeyRead::read(&&ledger, &Value::from(key))');
     });
     test('guard: an untyped row read (a Value bind ccxt writes back) keeps the Value key', () => {
         const out = run(body(': Dict'));
@@ -25343,5 +25344,41 @@ describe('ral-90rc R3: a nil-declared Str local written from a base credential f
     test('negative: a local only boxed into a literal stays Value', () => {
         const out = run ('r90rc-r3-boxonly', "        return this.hold ({ 'secret': secret });\n");
         expect(out).toContain('let mut secret: Value = Value::Null;');
+    });
+});
+describe('ral-90rd: safeValue / safeDict / safeList result locals', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeString (o: any, k: any, d: any = undefined): string { return o; }\n    parseOrder (o: Dict, m: any = undefined): Dict { return o; }\n    parseOrders (o: any, m: any = undefined): any[] { return o; }\n    extend (...args: any[]): any { return args[0]; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Dictionary } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('R1 kraken fetchLedger: a Dictionary<Dict> map whose own-key row bind is mutated is a typed Dict', () => {
+        const out = write ('ral-90rd-r1a', "    m (result: Dict) {\n        const ledger: Dictionary<Dict> = this.safeDict (result, 'ledger', {});\n        const keys = Object.keys (ledger);\n        const items = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = ledger[key];\n            value['id'] = key;\n            items.push (value);\n        }\n        return items;\n    }\n");
+        expect(out).toContain('let mut ledger: crate::value::Dict = ');
+        expect(out).toContain('Value::Array(ledger.keys().cloned().map(Value::from).collect())');
+        expect(out).not.toContain('get_value(&ledger');
+    });
+    test('R1 htx fetchFundingRateHistory: a Dict[] list whose typed row bind is mutated is a typed List', () => {
+        const out = write ('ral-90rd-r1b', "    m (data: Dict, flag: boolean) {\n        const rates = [];\n        if (flag) {\n            const rows = this.safeValue (data, 'data');\n            for (let i = 0; i < rows.length; i++) {\n                const entry = rows[i];\n                rates.push ({ 'info': entry, 'symbol': this.safeString (entry, 'contract_code') });\n            }\n        } else {\n            const cursor = this.safeValue (data, 'current_page');\n            const result: Dict[] = this.safeList (data, 'data', []);\n            for (let i = 0; i < result.length; i++) {\n                const entry = result[i];\n                entry['current_page'] = cursor;\n                rates.push ({ 'info': entry, 'symbol': this.safeString (entry, 'contract_code') });\n            }\n        }\n        return rates;\n    }\n");
+        expect(out).toContain('let mut result: crate::value::List = ');
+        expect(out).not.toContain('get_value(&result');
+    });
+    test('R2 binance sign: a []-defaulted safeList local joined by a literal is a typed List with a native join', () => {
+        const out = write ('ral-90rd-r2a', "    m (params: Dict, query: string) {\n        const orderidlist = this.safeList (params, 'orderidlist', []);\n        const n = orderidlist.length;\n        if (n > 0) {\n            query = query + '&' + 'orderidlist=%5B' + orderidlist.join ('%2C') + '%5D';\n        }\n        return query;\n    }\n");
+        expect(out).toContain('let mut orderidlist: crate::value::List = ');
+        expect(out).toContain('orderidlist.iter().map(crate::runtime::stringify_param).collect::<Vec<String>>().join("%2C")');
+        expect(out).not.toContain('join(&orderidlist');
+    });
+    test('R2 negative: a no-default safeList local under a null test keeps the helper join', () => {
+        const out = write ('ral-90rd-r2n', "    m (params: Dict, query: string) {\n        const ids = this.safeList (params, 'ids');\n        if (ids !== undefined) {\n            query = query + ids.join (',');\n        }\n        return query;\n    }\n");
+        expect(out).not.toContain('ids.iter().map(crate::runtime::stringify_param)');
+    });
+    test('R1 negative: an untyped (Dict) map with a mutated row bind stays Value', () => {
+        const out = write ('ral-90rd-r1n', "    m (result: Dict) {\n        const ledger = this.safeDict (result, 'ledger', {});\n        const keys = Object.keys (ledger);\n        const items = [];\n        for (let i = 0; i < keys.length; i++) {\n            const key = keys[i];\n            const value = ledger[key];\n            value['id'] = key;\n            items.push (value);\n        }\n        return items;\n    }\n");
+        expect(out).not.toContain('let mut ledger: crate::value::Dict = ');
     });
 });
