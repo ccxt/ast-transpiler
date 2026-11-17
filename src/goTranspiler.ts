@@ -16928,12 +16928,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     printGoSignature(node, identation, receiver: string): string {
         const name = this.printAsyncDeclarationName(node, this.transformMethodNameIfNeeded(node.name.text));
         // a market producer whose every path answers a dictionary prints that map
-        const returnType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
+        const printedType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
+        const returnType = (printedType === 'any') ? (this.goStrPtrFamilyReturnType(node) ?? printedType) : printedType;
         const parsedArgs = this.printMethodParameters(node);
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
         const returnSignature = returnType ? " " + returnType : "";
         const methodDef = this.getIden(identation) + methodToken + receiver + name + "(" + parsedArgs + ")" + returnSignature;
         return this.printNodeCommentsIfAny(node, identation, methodDef);
+    }
+
+    // a base string-pointer family method (decided from its AST) returns `*string`
+    goStrPtrFamilyReturnType(node): string | undefined {
+        return undefined;
     }
 
     printMethodParameters(node) {
@@ -38578,13 +38584,8 @@ function strPtrFamilyEnclosingMethod(node) {
     }
     return undefined;
 }
-const strPtrFamilyMethodDefinition = GoTranspiler.prototype.printMethodDefinition;
-GoTranspiler.prototype.printMethodDefinition = function (node, identation) {
-    const printed = strPtrFamilyMethodDefinition.call(this, node, identation);
-    if ((typeof printed !== 'string') || (strPtrFamilyVerdict(this, node) === undefined)) {
-        return printed;
-    }
-    return printed.replace(/(\)\s+)any(\s*)$/, '$1*string$2');
+GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+    return (strPtrFamilyVerdict(this, node) !== undefined) ? '*string' : undefined;
 };
 const strPtrFamilyReturnStatement = GoTranspiler.prototype.printReturnStatement;
 GoTranspiler.prototype.printReturnStatement = function (node, identation) {
