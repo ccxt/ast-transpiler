@@ -32393,9 +32393,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-87rg R1: `[ v, x ] = this.handleParamBool|String|Integer[2] (x, ..)` on the base runtime helper, whose first argument
      *  is the very local the slot writes back (so slot 1 is that map, or its omit, on every path). */
-    rust87rgParamSlotCall(call: any, n: any): boolean {
+    rust87rgParamSlotCall(call: CallExpression, n: Node): boolean {
         if (!this.rustBaseCallNamed(call, RustTranspiler.RUST_87RG_PARAM_SLOT_HELPERS) || this.rustTestTierSource(call) || !isIdentifier(n)) return false;
-        const head: any = this.rustSkipWrappers(call.arguments[0]);
+        const head: Node = this.rustSkipWrappers(call.arguments[0]);
         return head !== undefined && isIdentifier(head) && this.rustDeclaredNode(head) === this.rustDeclaredNode(n) && this.rustDeclaredNode(n) !== undefined;
     }
 
@@ -36131,7 +36131,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-87rg R4: `this.aggregate (x)` bound to the base helper (a hand-written runtime stub that returns `Value::Array(..)` for
      *  every input: the non-list case answers `[]`), so a `sortBy` over it hands a list back. */
-    rust87rgAggregateCall(n: any): boolean {
+    rust87rgAggregateCall(n: Node): boolean {
         return n !== undefined && isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
             && String(n.expression.name.text) === 'aggregate' && n.arguments.length === 1 && this.rustCalleeIsBase(n) && !this.rustTestTierSource(n);
     }
