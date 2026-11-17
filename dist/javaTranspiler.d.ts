@@ -292,6 +292,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaFieldMapReadIfAllowed(node: any): string | undefined;
     printCheckerTypedElementAccessRead(node: any): string;
     printElementAccessExpression(node: any, identation: any): any;
+    printJavaHandlerElementRead(node: any): string;
     javaLibraryTierNode(node: any): boolean;
     javaClassTypedElementRead(node: any): string;
     elementWriteTargetsMap(container: any, base: any, keys: any, value: any): boolean;
@@ -550,12 +551,15 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHandlerScopeOf(node: any): any;
     javaHandlerReferences(scope: any, name: any): any[];
     javaIsHandlerTableRead(call: any, read: any): boolean;
+    javaHandlerStringKey(key: any): boolean;
+    javaIsHandlerKeyRead(read: any): boolean;
     javaHandlerBoundName(call: any): any;
     javaIsHandlerReadOf(node: any, tableName: any): boolean;
     javaIsHandlerCallUse(use: any, tableName: any): boolean;
     javaScanHandlerTables(node: any): void;
     printJavaHandlerTable(node: any, identation: any): string;
     printJavaHandlerRead(node: any): string;
+    javaHandlerTableIdentifier(node: any): boolean;
     javaHandlerDeclarationType(declaration: any): "String" | "java.util.Map<String, String>";
     javaHandlerArgumentType(node: any, position: any): "Client" | "Map<String, Object>";
     javaHandlerCallArgument(node: any, position: any): string;

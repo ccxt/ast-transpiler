@@ -794,6 +794,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-53k: `c['code']` (a unified string key of a market / currency record) on an `Option<Dict>` local, printed as the
      *  owned `KeyRead::key_read(&&c, "code")` temporary moved into its string (`into_opt_string`: `None` for a missing key). */
     rustOptDictStrKeyText(node: any): string | undefined;
+    /** ral-87rh R2: `node` reads a never-written base-tier `market: Market = undefined` parameter that is no typed market
+     *  slot (it prints as the plain `Value` get_arg gave back); the parameter declaration, else undefined. */
+    rust87rhValueMarketParam(node: Node): ParameterDeclaration | undefined;
     /** ral-84e: an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot, currency
      *  local): its `KeyRead` reads the record's own map and answers `Null` when absent, the same `Value` the boxed read held. */
     rust84eOptRecordRecv(recv: Node): boolean;
@@ -930,6 +933,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSumShape(node: any): boolean;
     /** A cast, clock-string or `sum` local must earn a native use, and a string one never copies where the `Value` moved. */
     rustNewShapeCostly(init: any, typedUses: number, copied: number): boolean;
+    /** ral-87rh R3: `x = v.toString ()` (no radix) as a whole statement write whose target is a single-binding `let` local
+     *  seeded with a string literal, in a non-test source, and whose call the printer boxes whole as
+     *  `Value::Str(format!("{}", ..))` (decided from that very node's print, rustUnboxedFormatOf). */
+    rust87rhToStringWrite(node: Node): boolean;
     /** ral-45g: `p.toString()` (no radix) of a parameter the checker types `number`: the printer already boxes
      *  `format!("{}", p)` (the decimal text `Display` gives the `Int` / `Float` box), so the local holds that String. */
     rustNumParamToString(node: any): boolean;
@@ -969,6 +976,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `.push (v)` of one string-typed value: never rebound, element-written, spliced or handed on whole. Every element
      *  the list can hold is a `Str`, so the read is the string or (out of range) undefined. */
     rustAnyStrPushElem(node: any): boolean;
+    /** ral-87ra R2: the integer twin of `rustExactBoolTupleRead`: `t[i]` (a literal index) of a never-written `const t = this.m (..)`
+     *  (or `await this.m (..)`) whose every return puts an exact Int-or-Null at slot i (rustExactSlotCallee `int`, as the
+     *  destructured slot rule; lighter `handleAccountIndex` / `handleApiKeyIndex`), the read typed `number`: `Option<i64>`. */
+    rust87raExactIntTupleRead(node: Node, owner: Node): string | undefined;
+    private static readonly RUST_87RA_COMPARE_OPS;
     /** ral-ug: `t[i]` (a literal index) of a never-written `const t = this.m (..)` whose every return puts an exact
      *  Bool-or-Null at slot i (`handleOptionBoolAndParams[2]`: `checkOptionBool`): `Option<bool>`, as the slot rule. */
     rustExactBoolTupleRead(node: any, owner: any): string | undefined;
@@ -2044,6 +2056,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-76e: `c`, `c + k` or `c - k` (parentheses skipped) where `c` is an always-`Int` for counter (rustValueIntCounter) and
      *  `k` an int literal: the runtime value is an `Int` on every path. */
     rust76eCounterStep(node: any): boolean;
+    /** ral-87rb R4: `node` is (inside parentheses) the initializer of a declaration (or an operand of one) whose every
+     *  `this.sum (..)` use has only int-literal partners. */
+    rust87rbSumLiteralOnly(node: Node): boolean;
     /** tb: `const b = this.parseToInt (..)` (an `Int`-or-`Null` producer, `i64` / `Option<i64>`). */
     rustTbParseToIntInit(declaration: any): boolean;
     /** 40d: `const n = this.safeInteger* (.., <integer literal>)`: the reader answers an `Int` on every path (parsed or the
@@ -2260,6 +2275,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustIsTypedMarketCall(node: any): boolean;
     /** The literal key of a struct-local read `m['k']` / `m.k` (not written, not called). */
     rustMarketReadKey(n: any): string | undefined;
+    /** ral-87rh R1: `outer` is a plain read `<inner>['k']` (string-literal key) of `inner`: no write target, update, delete,
+     *  call or deeper chain link. */
+    rust87rhPrecisionRead(outer: Node | undefined, inner: Node | undefined): boolean;
+    /** ral-87rh R1: a market struct local R1 freed (one of its reads is `m['precision']['k']`): its listed string fields box
+     *  borrowed (`Value::from(m.f.as_str())`, the same `Str` the boxed key read copied), no field clone. */
+    rust87rhPrecisionLocal(declaration: Node): boolean;
     /** The listed field a `this.safeString|safeBool (m, 'k')` call reads (no default, or a `false` default for a flag). */
     rustMarketSafeReadField(call: any): string | undefined;
     /** `this.safeString (m, 'k', '')`: three arguments, the last an empty string literal. */
@@ -2411,6 +2432,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-84e: an equality arm (`m['inverse'] === true`, `t === 'inverse'`) of a ternary initializer of a `boolean` local whose
      *  native text exists: the arm prints that `bool` (rustScalarNativeText's ternary arm), the very `Bool` its box held. */
     rust84eBoolArmKind(arm: Node): string | undefined;
+    private rust87reLocalSeeds;
     /** A `const x = <comparison>` initializer whose native text exists and whose local's checker type is `boolean`. */
     rustBoolCompareSeed(node: any): boolean;
     /** `m['symbol']` / `m.id` off a loaded `crate::types::Market` local: the field's own `String` / `Option<String>`
@@ -2962,6 +2984,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  holds before the slot is read back, lent (`Value::from(&x)`, `From<&Option<String>>`: `None` is the Null, `Some` the Str). */
     rustStrSlotSelfDefault(n: any): boolean;
     rustBoolSlotUsesOk(declaration: any): boolean;
+    /** ral-87rb R3: `x === true` / `x !== true` reads a slot-written bool exactly: the slot prints `.as_bool() == Some(true)`,
+     *  which is `true` for the very values the boxed `is_equal(x, true)` matched (a `false` / `null` compare would not agree on a Null slot). */
+    rust87rbTrueTest(n: Node): boolean;
     /** The destructuring statement keeps the 400-char line budget with the slot's bool read.
      *  ral-46f: measured on the open print of the write with the bool slot read swapped in (was a length estimate that
      *  refused every write over 380 chars although the printed block line is split after `; ` by build/ `splitLongRustLines`). */
@@ -3624,6 +3649,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust84dStoreKeyArg(n: Node, keyNode: Node): string | undefined;
     /** ral-84d R2: `delete n[k]` (statement) on the `this.options` store copy, `k` a string local printed in the `dkey` form. */
     rust84dStoreDelete(n: Node, init: Node): boolean;
+    /** ral-87rd R2: `delete n['lit']` (statement) on `const n = this.safeDict (local, 'lit', {})` (a base reader with a map-literal
+     *  default: a map on every path) whose head local reads no tagged container: the untyped printer already removes it with the
+     *  native `shift_remove` (provenDictFieldDelete: no ws subscription route), so the typed map runs the same remove. */
+    rust87rdLiteralDelete(n: Node, init: Node): boolean;
     print84dStoreDelete(node: DeleteExpression): string | undefined;
     print84dStoreKeyWrite(left: ElementAccessExpression, right: Node, valueText: string): string | undefined;
     /** ral-48b: `n['k'] = v` (statement, literal non-digit key) whose value does not read `n`. */
@@ -3836,6 +3865,15 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  argument is a proven map (a typed / helper-proven params parameter, a handed slot map or a settled Dict local): the
      *  base answers `[x, m]` or `[x, omit (m, k)]`, a map on every path. */
     rustHandleTupleMapSlotRead(rhs: any): boolean;
+    /** ral-87ra R1: `const p: Dict = t[k]` (literal index) of a never-rebound `const t = this.m (..)` whose venue callee declares
+     *  slot `k` of its tuple return a bare `Dict` (rustCallDeclaresDictSlot: bitget `handleProductTypeAndParams`, binance pro
+     *  `resolveAuthType`, dydx `createOrderRequest`) and whose every use is a literal-index read: the slot holds that map. */
+    rust87raVenueTupleMapSlotRead(rhs: Node): boolean;
+    /** ral-87ra R3: base `handleTriggerPricesAndParams (symbol, params)` answers its params map (omitted or as passed) at slot 3
+     *  (declared `[Str, Str, Str, Dict]`): a map when the params argument is a proven map local / parameter (ral-51a's head proof). */
+    rust87raBaseParamsSlot(call: CallExpression, at: number): boolean;
+    /** ral-87ra R3: base tuple producer name -> [Dict slot, params argument index]. */
+    private static readonly RUST_87RA_BASE_PARAMS_SLOT;
     /** ral-51a: `this.handleRouteAndParams (m, params)` typed by name: a venue member of the enclosing class declared
      *  `handleRouteAndParams (methodName: string, params: Dict = {}): Dict` answers the (route-omitted) params map. */
     rustRouteParamsDictCall(init: any): boolean;
@@ -3987,6 +4025,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust64iBaseSliceInit(init: any): boolean;
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
     rustDefaultedListRead(init: any): boolean;
+    /** ral-87rd R1: some statement `name.push (v)` on this very binding inside its own function, and no other binding of the same
+     *  name in that function (ccxt build/'s container-op prover reads the function text by name: a typed sibling `let` would make it
+     *  drop a native `len()` it proves for the other, still boxed, binding). */
+    rust87rdPushedLocal(declaration: VariableDeclaration, name: string): boolean;
     rustLentListLocalUncached(declaration: any): boolean;
     private static readonly RUST_TYPED_LIST_FIELDS;
     rustTypedListField(node: any): boolean;
@@ -4528,6 +4570,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A base-tier list source that may return `undefined` (a `safeList*` default must be absent or nullish). */
     rustOptListSource(node: any): boolean;
     rustOptListLocalUncached(declaration: any): boolean;
+    /** ral-87rf R1: `const x = await this.m (..)` where `m` is an implicit-API endpoint (declared in `ts/src/abstract/`), outside
+     *  the test tier. Whatever the endpoint answers, the split form keeps the list it held (`Some`) and the map it held, so an
+     *  `Array.isArray (x)` test reads `is_some()` and every list-arm use reads the held list. */
+    rust87rfEndpointSplitSource(declaration: Node, init: Node): boolean;
     /** ral-80c R1: an unwritten method parameter whose typed signature slot is a string list (decided from the signature table). */
     rust80cStrVecParamAlias(init: Expression | undefined): boolean;
     /** ral-80c R1: `this.symbols` / `this.ids`, base fields declared `string[]` (always a list). */
@@ -4539,7 +4585,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptListParamInit(init: any): boolean;
     /** ral-80d: `n` sits in the arm where `Array.isArray (x)` held: the then-branch / true arm of `Array.isArray (x)`, or the
      *  else-branch / false arm of `!Array.isArray (x)` (an `if` statement or a conditional expression inside `fn`). */
-    rust80dInListArm(n: any, declaration: any, fn: any): boolean;
+    rust80dInListArm(n: any, declaration: any, fn: any, flags?: boolean): boolean;
     /** `Array.isArray`. */
     rustIsArrayIsArrayCallee(call: any): boolean;
     /** The optional list local an identifier reads (never its own declaration name). */
@@ -4591,6 +4637,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilSlotDictCandidate(declaration: any): boolean;
     /** The element `n` of `[ .., n, .. ] = <call>` sits at a map slot of the call's tuple. */
     rustDictSlotOfWrite(n: any): boolean;
+    private static readonly RUST_87RG_PARAM_SLOT_HELPERS;
+    /** ral-87rg R1: `[ v, x ] = this.handleParamBool|String|Integer[2] (x, ..)` on the base runtime helper, whose first argument
+     *  is the very local the slot writes back (so slot 1 is that map, or its omit, on every path). */
+    rust87rgParamSlotCall(call: CallExpression, n: Node): boolean;
     rustNilSlotDictCandidateUncached(declaration: any): boolean;
     rustNilSlotLineOk(n: any): boolean;
     rustShortDestrHeads: WeakSet<any>;
@@ -5090,6 +5140,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  arm), base `sortBy`/`sortBy2` of an Arr-only local (returns its input's variant), and a
      *  plain alias of a non-nullable Arr-only local (COW: the push never reaches the alias). */
     extraArrSource(n: any): boolean;
+    /** ral-87rg R4: `this.aggregate (x)` bound to the base helper (a hand-written runtime stub that returns `Value::Array(..)` for
+     *  every input: the non-list case answers `[]`), so a `sortBy` over it hands a list back. */
+    rust87rgAggregateCall(n: Node): boolean;
     arrAlias(ident: any): boolean;
     assumedNumericSelf(inner: any): string | undefined;
     private strVisiting;

@@ -1999,6 +1999,7 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     goClientFuturesTable(node: any): boolean;
     goClientFutureReadKey(initializer: any): Node | undefined;
+    goClientFutureCheckerStringKey(key: any): boolean;
     goClientFutureLocal(declaration: any): boolean;
     goClientFutureLocalCache: WeakMap<object, boolean>;
 }
@@ -2015,4 +2016,7 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goTernaryJoinFeedsParameterCopy(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoinR87HasNativeRead(declaration: any, kind: string): boolean;
 }
