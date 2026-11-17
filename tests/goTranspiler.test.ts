@@ -16523,3 +16523,117 @@ describe('ral-90g8 R4 annotated int counters and loop-index writes', () => {
         expect(out).toContain('page = page + 1');
     });
 });
+
+describe('92g1 parse* Num consumers', () => {
+    const BASE = 'export type Dict = { [key: string]: unknown };\n'
+        + 'export type Str = string | undefined;\n'
+        + 'export type Num = number | undefined;\n'
+        + 'export type Int = number | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    safeString (a: Dict, k: string, d: Str = undefined): Str { return d; }\n'
+        + '    parseNumber (v: Str, d: Num = undefined): Num { return d; }\n'
+        + '    parse8601 (v: Str): Int { return undefined; }\n'
+        + '}\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g92-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange, { Dict, Str, Num, Int } from './base/Exchange.js';\nclass X extends Exchange {\n"
+                + '    parseDay (day: string): Int {\n'
+                + "        if (day === '') {\n"
+                + '            return undefined;\n'
+                + '        }\n'
+                + "        return this.parse8601 (day + 'T00:00:00Z');\n"
+                + '    }\n'
+                + '    parseScaled (value: Str): Num {\n'
+                + '        if (value === undefined) {\n'
+                + '            return undefined;\n'
+                + '        }\n'
+                + '        return this.parseNumber (value);\n'
+                + '    }\n'
+                + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('R1: a parse* Num method returns *float64 and a nil-seeded local tested for nil follows', () => {
+        const out = run('    f (trade: Dict): Dict {\n'
+            + '        let feeCost = undefined;\n'
+            + "        if (trade['x']) {\n"
+            + "            feeCost = this.parseScaled (this.safeString (trade, 'fee'));\n"
+            + '        }\n'
+            + '        let fee = undefined;\n'
+            + '        if (feeCost !== undefined) {\n'
+            + "            fee = { 'cost': feeCost };\n"
+            + '        }\n'
+            + '        return fee;\n'
+            + '    }\n');
+        expect(out).toMatch(/ParseScaled\(value [^)]*\) \*float64 \{/);
+        expect(out).toContain('var feeCost *float64 = nil');
+        expect(out).toContain('if feeCost != nil {');
+    });
+    test('R1: a parse* Num result with no nil test keeps the box', () => {
+        const out = run('    f (trade: Dict): Dict {\n'
+            + "        const amount = this.parseScaled (this.safeString (trade, 'amount'));\n"
+            + "        return { 'amount': amount };\n"
+            + '    }\n');
+        expect(out).toMatch(/ParseScaled\(value [^)]*\) \*float64 \{/);
+        expect(out).toContain('var amount any = this.ParseScaled(');
+    });
+    test('R2: a parse* Int method returns *int64 and a nil-seeded local tested for nil follows', () => {
+        const out = run('    f (market: Dict): Dict {\n'
+            + '        let expiry = undefined;\n'
+            + "        if (market['future']) {\n"
+            + "            expiry = this.parseDay (this.safeString (market, 'day', ''));\n"
+            + '        }\n'
+            + '        if (expiry === undefined) {\n'
+            + '            return market;\n'
+            + '        }\n'
+            + "        return { 'expiry': expiry };\n"
+            + '    }\n');
+        expect(out).toMatch(/ParseDay\(day string\) \*int64 \{/);
+        expect(out).toContain('var expiry *int64 = nil');
+        expect(out).toContain('if expiry == nil {');
+    });
+});
+
+describe('92g1 string pair slot consumers', () => {
+    const BASE = 'export type Dict = { [key: string]: unknown };\n'
+        + 'export type Str = string | undefined;\n'
+        + 'export default class Exchange {\n'
+        + '    handleNetworkCodeAndParams (params: Dict): [Str, Dict] { return [ undefined, params ]; }\n'
+        + '}\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'g92p-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange, { Dict, Str } from './base/Exchange.js';\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('R3: a nil-seeded local written from slot 0 of a *string pair twin and nil-tested takes the pointer', () => {
+        const out = run('    f (params: Dict): Dict {\n'
+            + '        let query = params;\n'
+            + '        let networkCode = undefined;\n'
+            + '        [ networkCode, query ] = this.handleNetworkCodeAndParams (query);\n'
+            + '        if (networkCode !== undefined) {\n'
+            + '            return query;\n'
+            + '        }\n'
+            + '        return params;\n'
+            + '    }\n');
+        expect(out).toContain('var networkCode *string = nil');
+        expect(out).not.toContain('networkCodePtr');
+        expect(out).toContain('networkCode = SafeStringPtr(networkCodequeryVariable[0])');
+    });
+});
