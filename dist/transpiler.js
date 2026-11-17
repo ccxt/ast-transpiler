@@ -13,7 +13,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-E73R464T.js";
+} from "./chunk-VMQBJBIJ.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -28599,7 +28599,8 @@ ${iden}}`;
       return void 0;
     }
     const element = checker.getIndexTypeOfType(type, IndexKind2.Number);
-    if (element === void 0 || !(element.flags & TypeFlags4.Object)) {
+    const anyElement = element !== void 0 && (element.flags & (TypeFlags4.Any | TypeFlags4.Number)) !== 0;
+    if (element === void 0 || !(element.flags & TypeFlags4.Object) && !anyElement) {
       return void 0;
     }
     if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, "[]any")) {

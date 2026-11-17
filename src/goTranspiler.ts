@@ -19714,7 +19714,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const element = checker.getIndexTypeOfType(type, IndexKind.Number);
-        if ((element === undefined) || !(element.flags & TypeFlags.Object)) {
+        // an `any[]` / `number[]` slot boxes every element as `any` too, so it is the same `[]any`
+        const anyElement = (element !== undefined) && ((element.flags & (TypeFlags.Any | TypeFlags.Number)) !== 0);
+        if ((element === undefined) || (!(element.flags & TypeFlags.Object) && !anyElement)) {
             return undefined;
         }
         if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]any')) {
