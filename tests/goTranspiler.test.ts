@@ -14174,3 +14174,68 @@ describe('Str base producers typed *string', () => {
         expect(output).not.toMatch(/\*typeVar \+|\+ \*typeVar/);
     });
 });
+
+describe('*string venue parameters proven from every caller', () => {
+    const BASE = 'export default class Exchange {\n' +
+        '    safeString (a: any, k: any, d: any = undefined): Str { return a; }\n' +
+        '    currency (c: any): any { return c; }\n' +
+        '}\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'string-ptr-param-proof-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange from './base/Exchange.js';\ntype Str = string | undefined;\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    const helper = '    async helperRequest (code: Str, params: any): Promise<any> {\n' +
+        '        if (code !== undefined) {\n' +
+        '            return this.currency (code);\n' +
+        '        }\n' +
+        '        return params;\n' +
+        '    }\n';
+    test('callers passing a *string reader result and undefined: the parameter is *string and its nil test native', () => {
+        const out = run(helper +
+            '    async a (p: any): Promise<any> {\n' +
+            "        const c = this.safeString (p, 'c');\n" +
+            '        return await this.helperRequest (c, p);\n' +
+            '    }\n' +
+            '    async b (p: any): Promise<any> {\n' +
+            '        return await this.helperRequest (undefined, p);\n' +
+            '    }\n');
+        expect(out).toMatch(/HelperRequest\(code \*string, params any\)/);
+        expect(out).toContain('if code != nil {');
+        expect(out).not.toContain('IsEqual(code, nil)');
+    });
+    test('a method whose name is quoted anywhere (dispatch by name) keeps the box', () => {
+        const out = run(helper +
+            '    async a (p: any): Promise<any> {\n' +
+            "        const c = this.safeString (p, 'c');\n" +
+            "        const m = 'helperRequest';\n" +
+            '        return await this.helperRequest (c, p);\n' +
+            '    }\n');
+        expect(out).toMatch(/HelperRequest\(code any, params any\)/);
+    });
+    test('a caller passing an untyped value keeps the box', () => {
+        const out = run(helper +
+            '    async a (p: any): Promise<any> {\n' +
+            "        return await this.helperRequest (p['c'], p);\n" +
+            '    }\n');
+        expect(out).toMatch(/HelperRequest\(code any, params any\)/);
+    });
+    test('a method reference (not a call) keeps the box', () => {
+        const out = run(helper +
+            '    async a (p: any): Promise<any> {\n' +
+            "        const c = this.safeString (p, 'c');\n" +
+            '        const f = this.helperRequest;\n' +
+            '        return await this.helperRequest (c, p);\n' +
+            '    }\n');
+        expect(out).toMatch(/HelperRequest\(code any, params any\)/);
+    });
+});
