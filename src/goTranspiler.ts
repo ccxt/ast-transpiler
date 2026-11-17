@@ -38389,7 +38389,7 @@ function go92g2StringListScan (goTranspiler: GoTranspiler, declaration): Node[] 
             writes.push(parent.right);
             return false;
         }
-        return true;
+        return !go93g2StringListElementRead(n, parent);
     });
     return (unsafe || (joins === 0)) ? undefined : writes;
 }
@@ -38476,7 +38476,7 @@ function go92g2LoopListLocal (goTranspiler: GoTranspiler, declaration): boolean 
     // a 3-arg safeList with an expression default (no nil test: SafeListSlice is nil for a non-list default), or a
     // no-default safeListN (nil tests allowed: SafeListNSlice is nil exactly where SafeListN is)
     const method = String(callee?.name?.text ?? '');
-    const nilExact = (method === 'safeListN') && (call?.arguments?.length === 2);
+    const nilExact = ((method === 'safeListN') && (call?.arguments?.length === 2)) || ((method === 'marketIds') && (call?.arguments?.length === 1));
     if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
         || call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)
         || !(nilExact || ((method === 'safeList') && (call.arguments.length === 3)
@@ -38533,7 +38533,7 @@ function go92g2LoopListLocal (goTranspiler: GoTranspiler, declaration): boolean 
     GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
         if ((listType.call(this, declaration) === undefined) && go92g2LoopListLocal(this, declaration)) {
             const args = declaration.initializer.arguments.map((a, i) => this.printNode(a, i === 0 ? identation : 0).trim());
-            const reader = (declaration.initializer.expression.name.text === 'safeListN') ? 'SafeListNSlice' : 'SafeListSlice';
+            const reader = GO93G2_LOOP_LIST_READERS[declaration.initializer.expression.name.text] ?? 'SafeListSlice';
             return `this.${reader}(${args.join(', ')})`;
         }
         return listValue.call(this, declaration, identation);
@@ -39328,3 +39328,23 @@ function ccxtGo93OtherBinding (goTranspiler: GoTranspiler, n, declaration): bool
         && ((bound.kind === SyntaxKind.VariableDeclaration) || (bound.kind === SyntaxKind.Parameter));
 }
 // ===== nil-seeded scalar pointers joined through plain copies (end) =====
+
+// ===== ral-93g2 R1: marketIds locals joined as strings =====
+// `const ids = this.marketIds (symbols)` read only by nil tests and `.join ('lit')` is the []string
+// BaseExchange.MarketIdsStrings returns (nil exactly where MarketIds is nil, else what Join joins).
+GO92G2_STRING_LIST_READERS['marketIds'] = [ 'MarketIdsStrings', 1 ];
+// a string-list local handed as the container of `this.safeString (xs, i[, dflt])`: SafeString reads a
+// []string element exactly as it read the boxed list's string element
+function go93g2StringListElementRead (n, parent): boolean {
+    const reader = parent?.expression;
+    return (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === n) && (parent.arguments.length >= 2)
+        && (parent.arguments.length <= 3) && (reader?.kind === SyntaxKind.PropertyAccessExpression)
+        && (reader.expression?.kind === SyntaxKind.ThisKeyword) && (reader.name?.text === 'safeString');
+}
+// ===== ral-93g2 R1 (end) =====
+
+// ===== ral-93g2 R2: marketIds locals read by length-bounded loops =====
+// a no-default `this.marketIds (symbols)` loop list (92g2 R2 shape, nil tests allowed) is the []any
+// BaseExchange.MarketIdsSlice returns: nil exactly where MarketIds is nil, so `xs.length` prints len(xs).
+const GO93G2_LOOP_LIST_READERS: { [name: string]: string } = { 'safeListN': 'SafeListNSlice', 'marketIds': 'MarketIdsSlice' };
+// ===== ral-93g2 R2 (end) =====
