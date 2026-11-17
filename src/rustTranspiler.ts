@@ -6557,6 +6557,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `this.encode(..)` & co. resolved to the base tier, or such a call on a test's untyped `exchange`. */
     rustBytesProducer(node): boolean {
         if (this.rustHashBinaryCall(node)) return true;
+        if (this.rustBytesSliceSource(node) !== undefined) return true;
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || !RustTranspiler.RUST_BYTES_PRODUCERS.has(String(node.expression.name.text))) return false;
         const recv: any = node.expression.expression;
         if (this.rustScalarReceiver(recv)) return this.rustCalleeIsRuntimeBase(node);
@@ -6604,7 +6605,35 @@ export class RustTranspiler extends BaseTranspiler {
         return (RustTranspiler.RUST_BYTES_SLOTS[String(callee.name.text)] ?? []).includes(at) && this.rustCalleeIsRuntimeBase(call);
     }
 
+    /** `this.arraySlice (b, s, e)` of a byte-buffer local `b` with integer-literal bounds `0 <= s <= e`: the runtime copies
+     *  `b[min(s, len) .. min(e, len)]` into a fresh list, so the slice is itself a byte buffer. Answers `b`'s identifier. */
+    rustBytesSliceSource(node): Node | undefined {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(node.expression.name.text) !== 'arraySlice' || node.arguments.length !== 3 || this.rustTestTierSource(node)) return undefined;
+        const bound = (a: Node): number | undefined => (isNumericLiteral(a) && /^[0-9]+$/.test(a.text) ? Number(a.text) : undefined);
+        const start = bound(node.arguments[1]);
+        const end = bound(node.arguments[2]);
+        const source: Node = this.unwrapParens(node.arguments[0]);
+        if (start === undefined || end === undefined || start > end || !isIdentifier(source) || !this.rustCalleeIsRuntimeBase(node)) return undefined;
+        return this.rustBytesLocalOf(source) === undefined ? undefined : source;
+    }
+
+    /** `this.packb (..)` / `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
+     *  (`packb` always a list, `ethAbiEncode` a list or `Null` on an unsupported type). Only a local initializer takes
+     *  it, unboxed once into the `Bytes` handle (`Null` reads as no bytes, as every byte slot reads it). */
+    rustBoxedBytesProducer(node: Node): boolean {
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(node.expression.name.text);
+        return (name === 'packb' || name === 'ethAbiEncode') && !this.rustTestTierSource(node) && this.rustCalleeIsRuntimeBase(node);
+    }
+
     rustBytesBareText(node, identation = 0): string {
+        if (this.rustBoxedBytesProducer(node)) return `crate::value::Bytes(${this.printNode(node, identation).trim()}.into_list())`;
+        const sliced: Node = this.rustBytesSliceSource(node);
+        if (sliced !== undefined) {
+            const [ start, end ] = [ Number(node.arguments[1].getText()), Number(node.arguments[2].getText()) ];
+            return `crate::value::Bytes(std::sync::Arc::new(${super.printIdentifier(sliced)}.0.iter()${start > 0 ? `.skip(${start})` : ''}.take(${end - start}).cloned().collect()))`;
+        }
         if (this.rustHashBinaryCall(node)) return `self.hash_binary(${this.rustPrintedArgs(node, identation).slice(0, 2).map((a) => this.rustSliceArgText(a.trim())).join(', ')})`;
         this.rustBytesBare.add(node);
         try {
@@ -6641,7 +6670,8 @@ export class RustTranspiler extends BaseTranspiler {
         const list: any = declaration.parent;
         if (!isIdentifier(declaration.name) || list?.declarations?.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return false;
         const init: any = this.unwrapParens(declaration.initializer);
-        if (!this.rustBytesProducer(init) || (this.rustTestTierSource(declaration) && !this.rustScalarReceiver(init.expression.expression))) return false;
+        const boxed = this.rustBoxedBytesProducer(init);
+        if (!boxed && (!this.rustBytesProducer(init) || (this.rustTestTierSource(declaration) && !this.rustScalarReceiver(init.expression.expression)))) return false;
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
         const forms = new Map<Node, string>();
@@ -6660,6 +6690,8 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         });
         if (!ok) return false;
+        // a `Null` from `ethAbiEncode` stays visible to a `Value` hand-off: only byte slots may read that local
+        if (boxed && String(init.expression.name.text) === 'ethAbiEncode' && [ ...forms.values() ].some((f) => f !== 'lend')) return false;
         for (const [ n, form ] of forms) this.rustBytesUseForms.set(n, form);
         return true;
     }
@@ -16436,7 +16468,8 @@ export class RustTranspiler extends BaseTranspiler {
         const file = String(node.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
         if (RustTranspiler.RUST_BASE_TIER_FILE.test(file) || !/ts[/]src[/]/.test(file) || /ts[/]src[/](?:pro[/])?test[/]/.test(file)) return false;
         const ret: any = node.type;
-        if (ret?.kind !== SyntaxKind.TypeReference || !isIdentifier(ret.typeName) || String(ret.typeName.text) !== 'Market') return false;
+        // an unannotated method qualifies too: its return set is read from the body below (a market record or `undefined`)
+        if (ret !== undefined && (ret.kind !== SyntaxKind.TypeReference || !isIdentifier(ret.typeName) || String(ret.typeName.text) !== 'Market')) return false;
         if ((node.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword || m.kind === SyntaxKind.OverrideKeyword || m.kind === SyntaxKind.StaticKeyword)) return false;
         let decision = this.rustVenueOptMarketDecisions.get(node);
         if (decision !== undefined) return decision;
@@ -16452,6 +16485,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (inner !== undefined && this.literalKindOfNode(inner) === 'null') { nones++; return; }
                 if (inner !== undefined && isCallExpression(inner) && isPropertyAccessExpression(inner.expression)
                     && String(inner.expression.name.text) === 'safeMarket' && this.rustIsSafeMarketCall(inner)) { records++; return; }
+                // a typed `this.market (x)` lookup answers the loaded record (or panics as the boxed call did): never Null
+                if (inner !== undefined && this.rustIsTypedMarketCall(inner) && this.printTypedMarketValue(inner) !== undefined) { records++; return; }
                 ok = false;
                 return;
             }
@@ -26856,6 +26891,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (method === 'keysort') return !this.rustTestTierSource(call) && call.arguments.length === 1 && this.rustCalleeIsRuntimeBase(call) && this.rustKeysortOfDict(call) && this.rustOmitLineFits(call) ? 'dict' : undefined;
         // `sortBy*` hands a non-list input back as it came: a list only when its input is one (the Arr-only proof)
         if (method === 'sortBy' || method === 'sortBy2') return !this.rustTestTierSource(call) && (this.extraArrSource(call) || this.rustSortOfTypedList(call)) ? 'list' : undefined;
+        // base `sort` (exchange_stubs.rs) sorts a `Value::Arr` into a new `Value::Array` and hands anything else back: the same proof
+        if (method === 'sort') return !this.rustTestTierSource(call) && call.arguments.length === 1 && this.rustSortOfTypedList(call) ? 'list' : undefined;
         if (/^(?:safe|extend$|deepExtend$|omit$|keysort$|parseJson$|watch|subscribe|unsubscribe|market$|currency$)/.test(method)) return undefined;
         if (this.rustTestTierSource(call) || this.rustTypedUnified.has(method)) return undefined;
         // base `handle*` tuples have their own slot rules; a venue `handle*` whose body builds its tuple list is a fresh list

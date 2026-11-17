@@ -26463,3 +26463,103 @@ describe('ral-93rf R2: on a watch, a boolean settle under a known hash is no cac
         expect(out).toMatch(/let mut orders: Value = /);
     });
 });
+
+describe('rust byte-buffer slices', () => {
+    const base = "export default class Exchange {\n    secret: string = '';\n    encode (s: string): Uint8Array { return new Uint8Array (); }\n    base64ToBinary (s: string): Uint8Array { return new Uint8Array (); }\n    arraySlice (array: any, first: any, second: any = undefined): any { return array; }\n}\n";
+    const crypto = "export function eddsa (request: any, secret: any, curve: any): string { return ''; }\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport { eddsa } from './base/functions/crypto.js';\nexport default class venue extends Exchange {\n"
+        + "    signIt (payload: string): string {\n        const secretBytes = this.base64ToBinary (this.secret);\n        const seed = this.arraySlice (secretBytes, 0, 32);\n        return eddsa (this.encode (payload), seed, 'ed25519');\n    }\n"
+        + "    tailOf (payload: string): string {\n        const secretBytes = this.base64ToBinary (this.secret);\n        const seed = this.arraySlice (secretBytes, 4, 36);\n        return eddsa (this.encode (payload), seed, 'ed25519');\n    }\n"
+        + "    openEnd (payload: string, n: number): string {\n        const secretBytes = this.base64ToBinary (this.secret);\n        const seed = this.arraySlice (secretBytes, 0, n);\n        return eddsa (this.encode (payload), seed, 'ed25519');\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rg1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base/functions'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/base/functions/crypto.ts'), crypto);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+    test('a literal-bounded slice of a byte local is a byte buffer lent to the byte slot', () => {
+        expect(out).toContain('let mut seed: crate::value::Bytes = crate::value::Bytes(std::sync::Arc::new(secretBytes.0.iter().take(32).cloned().collect()));');
+        expect(out).toContain('crate::value::Bytes(std::sync::Arc::new(secretBytes.0.iter().skip(4).take(32).cloned().collect()))');
+        expect(out).toMatch(/eddsa\([^;]*, &seed, /);
+    });
+    test('a non-literal bound keeps the runtime arraySlice', () => {
+        expect(out).toContain('let mut seed: Value = self.arraySlice(Value::from(&secretBytes), Value::Int(0), &[n.clone()]);');
+    });
+});
+
+describe('rust boxed byte producers', () => {
+    const base = "export default class Exchange {\n    packb (x: any): any { return x; }\n    ethAbiEncode (types: any, args: any): Uint8Array { return new Uint8Array (); }\n    binaryToBase16 (b: Uint8Array): string { return ''; }\n    hash (request: any, hash: any, digest: string = 'hex'): any { return ''; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+        + "    packIt (action: any): string {\n        const dataBinary = this.packb (action);\n        return this.binaryToBase16 (dataBinary);\n    }\n"
+        + "    abiIt (a: any): string {\n        const data = this.ethAbiEncode ([ 'uint256' ], [ a ]);\n        return this.hash (data, 'keccak', 'hex');\n    }\n"
+        + "    abiHeld (a: any): any {\n        const data = this.ethAbiEncode ([ 'uint256' ], [ a ]);\n        return this.hold (data);\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rg2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+    test('a packb / ethAbiEncode local unboxes once into the byte handle and lends it', () => {
+        expect(out).toContain('let mut dataBinary: crate::value::Bytes = crate::value::Bytes(self.packb(action, &[]).into_list());');
+        expect(out).toContain('self.binaryToBase16(&dataBinary');
+        expect(out).toMatch(/let mut data: crate::value::Bytes = crate::value::Bytes\(self\.ethAbiEncode\([^;]*\)\.into_list\(\)\);\n[^\n]*self\.hash\(&data, /);
+    });
+    test('an ethAbiEncode local handed on as a Value keeps its Null', () => {
+        expect(out).toMatch(/let mut data: Value = self\.ethAbiEncode\([^;]*\);\n[^\n]*self\.hold\(data\)/);
+    });
+});
+
+describe('rust venue Option<Market> producers returning a typed market lookup', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport default class Exchange {\n    markets: Dict = undefined;\n    market (symbol: string): MarketInterface { return undefined; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeBool (o: any, k: any, d: any = undefined): any { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined): MarketInterface {\n        if (market !== undefined) {\n            return market;\n        }\n        return this.market (marketId);\n    }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Market, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+        + "    findSwap (wsId: Str) {\n        if (this.markets === undefined) {\n            return undefined;\n        }\n        const symbols = Object.keys (this.markets);\n        for (let i = 0; i < symbols.length; i++) {\n            const symbolId: string = symbols[i];\n            if (symbolId === wsId) {\n                return this.market (symbolId);\n            }\n        }\n        return undefined;\n    }\n"
+        + "    findLoose (wsId: Str) {\n        if (wsId === undefined) {\n            return undefined;\n        }\n        return this.markets[wsId];\n    }\n"
+        + "    handleIt (wsId: Str): Str {\n        const market = this.findSwap (wsId);\n        return this.safeString (market, 'symbol');\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rg3-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+    test('an unannotated producer of undefined or this.market (x) prints Option<Market> and its caller local follows', () => {
+        expect(out).toMatch(/fn findSwap\(&self, [^)]*\) -> Option<crate::types::Market>/);
+        expect(out).toContain('return Some((match self.market(');
+        expect(out).toContain('let mut market: Option<crate::types::Market> = self.findSwap(');
+        expect(out).toContain('self.safe_string_k_opt(&market, \"symbol\"');
+    });
+    test('a producer returning a raw store read stays Value', () => {
+        expect(out).toMatch(/fn findLoose\(&self, [^)]*\) -> Value/);
+    });
+});
+
+describe('rust base sort of a proven list', () => {
+    const base = "export type Str = string | undefined;\nexport default class Exchange {\n    sort (array: any): any { return array; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n"
+        + "    joinIds (ids: string[]): string {\n        const quoteIds: string[] = [];\n        for (let i = 0; i < ids.length; i++) {\n            quoteIds.push (ids[i]);\n        }\n        const sorted: string[] = this.sort (quoteIds);\n        let out = '';\n        for (let i = 0; i < sorted.length; i++) {\n            out = out + this.safeString (sorted, i, '');\n        }\n        return out;\n    }\n"
+        + "    sortAny (x: any): number {\n        const sorted = this.sort (this.hold (x));\n        return sorted.length;\n    }\n}\n";
+    let out = '';
+    beforeAll(() => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93rg4-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+    test('a sort of a typed list local is a list', () => {
+        expect(out).toMatch(/let mut sorted: crate::value::List = self\.sort\([^;]*\)\.into_list\(\);/);
+    });
+    test('a sort of an unproven value stays Value', () => {
+        expect(out).toMatch(/let mut sorted: Value = self\.sort\(self\.hold\(/);
+    });
+});
