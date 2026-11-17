@@ -3558,7 +3558,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(n) || !isReturnStatement(n.parent) || findAncestor(n.parent.parent, isFunctionLike) !== fn) return false;
         const declaration: any = this.rustDeclaredNode(n);
         if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined) return false;
+        // ral-90rb R4: a `+` concatenation of string literals / `String` locals is a string on every path, like a literal seed
+        const init: Node = this.unwrapParens(declaration.initializer);
+        if (isBinaryExpression(init) && init.operatorToken.kind === SyntaxKind.PlusToken && this.rust90bStrConcatInit(init) && this.rustEnclosingFunction(declaration) === fn) return true;
         return this.literalKindOfNode(this.unwrapParens(declaration.initializer)) === 'string' && this.rustEnclosingFunction(declaration) === fn;
+    }
+
+    /** ral-90rb R4: every leaf of a `+` chain is a string literal or an identifier whose declaration is a `const` initialised from a
+     *  base `safeString*` read with a string-literal default (checker `string`, never `undefined`). Decided from the AST. */
+    rust90bStrConcatInit(node: Node): boolean {
+        const inner: Node = this.unwrapParens(node);
+        if (isBinaryExpression(inner)) return inner.operatorToken.kind === SyntaxKind.PlusToken && this.rust90bStrConcatInit(inner.left) && this.rust90bStrConcatInit(inner.right);
+        if (isStringLiteral(inner)) return true;
+        if (!isIdentifier(inner)) return false;
+        const declaration: Node | undefined = this.rustDeclaredNode(inner);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || (declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        const read: Node = this.unwrapParens(declaration.initializer);
+        if (read === undefined || !isCallExpression(read) || !isPropertyAccessExpression(read.expression) || read.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(read.expression.name.text);
+        const last: Node = read.arguments[read.arguments.length - 1];
+        return (name === 'safeString' && read.arguments.length === 3 && isStringLiteral(last)) && this.primitiveKindOfType(this.getCheckedTypeOf(inner)) === 'string';
     }
 
     /** ral-61x: `return x` of the method's own nil-declared `let x: Str = undefined` local (an accumulator the body writes):
@@ -9275,8 +9294,38 @@ export class RustTranspiler extends BaseTranspiler {
         if (plan === undefined || node.pos < plan.bindPos || (!plan.typed && !plan.declOk && !this.rust80bClientDeclPending(plan))) return undefined;
         const write = this.isNativeWriteTargetBase(node);
         const first = plan.firstWrite.get(key);
-        if (!write && first !== undefined && this.rustClientHandleLine(node) >= first) return undefined;
+        if (!write && first !== undefined && this.rustClientHandleLine(node) >= first && !this.rust90bHandleSyncedInTest(node, plan)) return undefined;
         return { plan, key, write };
+    }
+
+    /** ral-90b: `k in client.subscriptions` after a write of that field reads the handle's snapshot when every write of
+     *  `client.subscriptions` in the method is a whole statement `client.subscriptions[k] = v` / `delete client.subscriptions[k]`:
+     *  both print through the handle (`add_subscription` / `remove_subscription`), which update the snapshot's key set with the
+     *  live client's, so the key test sees what the live read did. Decided from the AST. */
+    rust90bHandleSyncedInTest(node: Node, plan: { bindPos: number }): boolean {
+        if (!isPropertyAccessExpression(node) || String(node.name.text) !== 'subscriptions') return false;
+        const test: Node = this.rustSkipWrappersUp(node.parent);
+        if (!isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.InKeyword || this.unwrapParens(test.right) !== node) return false;
+        const method: Node | undefined = findAncestor(node, (n) => isMethodDeclaration(n));
+        if (method === undefined) return false;
+        // an awaited call (`this.watch (url, ..)`) can subscribe on the live client behind the snapshot
+        let awaits = false;
+        const visit = (m: Node) => { if (awaits) return; if (m.kind === SyntaxKind.AwaitExpression) { awaits = true; return; } m.forEachChild?.(visit); };
+        visit(method);
+        if (awaits) return false;
+        const refs: Node[] = this.rustScopeNameNodes(method, 'client');
+        return refs.every((r) => {
+            const p: Node = r.parent;
+            // the client handed whole to a call may have its live subscriptions changed behind the snapshot
+            if (r.kind === SyntaxKind.Identifier && (isCallExpression(p) || isNewExpression(p)) && (p.arguments ?? []).some((a) => a === r)) return false;
+            if (r.kind !== SyntaxKind.Identifier || r.pos < plan.bindPos || !isPropertyAccessExpression(p) || p.expression !== r
+                || String(p.name.text) !== 'subscriptions' || !this.isNativeWriteTargetBase(p)) return true;
+            const access: Node = p.parent;
+            if (!isElementAccessExpression(access) || access.expression !== p) return false;
+            const up: Node = access.parent;
+            const statement = up?.parent?.kind === SyntaxKind.ExpressionStatement;
+            return statement && (isDeleteExpression(up) || (isBinaryExpression(up) && up.left === access && up.operatorToken.kind === SyntaxKind.EqualsToken));
+        });
     }
 
     /** ral-80b: a `const client = this.client (url)` local whose declaration has not printed yet. A scalar decision made
@@ -30670,7 +30719,10 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration)
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         this.rustBuiltListCopiedElement = false;
-        if (!nilAssigned && (String(init.getText()).split('\n')[0].length > (read || guardedInit ? 240 : 120) || !(guardedInit || this.rustBuiltListWriteSource(init)))) return false;
+        // ral-90rb R3: a literal of string literals only (no element read, no copy) keeps the read-initializer budget: its native
+        // `Arc::new(vec![..])` is the boxed `Value::from(vec![..])` with the same elements, a few characters longer
+        const strLiteralList = init !== undefined && isArrayLiteralExpression(init) && init.elements.length > 0 && init.elements.every((e: Node) => isStringLiteral(e));
+        if (!nilAssigned && (String(init.getText()).split('\n')[0].length > (read || guardedInit || strLiteralList ? 240 : 120) || !(guardedInit || this.rustBuiltListWriteSource(init)))) return false;
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
         let handOffs = 0;
@@ -34233,8 +34285,8 @@ export class RustTranspiler extends BaseTranspiler {
         let root: any = access;
         while (isElementAccessExpression(root.parent) && root.parent.expression === root) root = root.parent;
         const up: any = root.parent;
-        // A write, `delete`, or a call/property target still reaches the helper.
-        if (up !== undefined && (isDeleteExpression(up) || (isBinaryExpression(up) && up.left === root)
+        // A write, `delete`, or a call/property target still reaches the helper (ral-90rb: a compare's left operand is a read).
+        if (up !== undefined && (isDeleteExpression(up) || (isBinaryExpression(up) && up.left === root && rustIsAssignmentOperator(up.operatorToken.kind))
             || (isCallExpression(up) && up.expression === root)
             || up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression)) return false;
         // The printer proves the position on the outermost chain node.

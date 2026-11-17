@@ -7928,7 +7928,8 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '        return Object.keys (marketIds);\n'
                 + '    }\n');
             expect(out).toContain('let mut marketIds: indexmap::IndexMap<String, Value> = (');
-            expect(out).toContain('marketIds.insert(crate::runtime::stringify_param(&(market.as_map().and_then(|__m| __m.get("id")).cloned().unwrap_or(Value::Null))), Value::Bool(true));');
+            // ral-90rb R2: `market['id'] !== undefined` is a read, so `market` is a read bearer (native `.get("id")`)
+            expect(out).toContain('marketIds.insert(crate::runtime::stringify_param(&(market.get("id").cloned().unwrap_or(Value::Null))), Value::Bool(true));');
             expect(out).toContain('Value::Array(marketIds.keys().cloned().map(Value::from).collect())');
             expect(out).not.toContain('add_element_to_object(&mut marketIds');
         });
@@ -22287,7 +22288,8 @@ describe('ral-65b: build-pass locals typed by the printer (second round)', () =>
     test('gate handleErrorMessage `id`: a safeStringN local keying a client `in` test the handle does not print is Option<String>', () => {
         expect(out).toContain('let mut id: Option<String> = self.safe_string_n_opt(message.clone(), Value::from(vec![Value::Str("id".into()), Value::Str("requestId".into()), Value::Str("request_id".into())]), &[]);');
         expect(out).toContain('let mut messageHash: Option<String> = self.safe_string_opt(__ch.subscriptions.clone(), id.clone().map(Value::from).unwrap_or(Value::Null), &[]);');
-        expect(out).toContain('if (id.is_some()) && (matches!((&get_value(&client, &Value::Str("subscriptions".into())), &id.clone().map(Value::from).unwrap_or(Value::Null)), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref()))) {');
+        // ral-90rb R1: every write of client.subscriptions in the method is a handle statement, so the later test reads the handle
+        expect(out).toContain('if (id.is_some()) && (__ch.has_subscription((&id).as_deref())) {');
         expect(out).toContain('__ch.remove_subscription(id.as_deref());');
         expect(out).not.toContain('let mut id: Value');
     });
@@ -24147,7 +24149,8 @@ describe('ral-80b: a string key tested against client.subscriptions after the ha
     });
     test('paradex watchOrderBookForSymbols snapshotChannel: no boxed typed key for the unserved in-test', () => {
         expect(out).toContain('let mut deltasHash: String = ');
-        expect(out).not.toMatch(/let mut snapshotChannel: (?:String|Option<String>) = /);
+        // ral-90rb R1: the only write is the handle's add_subscription statement, so the later in-test is served by the handle
+        expect(out).toContain('if deltas && (__ch.has_subscription(snapshotChannel.as_deref())) {');
     });
 });
 
@@ -25236,5 +25239,57 @@ describe('ral-90ra R1c: an annotated literal-seeded Str accumulator keeps its ke
         let sigs: Array<{ name: string, ret: string }> = [];
         try { sigs = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).rustSignatures ?? []; } finally { fs.rmSync(root, { recursive: true, force: true }); }
         expect(sigs.find((x) => x.name === 'create_order_appendix')?.ret).toBe('keptostr');
+    });
+});
+
+describe('ral-90rb R1: a key tested in client.subscriptions after a handle-synced write', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': "export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    resolve (result: any, messageHash: string): any { return result; }\n    reject (result: any, messageHash: string = undefined): any { return result; }\n}\n",
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n    handleErr (client: Client, message: any, id: string) {\n        if (id in client.subscriptions) {\n            delete client.subscriptions[id];\n        }\n        const authHash = 'authenticated';\n        client.reject (message, authHash);\n        if (authHash in client.subscriptions) {\n            delete client.subscriptions[authHash];\n        }\n    }\n    handleMixed (client: Client, message: any, id: string) {\n        client.subscriptions = {};\n        const otherHash = 'other';\n        client.reject (message, otherHash);\n        if (otherHash in client.subscriptions) {\n            delete client.subscriptions[otherHash];\n        }\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-90rb1-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the later key test reads the handle and the key is a String', () => {
+        expect(out).toContain('let mut authHash: String = "authenticated".to_string();');
+        expect(out).toContain('__ch.has_subscription(authHash.as_str())');
+    });
+    test('a whole-field write keeps the boxed key', () => {
+        expect(out).toContain('let mut otherHash: Value = ');
+    });
+});
+
+describe('ral-90rb R2: a list element compared (left operand of ===) is a read', () => {
+    test('a literal string list indexed by a loop counter and compared is a native List', () => {
+        const ts = "class venue {\n    safeList (o: any, k: any, d: any = undefined): any { return o[k]; }\n    handle (data: any) {\n        const levelKeys = [ 'inserts', 'updates', 'deletes' ];\n        let n = 0;\n        for (let k = 0; k < levelKeys.length; k++) {\n            const isDelete = (levelKeys[k] === 'deletes');\n            const levels = this.safeList (data, levelKeys[k], []);\n            if (isDelete) {\n                n = n + levels.length;\n            }\n        }\n        return n;\n    }\n}\n";
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut levelKeys: crate::value::List = std::sync::Arc::new(vec![');
+        expect(out).toContain('levelKeys.get(k as usize).cloned().unwrap_or(Value::Null).as_str() == Some("deletes")');
+    });
+});
+
+describe('ral-90rb R3: a long literal list of string literals is a native List', () => {
+    test('an 11-key string list read by index in a loop', () => {
+        const ts = "class venue {\n    check (params: any) {\n        const unsupported = [ 'cost', 'quoteQuantity', 'postOnly', 'triggerPrice', 'stopLossPrice', 'takeProfitPrice', 'stopLoss', 'takeProfit', 'reduceOnly', 'timeInForce', 'selfTradePrevention' ];\n        for (let i = 0; i < unsupported.length; i++) {\n            const key = unsupported[i];\n            if (key in params) {\n                return key;\n            }\n        }\n        return undefined;\n    }\n}\n";
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('let mut unsupported: crate::value::List = std::sync::Arc::new(vec![Value::Str("cost".into()), ');
+        expect(out).not.toContain('let mut unsupported: Value');
+    });
+});
+
+describe('ral-90rb R4: a returned concatenation of defaulted string reads in a -> Option<String> method', () => {
+    test('the concat local is a String with native string ops', () => {
+        const ts = "class venue {\n    safeString (o: any, k: any, d: any = undefined): string { return o[k]; }\n    formatNumber (data: string): string {\n        const parts = data.split ('.');\n        const integer = this.safeString (parts, 0, '');\n        const decimals = this.safeString (parts, 1, '');\n        let joinedResult = integer + decimals;\n        while (joinedResult.startsWith ('0')) {\n            joinedResult = joinedResult.slice (1);\n        }\n        return joinedResult;\n    }\n}\n";
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toMatch(/let mut joinedResult: String = format!\(/);
+        expect(out).not.toContain('let mut joinedResult: Value');
     });
 });
