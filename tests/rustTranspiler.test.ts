@@ -24850,3 +24850,47 @@ describe("ral-87rb R4: a for counter times an int literal is an i64", () => {
         expect(out).not.toContain('let mut start: Value');
     });
 });
+
+describe('ral-87rc R2: a nil-declared Str local keys an insert into an enumerated literal map read back by key', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (obj: any, key: any, defaultValue: string = undefined): string { return obj[key]; }\n    shortenSlug (s: any): string { return s; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    group (rows: any[]): any {\n        const groups: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            const raw = rows[i];\n            const groupId = this.safeString (raw, 'g');\n            let key: Str = undefined;\n            if (groupId !== undefined) {\n                key = this.shortenSlug (groupId);\n            }\n            if ((key !== undefined) && (key !== '')) {\n                if (!(key in groups)) {\n                    groups[key] = { 'id': groupId, 'items': [] };\n                }\n                const g = groups[key];\n                this.hold (g);\n            }\n        }\n        const keys = Object.keys (groups);\n        return this.hold (keys);\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-87rc2-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the key local is an Option<String>: insert key text, in test and map read are native', () => {
+        expect(out).toMatch(/let mut key: Option<String> = None;/);
+        expect(out).toMatch(/groups\.insert\(key\.as_deref\(\)\.unwrap_or\("null"\)\.to_string\(\)/);
+        expect(out).not.toContain('stringify_param(&key)');
+    });
+});
+
+describe('ral-87rc R3: a nil-declared Str local read by its own .length is an Option<String>', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    urlencode (o: Dict = {}): string { return ''; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    sign (path: string, method: string, params: Dict = {}): any {\n        let url = '/' + path;\n        let query: Str = undefined;\n        if (path === 'private') {\n            let bodySigned: Str = undefined;\n            query = this.customUrlencode (params);\n            if (method === 'GET') {\n                url = url + '?' + query;\n            } else {\n                bodySigned = query;\n            }\n            const bodyResolved = (method === 'GET') ? undefined : bodySigned;\n            return { 'url': url, 'body': bodyResolved };\n        } else {\n            query = this.urlencode (params);\n            if (query.length !== 0) {\n                url = url + '?' + query;\n            }\n        }\n        return { 'url': url, 'body': undefined };\n    }\n\n    customUrlencode (params: Dict = {}): Str {\n        let result = this.urlencode (params);\n        result = result.replace ('%2C', ',');\n        return result;\n    }\n}\n"
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-87rc3-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the local is typed and its length is the native char count', () => {
+        expect(out).toMatch(/let mut query: Option<String> = None;/);
+        expect(out).toContain('query.as_deref().unwrap_or_default().chars().count() as i64');
+        expect(out).not.toContain('let mut query: Value');
+    });
+});

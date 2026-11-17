@@ -3198,7 +3198,11 @@ export class RustTranspiler extends BaseTranspiler {
             // an optional string has no native `+`: the concat would fall back to the `add` helper
             if (kind === 'ostr' && isBinaryExpression(n.parent) && n.parent.operatorToken.kind === SyntaxKind.PlusToken && !this.rustNilOptStrConcatUse(n)) return false;
             const optConcat = kind === 'ostr' && this.rustNilOptStrConcatUse(n);
-            const form = this.rustNilSlotWrite(n) ? 'slot' : (optConcat ? 'concat' : this.rustScalarUseForm(n, kind));
+            // ral-87rc R3: `x.length` of the optional string local itself: the length hook reads the settled decision, which the
+            // walk is proving, so the receiver is native here (`x.as_deref().unwrap_or_default().chars().count()`: 0 for None, as
+            // `get_array_length` of the `Null` box answered)
+            const ownLength = kind === 'ostr' && isPropertyAccessExpression(n.parent) && n.parent.expression === n && isIdentifier(n.parent.name) && n.parent.name.text === 'length';
+            const form = this.rustNilSlotWrite(n) ? 'slot' : (optConcat ? 'concat' : (ownLength ? 'native' : this.rustScalarUseForm(n, kind)));
             this.rustScalarUseForms.set(n, form);
             if (form === 'box' || form === 'xbox' || form === 'err') boxed.push(n);
             if (RustTranspiler.RUST_NIL_SCALAR_NATIVE_FORMS.has(form)) native++;
@@ -13110,6 +13114,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-62k: every key read of the map is keyed by this very binding (anywhere after its write, e.g. safeBalance
             // `entry['debt'] = debtBalance[code]`): each prints `m.get(k.as_deref().unwrap_or(""))` (rustBearerTypedStrReadKey)
             if (enumerated && keyRead && isElementAccessExpression(this.rustSkipWrappers(local.initializer)) && this.rust62kOwnKeyOnlyRead(declaration, name, n)) return this.rustScalarInsertKeyUse(n);
+            // ral-87rc R2: a nil-declared `let k: Str = undefined` local (rust84cNilStrInKey) keying a plain literal map that is
+            // enumerated and read back by key: the insert takes the key text (`None` keys as "null", exactly the
+            // `stringify_param(&Null)` the boxed local gave); the map's reads print their own key forms, unchanged
+            if (enumerated && keyRead && this.rust84cNilStrInKey(local)) return this.rustScalarInsertKeyUse(n);
             if (enumerated) return !keyRead && (isElementAccessExpression(this.rustSkipWrappers(local.initializer)) || this.rustTbNetworkCodeInit(local.initializer)
                 || this.rust55xGuardedSafeStringKey(n, local))
                 && this.rustScalarInsertKeyUse(n);
