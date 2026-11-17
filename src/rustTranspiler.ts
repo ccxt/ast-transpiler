@@ -24569,7 +24569,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** ral-61i: `let x = undefined` / `let x: T;` (a statement, one declarator) written only as statements `x = await this.<endpoint> (..)`
      *  of REST endpoints declared `Promise<Dict>` (or `x = undefined`): the optional map the declared-endpoint rule holds. */
-    rustDeclaredDictEndpointLet(d: any): boolean {
+    rustDeclaredDictEndpointLet(d: any, comparisonsRead = false): boolean {
         const init: any = this.rustSkipWrappers(d.initializer);
         if (init !== undefined && this.literalKindOfNode(init) !== 'null') return false;
         if (d.parent?.parent?.kind !== SyntaxKind.VariableStatement || this.rustTestTierSource(d)) return false;
@@ -24582,6 +24582,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (!ok) return;
             if (isIdentifier(n) && String(n.text) === name && n !== d.name && !this.rustIdentifierIsPropertyName(n) && this.rustIdentifierRefersToDeclaration(n, d)) {
                 const up: any = n.parent;
+                // a comparison (`x !== undefined`) only reads x, it writes nothing
+                if (comparisonsRead && isBinaryExpression(up) && up.left === n && this.isEqualityOp(up.operatorToken.kind)) return;
                 if (isBinaryExpression(up) && up.left === n) {
                     if (up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) { ok = false; return; }
                     const rhs: any = this.rustSkipWrappers(up.right);
@@ -26609,6 +26611,30 @@ export class RustTranspiler extends BaseTranspiler {
         return call !== undefined && isCallExpression(call) && this.rustBorrowedSourceKind(call) === 'api' && this.rustDeclaredEndpointKind(call) !== undefined;
     }
 
+    /** `this.safeDict (x, k, x)` / `this.safeList (x, k, x)` whose default is its own receiver, x a `let` filled only by endpoints
+     *  declared `Promise<Dict>` (ral-61i, a syntactic proof) or a never-rewritten const answer of an endpoint declared of the
+     *  read's kind: the answer is the container read at k or x itself, so that kind or Null on every path. */
+    rustSelfDefaultedRead(call: Node, kind: 'dict' | 'list' | 'api'): boolean {
+        if (kind === 'api' || !isCallExpression(call) || call.arguments.length !== 3 || this.rustTestTierSource(call)) return false;
+        if (!isPropertyAccessExpression(call.expression) || String(call.expression.name.text) !== (kind === 'dict' ? 'safeDict' : 'safeList')) return false;
+        const recv: Node | undefined = this.rustSkipWrappers(call.arguments[0]);
+        const dflt: Node | undefined = this.rustSkipWrappers(call.arguments[2]);
+        if (recv === undefined || dflt === undefined || !isIdentifier(recv) || !isIdentifier(dflt) || String(recv.text) !== String(dflt.text)) return false;
+        const declaration: Declaration | undefined = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration !== this.rustDeclarationOfIdentifier(dflt)) return false;
+        // a never-rewritten parameter declared `Dict` (no `?`, no default): a map or Null, so a `safeDict` read of it is too
+        if (kind === 'dict' && isParameterDeclaration(declaration)) {
+            const type: TypeNode | undefined = declaration.type;
+            return type !== undefined && isTypeReferenceNode(type) && isIdentifier(type.typeName) && String(type.typeName.text) === 'Dict' && type.typeArguments === undefined
+                && declaration.questionToken === undefined && declaration.initializer === undefined && !this.rustHasWrites(declaration);
+        }
+        if (!isVariableDeclaration(declaration)) return false;
+        if (kind === 'dict' && this.rustDeclaredDictEndpointLet(declaration, true)) return true;
+        const init: Node | undefined = this.rustSkipWrappers(declaration.initializer);
+        if ((declaration.parent.flags & NodeFlags.Const) === 0 || init === undefined || init.kind !== SyntaxKind.AwaitExpression || !this.rustDeclaredEndpointWrite(init)) return false;
+        return this.rustDeclaredEndpointKind(this.rustSkipWrappers((init as Node & { expression: Node }).expression)) === kind;
+    }
+
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean {
         if (kind === 'api' || !isCallExpression(call)) return false;
@@ -26619,6 +26645,7 @@ export class RustTranspiler extends BaseTranspiler {
         const at = name.endsWith('2') ? 3 : 2;
         const dflt: any = call.arguments.length > at ? this.rustSkipWrappers(call.arguments[at]) : undefined;
         if (dflt === undefined || this.literalKindOfNode(dflt) === 'null') return true;
+        if (this.rustSelfDefaultedRead(call, kind)) return true;
         return kind === 'dict' ? isObjectLiteralExpression(dflt) && dflt.properties.length === 0 : isArrayLiteralExpression(dflt) && dflt.elements.length === 0;
     }
 

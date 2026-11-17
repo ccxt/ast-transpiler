@@ -26270,3 +26270,70 @@ describe('a nil-declared Str local written from a Strings parameter the checker 
         expect(out).toContain('let mut symbol: Value = Value::Null;');
     });
 });
+
+describe('a safeDict read defaulted to its own declared-endpoint receiver holds the optional map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, second: string, guard = 'flag === undefined') => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetB (params = {}): Promise<Dict> { return this.keep (params); }\n    publicGetC (params = {}): Promise<List> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async m (flag: boolean, params: Dict = {}) {\n        let response = undefined;\n        if (flag) {\n            response = await this.publicGetA (params);\n        } else {\n            response = await this.publicGet" + second + " (params);\n        }\n        if (" + guard + ") {\n            return undefined;\n        }\n        let inner = this.safeDict (response, 'data', response);\n        if (inner === undefined) {\n            inner = {};\n        }\n        return this.parseOrder (inner);\n    }\n    parseOrder (order: Dict, market = undefined) {\n        return { 'id': this.safeString (order, 'id'), 'info': order };\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('every write a declared Promise<Dict>: the read is an optional map lent to parseOrder', () => {
+        const out = transpiler.transpileRustByPath (write ('self-default-pos', 'B')).content;
+        expect(out).toContain('let mut inner: Option<crate::value::Dict> = self.safe_dict_k(&response, ');
+        expect(out).toContain('.parseOrder(&inner, ');
+    });
+    test('a null test of the receiver only reads it: still the optional map', () => {
+        const out = transpiler.transpileRustByPath (write ('self-default-test', 'B', 'response === undefined')).content;
+        expect(out).toContain('let mut inner: Option<crate::value::Dict> = self.safe_dict_k(&response, ');
+    });
+    test('a declared Promise<List> write keeps the read Value', () => {
+        const out = transpiler.transpileRustByPath (write ('self-default-neg', 'C')).content;
+        expect(out).toContain('let mut inner: Value');
+    });
+});
+
+describe('a safeList read defaulted to its own const declared-endpoint receiver holds the optional list', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeList (o: any, k: any, d: List = undefined): List { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, decl: string, ret: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetA (params = {}): Promise<" + ret + "> { return this.keep (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict, List } from './base/Exchange.js';\nexport default class venue extends venueApi {\n    async m (params: Dict = {}) {\n        " + decl + " response = await this.publicGetA (params);\n        const rows = this.safeList (response, 'data', response as any);\n        return this.parseRows (rows);\n    }\n    parseRows (rows: List, market = undefined) {\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (rows[i]);\n        }\n        return out;\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('a const Promise<List> answer: the read is an optional list', () => {
+        const out = transpiler.transpileRustByPath (write ('self-list-pos', 'const', 'List')).content;
+        expect(out).toContain('let mut rows: Option<crate::value::List> = ');
+        expect(out).toContain('.into_opt_list();');
+    });
+    test('a Promise<Dict | List> answer or a let keeps the read Value', () => {
+        expect(transpiler.transpileRustByPath (write ('self-list-mixed', 'const', 'Dict | List')).content).toContain('let mut rows: Value');
+        expect(transpiler.transpileRustByPath (write ('self-list-let', 'let', 'List')).content).toContain('let mut rows: Value');
+    });
+});
+
+describe('a safeDict read defaulted to its own never-written Dict parameter holds the optional map', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n}\n";
+    const write = (name: string, param: string, body = '') => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    m (" + param + ") {\n" + body + "        const inner = this.safeDict (raw, 'data', raw);\n        return { 'id': this.safeString (inner, 'id'), 'info': inner };\n    }\n}\n");
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    test('a Dict parameter: the read is a typed map', () => {
+        const out = transpiler.transpileRustByPath (write ('self-param-pos', 'raw: Dict')).content;
+        expect(out).toContain('let mut inner: Option<crate::value::Dict> = ');
+    });
+    test('an any parameter or a rewritten one keeps the read Value', () => {
+        expect(transpiler.transpileRustByPath (write ('self-param-any', 'raw: any')).content).toContain('let mut inner: Value');
+        expect(transpiler.transpileRustByPath (write ('self-param-written', 'raw: Dict', "        raw = this.safeDict (raw, 'x');\n")).content).toContain('let mut inner: Value');
+    });
+});
