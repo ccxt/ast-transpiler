@@ -22765,6 +22765,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.goNativeParameterTypeCache = /* @__PURE__ */ new Map();
     this.goSameFileCallCache = /* @__PURE__ */ new Map();
     this.goTsSrcTreeCache = /* @__PURE__ */ new Map();
+    this.goSliceParamsKeepingGetValue = /* @__PURE__ */ new Set();
     // the Go type this identifier is actually *declared* with, or undefined when it
     // stays `any`. It goes through getGoLocalType, not goTypeOfInitializer, so a
     // declaration the reject filters demoted back to `any` is reported as `any` here
@@ -28493,10 +28494,15 @@ ${iden}}`;
     if (annotated === void 0) {
       return void 0;
     }
-    if (annotated === GO_SAFE_LIST_LOCAL_TYPE && this.goBodyReadsElement(fn.body, param.name.text)) {
+    const readsElement = annotated === GO_SAFE_LIST_LOCAL_TYPE && this.goBodyReadsElement(fn.body, param.name.text);
+    if (readsElement && !fn.name.text.startsWith("parse")) {
       return void 0;
     }
-    return this.goParameterCallSitesPassType(fn, index, annotated) && this.goParameterBodyTakes(fn, param, annotated) ? annotated : void 0;
+    const typed = this.goParameterCallSitesPassType(fn, index, annotated) && this.goParameterBodyTakes(fn, param, annotated) ? annotated : void 0;
+    if (typed !== void 0 && readsElement) {
+      this.goSliceParamsKeepingGetValue.add(param);
+    }
+    return typed;
   }
   // the slice type an array-annotated parameter prints, undefined for every other annotation
   goAnnotatedSliceParameterType(param) {
@@ -28607,6 +28613,15 @@ ${iden}}`;
       throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
     }
     return "[]any";
+  }
+  goSliceParamKeepsGetValue(decl) {
+    if (this.goIsUnifiedAnySliceParameterNode(decl)) {
+      return true;
+    }
+    if (decl?.kind === SyntaxKind5.Parameter) {
+      this.goNativeParameterType(decl);
+    }
+    return this.goSliceParamsKeepingGetValue.has(decl);
   }
   // the parameter node a unified `[]any` slot belongs to: its element reads keep GetValue, the native
   // read would trade it for DerefScalar
@@ -35734,7 +35749,7 @@ ${this.getIden(level)}}()`;
       return void 0;
     }
     const readBase = node?.expression;
-    if (readBase?.kind === SyntaxKind5.Identifier && this.goIsUnifiedAnySliceParameterNode(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
+    if (readBase?.kind === SyntaxKind5.Identifier && this.goSliceParamKeepsGetValue(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
       return void 0;
     }
     const bounded = this.goGb08BoundedListRead(node, keyNode);
