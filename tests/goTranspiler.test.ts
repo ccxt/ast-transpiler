@@ -17848,3 +17848,51 @@ describe('closed venue parse* methods annotated string print string', () => {
         expect(out).toContain('var part string = this.ParseArrayParam(');
     });
 });
+
+describe('int literal seeds joined with int64 writes', () => {
+    const head = 'export class ex {\n'
+        + '    parseToInt (x: any): number { return x; }\n';
+    test('a literal-seeded local written from parseToInt and literals declares int64', () => {
+        const out = goTranspile87g8(head
+            + '    f (limit: any, type: any) {\n'
+            + '        let n = 100;\n'
+            + '        if (limit !== undefined) {\n'
+            + '            n = this.parseToInt (limit);\n'
+            + '        } else {\n'
+            + '            n = 5000;\n'
+            + '        }\n'
+            + '        let k = 0;\n'
+            + '        while (k < n) {\n'
+            + '            k = k + 1;\n'
+            + '        }\n'
+            + '        k = this.parseToInt (type);\n'
+            + '        return n * k;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var n int64 = 100');
+        expect(out).toContain('var k int64 = 0');
+    });
+    test('a float or string write keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    f (limit: any) {\n'
+            + '        let n = 100;\n'
+            + '        n = this.parseToInt (limit);\n'
+            + '        n = 0.5;\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var n any = 100');
+    });
+    test('a nil-tested local keeps the box', () => {
+        const out = goTranspile87g8(head
+            + '    f (limit: any) {\n'
+            + '        let n = this.parseToInt (limit);\n'
+            + '        if (n === undefined) {\n'
+            + '            n = 100;\n'
+            + '        }\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain('var n any = this.ParseToInt(limit)');
+    });
+});

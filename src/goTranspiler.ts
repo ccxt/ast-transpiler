@@ -40336,3 +40336,128 @@ function goPagedListRowsLocal (goTranspiler, list): boolean {
         return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden (level + 2)}return ${containerStr}[${keyStr}]\n${body}}\n${body}return nil\n${this.getIden (level)}}()`;
     };
 }
+
+// A number local whose initializer and every `=` write is an int literal, an int64 local/param, an
+// int64 reader call or `+ - *` of those (the local itself included) holds an int64: declare it so.
+const goIntSeedAdmittedWrites = new Set<object>();
+const goIntSeedVerdicts = new WeakMap<object, boolean>();
+function goIntSeedUnwrap (node) {
+    while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression)) {
+        node = node.expression;
+    }
+    return node;
+}
+function goIntSeedRefersTo (goTranspiler, node, declaration): boolean {
+    return goTranspiler.hasNodeWhere (node, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === declaration.name.text)
+        && (goTranspiler.goDeclarationOfIdentifier (n) === declaration)) || ((node?.kind === SyntaxKind.Identifier)
+        && (goTranspiler.goDeclarationOfIdentifier (node) === declaration));
+}
+function goIntSeedIntValue (goTranspiler, node, declaration): boolean {
+    node = goIntSeedUnwrap (node);
+    if (goTranspiler.goIsNumericConstant (node)) {
+        return (goTranspiler.goNumericLiteralKind (node) === 'int') && Number.isSafeInteger (goTranspiler.goNumericConstantValue (node));
+    }
+    if (node?.kind === SyntaxKind.Identifier) {
+        if (goTranspiler.goDeclarationOfIdentifier (node) === declaration) {
+            return true;
+        }
+        return (goTranspiler.goDeclaredTypeOfIdentifier (node) === 'int64') || (goTranspiler.goDeclaredParamStaticType (node) === 'int64');
+    }
+    if (node?.kind === SyntaxKind.BinaryExpression) {
+        const op = node.operatorToken.kind;
+        if ((op !== SyntaxKind.PlusToken) && (op !== SyntaxKind.MinusToken) && (op !== SyntaxKind.AsteriskToken)) {
+            return false;
+        }
+        if (goIntSeedRefersTo (goTranspiler, node, declaration)) {
+            return goIntSeedIntValue (goTranspiler, node.left, declaration) && goIntSeedIntValue (goTranspiler, node.right, declaration);
+        }
+        return goTranspiler.goNativeArithmetic (node)?.goType === 'int64';
+    }
+    if (node?.kind === SyntaxKind.CallExpression) {
+        return goTranspiler.goTypeOfInitializer (node, goTranspiler.printNode (node, 0)) === 'int64';
+    }
+    return false;
+}
+function goIntSeedMeetsIntOperand (goTranspiler, scope, declaration): boolean {
+    return goTranspiler.hasNodeWhere (scope, (n) => {
+        const parent = n.parent;
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (parent?.kind !== SyntaxKind.BinaryExpression)
+            || (parent.left === n && parent.operatorToken.kind === SyntaxKind.EqualsToken) || (goTranspiler.goDeclarationOfIdentifier (n) !== declaration)) {
+            return false;
+        }
+        const other = goIntSeedUnwrap ((parent.left === n) ? parent.right : parent.left);
+        return ((other?.kind === SyntaxKind.PropertyAccessExpression) && (other.name?.text === 'length'))
+            || ((other?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier (other) === 'int64'));
+    });
+}
+function goIntSeedInt64Local (goTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.initializer === undefined) || (declaration.parent?.kind !== SyntaxKind.VariableDeclarationList)
+        || ((declaration.parent.flags & NodeFlags.Let) === 0)
+        || ((declaration.type !== undefined) && !['Int', 'number', 'int'].includes (declaration.type.getText ()))) {
+        return false;
+    }
+    if (goIntSeedVerdicts.has (declaration)) {
+        return goIntSeedVerdicts.get (declaration);
+    }
+    goIntSeedVerdicts.set (declaration, false);
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const name = declaration.name.text;
+    const writes = [ declaration.initializer ];
+    let bad = (scope === undefined) || (goTranspiler.checkerOrUndefined () === undefined);
+    if (!bad) {
+        bad = goTranspiler.hasNodeWhere (scope, (n) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)
+                || (goTranspiler.goDeclarationOfIdentifier (n) !== declaration)) {
+                return false;
+            }
+            const parent = n.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
+                const op = parent.operatorToken.kind;
+                if (op === SyntaxKind.EqualsToken) {
+                    writes.push (parent.right);
+                    return false;
+                }
+                if ((op >= SyntaxKind.FirstAssignment) && (op <= SyntaxKind.LastAssignment)) {
+                    return true;
+                }
+            }
+            // an int64 is never nil: a nil test on it would print the IsEqual helper
+            if (parent?.kind === SyntaxKind.BinaryExpression) {
+                const other = goIntSeedUnwrap ((parent.left === n) ? parent.right : parent.left);
+                return (other?.kind === SyntaxKind.NullKeyword) || (other?.kind === SyntaxKind.UndefinedKeyword)
+                    || ((other?.kind === SyntaxKind.Identifier) && (other.getText () === 'undefined'));
+            }
+            return false;
+        });
+    }
+    // literal seeds and self counters alone need a read against a length or an int64 operand
+    const foreign = writes.some ((w) => !goTranspiler.goIsNumericConstant (goIntSeedUnwrap (w)) && !goIntSeedRefersTo (goTranspiler, w, declaration));
+    let ok = !bad && (foreign || goIntSeedMeetsIntOperand (goTranspiler, scope, declaration))
+        && writes.every ((w) => goIntSeedIntValue (goTranspiler, w, declaration));
+    if (ok) {
+        for (const w of writes) {
+            goIntSeedAdmittedWrites.add (w);
+        }
+        try {
+            ok = !goTranspiler.goTypeNameIsShadowed (scope, 'int64') && goTranspiler.goLocalIsSafeToType (scope, declaration, name, 'int64');
+        } finally {
+            for (const w of writes) {
+                goIntSeedAdmittedWrites.delete (w);
+            }
+        }
+    }
+    goIntSeedVerdicts.set (declaration, ok);
+    return ok;
+}
+{
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+        return goIntSeedAdmittedWrites.has (initializer) ? 'int64' : goTypeOfInitializer.call (this, initializer, printedValue);
+    };
+    const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        const shipped = getGoLocalType.call (this, declaration, parsedValue);
+        return ((shipped === 'any') && goIntSeedInt64Local (this, declaration)) ? 'int64' : shipped;
+    };
+}
