@@ -39970,3 +39970,45 @@ function goConcatSeed(goTranspiler: GoTranspiler, declaration): boolean {
     };
 }
 // ===== end *string concat seeds =====
+
+// An async exchange-local `Str` parameter prints `*string` when every call site passes a `*string`
+// or the address of a never-written `string` parameter (printed `&x` by installStringPtrParams):
+// the value-type-only async rule refused such mixed sites, so the body compared through IsEqual.
+const goRequiredParameterNativeTypeAsyncStrPtr = GoTranspiler.prototype.goRequiredParameterNativeType;
+GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, index: number) {
+    const answer = goRequiredParameterNativeTypeAsyncStrPtr.call(this, fn, param, index);
+    if ((answer !== undefined) || !this.isAsyncFunction(fn) || (param.type?.getText() !== 'Str')
+        || (param.name?.kind !== SyntaxKind.Identifier) || this.goHasDynamicCallee(fn, fn.name.text)) {
+        return answer;
+    }
+    const sites = this.goSameFileCallsOf(fn, fn.name.text);
+    if (sites.length === 0) {
+        return answer;
+    }
+    let pointers = 0;
+    for (const site of sites) {
+        const arg = site.arguments?.[index];
+        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (site.runner !== undefined)) {
+            return answer;
+        }
+        const printed = this.goPrintedArgType(arg);
+        if (printed === '*string') {
+            pointers++;
+        } else if ((printed !== 'string') || (ccxtGoStringParamAddress(this, arg) === undefined)) {
+            return answer;
+        }
+    }
+    // a sibling-file caller is outside the proof
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    if (tree !== undefined) {
+        const myClass = this.goEnclosingClassName(fn);
+        const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        if ((tree.callIndex.get(fn.name.text) ?? []).some((site) => (site.file !== myFile) && this.goTsSrcFileDerivesFrom(tree, site.file, myClass))) {
+            return answer;
+        }
+    }
+    if ((pointers === 0) || !this.goLocalIsSafeToType(fn.body, param, param.name.text, '*string')) {
+        return answer;
+    }
+    return '*string';
+};

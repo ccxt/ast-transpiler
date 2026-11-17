@@ -17685,3 +17685,40 @@ describe('*string safeString seeds rebound by a literal concat', () => {
         expect (out).not.toContain ('var s *string');
     });
 });
+
+describe('an async venue Str parameter fed pointers and unwritten string parameters', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'async-str-ptr-param-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (caller: string): string => {
+        const dir = path.join(tmp, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), 'export type Str = string | undefined;\nexport class Exchange {\n    safeString (a: any, b: any, c: any = undefined): Str { return c; }\n}\n');
+        const file = path.join(dir, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, Str } from './base/Exchange';\nexport class ex extends Exchange {\n"
+            + "    async zero () {\n        return await this.one ('buy');\n    }\n"
+            + '    async one (side: string) {\n        return await this.req (side);\n    }\n'
+            + '    async two (o: object) {\n' + caller + '    }\n'
+            + "    async req (side: Str) {\n        const sideStr: string = side;\n        if (sideStr === 'sell') {\n            return 1;\n        }\n        return 2;\n    }\n}\n");
+        const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoLocalTypes(inst.goTranspiler);
+        const cwd = process.cwd();
+        process.chdir(tmp);
+        try {
+            return inst.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    test('the parameter and its copy print *string', () => {
+        const output = run("        const side = this.safeString (o, 'side');\n        return await this.req (side);\n");
+        expect(output).toContain('reqBody(ch chan any, side *string)');
+        expect(output).toContain('var sideStr *string = side');
+        expect(output).toContain('this.ReqAsync(&side)');
+    });
+    test('a caller passing an untyped value keeps the box', () => {
+        const output = run("        return await this.req (o['side']);\n");
+        expect(output).toContain('reqBody(ch chan any, side any)');
+    });
+});
