@@ -15487,3 +15487,90 @@ describe('ral-87g6 a map copy rebound only by a pair write needs a native use', 
         expect(output).toContain('var paramsLoop map[string]any = params');
     });
 });
+
+describe('87g7 R1 empty list arm next to a []string arm', () => {
+    test('a defaulted string-list parameter or [] declares []string and reads natively', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'type Strings = string[] | undefined;\n'
+            + 'class X {\n'
+            + '    outcome (s: any): Dict { return {}; }\n'
+            + '    f (outcomes: Strings = undefined, params: Dict = {}) {\n'
+            + '        const outcomesList: string[] = (outcomes === undefined) ? [] : outcomes;\n'
+            + '        const n = outcomesList.length;\n'
+            + '        for (let i = 0; i < n; i++) {\n'
+            + '            const o = this.outcome (outcomesList[i]);\n'
+            + '        }\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar outcomesList []string\n\tif outcomes == nil {\n\t\toutcomesList = []string{}\n\t} else {\n\t\toutcomesList = outcomes\n\t}');
+        expect(out).toContain('var n int = len(outcomesList)');
+        expect(out).toContain('this.Outcome(outcomesList[i])');
+    });
+});
+
+describe('87g7 R2 string arm next to a *string arm', () => {
+    test('a string field or literal next to a safeString read declares *string; nil tests and concatenation are native', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class X {\n'
+            + '    apiKey: string = \'\';\n'
+            + '    options: Dict = {};\n'
+            + '    safeString (a: any, k: any): string | undefined { return undefined; }\n'
+            + '    h (params: Dict = {}) {\n'
+            + '        const hasDirectApiKey = (this.apiKey !== undefined) && (this.apiKey !== \'\');\n'
+            + '        const apiKey = hasDirectApiKey ? this.apiKey : this.safeString (this.options, \'apiKey\');\n'
+            + '        if (apiKey === undefined) {\n'
+            + '            throw new Error (\'x\');\n'
+            + '        }\n'
+            + '        return \'u?apikey=\' + apiKey;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar apiKey *string\n\tif hasDirectApiKey {\n\t\tapiKeyValue := this.ApiKey\n\t\tapiKey = &apiKeyValue\n\t} else {\n\t\tapiKey = this.SafeString(this.Options, "apiKey")\n\t}');
+        expect(out).toContain('if apiKey == nil {');
+    });
+    test('a local handed to a map literal keeps the box', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class X {\n'
+            + '    apiKey: string = \'\';\n'
+            + '    options: Dict = {};\n'
+            + '    safeString (a: any, k: any): string | undefined { return undefined; }\n'
+            + '    h (params: Dict = {}) {\n'
+            + '        const apiKey = (this.apiKey !== \'\') ? this.apiKey : this.safeString (this.options, \'apiKey\');\n'
+            + '        if (apiKey === undefined) {\n'
+            + '            throw new Error (\'x\');\n'
+            + '        }\n'
+            + '        return { \'apikey\': apiKey };\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).not.toContain('var apiKey *string');
+    });
+});
+
+describe('87g7 R3 absent arm next to a string arm', () => {
+    test('a string arm or undefined compared with string literals declares *string', () => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler);
+        const src = 'type Dict = { [key: string]: any };\n'
+            + 'class X {\n'
+            + '    safeString (a: any, k: any): string | undefined { return undefined; }\n'
+            + '    f (params: Dict = {}) {\n'
+            + '        const typeVar = this.safeString (params, \'type\');\n'
+            + '        const lowercaseRawType = (typeVar !== undefined) ? typeVar.toLowerCase () : undefined;\n'
+            + '        const isFunding = (lowercaseRawType === \'fund\') || (lowercaseRawType === \'funding\');\n'
+            + '        return isFunding;\n'
+            + '    }\n'
+            + '}\n';
+        const out = x.transpileGo(src).content;
+        expect(out).toContain('\tvar lowercaseRawType *string\n\tif typeVar != nil {\n\t\tlowercaseRawTypeValue := strings.ToLower(*typeVar)\n\t\tlowercaseRawType = &lowercaseRawTypeValue\n\t} else {\n\t\tlowercaseRawType = nil\n\t}');
+        expect(out).toContain('(lowercaseRawType != nil && *lowercaseRawType == "fund")');
+    });
+});

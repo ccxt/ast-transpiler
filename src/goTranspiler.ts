@@ -35986,3 +35986,144 @@ GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: stri
     }
     return 'bool';
 };
+
+// ---- 87g7 R1: an empty list literal arm next to a `[]string` arm --------------------------------
+// `const xs = (outcomes === undefined) ? [] : outcomes` with `outcomes` a `[]string` (GetArgStringSlice):
+// the literal boxed a `[]any{}` on one branch and a `[]string` on the other; every helper reads both as
+// an empty / the same list. The local is declared `[]string` and the empty arm prints `[]string{}`, so
+// length and element reads are native. Only a local with such a read is admitted.
+// ---- 87g7 R2: a string arm next to a `*string` arm ----------------------------------------------
+// `const k = hasDirect ? this.apiKey : this.safeString (this.options, 'apiKey')` (or a string literal arm):
+// the literal boxed a Go `string` on one branch and a `*string` on the other, and every reader derefs the
+// pointer (a nil pointer reads like the nil box). The local is declared `*string`: the pointer arm is
+// assigned as is and the string arm is copied into a branch-local and its address taken, so the local is
+// never nil on that branch, exactly like the boxed string was never nil. Only a local read by a nil test
+// or a string comparison is admitted.
+interface GoTernaryJoinR87Parts { goType: string, derefTrue: boolean, derefFalse: boolean, emptyTrue?: boolean, emptyFalse?: boolean, addressTrue?: boolean, addressFalse?: boolean, nilTrue?: boolean, nilFalse?: boolean }
+
+export interface GoTranspiler {
+    goTernaryJoinR87HasNativeRead(declaration, kind: string): boolean;
+}
+
+GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, kind: string): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name;
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined)) {
+        return false;
+    }
+    const isNil = (e) => (e?.kind === SyntaxKind.NullKeyword) || ((e?.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
+    return this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        if (kind === 'list') {
+            return ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === current))
+                || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === current) && (parent.name?.text === 'length'));
+        }
+        if ((parent?.kind !== SyntaxKind.BinaryExpression) || (COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0)) {
+            return false;
+        }
+        const other = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+        return isNil(other) || (other?.kind === SyntaxKind.StringLiteral);
+    }) && ((kind === 'list') || !this.hasNodeWhere(scope, (n) => {
+        // a `*string` local is read only by nil tests, string comparisons and concatenation: a store, a call
+        // argument or a return would hand the pointer on where the box held a plain string
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        let current = n;
+        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            current = current.parent;
+        }
+        const parent = current.parent;
+        if (parent?.kind !== SyntaxKind.BinaryExpression) {
+            return true;
+        }
+        const op = parent.operatorToken.kind;
+        if (COMPARISON_TOKENS.indexOf(op) >= 0) {
+            const other = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+            return !(isNil(other) || (other?.kind === SyntaxKind.StringLiteral));
+        }
+        return op !== SyntaxKind.PlusToken;
+    }));
+};
+
+const goTernaryJoinR87PartsUncached = GoTranspiler.prototype.goTernaryJoinPartsUncached;
+GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
+    const known = goTernaryJoinR87PartsUncached.call(this, declaration);
+    if ((known !== undefined) || this.goTernaryJoinProvisional()) {
+        return known;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((ternary?.kind !== SyntaxKind.ConditionalExpression) || (declaration.type !== undefined && declaration.type.kind === SyntaxKind.AnyKeyword)) {
+        return undefined;
+    }
+    const isEmptyList = (n) => { const u = this.goUnwrapParenthesizedNode(n); return (u?.kind === SyntaxKind.ArrayLiteralExpression) && (u.elements.length === 0); };
+    const emptyTrue = isEmptyList(ternary.whenTrue);
+    const emptyFalse = isEmptyList(ternary.whenFalse);
+    if (emptyTrue !== emptyFalse) {
+        const otherNode = this.goUnwrapParenthesizedNode(emptyTrue ? ternary.whenFalse : ternary.whenTrue);
+        let other = this.goTernaryJoinArmType(otherNode);
+        if ((other === undefined) && (otherNode?.kind === SyntaxKind.Identifier)) {
+            const target = this.checkerOrUndefined()?.getSymbolAtLocation(otherNode)?.valueDeclaration?.resolve();
+            other = (target?.kind === SyntaxKind.Parameter) ? this.goGetArgParameterType(target) : this.goDeclaredTypeOfIdentifier(otherNode);
+        }
+        if ((other === '[]string') && !this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+            && this.goTernaryJoinR87HasNativeRead(declaration, 'list')) {
+            return { goType: '[]string', derefTrue: false, derefFalse: false, emptyTrue: emptyTrue, emptyFalse: emptyFalse } as GoTernaryJoinR87Parts;
+        }
+        return undefined;
+    }
+    const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
+    const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
+    // 87g7 R3: an absent arm next to a string / *string arm is a nil *string on that branch; the use scan
+    // below admits only nil tests, string-literal comparisons and concatenation, all of which read a nil
+    // pointer exactly as they read the nil box
+    const nilWithString = ((whenTrue === 'nil') && ((whenFalse === 'string') || (whenFalse === '*string')))
+        || ((whenFalse === 'nil') && ((whenTrue === 'string') || (whenTrue === '*string')));
+    const pairs = nilWithString || ((whenTrue === 'string') && (whenFalse === '*string')) || ((whenTrue === '*string') && (whenFalse === 'string'));
+    if (!pairs || this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)).includes('\n')
+        || !this.goTernaryJoinR87HasNativeRead(declaration, 'string')) {
+        return undefined;
+    }
+    return { goType: '*string', derefTrue: false, derefFalse: false, addressTrue: whenTrue === 'string', addressFalse: whenFalse === 'string',
+        nilTrue: whenTrue === 'nil', nilFalse: whenFalse === 'nil' } as GoTernaryJoinR87Parts;
+};
+
+const goTernaryJoinR87Declaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const parts = (goTernaryJoinOwner(declaration?.initializer) === declaration) ? (this.goTernaryJoinParts(declaration) as GoTernaryJoinR87Parts) : undefined;
+    if ((parts === undefined) || !(parts.emptyTrue || parts.emptyFalse || parts.addressTrue || parts.addressFalse || parts.nilTrue || parts.nilFalse)) {
+        return goTernaryJoinR87Declaration.call(this, statement, declaration, identation);
+    }
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (statement.declarations?.length !== 1)
+        || (this.getGoLocalType(declaration, this.printNode(declaration.initializer, identation)) !== parts.goType)) {
+        return undefined;
+    }
+    const ternary = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    const temp = name + 'Value';
+    const branch = (node, empty: boolean, address: boolean, absent: boolean) => {
+        if (empty) {
+            return `${iden}\t${name} = []string{}`;
+        }
+        if (absent) {
+            return `${iden}\t${name} = nil`;
+        }
+        const printed = this.goPrintTernaryBranch(node, 1).trim();
+        return address ? `${iden}\t${temp} := ${printed}\n${iden}\t${name} = &${temp}` : `${iden}\t${name} = ${printed}`;
+    };
+    const whenTrue = branch(ternary.whenTrue, parts.emptyTrue === true, parts.addressTrue === true, parts.nilTrue === true);
+    const whenFalse = branch(ternary.whenFalse, parts.emptyFalse === true, parts.addressFalse === true, parts.nilFalse === true);
+    return `${iden}var ${name} ${parts.goType}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${whenTrue}\n${iden}} else {\n${whenFalse}\n${iden}}`;
+};
