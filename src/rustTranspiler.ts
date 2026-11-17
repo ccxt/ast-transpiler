@@ -6669,7 +6669,9 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = isIdentifier(arg) ? this.rustScalarIdentifierKind(arg) : this.rustScalarValueKind(arg, true);
         // ral-84g R1: a venue method already printed `-> Option<String>` (rustVenueStrCall: every venue declaration of the name
         // declares a string return) boxes into a `Str` or `Null` at the argument, never an `Int`
-        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg);
+        // ral-87rg R2: an unwritten parameter whose typed signature slot is `f64` / `Option<f64>` (rustOptParamKind, from the
+        // signature table) is rebound from that float, so its `Value` is a `Float` or `Null`: `parse_number` hands it through
+        return kind === 'str' || kind === 'ostr' || this.rustVenueStrCall(arg) || (kind === undefined && [ 'num', 'onum' ].includes(this.rustOptParamKind(arg) ?? ''));
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
@@ -26378,7 +26380,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
         if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
-        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        // ral-87rg R5: or a never-reassigned local the dict-bearer rule prints `indexmap::IndexMap` (handed back as `Value::Map(x)`)
+        const typedMap = isVariableDeclaration(d) && !this.rustLocalIsReassigned(d, String(head.text)) && this.rustDictLocalIsTyped(d);
+        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d)) || typedMap;
     }
 
     /** ral-50a: `t[1]` read off a `const t = this.handle*AndParams (m, ..)` tuple (base helper, PARAMS_SLOT_ARG) whose params
@@ -32291,12 +32295,25 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const at = list.elements.indexOf(n);
         if (/^handle\w*AndParams\d*$/.test(String(call.expression.name.text)) && list.elements.length === 2 && at === 1) return true;
+        // ral-87rg R1: base `handleParamBool|String|Integer[2] (x, ..)` hands back `x` itself or `this.omit (x, ..)` at slot 1
+        // (Exchange.ts: `paramsOmitted = params` / `this.omit (params, name)`): a map whenever the lent `x` is the written local
+        if (list.elements.length === 2 && at === 1 && this.rust87rgParamSlotCall(call, n)) return true;
         if (!this.rustNativeListSource(call)) return false;
         const declaration: any = this.rustCalleeDeclaration(call);
         let type: any = declaration?.type;
         const named = (t: any, name: string): boolean => t?.kind === SyntaxKind.TypeReference && isIdentifier(t.typeName) && t.typeName.text === name;
         if (named(type, 'Promise') && type.typeArguments?.length === 1) type = type.typeArguments[0];
         return type?.kind === SyntaxKind.TupleType && named(type.elements?.[at], 'Dict') && type.elements[at].typeArguments === undefined;
+    }
+
+    private static readonly RUST_87RG_PARAM_SLOT_HELPERS = new Set([ 'handleParamBool', 'handleParamBool2', 'handleParamString', 'handleParamString2', 'handleParamInteger', 'handleParamInteger2' ]);
+
+    /** ral-87rg R1: `[ v, x ] = this.handleParamBool|String|Integer[2] (x, ..)` on the base runtime helper, whose first argument
+     *  is the very local the slot writes back (so slot 1 is that map, or its omit, on every path). */
+    rust87rgParamSlotCall(call: any, n: any): boolean {
+        if (!this.rustBaseCallNamed(call, RustTranspiler.RUST_87RG_PARAM_SLOT_HELPERS) || this.rustTestTierSource(call) || !isIdentifier(n)) return false;
+        const head: any = this.rustSkipWrappers(call.arguments[0]);
+        return head !== undefined && isIdentifier(head) && this.rustDeclaredNode(head) === this.rustDeclaredNode(n) && this.rustDeclaredNode(n) !== undefined;
     }
 
     rustNilSlotDictCandidateUncached(declaration: any): boolean {
@@ -36020,11 +36037,20 @@ export class RustTranspiler extends BaseTranspiler {
             if (callee === 'arrayConcat') return n.arguments.length === 2 && this.rustCalleeIsBase(n);
             if (callee === 'sortBy' || callee === 'sortBy2') {
                 const first: any = this.rustStripWrappers(n.arguments[0]);
+                // ral-87rg R4: a base `aggregate (x)` operand: the runtime (exchange_stubs.rs `aggregate`) answers `Value::Array` on every path
+                if (first !== undefined && this.rust87rgAggregateCall(first)) return this.rustCalleeIsBase(n);
                 return first !== undefined && isIdentifier(first) && this.rustCalleeIsBase(n) && this.arrAlias(first);
             }
             return false;
         }
         return isIdentifier(n) && String(n.text) !== 'undefined' && this.arrAlias(n);
+    }
+
+    /** ral-87rg R4: `this.aggregate (x)` bound to the base helper (a hand-written runtime stub that returns `Value::Array(..)` for
+     *  every input: the non-list case answers `[]`), so a `sortBy` over it hands a list back. */
+    rust87rgAggregateCall(n: any): boolean {
+        return n !== undefined && isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(n.expression.name.text) === 'aggregate' && n.arguments.length === 1 && this.rustCalleeIsBase(n) && !this.rustTestTierSource(n);
     }
 
     arrAlias(ident: any): boolean {
