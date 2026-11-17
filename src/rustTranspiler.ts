@@ -5709,6 +5709,9 @@ export class RustTranspiler extends BaseTranspiler {
         const cast = this.rustStrCastCall(node); if (cast !== undefined) return this.rustScalarValueKind(cast, fresh) === 'ostr' ? 'ostr' : undefined;
         if (fresh && this.rustClockString(node)) return 'str';
         if (fresh && this.rustNumParamToString(node)) return 'str';
+        // ral-87rh R3: `x = v.toString ()` as a statement write into a `let` seeded with a string literal, where the printer
+        // boxes the call whole as `Value::Str(format!("{}", v))` (rustFormatPrints): the `String` that `format!` makes
+        if (fresh && this.rust87rhToStringWrite(node)) return 'str';
         // ral-46c: `this.requestId().toString()` of an all-`int` venue method is the `i64`'s decimal text
         if (fresh && this.rustIdString(node) && !this.rustIntToStringShape(node)) return 'str';
         if (fresh && this.rustSbJoinShape(node)) return 'str';
@@ -5923,6 +5926,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined || !isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteralLikeNode(node.argumentExpression)) return undefined;
         if (!RustTranspiler.RUST_NIL_ELEM_STR_KEYS.has(String(node.argumentExpression.text))) return undefined;
         if (/[/]test[/]/.test(String(node.getSourceFile?.()?.fileName ?? ''))) return undefined;
+        // ral-87rh R2: `m['symbol']` of a never-written base-tier `market: Market = undefined` parameter that prints as a
+        // plain `Value` (no typed slot): the market map's own `symbol` text (`None` when absent or not a string; the only
+        // reader of such a local is a typed `Option<&str>` slot that took `as_str()` of the boxed arm)
+        const marketParam = this.rust87rhValueMarketParam(node.expression);
+        if (marketParam !== undefined && String(node.argumentExpression.text) === 'symbol') {
+            return `${super.printIdentifier(node.expression)}.as_map().and_then(|__m| __m.get("symbol")).and_then(Value::as_str).map(str::to_owned)`;
+        }
         const local = this.rustOptContainerOf(node.expression);
         // ral-84e: also an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot):
         // its `KeyRead` reads the record's own map and answers `Null` when absent, the same `Value` the boxed arm held
@@ -5930,6 +5940,24 @@ export class RustTranspiler extends BaseTranspiler {
         const read = this.printNode(node, 0).trim();
         if (!/^(?:crate|ccxt)::value::KeyRead::key_read\(&{1,2}[A-Za-z_][A-Za-z0-9_]*, "[A-Za-z]+"\)$/.test(read)) return undefined;
         return `${read}.into_opt_string()`;
+    }
+
+    /** ral-87rh R2: `node` reads a never-written base-tier `market: Market = undefined` parameter that is no typed market
+     *  slot (it prints as the plain `Value` get_arg gave back); the parameter declaration, else undefined. */
+    rust87rhValueMarketParam(node: Node): ParameterDeclaration | undefined {
+        if (node === undefined || !isIdentifier(node)) return undefined;
+        const param: Node = this.rustDeclaredNode(node);
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || !isMethodDeclaration(param.parent) || param.dotDotDotToken !== undefined) return undefined;
+        if (param.initializer === undefined || this.literalKindOfNode(this.unwrapParens(param.initializer)) !== 'null') return undefined;
+        const annotation = param.type;
+        if (annotation === undefined || annotation.kind !== SyntaxKind.TypeReference || annotation.getText() !== 'Market') return undefined;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile?.()?.fileName ?? '')) || this.rustMarketSlotParam(param)) return undefined;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text))) {
+            if (n === param.name || !isIdentifier(n)) continue;
+            const up: Node = n.parent;
+            if (isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind)) return undefined;
+        }
+        return param;
     }
 
     /** ral-84e: an optional market / currency record (`Option<Market>` local, lent `Option<&Market>` / currency slot, currency
@@ -6605,6 +6633,23 @@ export class RustTranspiler extends BaseTranspiler {
         const node: any = this.unwrapParens(init);
         if (this.rustStrCastCall(node) === undefined && !this.rustClockString(node) && !this.rustSumShape(node) && !this.rustIntToStringShape(node)) return false;
         return typedUses === 0 || copied > 0;
+    }
+
+    /** ral-87rh R3: `x = v.toString ()` (no radix) as a whole statement write whose target is a single-binding `let` local
+     *  seeded with a string literal, in a non-test source, and whose call the printer boxes whole as
+     *  `Value::Str(format!("{}", ..))` (decided from that very node's print, rustUnboxedFormatOf). */
+    rust87rhToStringWrite(node: Node): boolean {
+        if (node === undefined || !isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || String(node.expression.name.text) !== 'toString') return false;
+        if (this.rustTestTierSource(node)) return false;
+        const up: Node = this.rustSkipWrappersUp(node.parent);
+        if (up === undefined || !isBinaryExpression(up) || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
+        if (this.unwrapParens(up.right) !== node) return false;
+        const target: Node = this.rustDeclaredNode(up.left);
+        if (target === undefined || !isVariableDeclaration(target) || target.initializer === undefined || this.literalKindOfNode(this.unwrapParens(target.initializer)) !== 'string') return false;
+        const list: Node = target.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Let) === 0 || (list as { declarations?: readonly Node[] }).declarations?.length !== 1) return false;
+        // the arm the printer took for this very call (rustRecordFormatToString records it), not its text
+        return this.rustUnboxedFormatOf(node) !== undefined;
     }
 
     /** ral-45g: `p.toString()` (no radix) of a parameter the checker types `number`: the printer already boxes
@@ -10956,6 +11001,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (clock !== undefined && this.rustNonceCall(this.unwrapParens(clock))) return wrap(`format!("{}", ${this.printNode(this.unwrapParens(clock), 0).trim()})`);
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         // ral-45g: `p.toString()` of a `number` parameter: the String the `format!` box held
+        if (base === 'str' && this.rust87rhToStringWrite(node)) return wrap(this.rustUnboxedFormatOf(node));
         if (base === 'str' && this.rustNumParamToString(node)) {
             const boxed = text.match(/^Value::Str\((format!\(.*\))\.into\(\)\)$/s);
             return boxed !== null ? wrap(boxed[1]) : wrap(`${text}.as_str().unwrap_or_default().to_string()`);
@@ -12133,6 +12179,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (equality && (lk === 'str' || rk === 'str') && (lk === 'ostr' || rk === 'ostr')) {
             const [ o, s ] = lk === 'ostr' ? [ left, right ] : [ right, left ];
             return `${text('ostr', o)}.as_deref() ${sign} Some(${text('str', s)}.as_str())`;
+        }
+        // ral-87rh R4: an `Option<bool>` against a `bool` local (strict equality): `Some(b)` is the only `Option` a JS boolean
+        // equals (`undefined` never does), the very answer the boxed `Bool` / `Null` comparison gave
+        if (equality && (lk === 'bool' || rk === 'bool') && (lk === 'obool' || rk === 'obool') && (op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            const [ o, b ] = lk === 'obool' ? [ left, right ] : [ right, left ];
+            if (isIdentifier(b) && this.rustScalarLocalOf(b)?.kind === 'bool') return `(${text('obool', o)} ${sign} Some(${text('bool', b)}))`;
         }
         if (lk === 'bool' || rk === 'bool' || base(lk) === 'str' || base(rk) === 'str') return undefined;
         const lo = lk.startsWith('o');
@@ -15135,9 +15187,34 @@ export class RustTranspiler extends BaseTranspiler {
         else if (isPropertyAccessExpression(parent) && parent.expression === n && isIdentifier(parent.name)) key = String(parent.name.text);
         if (key === undefined || key === 'length') return undefined;
         const outer: any = parent.parent;
+        // ral-87rh R1: `m['precision']['k']` (a literal key, read only) reads the nested map off the record's own `raw`
+        // (`KeyRead` for `&Market`), the very map the boxed `m['precision']` read held
+        if (key === 'precision' && this.rust87rhPrecisionRead(outer, parent)) return key;
         if (outer !== undefined && (isCallExpression(outer) || isPropertyAccessExpression(outer) || isElementAccessExpression(outer)) && outer.expression === parent) return undefined;
         if (outer !== undefined && (isDeleteExpression(outer) || (isBinaryExpression(outer) && outer.left === parent && rustIsAssignmentOperator(outer.operatorToken.kind)))) return undefined;
         return key;
+    }
+
+    /** ral-87rh R1: `outer` is a plain read `<inner>['k']` (string-literal key) of `inner`: no write target, update, delete,
+     *  call or deeper chain link. */
+    rust87rhPrecisionRead(outer: Node | undefined, inner: Node | undefined): boolean {
+        if (outer === undefined || !isElementAccessExpression(outer) || outer.expression !== inner || !isStringLiteralLikeNode(outer.argumentExpression)) return false;
+        const up: Node | undefined = outer.parent;
+        if (up === undefined || ((isCallExpression(up) || isPropertyAccessExpression(up) || isElementAccessExpression(up)) && up.expression === outer)) return false;
+        if (isDeleteExpression(up) || isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) return false;
+        if (isBinaryExpression(up) && up.left === outer && rustIsAssignmentOperator(up.operatorToken.kind)) return false;
+        return true;
+    }
+
+    /** ral-87rh R1: a market struct local R1 freed (one of its reads is `m['precision']['k']`): its listed string fields box
+     *  borrowed (`Value::from(m.f.as_str())`, the same `Str` the boxed key read copied), no field clone. */
+    rust87rhPrecisionLocal(declaration: Node): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        const fn = this.rustEnclosingFunction(declaration);
+        const own = declaration.name;
+        if (fn === undefined) return false;
+        return this.rustScopeNameNodes(fn, String(own.text)).some((n: Node) => n !== own && isElementAccessExpression(n.parent) && n.parent.expression === n
+            && isStringLiteralLikeNode(n.parent.argumentExpression) && String(n.parent.argumentExpression.text) === 'precision' && this.rust87rhPrecisionRead(n.parent.parent, n.parent));
     }
 
     /** The listed field a `this.safeString|safeBool (m, 'k')` call reads (no default, or a `false` default for a flag). */
@@ -16424,6 +16501,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (field !== undefined) return `Value::from(${recv}.${field}.as_str())`;
             if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref().unwrap_or(""))`;
         }
+        if (field !== undefined && this.rust87rhPrecisionLocal(declaration)) return `Value::from(${recv}.${field}.as_str())`;
         if (field !== undefined) return `Value::from(${recv}.${field}.clone())`;
         if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref())`;
         // a declared flag's initializer keeps the raw read: the bool-local narrowing keys on it
@@ -19516,6 +19594,11 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-50c: an `Option<Market>` local reads through `KeyRead` (Null when empty), as `printOptMarketKeyRead` does
         if (isIdentifier(receiverNode) && this.rustOptMarketLocalOf(receiverNode) !== undefined && RustTranspiler.rustBearerKeyTextOk(keyText)) {
             return `crate::value::KeyRead::key_read(&&${receiverText}, "${this.escapeRustStringLiteral(keyText)}")`;
+        }
+        // ral-87rh R1: `m['precision']` under a literal-key read off a loaded market struct local: the record's own `raw` map
+        if (keyText === 'precision' && isIdentifier(receiverNode) && this.rust87rhPrecisionRead(receiverNode.parent?.parent, receiverNode.parent)) {
+            const declaration = this.rustTypedMarketLocalOf(receiverNode);
+            if (declaration !== undefined && this.rustMarketLocalKind(declaration) === 'struct') return `crate::value::KeyRead::key_read(&&${receiverText}, "precision")`;
         }
         // `client.url` on a ws `Client`: the handle's own accessor, no map closure.
         if (keyText === 'url' && this.rustIsWsClientType(this.getCheckedTypeOf(receiverNode))) return `${receiverText}.url()`;
@@ -23117,6 +23200,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustReadBearerKindOfDeclaration(declaration: any): 'list' | 'map' | false {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || this.rustCurrencyLocalKind(declaration) !== false) return false;
+        // ral-87rh R1: a `this.market (..)` local the market rule holds as its struct is never also a read-only map bearer
+        if (this.rustIsTypedMarketCall(declaration.initializer) && this.rustMarketLocalKind(declaration) === 'struct') return false;
         let decision = this.rustReadBearerDecisions.get(declaration);
         if (decision === undefined) {
             this.rustReadBearerDecisions.set(declaration, false); // re-entrancy guard

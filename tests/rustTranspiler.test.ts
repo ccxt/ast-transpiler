@@ -25149,3 +25149,51 @@ describe('ral-87rg R5: keysort of a typed IndexMap local answers a map', () => {
         expect(out).toMatch(/let mut other: Value = /);
     });
 });
+
+describe('ral-87rh R1: nested precision reads off a market struct local', () => {
+    test('m[\'precision\'][\'k\'] reads the record raw map and keeps the struct', () => {
+        const dir = path.join (rustFixtureRoot, 'r87rh-precision');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface MarketInterface { symbol: string; precision: any; [key: string]: any }\nexport default class Exchange {\n    market (symbol: string): MarketInterface { return undefined; }\n    decimalToPrecision (x: any, p: any): string { return x; }\n    numberToString (x: any): string { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    priceToPrecision (symbol: string, price: any): string {\n        const market = this.market (symbol);\n        const result = this.decimalToPrecision (price, market['precision']['price']);\n        if (result === '0') {\n            const p = this.numberToString (market['precision']['price']);\n            throw new Error ('market ' + market['symbol'] + ' ' + p);\n        }\n        return result;\n    }\n    feeToPrecision (symbol: string, fee: any): string {\n        const market = this.market (symbol);\n        return this.decimalToPrecision (fee, market['precision']['price']);\n    }\n    writes (symbol: string): any {\n        const market = this.market (symbol);\n        market['precision']['price'] = 1;\n        return market;\n    }\n}\n");
+        const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const out = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toMatch(/fn priceToPrecision[^\n]*\n\s*let mut market: crate::types::Market = /);
+        expect(out).toMatch(/fn feeToPrecision[^\n]*\n\s*let mut market: crate::types::Market = /);
+        expect(out).toContain('crate::value::KeyRead::key_read(&&market, "precision"), "price")');
+        expect(out).toContain('Value::from((market).symbol.as_str())');
+        // negative: a nested write keeps the boxed local
+        expect(out).toMatch(/fn writes[\s\S]*?let mut market: Value = /);
+    });
+});
+
+describe('ral-87rh R2: symbol of an untyped base market parameter', () => {
+    test('(market === undefined) ? undefined : market[\'symbol\'] into a typed filter slot is an Option<String>', () => {
+        const dir = path.join (rustFixtureRoot, 'r87rh-symbol');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface MarketInterface { symbol: string; [key: string]: any }\nexport type Market = MarketInterface | undefined;\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport default class Exchange {\n    filterBySymbolSinceLimit (array: any, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined): any { return array; }\n    sortBy (a: any, k: any): any { return a; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    parseRows (rows: any[], market: Market = undefined, since: Int = undefined, limit: Int = undefined): any {\n        const sorted = this.sortBy (rows, 'timestamp');\n        const symbol = (market === undefined) ? undefined : market['symbol'];\n        return this.filterBySymbolSinceLimit (sorted, symbol, since, limit);\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut symbol: Option<String> = ');
+        expect(out).toContain('.and_then(Value::as_str).map(str::to_owned)');
+        expect(out).not.toContain('let mut symbol: Value');
+    });
+});
+
+describe('ral-87rh R3: a literal-seeded string let rewritten from a boxed toString', () => {
+    test('x = v.toString () into a \'\'-seeded let is a String written from the format!', () => {
+        const out = transpiler.transpileRust("class T {\n    log (x: any) { return x; }\n    f (w: number) {\n        let v: number = undefined;\n        if (w > 1) {\n            v = w;\n        }\n        let s = '';\n        if (v !== undefined) {\n            s = v.toString ();\n        }\n        this.log ('cursor ' + s);\n    }\n}\n").content;
+        expect(out).toContain('let mut s: String = ');
+        expect(out).toContain('s = format!("{}", v);');
+        expect(out).not.toContain('let mut s: Value');
+    });
+});
+
+describe('ral-87rh R4: a bool local strictly compared with an Option<bool> reader local', () => {
+    test('isActive === wantActive compares Some(wantActive), the bool local is native', () => {
+        const dir = path.join (rustFixtureRoot, 'r87rh-bool-eq');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    safeBool (o: any, k: any, d: boolean = undefined): boolean { return o; }\n    safeDict (o: any, k: any): any { return o; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    keep (events: any[], status: Str = undefined): any[] {\n        if (status === undefined) {\n            return events;\n        }\n        const wantActive = (status === 'active');\n        const result = [];\n        for (let i = 0; i < events.length; i++) {\n            const event = this.safeDict (events, i);\n            const isActive = this.safeBool (event, 'active');\n            if ((isActive === undefined) || (isActive === wantActive)) {\n                result.push (event);\n            }\n        }\n        return result;\n    }\n}\n");
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(out).toContain('let mut wantActive: bool = ');
+        expect(out).toContain('== Some(wantActive))');
+    });
+});
