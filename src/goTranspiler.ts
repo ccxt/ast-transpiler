@@ -6261,6 +6261,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoUnifiedStringDerefArgs (goTranspiler);
     installCcxtGoUnifiedInt64Params (goTranspiler, unifiedInt64Params);
     installStringPtrParams (goTranspiler); // nullable string params fed proven Go strings
+    installStringPtrParamProof (goTranspiler); // venue string params every caller hands a *string, a never-rebound string or nil
     const upstream = goTranspiler.goTypeOfInitializer;
     goTranspiler.goTypeOfInitializer = function (initializer, printedValue) {
         const known = upstream.call (this, initializer, printedValue);
@@ -10063,6 +10064,89 @@ function installStringPtrParams (goTranspiler) {
             return wrap[i] ? (goStringAddressArg (this, a, text) ?? ('SafeStringPtr(' + text + ')')) : text;
         }).join (', ');
     };
+}
+
+// A venue-local `Str`/`string` parameter prints `*string` when no name-based dispatch reaches the method
+// and every call site passes a `*string`, `undefined`, a never-rebound Go `string` (printed `&x`) or,
+// in a sibling file, a unified-string passthrough; the body must keep the type. Sync and async alike.
+function installStringPtrParamProof (goTranspiler) {
+    const upstreamOf = goTranspiler.goNativeParameterTypeOf;
+    goTranspiler.goNativeParameterTypeOf = function (param) {
+        return upstreamOf.call (this, param) ?? (goStringPtrParamProven (this, param) ? '*string' : undefined);
+    };
+}
+
+// the method is reached only through plain `this.<name> (..)` calls: no file of the tree quotes the name
+// (dispatch by string), and in the files of the class's own lineage every code mention is a call or the declaration
+function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass) {
+    const quoted = new RegExp ('[\'"`]' + name + '[\'"`]');
+    const anyRef = new RegExp ('(?<![\\w$])' + name + '(?![\\w$])', 'g');
+    const direct = new RegExp ('\\bthis\\s*\\.\\s*' + name + '\\s*\\(', 'g');
+    const declared = new RegExp ('^ {4}(?:(?:async|public|private|protected|override) )*' + name + ' \\(', 'gm');
+    for (const [ file, text ] of tree.fileText) {
+        if (!text.includes (name)) {
+            continue;
+        }
+        if (quoted.test (text)) {
+            return false;
+        }
+        if (!go.goTsSrcFileDerivesFrom (tree, file, myClass)) {
+            continue;
+        }
+        const code = text.replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, '');
+        const refs = (code.match (anyRef) ?? []).length;
+        const calls = (code.match (direct) ?? []).length + (code.match (declared) ?? []).length;
+        if (refs !== calls) {
+            return false; // a method reference, a foreign receiver or a doc mention: fail closed
+        }
+    }
+    return true;
+}
+
+function goStringPtrParamProven (go, param) {
+    if ((param?.kind !== ts.SyntaxKind.Parameter) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.questionToken !== undefined) || (param.name?.kind !== ts.SyntaxKind.Identifier) || !nullableStringParam (go, param)) {
+        return false;
+    }
+    const fn = param.parent;
+    if ((fn?.kind !== ts.SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const name = fn.name.text;
+    const index = fn.parameters.indexOf (param);
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if ((tree === undefined) || go.goMethodKeepsBaseSignature (fn) || go.goIsProHandlerMethod (fn) || !go.goHasTreeCallSite (fn)
+        || !goStringPtrParamOnlyDirectCalls (go, tree, name, go.goEnclosingClassName (fn))) {
+        return false;
+    }
+    const isUndefined = (a) => (a?.kind === ts.SyntaxKind.Identifier) && (a.text === 'undefined');
+    for (const call of go.goSameFileCallsOf (fn, name)) {
+        const arg = call.arguments?.[index];
+        if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) {
+            return false;
+        }
+        if (isUndefined (arg)) {
+            continue;
+        }
+        const t = go.goPrintedArgType (arg);
+        if ((t !== '*string') && !((t === 'string') && (goStringAddressArg (go, arg, arg.text ?? '') !== undefined))) {
+            return false;
+        }
+    }
+    const myClass = go.goEnclosingClassName (fn);
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    for (const site of tree.callIndex.get (name) ?? []) {
+        if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) {
+            continue;
+        }
+        const arg = (site.args[index] ?? '').trim ();
+        const fileText = tree.fileText.get (site.file) ?? '';
+        if ((arg !== 'undefined') && !go.goTextArgMatchesType (arg, '*string', site.file, tree, site.at)
+            && !go.goSiblingPassesUnifiedString (arg, fileText, site.at)) {
+            return false;
+        }
+    }
+    return go.goParameterBodyTakes (fn, param, '*string');
 }
 
 // a Go `string` parameter or local that is never rebound is handed to a `*string` slot as `&x`:
