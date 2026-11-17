@@ -22132,7 +22132,9 @@ var GO_STRING_FIELD_NAMES = [
   "Password",
   "AccountId",
   "PrivateKey",
-  "WalletAddress"
+  "WalletAddress",
+  "Login",
+  "Twofa"
 ];
 var GO_DEFAULTED_SAFE_STRING_ARITY = {
   "safeString": 3,
@@ -22196,7 +22198,8 @@ var GO_FIELD_CONTAINER_TYPES_NATIVE = Object.fromEntries([
     "Limits",
     "Fees",
     "Status",
-    "Countries"
+    "Countries",
+    "Headers"
   ].map((name) => [name, "map[string]any"]),
   ...GO_SYNC_MAP_FIELDS.filter((name) => name !== "Options").map((name) => [name, "*sync.Map"])
 ]);
@@ -22900,7 +22903,9 @@ var GoTranspiler = class extends BaseTranspiler {
       "Timeframes": "map[string]any",
       "Balance": "map[string]any",
       "Urls": "map[string]any",
-      "HttpExceptions": "map[string]any"
+      "HttpExceptions": "map[string]any",
+      "Headers": "map[string]any"
+      // the default request headers, `Dictionary<string>` in the TS base
     };
     // the market/currency tables are plain `map[string]any` fields of BaseExchange (go/v4/exchange.go),
     // written only by whole-map assignment or AddMarketsEntry-style copy-on-write, never in place
@@ -24726,6 +24731,16 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     const constant = ((declaration?.parent?.flags ?? 0) & NodeFlags2.Const) !== 0;
     const table = constant && init?.expression?.kind === SyntaxKind5.ThisKeyword ? this.goMarketTable(init) : void 0;
     return table === void 0 ? void 0 : { add: table.add, owner: init.expression };
+  }
+  // `this.<f> = this.omit (this.<f>, ..)` on a hand-written `map[string]any` field: Omit of a map is a fresh
+  // map[string]any (the OmitDict twin), so the field keeps its Go type without an assertion
+  goMapFieldOmitWriteText(node) {
+    const right = this.goUnwrapParenthesizedNode(node.right);
+    if (node.parent?.kind !== SyntaxKind5.ExpressionStatement || this.goFieldContainerTypeNative(node.left) !== "map[string]any" || right?.kind !== SyntaxKind5.CallExpression || right.expression?.kind !== SyntaxKind5.PropertyAccessExpression || right.expression.expression?.kind !== SyntaxKind5.ThisKeyword || right.expression.name?.text !== "omit" || (right.arguments?.length ?? 0) < 2 || this.goFieldContainerTypeNative(this.goUnwrapParenthesizedNode(right.arguments[0])) !== "map[string]any") {
+      return void 0;
+    }
+    const text = this.printNode(right, 0).trim();
+    return text.startsWith("this.Omit(") ? `${this.printNode(node.left, 0)} = this.OmitDict(${text.slice("this.Omit(".length)}` : void 0;
   }
   // `recv.<table> = v` as a statement: the field takes a whole new map (nil, an empty map, or the map
   // the right side builds), so a reader holding the old map never sees it change
@@ -35149,6 +35164,7 @@ ${this.getIden(identation)}return nil`;
         () => this.goBaseCacheInitText(node),
         () => right?.kind === SyntaxKind5.ObjectLiteralExpression && (right.properties?.length ?? 0) === 0 && this.goWsCacheEmptyLiteral(left) !== void 0 ? `${this.printNode(left, 0)} = ${this.goWsCacheEmptyLiteral(left)}{}` : void 0,
         () => this.goMarketTableWriteText(node),
+        () => this.goMapFieldOmitWriteText(node),
         () => this.goPointerWriteText(node, identation),
         () => this.goBalanceSafeBalanceWrite(node, identation)
       ]);

@@ -835,6 +835,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         add: string;
         owner: any;
     } | undefined;
+    goMapFieldOmitWriteText(node: any): string | undefined;
     goMarketTableWriteText(node: any): string | undefined;
     goBookAccessorRead(initializer: any): boolean;
     goIsBaseMapResultLocal(node: any): boolean;
