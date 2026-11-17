@@ -26409,3 +26409,57 @@ describe('rust optional string += a String method of a String local', () => {
         expect(out).toContain('bar = Some(format!("{}{}", bar.as_deref().unwrap_or("null"), timezone.to_lowercase()));');
     });
 });
+
+describe('ral-93rf R1: a watch hash grown by `x = x + s` outside a loop takes the same patterns as `x += s`', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: number = undefined) {}\n    append (item: object) {}\n    getLimit (symbol: string, limit: number): number { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: object, messageHash: string): object { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    newUpdates: boolean = true;\n    orders: ArrayCache = undefined;\n    safeString (obj: object, key: string, defaultValue: string = undefined): string { return defaultValue; }\n    async watch (url: string, h: string, r: object = undefined, s: object = undefined): Promise<ArrayCache> { return undefined; }\n    filterBySinceLimit (a: ArrayCache, since: number = undefined, limit: number = undefined): object[] { return []; }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchOrders (symbol: string = undefined, since: number = undefined, limit: number = undefined) {\n        let messageHash = 'order';\n        if (symbol !== undefined) {\n            messageHash = messageHash + ':' + symbol;\n        }\n        const orders = await this.watch ('u', messageHash);\n        let limitResolved = limit;\n        if (this.newUpdates) {\n            limitResolved = orders.getLimit (symbol, limit);\n        }\n        return this.filterBySinceLimit (orders, since, limitResolved);\n    }\n    handleOrders (client: Client, message: object) {\n        if (this.orders === undefined) {\n            this.orders = new ArrayCache (10);\n        }\n        const symbol = this.safeString (message, 's');\n        client.resolve (this.orders, 'order');\n        client.resolve (this.orders, 'order:' + symbol);\n    }\n    handleOrderBook (client: Client, message: object) {\n        const symbol = this.safeString (message, 's');\n        client.resolve ({ 'symbol': symbol }, 'orderbook:' + symbol);\n    }\n}\n",
+    };
+    const run = (venue: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-93rf-r1-'));
+        for (const [rel, text] of Object.entries ({ ...files, "ts/src/pro/venue.ts": venue })) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return out;
+    };
+    test('hollaex watchOrders shape: `order` / `order:` + symbol meet only the cache resolves, not `orderbook:`', () => {
+        const out = run (files["ts/src/pro/venue.ts"]);
+        expect(out).toContain('let mut orders: Option<crate::pro::cache::Cache> = ');
+        expect(out).not.toMatch(/let mut orders: Value = /);
+    });
+    test('negative: the same write inside a loop proves nothing and the watched result stays boxed', () => {
+        const out = run (files["ts/src/pro/venue.ts"].replace ("if (symbol !== undefined) {\n            messageHash = messageHash + ':' + symbol;\n        }", "for (let i = 0; i < 2; i++) {\n            messageHash = messageHash + ':' + symbol;\n        }"));
+        expect(out).toMatch(/let mut orders: Value = /);
+    });
+});
+describe('ral-93rf R2: on a watch, a boolean settle under a known hash is no cache, as a Null settle is', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/ws/Cache.ts": "export class ArrayCache {\n    constructor (maxSize: number = undefined) {}\n    append (item: object) {}\n    getLimit (symbol: string, limit: number): number { return limit; }\n}\n",
+        "ts/src/base/ws/Client.ts": "export default class Client {\n    resolve (result: object, messageHash: string): object { return result; }\n}\n",
+        "ts/src/base/Exchange.ts": "import { ArrayCache } from './ws/Cache.js';\nexport default class Exchange {\n    newUpdates: boolean = true;\n    orders: ArrayCache = undefined;\n    safeString (obj: object, key: string, defaultValue: string = undefined): string { return defaultValue; }\n    async watch (url: string, h: string, r: object = undefined, s: object = undefined): Promise<ArrayCache> { return undefined; }\n    filterBySinceLimit (a: ArrayCache, since: number = undefined, limit: number = undefined): object[] { return []; }\n}\n",
+        "ts/src/pro/venue.ts": "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport { ArrayCache } from '../base/ws/Cache.js';\nexport default class venue extends Exchange {\n    async watchOrders (symbol: string = undefined, since: number = undefined, limit: number = undefined) {\n        let messageHash = 'order';\n        if (symbol !== undefined) {\n            messageHash = messageHash + ':' + symbol;\n        }\n        const orders = await this.watch ('u', messageHash);\n        let limitResolved = limit;\n        if (this.newUpdates) {\n            limitResolved = orders.getLimit (symbol, limit);\n        }\n        return this.filterBySinceLimit (orders, since, limitResolved);\n    }\n    handleOrders (client: Client, message: object) {\n        if (this.orders === undefined) {\n            this.orders = new ArrayCache (10);\n        }\n        const symbol = this.safeString (message, 's');\n        client.resolve (this.orders, 'order');\n        client.resolve (this.orders, 'order:' + symbol);\n    }\n    handleUnsubscription (client: Client, message: object) {\n        client.resolve (true, 'unsubscribe:' + this.safeString (message, 'h'));\n    }\n}\n",
+    };
+    const run = (venue: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-93rf-r2-'));
+        for (const [rel, text] of Object.entries ({ ...files, "ts/src/pro/venue.ts": venue })) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        const out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+        return out;
+    };
+    test('polymarket watchOrders shape: the unsubscription `true` settle does not veto the cache', () => {
+        const out = run (files["ts/src/pro/venue.ts"]);
+        expect(out).toContain('let mut orders: Option<crate::pro::cache::Cache> = ');
+    });
+    test('negative: a boolean settle under an unknown hash keeps the watched result boxed', () => {
+        const out = run (files["ts/src/pro/venue.ts"].replace ("client.resolve (true, 'unsubscribe:' + this.safeString (message, 'h'));", "client.resolve (true, this.safeString (message, 'h'));"));
+        expect(out).toMatch(/let mut orders: Value = /);
+    });
+});
