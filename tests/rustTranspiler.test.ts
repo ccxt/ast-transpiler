@@ -12952,8 +12952,8 @@ describe('pg: precision formatters answer Option<String> (results of other self 
         base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'pg-precision', 'ts/src/base/Exchange.ts')).content;
     });
     test('base amountToPrecision / priceToPrecision (TS `Str`) and an override spelling `string` print -> Option<String>', () => {
-        expect(base).toMatch(/pub fn amountToPrecision\(&self, symbol: Value, amount: Value\) -> Option<String> \{/);
-        expect(out).toMatch(/pub fn priceToPrecision\(&self, symbol: Value, price: Value\) -> Option<String> \{/);
+        expect(base).toMatch(/pub fn amountToPrecision\(&self, symbol: Value, amount: impl Into<crate::Value>\) -> Option<String> \{/);
+        expect(out).toMatch(/pub fn priceToPrecision\(&self, symbol: Value, price: impl Into<crate::Value>\) -> Option<String> \{/);
     });
     test('their locals are Option<String> and a Value slot boxes the call once', () => {
         expect(out).toMatch(/let mut size: Option<String> = self\.amountToPrecision\(/);
@@ -25161,7 +25161,7 @@ describe('ral-87rh R1: nested precision reads off a market struct local', () => 
         fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface MarketInterface { symbol: string; precision: any; [key: string]: any }\nexport default class Exchange {\n    market (symbol: string): MarketInterface { return undefined; }\n    decimalToPrecision (x: any, p: any): string { return x; }\n    numberToString (x: any): string { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    priceToPrecision (symbol: string, price: any): string {\n        const market = this.market (symbol);\n        const result = this.decimalToPrecision (price, market['precision']['price']);\n        if (result === '0') {\n            const p = this.numberToString (market['precision']['price']);\n            throw new Error ('market ' + market['symbol'] + ' ' + p);\n        }\n        return result;\n    }\n    feeToPrecision (symbol: string, fee: any): string {\n        const market = this.market (symbol);\n        return this.decimalToPrecision (fee, market['precision']['price']);\n    }\n    writes (symbol: string): any {\n        const market = this.market (symbol);\n        market['precision']['price'] = 1;\n        return market;\n    }\n}\n");
         const typed = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['market'], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const out = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
-        expect(out).toMatch(/fn priceToPrecision[^\n]*\n\s*let mut market: crate::types::Market = /);
+        expect(out).toMatch(/fn priceToPrecision[^\n]*\n\s*let mut price: Value = price.into\(\);\n\s*let mut market: crate::types::Market = /);
         expect(out).toMatch(/fn feeToPrecision[^\n]*\n\s*let mut market: crate::types::Market = /);
         expect(out).toContain('crate::value::KeyRead::key_read(&&market, "precision"), "price")');
         expect(out).toContain('Value::from((market).symbol.as_str())');
@@ -26561,5 +26561,54 @@ describe('rust base sort of a proven list', () => {
     });
     test('a sort of an unproven value stays Value', () => {
         expect(out).toMatch(/let mut sorted: Value = self\.sort\(self\.hold\(/);
+    });
+});
+
+describe('rust lent priceToPrecision price slot', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Num = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeNumber (o: object, k: string, d: Num = undefined): Num { return d; }\n    decimalToPrecision (x: number | string, r: Str): Str { return r; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    priceToPrecision (symbol: Str, price: number | string): Str {\n        if (price === undefined) {\n            return undefined;\n        }\n        return this.decimalToPrecision (price, symbol);\n    }\n    editThing (symbol: string, params = {}) {\n        const px = this.safeNumber (params, 'px');\n        const out = {};\n        if (px !== undefined) {\n            out['px'] = this.priceToPrecision (symbol, px);\n        }\n        return out;\n    }\n}\n",
+    };
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-ptp-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('the price slot takes impl Into<crate::Value> and binds the Value once', () => {
+        expect(base).toMatch(/priceToPrecision\(&self, symbol: [^,]+, price: impl Into<crate::Value>\)/);
+        expect(base).toContain('let mut price: Value = price.into();');
+    });
+    test('a number local handed to the price slot stays Option<f64>, passed unboxed', () => {
+        expect(base).toMatch(/let mut px: Option<f64> = /);
+        expect(base).toMatch(/self\.priceToPrecision\([^;]*, px\)/);
+    });
+});
+
+describe('rust lent amountToPrecision / costToPrecision value slots', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export type Num = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeNumber (o: object, k: string, d: Num = undefined): Num { return d; }\n    decimalToPrecision (x: number | string, r: Str): Str { return r; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    amountToPrecision (symbol: Str, amount: number | string): Str {\n        return this.decimalToPrecision (amount, symbol);\n    }\n    costToPrecision (symbol: Str, cost: number | string): Str {\n        return this.decimalToPrecision (cost, symbol);\n    }\n    editThing (symbol: string, params = {}) {\n        const qty = this.safeNumber (params, 'qty');\n        const notional = this.safeNumber (params, 'notional');\n        const out = {};\n        if (qty !== undefined) {\n            out['qty'] = this.amountToPrecision (symbol, qty);\n        }\n        if (notional !== undefined) {\n            out['notional'] = this.costToPrecision (symbol, notional);\n        }\n        return out;\n    }\n}\n",
+    };
+    let base: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-atp-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        base = transpiler.transpileRustByPath(path.join (root, 'ts/src/base/Exchange.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('both value slots take impl Into<crate::Value>', () => {
+        expect(base).toMatch(/amountToPrecision\(&self, symbol: [^,]+, amount: impl Into<crate::Value>\)/);
+        expect(base).toMatch(/costToPrecision\(&self, symbol: [^,]+, cost: impl Into<crate::Value>\)/);
+    });
+    test('number locals handed to them stay Option<f64>, passed unboxed', () => {
+        expect(base).toMatch(/let mut qty: Option<f64> = /);
+        expect(base).toMatch(/self\.amountToPrecision\([^;]*, qty\)/);
+        expect(base).toMatch(/self\.costToPrecision\([^;]*, notional\)/);
     });
 });
