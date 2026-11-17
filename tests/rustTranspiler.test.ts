@@ -25000,3 +25000,34 @@ describe('ral-87rd R4: a pushed list stored at a literal key before later reads 
         expect(out).not.toContain('let mut previousTrades: crate::value::List');
     });
 });
+describe('ral-87re: Precise self-writes and comparison seeds over record locals', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict | undefined { return o; }\n    hold (m: any): any { return m; }\n}\n";
+    const precise = "export class Precise {\n    static stringMul (a: Str, b: Str): Str { return a; }\n    static stringAdd (a: Str, b: Str): Str { return a; }\n}\ntype Str = string | undefined;\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Precise.ts'), precise);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport { Precise } from './base/Precise.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('binance parsePositionRisk entryPriceSignString: a copy rewritten by Precise of itself', () => {
+        const out = write ('ral-87re-p1', "    p (q: Dict, side: string, usdm: boolean) {\n        const position = this.hold (q);\n        const entryPriceString = this.safeString (position, 'entryPrice');\n        let out: Str = undefined;\n        if (usdm) {\n            let entryPriceSignString = entryPriceString;\n            if (side === 'short') {\n                entryPriceSignString = Precise.stringMul ('-1', entryPriceSignString);\n            }\n            const rightSide = Precise.stringAdd ('1', entryPriceSignString);\n            out = Precise.stringAdd (rightSide, '0');\n        } else {\n            let entryPriceSignString = entryPriceString;\n            if (side === 'long') {\n                entryPriceSignString = Precise.stringMul ('-1', entryPriceSignString);\n            }\n            const rightSide = Precise.stringAdd ('2', entryPriceSignString);\n            out = Precise.stringAdd (rightSide, '0');\n        }\n        return this.hold (out);\n    }\n");
+        expect(out).toContain('let mut entryPriceSignString: Option<String> = ');
+        expect(out).not.toContain('let mut entryPriceSignString: Value');
+    });
+    test('kucoin fetchContractMarkets future: a comparison over a Dict local read natively', () => {
+        const out = write ('ral-87re-c1', "    c (rows: Dict) {\n        const market = this.safeDict (rows, 'm');\n        const future = this.safeString (market, 'next') === undefined;\n        const swap = !future;\n        if (future) {\n            return { 'swap': swap };\n        }\n        return { 'future': future };\n    }\n");
+        expect(out).toContain('let mut future: bool = ');
+        expect(out).not.toContain('let mut future: Value');
+    });
+    test('hitbtc fetchMarkets future / swap: a comparison over another local read as a condition', () => {
+        const out = write ('ral-87re-c3', "    m (rows: Dict) {\n        const row = this.hold (rows);\n        const expiry = this.safeString (row, 'expiry');\n        const future = (expiry !== undefined);\n        if (future) {\n            return { 'future': future };\n        }\n        return 1;\n    }\n");
+        expect(out).toContain('let mut future: bool = (expiry.is_some());');
+        expect(out).toContain('if future {');
+    });
+    test('negative: a comparison over a Dict local only boxed into a literal stays Value', () => {
+        const out = write ('ral-87re-c2', "    d (rows: Dict) {\n        const net = this.safeDict (rows, 'n');\n        const deposit = this.safeString (net, 'deposit') === 'enabled';\n        return { 'deposit': deposit };\n    }\n");
+        expect(out).toContain('let mut deposit: Value');
+    });
+});
