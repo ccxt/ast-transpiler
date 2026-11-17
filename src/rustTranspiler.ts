@@ -18200,6 +18200,8 @@ export class RustTranspiler extends BaseTranspiler {
         let fits = true;
         this.rustLocalUsesAll(element, String(element.name.text), true, (n: any) => {
             if (this.rustStrSlotConcatUses.has(n) || !this.rustStrSlotBoxUse(n) || this.rustEnclosingFunction(n) !== fn) return true;
+            // a typed string slot of a venue call takes the text natively: no box is printed there
+            if (this.rustVenueStrArgSlot(n)) return true;
             const statement: any = findAncestor(n.parent, (a: any) => isStatement(a));
             if (statement === undefined || isBlock(statement)) return true;
             const column = statement.getStart() - String(statement.getSourceFile().text).lastIndexOf('\n', statement.getStart()) - 1;
@@ -34469,7 +34471,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const form = plus ? 'concat' : this.rustScalarUseForm(n, 'ostr');
                 this.rustScalarUseForms.set(n, form);
                 // ral-53f: a ws `watch` url / hash / message-hash slot reads the string slot in place (`x.as_deref()`)
-                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || form === 'bkey' || (form === 'targ' && !this.rustWsKeyUse(n)) || form === 'kin') return false;
+                if (form === undefined || form === 'err' || form === 'key' || form === 'okey' || form === 'bkey' || (form === 'targ' && !this.rustWsKeyUse(n) && !this.rustVenueStrLocalArg(n)) || form === 'kin') return false;
                 const push: any = findAncestor(n, (m: any) => isStatement(m) || (isCallExpression(m) && isPropertyAccessExpression(m.expression) && m.expression.name.text === 'push'));
                 if (push !== undefined && isCallExpression(push)) return false;
                 if ((form === 'box' || form === 'xbox') && !this.rustSlotUseOutsideLoop(n, element)) return false;
@@ -37141,7 +37143,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
-        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType)) return undefined;
+        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType))) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
         for (const call of this.rustVenueStrCallSites(method)) {
@@ -37182,6 +37184,26 @@ export class RustTranspiler extends BaseTranspiler {
         };
         method.body.forEachChild(visit);
         return seeds;
+    }
+
+    /** A string slot of a sync ws method with no arm whose every caller passes a literal or one of its own
+     *  local (not a parameter): the slot is a typed consumer, so a string local handed to it reads natively. */
+    rust92raStrConsumerParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean {
+        if ((rustType !== '&str' && rustType !== 'Option<&str>') || !isIdentifier(param.name)) return false;
+        const calls = this.rustVenueStrCallSites(method);
+        if (calls.length === 0) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        let locals = 0;
+        for (const call of calls) {
+            const arg: Node | undefined = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            if (arg === undefined) return false;
+            if (arg.kind === SyntaxKind.StringLiteral || arg.kind === SyntaxKind.NoSubstitutionTemplateLiteral) continue;
+            locals++;
+            // a caller's own local (a parameter keeps the literal-or-lent rule of ral-63x / ral-64x)
+            const local: Node | undefined = isIdentifier(arg) ? this.rustDeclaredNode(arg) : undefined;
+            if (local === undefined || !(isVariableDeclaration(local) || isBindingElement(local)) || local.name === arg) return false;
+        }
+        return locals > 0;
     }
 
     /** ral-63x: a sync ws method with a declared `string` return (`-> Option<String>`, no kept arm: no by-name or ws

@@ -25737,3 +25737,29 @@ describe('stack-90r: a list bearer admitted by a compare-left read moves its fre
         expect(out).not.toContain('.as_array().cloned()');
     });
 });
+
+describe('a sync ws `string` method with no arm types a string slot every caller fills with a literal or a local', () => {
+    const exchange = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    handleOptionStringAndParams (p: Dict, m: string, k: string, d: Str = undefined): [ Str, Dict ] { return [ d, p ]; }\n    async watch (url: string, hash: string): Promise<any> { return undefined; }\n}\n";
+    const build = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), exchange);
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, Str } from '../base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
+    };
+    const body = "    getCategory (channel: Str): string {\n        if (channel === 'depth' || channel === 'trade') {\n            return 'public';\n        }\n        return 'market';\n    }\n    async watchMany (params: Dict = {}): Promise<any> {\n        const [ name, rest ] = this.handleOptionStringAndParams (params, 'watchMany', 'name', 'trade');\n        const url = 'wss://x/' + this.getCategory (name);\n        return await this.watch (url, this.getCategory ('depth') + rest['k']);\n    }\n";
+    test('the slot prints Option<&str> and the tuple slot handed to it is an Option<String>', () => {
+        const out = build ('ral92ra-cons', body);
+        expect(out).toMatch(/fn getCategory\(&self, channel: Option<&str>\)/);
+        expect(out).toContain('self.getCategory(Some("depth"))');
+        expect(out).toContain('self.getCategory(name.as_deref())');
+        expect(out).not.toMatch(/let mut name: Value/);
+    });
+    test('negative: a caller passes a call result, the slot and the tuple slot stay Value', () => {
+        const out = build ('ral92ra-cons-neg', body.replace ("this.getCategory ('depth')", "this.getCategory (this.safeString (params, 'c'))"));
+        expect(out).toMatch(/fn getCategory\(&self, channel: Value\)/);
+        expect(out).not.toContain('self.getCategory(name.as_deref())');
+    });
+});
