@@ -25031,3 +25031,60 @@ describe('ral-87re: Precise self-writes and comparison seeds over record locals'
         expect(out).toContain('let mut deposit: Value');
     });
 });
+
+describe('ral-87rf R1: an implicit endpoint answer tested with Array.isArray splits into the list it holds', () => {
+    const mk = (name: string, ret: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    publicPostInfo (params = {}): Promise<" + ret + "> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    const handOff = "    async m (params = {}) {\n        const response = await this.publicPostInfo (params);\n        let fills: Dict[] = [];\n        if (Array.isArray (response)) {\n            fills = response;\n        }\n        const out = [];\n        for (let i = 0; i < fills.length; i++) {\n            out.push (this.safeDict (fills, i, {}));\n        }\n        return out;\n    }\n";
+    test('hyperliquid fetchTrades: a Dict | List | string endpoint handed to a built list in the list arm', () => {
+        const out = mk ('ral-87rf-r1a', 'Dict | List | string', handOff);
+        expect(out).toMatch(/let mut response: Option<crate::value::List> = self\.public_post_info\([\s\S]*?\)\.await\.into_opt_list\(\);/);
+        expect(out).toContain('if (response.is_some())');
+        expect(out).toContain('fills = response.unwrap_or_default();');
+        expect(out).not.toMatch(/let mut response: Value = /);
+    });
+    test('a declared Promise<List> endpoint takes the same form', () => {
+        const out = mk ('ral-87rf-r1b', 'List', handOff);
+        expect(out).toContain('fills = response.unwrap_or_default();');
+    });
+    test('negative: a use outside the Array.isArray arm keeps the endpoint local Value', () => {
+        const out = mk ('ral-87rf-r1n', 'Dict | List | string', "    async m (params = {}) {\n        const response = await this.publicPostInfo (params);\n        let fills: Dict[] = [];\n        if (Array.isArray (response)) {\n            fills = response;\n        }\n        return this.keep (response);\n    }\n");
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+});
+
+describe('ral-87rf R2: the split endpoint list read back whole in its list arm (flag tests, ternary arms, plain local writes)', () => {
+    const mk = (name: string, venueBody: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (dir, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n    hold (o: any): any { return o; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/abstract/venue.ts'), "import _Exchange from '../base/Exchange.js';\nimport type { Dict } from '../base/Exchange.js';\nexport default abstract class Exchange extends _Exchange {\n    publicGetMarkets (params = {}): Promise<Dict> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venueBody + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('myriad fetchRawMarketsList: a const isArray flag, the list in the true arm, the map read in the false arm', () => {
+        const out = mk ('ral-87rf-r2a', "    async m (params = {}) {\n        const response = await this.publicGetMarkets (params);\n        const responseIsArray = Array.isArray (response);\n        const rows = (responseIsArray) ? response : this.safeList (response, 'data', []);\n        return this.keep (rows);\n    }\n");
+        expect(out).toContain('let (mut response, response__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match ');
+        expect(out).toContain('let mut responseIsArray: bool = response.is_some();');
+        expect(out).toContain('{ response.clone().map_or(Value::Null, Value::Arr) } else { self.safeList(&response__map, ');
+    });
+    test('hyperliquid fetchDeposits: the list written whole into a plain local in the list arm', () => {
+        const out = mk ('ral-87rf-r2b', "    async m (params = {}) {\n        const response = await this.publicGetMarkets (params);\n        let ledger = undefined;\n        if (Array.isArray (response)) {\n            ledger = response;\n        }\n        return this.keep (ledger);\n    }\n");
+        expect(out).toMatch(/let mut response: Option<crate::value::List> = /);
+        expect(out).toContain('ledger = response.map_or(Value::Null, Value::Arr);');
+    });
+    test('negative: a flag that is a plain let (may be rewritten) is not a test', () => {
+        const out = mk ('ral-87rf-r2n', "    async m (params = {}) {\n        const response = await this.publicGetMarkets (params);\n        let isList = Array.isArray (response);\n        isList = true;\n        const rows = isList ? response : [];\n        return this.keep (rows);\n    }\n");
+        expect(out).toMatch(/let mut response: Value = /);
+    });
+});
