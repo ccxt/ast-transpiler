@@ -8532,6 +8532,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (form === undefined && kind === 'ostr' && this.rust70fOperandBox(n)) return 'box';
         if (form === undefined && kind === 'ostr' && this.rust70fPushKey(n)) return 'native';
         if (form === undefined && kind === 'ostr' && isElementAccessExpression(n.parent) && n.parent.expression === n && this.rust70fFirstCharTest(this.rustSkipWrappersUp(n.parent.parent) ?? {}) !== undefined) return 'native';
+        if (form === undefined && kind === 'str' && isElementAccessExpression(n.parent) && n.parent.expression === n && this.rust93reStrCharTest(this.rustSkipWrappersUp(n.parent.parent) ?? {}) !== undefined) return 'native';
+        if (form === undefined && (kind === 'int' || kind === 'oint') && this.rust93reIntToStringRecv(n)) return 'native';
         // ral-70f: the key of a write `m[x] = v` / `delete m[x]` keeps the key form (the insert prints its key text, the helper its box)
         if (form === undefined && kind === 'ostr' && this.rust70fWriteKey(n)) return 'key';
         return form === undefined && this.rustSbCopyBoxUse(n, kind) ? 'xbox' : form;
@@ -8581,6 +8583,39 @@ export class RustTranspiler extends BaseTranspiler {
             || !this.rust70fReaderLocal(this.rustDeclaredNode(recv), true)) return undefined;
         const probe = `${super.printIdentifier(recv)}.as_deref().unwrap_or("").starts_with("${String(lit.text)}")`;
         return op === SyntaxKind.EqualsEqualsEqualsToken ? probe : `!${probe}`;
+    }
+
+    /** `s[i] === 'c'` / `!==` (one-character literal, either side) on a `String` scalar local, `i` an integer literal or an
+     *  `i64` / `Option<i64>` local: the boxed `get_value` read was the i-th char (`Null` when out of range, negative or `None`),
+     *  so the test is `s.chars().nth(i) == Some('c')`. */
+    rust93reStrCharTest(node: Node): string | undefined {
+        if (!isBinaryExpression(node)) return undefined;
+        const op = node.operatorToken.kind;
+        if (op !== SyntaxKind.EqualsEqualsEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return undefined;
+        const l: Node = this.unwrapParens(node.left);
+        const r: Node = this.unwrapParens(node.right);
+        const [ access, lit ] = isElementAccessExpression(l) ? [ l, r ] : [ r, l ];
+        if (!isElementAccessExpression(access) || !isStringLiteral(lit) || String(lit.text).length !== 1 || /['\\]/.test(String(lit.text)) || String(lit.text) in this.StringLiteralReplacements) return undefined;
+        const recv: Node = this.unwrapParens(access.expression);
+        if (!isIdentifier(recv) || this.rustScalarLocalOf(recv)?.kind !== 'str') return undefined;
+        const s = super.printIdentifier(recv);
+        const c = String(lit.text);
+        const index: Node = this.unwrapParens(access.argumentExpression);
+        const literal = this.rustScalarIntLiteral(index);
+        const indexKind = literal === undefined && isIdentifier(index) ? this.rustScalarLocalOf(index)?.kind : undefined;
+        let test: string;
+        if (literal !== undefined && !literal.startsWith('-')) test = `(${s}.chars().nth(${literal}) == Some('${c}'))`;
+        else if (indexKind === 'int') test = `(${super.printIdentifier(index)} >= 0 && ${s}.chars().nth(${super.printIdentifier(index)} as usize) == Some('${c}'))`;
+        else if (indexKind === 'oint') test = `matches!(${super.printIdentifier(index)}, Some(__i) if __i >= 0 && ${s}.chars().nth(__i as usize) == Some('${c}'))`;
+        else return undefined;
+        return op === SyntaxKind.EqualsEqualsEqualsToken ? test : `!${test}`;
+    }
+
+    /** `x.toString ()` (no argument) whose receiver `x` is the bare identifier. */
+    rust93reIntToStringRecv(n: Node): boolean {
+        const access: Node = n.parent;
+        return isIdentifier(n) && access !== undefined && isPropertyAccessExpression(access) && access.expression === n && access.name.text === 'toString'
+            && isCallExpression(access.parent) && access.parent.expression === access && access.parent.arguments.length === 0;
     }
 
     /** ral-70f: `n` sits inside the left side (target chain) of an assignment. */
@@ -11856,8 +11891,10 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarLengthRecv(node, params = false): any {
         const inner: any = this.unwrapParens(node);
         if (inner === undefined || !isPropertyAccessExpression(inner) || !isIdentifier(inner.name) || inner.name.text !== 'length') return undefined;
-        const kind = this.rustScalarIdentifierKind(inner.expression) ?? (params ? this.rustScalarParamRead(inner.expression)?.kind : undefined);
-        return kind === 'str' || kind === 'ostr' ? inner.expression : undefined;
+        // `(x as string).length` reads the local itself (the assertion prints nothing)
+        const recv: Node = this.rustStrCastLocal(inner.expression) ?? inner.expression;
+        const kind = this.rustScalarIdentifierKind(recv) ?? (params ? this.rustScalarParamRead(recv)?.kind : undefined);
+        return kind === 'str' || kind === 'ostr' ? recv : undefined;
     }
 
     /** Non-optional numeric operand kind (`int|num`), optional (`oint|onum`), or undefined. */
@@ -13064,6 +13101,8 @@ export class RustTranspiler extends BaseTranspiler {
             let rhs: string | undefined;
             if (this.literalKindOfNode(right) === 'string' && !(right.text in this.StringLiteralReplacements)) rhs = dry ? '_' : this.quotedStringLiteral(right.text);
             else if (isIdentifier(right) && this.rustScalarLocalOf(right)?.kind === 'str') rhs = dry ? '_' : `${super.printIdentifier(right)}`;
+            // a `String` method of a `String` local (`tz.toLowerCase ()`): the text its `Str` box displayed
+            else if (isCallExpression(right) && this.rustScalarStrMethod(right, false, true)?.kind === 'str') rhs = dry ? '_' : this.rustScalarExpressionText('str', right);
             else if (isBinaryExpression(right) && right.operatorToken.kind === SyntaxKind.PlusToken && this.primitiveKindOfType(this.typeOfNodeIfAny(right)) === 'string') rhs = this.rustScalarFormatText(right);
             if (rhs === undefined) return undefined;
             return dry ? '_' : `${name} = Some(format!("{}{}", ${name}.as_deref().unwrap_or("null"), ${rhs}))`;
@@ -14270,7 +14309,7 @@ export class RustTranspiler extends BaseTranspiler {
             const outer = this.rustScalarUseForm(parent, kind);
             // ral-64n: `(d as string)` as the delimiter of a native split of a string local
             if (kind === 'ostr' && this.rust64nOptSplitDelimUse(n)) return 'native';
-            return outer === 'box' || outer === 'xbox' || (outer === 'native' && (isParenthesizedExpression(parent) || this.rustCastSplitRecv(parent))) ? outer : undefined;
+            return outer === 'box' || outer === 'xbox' || (outer === 'native' && (isParenthesizedExpression(parent) || this.rustCastSplitRecv(parent) || this.rust93reCastLengthRecv(parent))) ? outer : undefined;
         }
         if (isBinaryExpression(parent)) {
             const op = parent.operatorToken.kind;
@@ -14335,6 +14374,14 @@ export class RustTranspiler extends BaseTranspiler {
         // an alias initializer (a `bool` alias is the bool-initializer rule's)
         if (isVariableDeclaration(parent) && parent.initializer === n && isIdentifier(parent.name) && kind !== 'bool') return 'xbox';
         return undefined;
+    }
+
+    /** `(x as string).length` (through parentheses) on a string local: the length prints from the local itself. */
+    rust93reCastLengthRecv(cast: Node): boolean {
+        let top: Node = cast;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
+        const access: Node = top.parent;
+        return access !== undefined && isPropertyAccessExpression(access) && access.expression === top && this.rustScalarLengthRecv(access) !== undefined;
     }
 
     /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
@@ -21031,6 +21078,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner === undefined || inner.kind !== SyntaxKind.BinaryExpression || !this.isEqualityOp(inner.operatorToken.kind)) return undefined;
         const first = this.rust70fFirstCharTest(inner);
         if (first !== undefined) return first;
+        const charTest = this.rust93reStrCharTest(inner);
+        if (charTest !== undefined) return charTest;
         return this.printNativeEqualityComparison(inner.left, inner.right, inner.operatorToken.kind);
     }
 
@@ -35781,6 +35830,10 @@ export class RustTranspiler extends BaseTranspiler {
     // Typed `Option<String>` receivers have no `Display`, so they keep the helper.
     printRustNativeToString(node, name: string): string | undefined {
         const receiver = node?.expression?.expression;
+        // an `i64` / `Option<i64>` local displays as the `Int` / `Null` box it replaces (`n` / `null`)
+        const intLocal = receiver !== undefined && isIdentifier(receiver) && this.rust93reIntToStringRecv(receiver) && this.rustScalarUseForms.get(receiver) === 'native' ? this.rustScalarLocalOf(receiver) : undefined;
+        if (intLocal?.kind === 'int') return this.rustRecordFormatToString(node, super.printIdentifier(receiver));
+        if (intLocal?.kind === 'oint') return `Value::Str((match ${super.printIdentifier(receiver)} { Some(__n) => __n.to_string(), None => "null".to_string() }).into())`;
         // sb: a Copy number local boxed at its `.toString()` read displays the box (`format!("{}", Value::from(x))`)
         const sbLocal = receiver !== undefined && isIdentifier(receiver) ? this.rustScalarLocalOf(receiver) : undefined;
         if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return this.rustRecordFormatToString(node, name);

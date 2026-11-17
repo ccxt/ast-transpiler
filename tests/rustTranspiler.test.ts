@@ -18887,7 +18887,7 @@ describe('ral-54e: a parseToInt local stepped through parseToInt (x = parseToInt
         expect(a).toContain('let mut leadingZeros: Option<i64> = ');
         expect(a).toContain('Some(__l + 1)');
         const b = out.slice(out.indexOf('fn zerosB'));
-        expect(b).toContain('let mut leadingZeros: Value = ');
+        expect(b).toContain('leadingZeros = self.parseToInt(add(&other, &Value::Int(1)));');
     });
 });
 
@@ -23058,7 +23058,7 @@ describe('ral-68b: declared-empty Int locals typed from TypeScript (typed-slot n
     test('gate parseLedgerEntry `timestamp`: parseInt of a string (times an int literal) into an Int local is Option<i64>', () => {
         const out = write ('ral-68b-parseint', parseBody ('parseInt (rawTimestamp as string) * 1000'));
         expect(out).toContain('let mut timestamp: Option<i64> = None;');
-        expect(out).toMatch(/timestamp = \(match &rawTimestamp \{ Value::Str\(__parse_s\).*\}\)\.as_i64\(\);/);
+        expect(out).toMatch(/timestamp = \(match rawTimestamp\.as_deref\(\) \{ Some\(__parse_s\).*\}\)\.as_i64\(\);/);
         expect(out).toContain('Value::from(timestamp)');
     });
     test('negative: parseInt times a float literal keeps Value (a Float product)', () => {
@@ -26335,5 +26335,77 @@ describe('a safeDict read defaulted to its own never-written Dict parameter hold
     test('an any parameter or a rewritten one keeps the read Value', () => {
         expect(transpiler.transpileRustByPath (write ('self-param-any', 'raw: any')).content).toContain('let mut inner: Value');
         expect(transpiler.transpileRustByPath (write ('self-param-written', 'raw: Dict', "        raw = this.safeDict (raw, 'x');\n")).content).toContain('let mut inner: Value');
+    });
+});
+
+describe('rust char test on a String reader local', () => {
+    const base = "export type Int = number | undefined;\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n    parseToInt (x: any): Int { return x; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    zeros (parts: string[]): number {\n        const decimalPart = this.safeString (parts, 1, '');\n        let n = this.parseToInt (0);\n        while ((n <= decimalPart.length) && (decimalPart[n] === '0')) {\n            n = this.parseToInt (n + 1);\n        }\n        return n;\n    }\n}\n";
+    test('the String local reads its char natively', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93re1-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut decimalPart: String = ');
+        expect(out).toContain("decimalPart.chars().nth(__i as usize) == Some('0')");
+    });
+});
+
+describe('rust toString of an integer reader local', () => {
+    const base = "export type Int = number | undefined;\nexport default class Exchange {\n    safeInteger (o: any, k: any, d: Int = undefined): Int { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    channelOf (params: any): string {\n        let channel = 'books';\n        const limit = this.safeInteger (params, 'limit');\n        if ((limit === 5) || (limit === 50)) {\n            channel += limit.toString ();\n        }\n        return channel;\n    }\n}\n";
+    test('the Option<i64> local displays as its Int / Null box', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93re2-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut limit: Option<i64> = ');
+        expect(out).toContain('(match limit { Some(__n) => __n.to_string(), None => "null".to_string() })');
+    });
+});
+
+describe('rust cast length of a string reader local', () => {
+    const base = "export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    isLong (item: any): boolean {\n        const raw = this.safeString (item, 'time');\n        if ((raw as string).length > 10) {\n            return true;\n        }\n        return false;\n    }\n}\n";
+    test('`(x as string).length` reads the Option<String> local', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93re3-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut raw: Option<String> = ');
+        expect(out).toContain('raw.as_deref().unwrap_or_default().chars().count() as i64');
+    });
+});
+
+describe('rust optional string += a String method of a String local', () => {
+    const base = "export type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return d; }\n}\n";
+    const venue = "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    barOf (frames: any, timeframe: string, options: any): any {\n        const timezone = this.safeString (options, 'timezone', 'UTC');\n        let bar = this.safeString (frames, timeframe, timeframe);\n        if (timezone === 'UTC') {\n            bar += timezone.toLowerCase ();\n        }\n        return { 'bar': bar };\n    }\n}\n";
+    test('the Option<String> local appends the lowered text', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-93re4-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue);
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toContain('let mut bar: Option<String> = ');
+        expect(out).toContain('bar = Some(format!("{}{}", bar.as_deref().unwrap_or("null"), timezone.to_lowercase()));');
     });
 });
