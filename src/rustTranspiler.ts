@@ -23626,7 +23626,7 @@ export class RustTranspiler extends BaseTranspiler {
             // `add_element_to_object` takes the typed map itself (`impl AddTarget for Dict / Option<Dict>`) and runs the very tag
             // hooks (book meta, ws subscriptions, cache buckets) the boxed `Value::Dict` arm ran; `None` skips as `Null` did
             // ral-84d R2: `delete x[k]` (a string local key) on the same store copy: native `shift_remove` (no ws tag on `this.options`)
-            if (!extendReuse && !sbAlias && from === 'dict' && this.rust84dStoreDelete(n, init)) return store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
+            if (!extendReuse && !sbAlias && from === 'dict' && (this.rust84dStoreDelete(n, init) || this.rust87rdLiteralDelete(n, init))) return store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
             // ral-84d R2: a variable-key write on a defaulted `safeDict (this.options, 'k', {})` copy (an untagged plain store): native insert
             if (!extendReuse && !sbAlias && from === 'dict' && this.rust84dStoreKeyWrite(n, init)) return keyWriteUses.push(n) > 0 && store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
             if (!sbAlias && this.rustAeoTargetWrite(n) && !this.rustAeoBoxedNative(n)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
@@ -24934,6 +24934,24 @@ export class RustTranspiler extends BaseTranspiler {
         return head !== undefined && isPropertyAccessExpression(head) && head.expression.kind === SyntaxKind.ThisKeyword && String(head.name.text) === 'options';
     }
 
+    /** ral-87rd R2: `delete n['lit']` (statement) on `const n = this.safeDict (local, 'lit', {})` (a base reader with a map-literal
+     *  default: a map on every path) whose head local reads no tagged container: the untyped printer already removes it with the
+     *  native `shift_remove` (provenDictFieldDelete: no ws subscription route), so the typed map runs the same remove. */
+    rust87rdLiteralDelete(n: Node, init: Node): boolean {
+        const access: Node = n.parent;
+        const del: Node = access?.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n || !isDeleteExpression(del) || del.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const key: Node = this.rustSkipWrappers(access.argumentExpression);
+        if (key === undefined || !isStringLiteral(key) || !this.rust84dNeverNullMapInit(init)) return false;
+        const head: Node = this.rustSkipWrappers((init as CallExpression).arguments[0]);
+        if (head === undefined || !isIdentifier(head) || this.rustLocalInitReadsTaggedContainer(head)) return false;
+        try {
+            return this.provenDictFieldDelete(del) !== undefined;
+        } catch (e) {
+            return false;
+        }
+    }
+
     print84dStoreDelete(node: DeleteExpression): string | undefined {
         if (!this.rust84dStoreWrites.has(node)) return undefined;
         const target = node.expression as ElementAccessExpression;
@@ -24941,6 +24959,8 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: Node = this.rustDeclaredNode(targetId);
         if (declaration === undefined || !this.rustPrintedBorrowed.has(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
         const key: Expression = target.argumentExpression;
+        // ral-87rd R2: a literal key removes from the always-a-map copy directly
+        if (isStringLiteral(key)) return `std::sync::Arc::make_mut(&mut ${super.transformIdentifier(targetId, this.ReservedKeywordsReplacements[targetId.text] ?? targetId.text)}).shift_remove(${JSON.stringify(String(key.text))})`;
         const kind = this.rustScalarLocalOf(key)?.kind;
         const keyName = super.printIdentifier(key);
         const name = super.transformIdentifier(targetId, this.ReservedKeywordsReplacements[targetId.text] ?? targetId.text);
@@ -27399,6 +27419,24 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
+    /** ral-87rd R1: some statement `name.push (v)` on this very binding inside its own function, and no other binding of the same
+     *  name in that function (ccxt build/'s container-op prover reads the function text by name: a typed sibling `let` would make it
+     *  drop a native `len()` it proves for the other, still boxed, binding). */
+    rust87rdPushedLocal(declaration: VariableDeclaration, name: string): boolean {
+        const fn: Node | undefined = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || isSourceFile(fn)) return false;
+        let pushed = false;
+        for (const n of this.rustScopeNameNodes(fn, name)) {
+            if (!isIdentifier(n)) continue;
+            const up: Node | undefined = n.parent;
+            if (up !== undefined && n !== declaration.name && (isVariableDeclaration(up) || isParameterDeclaration(up) || isBindingElement(up)) && up.name === n) return false;
+            if (up !== undefined && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'push'
+                && isCallExpression(up.parent) && up.parent.expression === up && up.parent.parent?.kind === SyntaxKind.ExpressionStatement
+                && this.rustDeclarationOfIdentifier(n) === declaration) pushed = true;
+        }
+        return pushed;
+    }
+
     rustLentListLocalUncached(declaration: any): boolean {
         if (declaration.name?.kind !== SyntaxKind.Identifier) return false;
         const list: any = declaration.parent;
@@ -27412,10 +27450,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(init)) return this.rustBuiltListLocal(declaration);
         // ral-ra: a reassigned `[]`-defaulted `safeList*` read whose every write is a list producer is a built list too
         if (this.rustDefaultedListRead(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
+        // ral-87rd R1: a `[]`-defaulted `safeList*` read pushed onto (`xs.push (v)` statement): a `Value::Arr` on every path, so it is
+        // the built list too (native `Arc::make_mut(&mut xs).push(v)` instead of the `if let Value::Arr` guard)
+        if (this.rustDefaultedListRead(init) && isIdentifier(declaration.name) && this.rust87rdPushedLocal(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
         // ral-56s: a reassigned base `arrayConcat (a, b)` initializer whose every write is a list producer is a built list too
         if (this.rustBuiltListConcatInit(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
         // ral-65i: a reassigned base `filterBy (..)` initializer (the runtime table's list answer) whose every write is a list producer
         if (this.rust65iFilterByCall(init) && isIdentifier(declaration.name) && this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return this.rustBuiltListLocal(declaration);
+        // ral-87rd R3: `Array.isArray (r) ? r : this.safeList (r, 'k', [])` (rustArrayGuardedTernary): a `Value::Arr` on every path
+        if (this.rustArrayGuardedTernary(init) && isIdentifier(declaration.name)) return this.rustBuiltListLocal(declaration);
         if (!this.rustLentListSource(init)) return false;
         // a defaulted read boxes its shared handle only when it also has a length or index read
         const defaulted = this.rustDefaultedListRead(init);
@@ -30485,9 +30528,11 @@ export class RustTranspiler extends BaseTranspiler {
         const nilAssigned = this.rustNilListAssignedFirst(declaration);
         // ral-56s: a base `arrayConcat (a, b)` initializer answers a `Value::Arr` on every path, like a `[]`-defaulted read
         const read = init !== undefined && (this.rustDefaultedListRead(this.rustSkipWrappers(init)) || this.rustBuiltListConcatInit(this.rustSkipWrappers(init)) || this.rust65iFilterByCall(this.rustSkipWrappers(init)));
-        if (!nilAssigned && (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)))) return false;
-        const type: any = nilAssigned ? undefined : this.typeOfNodeIfAny(read ? init : declaration.name);
-        if (!nilAssigned && (type === undefined || !this.getChecker().isArrayType(type))) return false;
+        // ral-87rd R3: the Array.isArray-guarded ternary of a list read (a list on every path, as its write form already proves)
+        const guardedInit = init !== undefined && this.rustArrayGuardedTernary(init);
+        if (!nilAssigned && !guardedInit && (init === undefined || !read && (!isArrayLiteralExpression(init) || init.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)))) return false;
+        const type: any = nilAssigned || guardedInit ? undefined : this.typeOfNodeIfAny(read ? init : declaration.name);
+        if (!nilAssigned && !guardedInit && (type === undefined || !this.getChecker().isArrayType(type))) return false;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined || isSourceFile(fn)) return false;
@@ -30495,7 +30540,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false || this.rustBorrowedDictLocal(declaration)
             || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
         this.rustBuiltListCopiedElement = false;
-        if (!nilAssigned && (String(init.getText()).split('\n')[0].length > (read ? 240 : 120) || !this.rustBuiltListWriteSource(init))) return false;
+        if (!nilAssigned && (String(init.getText()).split('\n')[0].length > (read || guardedInit ? 240 : 120) || !(guardedInit || this.rustBuiltListWriteSource(init)))) return false;
         const boxes: [any, 'clone' | 'move' | 'lend'][] = [];
         let natives = 0;
         let handOffs = 0;
@@ -30612,6 +30657,17 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
                     && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && this.rustLocalKeyPlace(up.left, n) && short(n)) {
                     boxes.push([n, 'move']);
+                    handOffs++;
+                    return true;
+                }
+                // ral-87rd R4: the same literal-key store before later reads of a list nothing mutates afterwards (no loop around the
+                // store, only `.length` / element reads / lends follow): shared there once (`Value::Arr(x.clone())`, the Arc bump the
+                // boxed `x.clone()` paid), later reads native
+                if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
+                    && isElementAccessExpression(up.left) && isIdentifier(up.left.expression) && up.left.expression.text !== name
+                    && isStringLiteralLikeNode(this.rustSkipWrappers(up.left.argumentExpression)) && short(n) && !this.rustLocalLastUse(n, declaration)
+                    && !this.rust73aStoreLastUse(up.left, n, declaration) && this.rustBuiltListFrozenAfter(n, declaration, name)) {
+                    boxes.push([n, 'clone']);
                     handOffs++;
                     return true;
                 }

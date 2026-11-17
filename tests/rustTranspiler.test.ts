@@ -24894,3 +24894,109 @@ describe('ral-87rc R3: a nil-declared Str local read by its own .length is an Op
         expect(out).not.toContain('let mut query: Value');
     });
 });
+describe('ral-87rd R1: a []-defaulted safeList local pushed onto is a typed list', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    parseAccounts (o: any, p: any = {}): any[] { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('cryptocom fetchAccounts: push then hand to parseAccounts', () => {
+        const out = write ('ral-87rd-r1a', "    m (result: Dict, master: Dict, params = {}) {\n        const accounts = this.safeList (result, 'sub_account_list', []);\n        accounts.push (master);\n        return this.parseAccounts (accounts, params);\n    }\n");
+        expect(out).toContain('let mut accounts: crate::value::List = ');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut accounts).push(');
+        expect(out).not.toContain('if let Value::Arr(__a) = &mut accounts');
+    });
+    test('aster handleMyTrade: push then store back into the order', () => {
+        const out = write ('ral-87rd-r1b', "    m (order: Dict, trade: Dict) {\n        const orderTrades = this.safeList (order, 'trades', []);\n        orderTrades.push (trade);\n        order['trades'] = orderTrades;\n    }\n");
+        expect(out).toContain('let mut orderTrades: crate::value::List = ');
+        expect(out).toContain('Value::Arr(orderTrades)');
+    });
+    test('negative: a safeList with no default stays Value', () => {
+        const out = write ('ral-87rd-r1n', "    m (order: Dict, trade: Dict) {\n        const orderTrades = this.safeList (order, 'trades');\n        orderTrades.push (trade);\n        order['trades'] = orderTrades;\n    }\n");
+        expect(out).not.toContain('let mut orderTrades: crate::value::List');
+    });
+});
+describe('ral-87rd R2: a literal-key delete on a defaulted safeDict copy of a local keeps it a typed Dict', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string { return o; }\n    extend (...args: any[]): any { return args[0]; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('foxbit createOrders: read, delete literal keys, extend', () => {
+        const out = write ('ral-87rd-r2a', "    m (order: Dict, request: Dict) {\n        const orderParams = this.safeDict (order, 'params', {});\n        const timeInForce = this.safeString (orderParams, 'timeInForce');\n        if (timeInForce !== undefined) {\n            delete orderParams['timeInForce'];\n        }\n        return this.extend (request, orderParams);\n    }\n");
+        expect(out).toContain('let mut orderParams: crate::value::Dict = ');
+        expect(out).toContain('std::sync::Arc::make_mut(&mut orderParams).shift_remove("timeInForce")');
+    });
+    test('negative: a safeDict with no default stays Value', () => {
+        const out = write ('ral-87rd-r2n', "    m (order: Dict, request: Dict) {\n        const orderParams = this.safeDict (order, 'params');\n        const timeInForce = this.safeString (orderParams, 'timeInForce');\n        if (timeInForce !== undefined) {\n            delete orderParams['timeInForce'];\n        }\n        return this.extend (request, orderParams);\n    }\n");
+        expect(out).not.toContain('let mut orderParams: crate::value::Dict');
+    });
+});
+describe('ral-87rd R1 fix: a pushed safeList local with a same-named sibling binding stays Value', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    test('limitless fetchTickers: the read-only `grouped` keeps its own form', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-87rd-r1s');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        const body = "    m (by: Dict, keys: string[], o: Dict) {\n        for (let i = 0; i < keys.length; i++) {\n            const k = keys[i];\n            const grouped = this.safeList (by, k, []);\n            grouped.push (o);\n            by[k] = grouped;\n        }\n        for (let i = 0; i < keys.length; i++) {\n            const grouped = this.safeList (by, keys[i], []);\n            for (let j = 0; j < grouped.length; j++) {\n                this.keep (grouped[j]);\n            }\n        }\n    }\n";
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        // two bindings named `grouped` in one function: the pushed one stays boxed (ccxt build/ proves lengths by name)
+        expect(out).not.toContain('let mut grouped: crate::value::List = self.safeList(by.clone(), k.clone()');
+        expect(out).toContain('if let Value::Arr(__a) = &mut grouped');
+    });
+});
+describe('ral-87rd R3: an Array.isArray-guarded ternary of a list read is a typed list local', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    keep (o: any): any { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('polymarket fetchTrades: guarded ternary read by index in a counter loop', () => {
+        const out = write ('ral-87rd-r3a', "    m (response: any) {\n        const rawTrades: Dict[] = Array.isArray (response) ? response : this.safeList (response, 'data', []);\n        for (let i = 0; i < rawTrades.length; i++) {\n            this.keep (rawTrades[i]);\n        }\n    }\n");
+        expect(out).toContain('let mut rawTrades: crate::value::List = ');
+        expect(out).not.toContain('let mut rawTrades: Value');
+    });
+    test('myriad: the test held in a const flag', () => {
+        const out = write ('ral-87rd-r3b', "    m (response: any) {\n        const responseIsArray = Array.isArray (response);\n        const rows = (responseIsArray) ? response : this.safeList (response, 'data', []);\n        for (let i = 0; i < rows.length; i++) {\n            this.keep (rows[i]);\n        }\n    }\n");
+        expect(out).toContain('let mut rows: crate::value::List = ');
+    });
+    test('negative: the guard tests another local', () => {
+        const out = write ('ral-87rd-r3n', "    m (response: any, other: any) {\n        const rows = Array.isArray (other) ? response : this.safeList (response, 'data', []);\n        for (let i = 0; i < rows.length; i++) {\n            this.keep (rows[i]);\n        }\n    }\n");
+        expect(out).not.toContain('let mut rows: crate::value::List');
+    });
+});
+describe('ral-87rd R4: a pushed list stored at a literal key before later reads shares its handle there once', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeList (o: any, k: any, d: any = undefined): any[] { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n    safeString (o: any, k: any, d: any = undefined): string { return o; }\n}\n";
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts'));
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('coinbaseexchange handleOrder: push, store, then read in a loop', () => {
+        const out = write ('ral-87rd-r4a', "    m (order: Dict, trade: Dict) {\n        const previousTrades = this.safeList (order, 'trades', []);\n        previousTrades.push (trade);\n        order['trades'] = previousTrades;\n        let total = '0';\n        for (let i = 0; i < previousTrades.length; i++) {\n            const tradeEntry = this.safeDict (previousTrades, i);\n            total = this.safeString (tradeEntry, 'cost', '0');\n        }\n        return total;\n    }\n");
+        expect(out).toContain('let mut previousTrades: crate::value::List = ');
+        expect(out).toContain('Value::Arr(previousTrades.clone())');
+        expect(out).toContain('previousTrades.len()');
+    });
+    test('negative: a push after the store keeps the list boxed', () => {
+        const out = write ('ral-87rd-r4n', "    m (order: Dict, trade: Dict) {\n        const previousTrades = this.safeList (order, 'trades', []);\n        previousTrades.push (trade);\n        order['trades'] = previousTrades;\n        previousTrades.push (trade);\n        return previousTrades.length;\n    }\n");
+        expect(out).not.toContain('let mut previousTrades: crate::value::List');
+    });
+});
