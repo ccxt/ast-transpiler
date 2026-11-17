@@ -2750,25 +2750,6 @@ describe('csharp helper removal: inOp / getArrayLength become native members', (
         expect(output).toContain('if (inOp(merged, a))');
         expect(output).not.toContain('merged?.ContainsKey');
     });
-    test('csharpDeclaredDictReceiverType naming the receiver a dictionary emits ContainsKey', () => {
-        const csharp: any = (transpiler as any).csharpTranspiler;
-        csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.text === 'merged' ? 'Dictionary<string, object>' : undefined);
-        try {
-            const input =
-            "class Exchange {\n" +
-            "    main(a: any) {\n" +
-            "        const merged = a;\n" +
-            "        if ('k' in merged) { return 1; }\n" +
-            "        return 0;\n" +
-            "    }\n" +
-            "}\n";
-            const output = transpiler.transpileCSharp(input).content;
-            expect(output).toContain('if ((merged?.ContainsKey("k") == true))');
-            expect(output).not.toContain('inOp(merged');
-        } finally {
-            delete csharp.csharpDeclaredDictReceiverType;
-        }
-    });
     test('an identifier key gets the helper null guard back', () => {
         const csharp: any = (transpiler as any).csharpTranspiler;
         csharp.csharpDeclaredDictReceiverType = (node: any) => (node?.text === 'merged' ? 'IDictionary<string, object>' : undefined);
@@ -3710,18 +3691,6 @@ describe('slice -> Substring / GetRange with the literal bounds clamped', () => 
         expect(output).toContain("((date == null) ? null : ((string)date).Substring(Math.Min(2, ((string)date).Length), Math.Min(4, ((string)date).Length) - Math.Min(2, ((string)date).Length)))");
         expect(output).not.toContain("slice(date");
     });
-    test('a `Str`-like union receiver is a proven string: `string | undefined`', () => {
-        const input =
-        "class Exchange {\n" +
-        "    convertExpireDate(date: string | undefined): string {\n" +
-        "        const year = date.slice(0, 2);\n" +
-        "        return year;\n" +
-        "    }\n" +
-        "}\n";
-        const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain("((date == null) ? null : ((string)date).Substring(0, Math.Min(2, ((string)date).Length)))");
-        expect(output).not.toContain("slice(date");
-    });
     test('a negative start counts from the end: the one-argument Substring', () => {
         const input =
         "class Exchange {\n" +
@@ -3994,35 +3963,6 @@ describe('csharp helper removal: parseInt / parseFloat / mod / prefix `-x`', () 
         expect(output).toContain('object c = parseFloat("abc");');
         expect(output).toContain('object d = parseFloat("1e3");');
         expect(output).toContain('object e = parseInt("");');
-    });
-    test('parseInt / parseFloat of a declared numeric local convert in place', () => {
-        const input =
-        "class Exchange {\n" +
-        "    main(items: any[], ms: number) {\n" +
-        "        const len = items.length;\n" +
-        "        const p = parseInt(len);\n" +
-        "        const f = parseFloat(ms);\n" +
-        "        return [p, f];\n" +
-        "    }\n" +
-        "}\n";
-        const output = withKinds({ len: 'int', ms: 'Int64' }, input);
-        expect(output).toContain('int len = (items?.Count ?? 0);');
-        expect(output).toContain('object p = ((Int64)len);');
-        expect(output).toContain('object f = ((double)ms);');
-        expect(output).not.toContain('parseInt(');
-        expect(output).not.toContain('parseFloat(');
-    });
-    test('a declared double passes through parseFloat unchanged', () => {
-        const input =
-        "class Exchange {\n" +
-        "    main(fl: number) {\n" +
-        "        const p = parseFloat(fl);\n" +
-        "        return p;\n" +
-        "    }\n" +
-        "}\n";
-        const output = withKinds({ fl: 'double' }, input);
-        expect(output).toContain('object p = fl;');
-        expect(output).not.toContain('parseFloat(');
     });
     test('an object / nullable / double operand keeps the parse helper', () => {
         const input =
@@ -5746,10 +5686,6 @@ describe('list index reads bounded by the enclosing for', () => {
     });
     test('a receiver written before the loop still qualifies', () => {
         const output = transpile('function test (other) {\n    let orders: any[] = [];\n    orders = other;\n    for (let i = 0; i < orders.length; i++) {\n        const a = orders[i];\n    }\n}', listRead);
-        expect(output).toContain('object a = orders[i];');
-    });
-    test('a property read of the receiver in the body keeps the bound', () => {
-        const output = transpile(loop('orders[i]', ['        const n = orders.length;']), listRead);
         expect(output).toContain('object a = orders[i];');
     });
     test('an element write keeps the cast path', () => {

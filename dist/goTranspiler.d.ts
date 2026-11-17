@@ -10,29 +10,19 @@ export declare const CCXT_GO_BOOL_METHOD_NAMES: string[];
 export declare const CCXT_GO_STRING_PTR_METHOD_NAMES: string[];
 export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     GetArgMap: string;
-    GetArgMapSlice: string;
-    GetArgAnySlice: string;
-    GetArgStringSlice: string;
     GetArgString: string;
     GetArgBool: string;
     GetArgInt64: string;
-    GetArgFloat64: string;
     GetArgStringPtr: string;
     GetArgInt64Ptr: string;
-    GetArgFloat64Ptr: string;
-    GetArgBoolPtr: string;
     'this.ToArray': string;
     'this.SortBy': string;
     'this.SortBy2': string;
     'this.FilterBy': string;
-    'this.ParseTransactionsByType': string;
     'this.ArraySlice': string;
     'this.Sort': string;
     'this.ExtractParams': string;
     'this.ArrayConcat': string;
-    'this.ArraysConcat': string;
-    'this.ParseCurrenciesCustom': string;
-    'this.DeepExtend2': string;
     'this.Account': string;
     'this.ParseOrderBook': string;
     'this.Market': string;
@@ -42,17 +32,9 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.Outcome': string;
     'this.SafeOutcome': string;
     'this.ParseSearchQueries': string;
-    'this.ApplyEventFetchParams': string;
-    'this.ParsePredictionPositions': string;
-    'this.ParseDepositAddresses': string;
-    'this.DerivedExchange.ParseDepositAddresses': string;
-    'this.SetApiCredentials': string;
-    'this.ParseDepositMethodIds': string;
-    'this.ParsePortfolioDetails': string;
     'this.StringToCharsArray': string;
     'this.EthEncodeStructuredData': string;
     'this.MarketSymbols': string;
-    'exchange.MarketSymbols': string;
     'this.Capitalize': string;
     'this.Uuid16': string;
     'this.Uuid22': string;
@@ -78,7 +60,6 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.Remove0xPrefix': string;
     'this.StringToBase64': string;
     'this.BinaryToBase16': string;
-    'this.BinaryToBase64': string;
     'this.BinaryToBase58': string;
     'this.BinaryToString': string;
     'this.Base16ToBinary': string;
@@ -128,25 +109,15 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     Eddsa: string;
     Jwt: string;
     Rsa: string;
-    Totp: string;
     Ecdsa: string;
     'this.SafeCurrencyCode': string;
     'this.SafeSymbol': string;
-    'this.DerivedExchange.SafeCurrencyCode': string;
     'this.HandleOptionAndParams': string;
     'this.HandleOptionAndParams2': string;
     'this.HandleOptionStringAndParams': string;
-    'this.HandleOptionStringAndParams2': string;
     'this.HandleOptionBoolAndParams': string;
-    'this.HandleOptionBoolAndParams2': string;
-    'this.HandleOptionBoolAndParamsNullable': string;
-    'this.HandleOptionBoolAndParams2Nullable': string;
-    'this.HandleOptionIntegerAndParamsNullable': string;
-    'this.HandleOptionIntegerAndParams2Nullable': string;
     'this.HandleOptionIntegerAndParams': string;
-    'this.HandleOptionIntegerAndParams2': string;
     'this.HandleParamString': string;
-    'this.HandleParamString2': string;
     'this.HandleMarketTypeAndParams': string;
     'this.ParseTimeframe': string;
     'exchange.ParseTimeframe': string;
@@ -157,20 +128,16 @@ export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.CountedOrderBook': string;
     'this.Client': string;
 };
-export declare function ccxtGoElementAccessType(goTranspiler: any, initializer: any, printedValue: any): string;
 export declare const CCXT_GO_FAMILY_RETURN_TYPE = "*string";
 export declare const CCXT_GO_FAMILY_LITERAL_RETURN_TYPE = "string";
-export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): "bool" | "float64" | "int" | "string";
+export declare function ccxtGoTernaryType(goTranspiler: any, printedValue: any): any;
 export declare function ccxtGoTernaryDeclaration(node: any): any;
 export declare function ccxtGoTypeOfArithmeticInitializer(goTranspiler: any, initializer: any, printedValue: any): string;
-export declare function ccxtGoUnboxArithmeticDeclaration(goTranspiler: any, printed: any): any;
-export declare function ccxtGoUnboxCurrencyDeclaration(goTranspiler: any, printed: any): any;
 export declare function ccxtGoWrapAddChainDeclaration(printed: any): any;
 export declare function ccxtGoWrapUrlsDeclaration(printed: any): any;
 export declare const CCXT_GO_EXCHANGE_MAP_FIELDS: {
     Has: string;
     Api: string;
-    TransformedApi: string;
     RequiredCredentials: string;
     HttpExceptions: string;
     Timeframes: string;
@@ -178,8 +145,6 @@ export declare const CCXT_GO_EXCHANGE_MAP_FIELDS: {
     Exceptions: string;
     Precision: string;
     UserAgents: string;
-    TokenBucket: string;
-    CommonCurrencies: string;
     Limits: string;
     Fees: string;
     Status: string;
@@ -193,7 +158,6 @@ export declare const CCXT_GO_ARRAY_BINDING_HOLDERS: string[];
 export declare function installCcxtGoArrayBindingHolders(goTranspiler: any): void;
 export declare function ccxtGoFamilyMethodReturnType(goTranspiler: any, node: any): any;
 export declare function ccxtGoFamilyCallType(goTranspiler: any, initializer: any, printedValue: any): any;
-export declare function ccxtGoUnboxSumDeclaration(goTranspiler: any, printed: any): any;
 export declare function ccxtGoCounterMethodReturnType(goTranspiler: any, node: any): any;
 export declare function ccxtGoNilDeclaredJoinType(goTranspiler: any, declaration: any): any;
 export declare const CCXT_GO_WRITESITE_CONVERSIONS: {
@@ -357,10 +321,6 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
     WatchTradesForSymbolsAsync: string;
     WatchOrderBookForSymbolsAsync: string;
     WatchOHLCVForSymbolsAsync: string;
-    DeepExtend: {
-        '*': string;
-    };
-    SubstituteString: string;
     GetClosestLimit: {
         '0': string;
     };
@@ -382,9 +342,6 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
     filterByArrayPositions: {
         '2': string;
     };
-    handleWithdrawTagAndParams: {
-        '0': string;
-    };
     FindNearestCeiling: {
         '1': string;
     };
@@ -404,36 +361,25 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     AddMarginAsync: string;
     ApproveBuilderCodeAsync: string;
     CancelAllContractOrdersAsync: string;
-    CancelAllOrdersAfterAsync: string;
-    CancelAllOrdersAsync: string;
     CancelAllOrdersRequestAsync: string;
-    CancelAllOrdersWsAsync: string;
     CancelAllSpotOrdersAsync: string;
     CancelAllUtaOrdersAsync: string;
     CancelContractOrderAsync: string;
     CancelOrderAsync: string;
-    CancelOrderWsAsync: string;
     CancelOrdersAsync: string;
     CancelOrdersForSymbolsAsync: string;
     CancelOrdersRequestAsync: string;
     CancelOrdersWsAsync: string;
     CancelSpotOrderAsync: string;
     CancelTwapOrderAsync: string;
-    CancelUnifiedOrderAsync: string;
     CancelUtaOrderAsync: string;
     CancelUtaOrdersAsync: string;
     ClosePositionAsync: string;
     CompleteRawTopicsAsync: string;
-    CreateApiKeyAsync: string;
     CreateContractOrderAsync: string;
     CreateContractOrdersAsync: string;
-    CreateConvertTradeAsync: string;
-    CreateDepositAddressAsync: string;
     CreateExtendedOrderRequestAsync: string;
-    CreateGiftCodeAsync: string;
-    CreateMarketBuyOrderWithCostAsync: string;
     CreateMarketOrderWithCostAsync: string;
-    CreateMarketSellOrderWithCostAsync: string;
     CreateOrDeriveApiKeyAsync: string;
     CreateOrderAsync: string;
     CreateOrderRequestAsync: string;
@@ -444,153 +390,84 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     CreateSpotOrderRequestAsync: string;
     CreateSpotOrdersAsync: string;
     CreateSwapOrderAsync: string;
-    CreateTrailingAmountOrderAsync: string;
-    CreateTrailingPercentOrderAsync: string;
-    CreateTwapOrderAsync: string;
     CreateUtaOrderAsync: string;
     CreateUtaOrdersAsync: string;
     EditContractOrderAsync: string;
     EditOrderRequestAsync: string;
-    EditOrderWsAsync: string;
     EditOrdersAsync: string;
     EditSpotOrderAsync: string;
     EstimateTxFeeAsync: string;
     FetchAccountAsync: string;
     FetchAccountHelperAsync: string;
     FetchAccountPositionsAsync: string;
-    FetchAccountSettingsAsync: string;
     FetchAccountsAsync: string;
     FetchAccountsV2Async: string;
     FetchAccountsV3Async: string;
     FetchAmmOrdersAsync: string;
-    FetchApiKeyAsync: string;
-    FetchApiKeysAsync: string;
     FetchBalanceAsync: string;
-    FetchBalanceWsAsync: string;
-    FetchBidsAsksAsync: string;
-    FetchBorrowInterestAsync: string;
-    FetchBorrowRateHistoriesAsync: string;
-    FetchBorrowRateHistoryAsync: string;
     FetchCanceledAndClosedOrdersAsync: string;
-    FetchCanceledOrdersAsync: string;
     FetchClosedContractOrdersAsync: string;
-    FetchClosedOrderAsync: string;
     FetchClosedOrdersAsync: string;
-    FetchClosedOrdersWsAsync: string;
     FetchClosedSpotOrdersAsync: string;
     FetchContractBalanceAsync: string;
     FetchContractDepositAddressAsync: string;
     FetchContractDepositsAsync: string;
-    FetchContractMarketsAsync: string;
     FetchContractOHLCVAsync: string;
     FetchContractOrderAsync: string;
     FetchContractOrdersAsync: string;
     FetchContractOrdersByStatusAsync: string;
     FetchContractTickersAsync: string;
     FetchContractWithdrawalsAsync: string;
-    FetchConvertCurrenciesAsync: string;
-    FetchConvertQuoteAsync: string;
-    FetchConvertTradeAsync: string;
-    FetchConvertTradeHistoryAsync: string;
     FetchCrossBorrowRatesAsync: string;
     FetchCurrenciesAsync: string;
     FetchCurrenciesFromCacheAsync: string;
     FetchCurrenciesFromWebAsync: string;
-    FetchCurrencyAsync: string;
     FetchCurrencyByIdAsync: string;
     FetchDefaultMarketsAsync: string;
     FetchDepositAddressAsync: string;
-    FetchDepositAddressDefaultAsync: string;
-    FetchDepositAddressSupplementAsync: string;
     FetchDepositAddressesByNetworkAsync: string;
-    FetchDepositAsync: string;
-    FetchDepositMethodIdAsync: string;
-    FetchDepositMethodIdsAsync: string;
     FetchDepositMethodsAsync: string;
-    FetchDepositWithdrawFeesAsync: string;
     FetchDepositsAsync: string;
     FetchDepositsOrWithdrawalsHelperAsync: string;
     FetchDepositsWithdrawalsAsync: string;
-    FetchDepositsWsAsync: string;
     FetchDerivativesMarketLeverageTiersAsync: string;
     FetchDerivativesOpenInterestHistoryAsync: string;
-    FetchEventsByQueryAsync: string;
-    FetchFinancialBalanceAsync: string;
-    FetchFundingHistoryAsync: string;
-    FetchFundingIntervalAsync: string;
-    FetchFundingIntervalsAsync: string;
-    FetchFundingLimitsAsync: string;
     FetchFundingRateAsync: string;
     FetchFundingRateHistoryAsync: string;
     FetchFundingRatesAsync: string;
-    FetchFutureMarketsAsync: string;
-    FetchGreeksAsync: string;
-    FetchHip3MarketsAsync: string;
-    FetchInverseSwapMarketsAsync: string;
     FetchL2OrderBookAsync: string;
-    FetchL3OrderBookAsync: string;
     FetchLedgerAsync: string;
-    FetchLedgerByEntriesAsync: string;
     FetchLedgerEntriesByIdsAsync: string;
-    FetchLedgerEntryAsync: string;
     FetchLeverageAsync: string;
     FetchLeverageTiersAsync: string;
-    FetchLiquidationsAsync: string;
-    FetchLongShortRatioHistoryAsync: string;
-    FetchMarginAdjustmentHistoryAsync: string;
-    FetchMarginBalanceAsync: string;
-    FetchMarginModeAsync: string;
     FetchMarkOHLCVAsync: string;
-    FetchMarkPriceAsync: string;
     FetchMarkPricesAsync: string;
-    FetchMarketAsync: string;
     FetchMarketByIdAsync: string;
-    FetchMarketLeverageTiersAsync: string;
     FetchMarketsAsync: string;
-    FetchMarketsByTypeAndSubTypeAsync: string;
-    FetchMarketsByTypeAsync: string;
     FetchMarketsFromAPIAsync: string;
     FetchMarketsFromCacheAsync: string;
-    FetchMarketsFromWebAsync: string;
     FetchMarketsV1Async: string;
     FetchMarketsV2Async: string;
     FetchMarketsV3Async: string;
-    FetchMyBuysAsync: string;
     FetchMyContractTradesAsync: string;
-    FetchMyDustTradesAsync: string;
-    FetchMyLiquidationsAsync: string;
-    FetchMySellsAsync: string;
-    FetchMySettlementHistoryAsync: string;
     FetchMySpotTradesAsync: string;
     FetchMyTradesAsync: string;
-    FetchMyTradesWsAsync: string;
     FetchMyUtaTradesAsync: string;
-    FetchNetworkDepositAddressAsync: string;
     FetchOHLCVAsync: string;
-    FetchOHLCVWsAsync: string;
-    FetchOpenInterestAsync: string;
-    FetchOpenInterestHistoryAsync: string;
     FetchOpenOrderAsync: string;
     FetchOpenOrdersAsync: string;
     FetchOpenOrdersV1Async: string;
     FetchOpenOrdersV2Async: string;
-    FetchOpenOrdersWsAsync: string;
     FetchOpenSpotOrdersAsync: string;
     FetchOpenSwapOrdersAsync: string;
-    FetchOptionAsync: string;
-    FetchOptionChainAsync: string;
-    FetchOptionMarketsAsync: string;
     FetchOptionOHLCVAsync: string;
     FetchOptionPositionsAsync: string;
     FetchOptionUnderlyingsAsync: string;
-    FetchOrderAsync: string;
     FetchOrderBookAsync: string;
     FetchOrderBooksAsync: string;
     FetchOrderClassicAsync: string;
     FetchOrderDefaultAsync: string;
     FetchOrderSupplementAsync: string;
-    FetchOrderTradesAsync: string;
-    FetchOrderWsAsync: string;
     FetchOrdersAsync: string;
     FetchOrdersByIdsAsync: string;
     FetchOrdersByStateAsync: string;
@@ -607,15 +484,9 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchPaginatedCallIncrementalAsync: string;
     LoadOutcomeAsync: string;
     FetchPaginatedCallDynamicAsync: string;
-    FetchPortfoliosAsync: string;
     FetchPositionAsync: string;
-    FetchPositionHistoryAsync: string;
-    FetchPositionModeAsync: string;
-    FetchPositionWsAsync: string;
-    FetchPositionsADLRankAsync: string;
     FetchPositionsAsync: string;
     FetchPositionsForSymbolAsync: string;
-    FetchPositionsHistoryAsync: string;
     FetchPositionsRiskAsync: string;
     FetchPositionsWsAsync: string;
     FetchPrivateTradingFeeAsync: string;
@@ -625,19 +496,10 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchPublicTradingFeesAsync: string;
     FetchPublicTransactionFeesAsync: string;
     FetchRawActiveMarketsAsync: string;
-    FetchRawEventsBySearchAsync: string;
     FetchRawEventsListAsync: string;
-    FetchRawMarketsBySearchAsync: string;
     FetchRawMarketsPagedAsync: string;
     FetchRawMarketsByTagsAsync: string;
-    FetchRawMarketsListAsync: string;
-    FetchRawQuestionsBySearchAsync: string;
-    FetchRawQuestionsListAsync: string;
     FetchRawTopicsAsync: string;
-    FetchRawTopicsByQueriesAsync: string;
-    FetchSeriesEventsAsync: string;
-    FetchSettlementHistoryAsync: string;
-    FetchSpotBalanceAsync: string;
     FetchSpotMarketsAsync: string;
     FetchSpotOHLCVAsync: string;
     FetchSpotOrderAsync: string;
@@ -645,53 +507,32 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     FetchSpotOrdersAsync: string;
     FetchSpotOrdersByStatesAsync: string;
     FetchSpotOrdersByStatusAsync: string;
-    FetchStatusAsync: string;
-    FetchSwapAndFutureMarketsAsync: string;
-    FetchSwapBalanceAsync: string;
     FetchSwapMarketsAsync: string;
-    FetchTicker2Async: string;
     FetchTickerAsync: string;
     FetchTickerV1AndV2Async: string;
     FetchTickerV1Async: string;
     FetchTickerV2Async: string;
     FetchTickerV3Async: string;
-    FetchTickerWsAsync: string;
     FetchTickersAsync: string;
     FetchTickersV2Async: string;
     FetchTickersV3Async: string;
-    FetchTradeQuoteAsync: string;
     FetchTradesAsync: string;
-    FetchTradesWsAsync: string;
-    FetchTradingFeeAsync: string;
     FetchTradingFeesAsync: string;
-    FetchTradingFeesWsAsync: string;
     FetchTradingLimitsAsync: string;
-    FetchTradingLimitsByIdAsync: string;
-    FetchTransactionFeeAsync: string;
     FetchTransactionFeesAsync: string;
     FetchTransactionsAsync: string;
     FetchTransactionsByTypeAsync: string;
     FetchTransactionsWithMethodAsync: string;
-    FetchTransferAsync: string;
-    FetchTransfersAsync: string;
-    FetchUSDTMarketsAsync: string;
     FetchUTAMarketsAsync: string;
     FetchUTAOHLCVAsync: string;
-    FetchUnderlyingAssetsAsync: string;
     FetchUtaBalanceAsync: string;
     FetchUtaCanceledAndClosedOrdersAsync: string;
     FetchUtaMarketsAsync: string;
     FetchUtaOrderAsync: string;
     FetchUtaOrdersByStatusAsync: string;
-    FetchVolatilityHistoryAsync: string;
-    FetchWithdrawAddressesAsync: string;
-    FetchWithdrawalAsync: string;
     FetchWithdrawalsAsync: string;
-    FetchWithdrawalsWsAsync: string;
     GetAssetHistoryRowsAsync: string;
     HandleAccountIndexAsync: string;
-    HandleNetworkIdAndParamsAsync: string;
-    HandlePortfolioAndParamsAsync: string;
     HandleUTAAndParamsAsync: string;
     InternalFetchTransfersAsync: string;
     IsUnifiedEnabledAsync: string;
@@ -716,42 +557,26 @@ export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     SignAndCreateOrderAsync: string;
     SignInWithPrivateKeyAsync: string;
     TransferAsync: string;
-    TransferBetweenMainAndSubAccountAsync: string;
-    TransferBetweenSubAccountsAsync: string;
     TransferClassicAsync: string;
-    TransferInAsync: string;
-    TransferOutAsync: string;
     TransferUtaAsync: string;
-    WatchBalanceAsync: string;
-    WatchBidsAsksAsync: string;
-    WatchFundingRateAsync: string;
     WatchFundingRatesAsync: string;
-    WatchLiquidationsAsync: string;
     WatchLiquidationsForSymbolsAsync: string;
-    WatchMarkPriceAsync: string;
     WatchMarkPricesAsync: string;
-    WatchMyLiquidationsAsync: string;
     WatchMyLiquidationsForSymbolsAsync: string;
     WatchMyTradesAsync: string;
-    WatchMyTradesForSymbolsAsync: string;
     WatchOHLCVAsync: string;
     WatchOHLCVForSymbolsAsync: string;
     WatchOrdersAsync: string;
     WatchOrdersForSymbolsAsync: string;
-    WatchPositionAsync: string;
-    WatchPositionsAsync: string;
     WatchTickerAsync: string;
     WatchTickersAsync: string;
     WatchTradesAsync: string;
     WatchTradesForSymbolsAsync: string;
-    WithdrawAsync: string;
-    WithdrawWsAsync: string;
     promiseAll: string;
     FetchDydxAccountAsync: string;
     FetchExtendedAccountAsync: string;
     FetchEventsAsync: string;
 };
-export declare const CCXT_GO_ASYNC_FORWARD_SAFE: any[];
 export declare const CCXT_GO_ASYNC_ELEM_EXCLUDED: string[];
 export declare function ccxtGoEndpointElement(goTranspiler: any, call: any): any;
 export declare function ccxtGoAsyncListHolderLines(goTranspiler: any, awaitNode: any, target: string, lead: string, wrapped: string): string;
@@ -826,8 +651,7 @@ export declare function installFmGo5OG02(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
 export declare function installNumParams(goTranspiler: any): void;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
-declare function alignGoTrailingComments(content: string): string;
-export { alignGoTrailingComments, };
+export declare function alignGoTrailingComments(content: string): string;
 export declare class GoTranspiler extends BaseTranspiler {
     goScopeDescendants: WeakMap<object, any[]>;
     goDescendantsOf(scope: any): any[];
@@ -883,90 +707,25 @@ export declare class GoTranspiler extends BaseTranspiler {
     DEFAULT_IDENTATION: string;
     constructor(config?: {});
     initConfig(): void;
-    printSuperCallInsideConstructor(node: any, identation: any): string;
     printStringLiteral(node: any): any;
-    transformFunctionNameIfNeeded(name: any): string;
     getStructFieldCells(node: any): string[];
-    printPropertyDeclaration(node: any, identation: any): string;
     printStruct(node: any, indentation: any): string;
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
-    /**
-     * gofmt's declaration-list rule (go/printer nodes.go `declList`): a top-level
-     * declaration that carries a doc comment is separated from the previous declaration
-     * by exactly one blank line (`min = 2` linebreaks), while a declaration without one
-     * keeps the source's own separation (the printer emits members adjacent to the
-     * closing brace above them). `printClass` used to join every member with a bare
-     * "\n", so a method whose leading `/** ... *` + `/` comment follows the previous
-     * method's closing brace came out as `}\n/**` and gofmt re-inserted the blank line.
-     */
     joinTopLevelDecls(decls: string[]): string;
-    /**
-     * True when the emitted declaration text opens with its doc comment - the comment
-     * group gofmt attaches to the declaration (`getDoc(d) != nil` in go/printer).
-     */
-    startsWithComment(decl: string): boolean;
     /**
      * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
      * whitespace, so an indented *blank* line (only the indentation of a blank source
      * line) must stay empty instead of becoming whitespace-only text.
      */
-    printPropertyAccessModifiers(node: any): string;
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     goProvenReturnRetype(node: any, printed: string): string;
     printAsyncDeclarationPair(node: any, identation: any, def: string, funcBody: string, isMethod: boolean): string;
     printFunctionDeclaration(node: any, identation: any): string;
-    /**
-     * Name of the sibling *body* method/function an async core hands its work to.
-     *
-     * `FetchTicker` -> `fetchTickerBody`. Deliberately UNEXPORTED: the body is an
-     * implementation detail of the trampoline, so it must not show up on the generated
-     * interfaces (ICoreExchange) nor on the typed `*_wrapper.go` facades, and it stays
-     * invisible to the reflection based `callInternal`/`callDynamically` dispatch.
-     *
-     * If that name is already taken by a real declaration (a hand written
-     * `fetchTickerBody`), a numeric suffix is appended instead of silently clobbering it.
-     */
     getAsyncBodyName(node: any, goName: string): string;
-    /**
-     * Parameter list of the body: the channel it must fill, then the original parameters
-     * verbatim (including the `optionalArgs ...any` tail), so the trampoline can forward
-     * its own arguments unchanged.
-     */
-    printAsyncBodyParameters(node: any): string;
-    /**
-     * Arguments the trampoline forwards to its body, matching printMethodParameters:
-     * the declared parameters in order, plus the variadic `optionalArgs...` tail when
-     * the function has any defaulted parameter.
-     */
     printAsyncTrampolineArgs(node: any): string;
-    /**
-     * The trampoline: an async core hands back a *hot handle*.
-     *
-     *     func (this *Exchange) FetchTicker(symbol any) <-chan any {
-     *         ch := make(chan any, 1)
-     *         go this.fetchTickerBody(ch, symbol)
-     *         return ch
-     *     }
-     *
-     *   - `ch` is buffered (cap 1): the body's single `ch <- value` never blocks, so a
-     *     result nobody ever receives still lets the goroutine finish and run
-     *     `defer close(ch)` (no leak for abandoned calls).
-     *   - the body runs on its own goroutine, so the call expression returns immediately
-     *     with work already in flight. That is what makes
-     *     `const a = this.fetchA (); const b = this.fetchB (); await Promise.all([a,b])`
-     *     overlap, exactly like the C#/Java ports, with no call-site wrapper.
-     *   - the result stays UNNAMED (`<-chan any`): `return ch` is the trampoline's only
-     *     statement and it always runs, because the recover (`defer ReturnPanicError(ch)`)
-     *     lives on the body, not here.
-     */
     printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
-    /**
-     * Go name of an async (channel returning) declaration: `fetchTicker` -> `FetchTickerAsync`.
-     * Empty `asyncMethodSuffix` (the default) keeps the plain name, so the suffix is opt-in.
-     */
-    printAsyncDeclarationName(node: any, goName: string): string;
     /**
      * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
      * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
@@ -1004,7 +763,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStringCallStaticType(node: any, printedText: string): string | undefined;
     goConstFloatStaticType(node: any): string | undefined;
     isNonZeroIntegerLiteral(node: any): boolean;
-    isNonZeroFloatLiteral(node: any): boolean;
     goConstantIntValue(node: any): number | undefined;
     goInsideTypedDeclarationInitializer(node: any): boolean;
     goNativeNumericResultType(op: any, leftType: string, rightType: string, node: any): string | undefined;
@@ -1016,13 +774,11 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         text: string;
     } | undefined;
-    goNonNilPointerSubtractionText(node: any, leftText: string, rightText: string): string | undefined;
     goInt64Operand(node: any, printedText: string): {
         pointer: boolean;
         text: string;
     } | undefined;
-    goNonNilPointerAdditionText(node: any, leftText: string, rightText: string): string | undefined;
-    goNonNilPointerProductText(node: any, leftText: string, rightText: string): string | undefined;
+    goNonNilPointerOperationText(node: any, leftText: string, rightText: string, op: string, operandOf: any): string | undefined;
     goInt64ProductOperand(node: any, printedText: string): {
         pointer: boolean;
         text: string;
@@ -1030,6 +786,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
+    goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
     goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
@@ -1054,24 +811,23 @@ export declare class GoTranspiler extends BaseTranspiler {
         names: Map<any, string>;
     }>>;
     goStringCallLocalName(call: any): string | undefined;
-    goSafeDictLocalArgs(initializer: any): {
-        container: any;
-        key: any;
-    };
-    goSafeAccessorLocalArgs(initializer: any, accessor: string, fallbackKind: SyntaxKind, fallbackItems: string): {
+    goSafeAccessorLocalArgs(initializer: any, accessor: 'safeDict' | 'safeList'): {
         container: any;
         key: any;
     };
     goIsNilComparisonOperand(node: any, parent: any): boolean;
     goSafeDictUseReadsTheMap(node: any): boolean;
+    goContainerLocalUseReads(node: any, rule: {
+        elementRead: (access: any) => boolean;
+        otherRead: (parent: any) => boolean;
+        calleeReads: (callee: string) => boolean;
+    }): boolean;
     goSafeDictLocalUnboxCache: Map<any, string>;
     goCachedLocalUnbox(cache: Map<any, string | undefined>, declaration: any, compute: () => string | undefined): string | undefined;
     goSafeDictLocalUnbox(declaration: any): string | undefined;
     goDeclaredLocalTypeIfSafe(declaration: any, goType: string, readsTheValue: (n: any) => boolean, skipUse?: (n: any) => boolean): string | undefined;
-    goSafeDictLocalUnboxUncached(declaration: any): string | undefined;
     goSafeDictLocalUnboxStandard(declaration: any): string | undefined;
     goSafeDictUnboxValue(declaration: any, identation: number): string | undefined;
-    goBaseMapCalleeName(name: string): boolean;
     goNodeIsInPredictionTree(node: any): boolean;
     GO_MARKET_TABLES: {
         [name: string]: {
@@ -1122,8 +878,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFunctionLevelReturns(body: any): any[];
     goMethodBodyReturnsMap(method: any): boolean;
     goMarketReturnIsMap(expr: any): boolean;
-    goMarketCallIsMap(call: any): boolean;
-    goMarketCalleePrintsMap(call: any): boolean;
+    goMarketCallIsMap(call: any, printsMap?: boolean): boolean;
     goMethodDeclarationOfCallee(callee: any): any;
     goMethodDeclarationByName(callee: any): any;
     goMarketLocalInitializerIsMap(identifier: any, knownDeclaration?: any): boolean;
@@ -1143,19 +898,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMarketUseReadsTheValue(node: any, throwingAccessor: boolean, keepsMap?: boolean, handsOn?: boolean): boolean;
     goMarketUseKeepsMap(node: any, handsOn?: boolean): boolean;
     goMarketUseHandsTheMapOn(node: any, parent: any): boolean;
-    goMarketLocalUnboxUncached(declaration: any): string | undefined;
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
     goDeclarationOfIdentifier(node: any): any;
     goMarketComparisonElementRead(node: any): boolean;
     goIsComparedOperand(node: any): boolean;
-    goSafeListLocalArgs(initializer: any): {
-        container: any;
-        key: any;
-    };
     goSafeListUseReadsTheList(node: any): boolean;
     goSafeListLocalUnboxCache: Map<any, string>;
     goSafeListLocalUnbox(declaration: any): string | undefined;
-    goSafeListLocalUnboxUncached(declaration: any): string | undefined;
     GO_LIST_SINK_CALLEES: string[];
     goListLocalSinkReadsAsList(node: any, nilTestSafe: boolean): boolean;
     goListLocalCopyTargetIsList(left: any): boolean;
@@ -1164,13 +913,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goContainerCandidateType(declaration: any): string | undefined;
     goContainerInitializerConversion(initializer: any, goType: string): 'direct' | undefined;
     goStringListLiteralIsProven(node: any): boolean;
-    goPrintsAsPlainString(node: any): boolean;
     goContainerUseReadsAs(node: any, goType: string): boolean;
     goStringListUseReadsAs(node: any): boolean;
     goContainerWriteConversion(right: any, goType: string): 'direct' | undefined;
     goContainerLocalCache: Map<any, string>;
     goContainerLocalType(declaration: any): string | undefined;
-    goContainerLocalTypeUncached(declaration: any): string | undefined;
     goStringListLiteralNode: any;
     goNilInitPointerTypes: Set<string>;
     goNilInitLocalTypeCache: Map<any, string>;
@@ -1186,14 +933,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goFieldStringLocalType(declaration: any): string | undefined;
     goFieldStringLocalTypeCache: WeakMap<object, string>;
     goFieldStringLocalTypeScan(declaration: any): string | undefined;
-    goFieldStringLocalReadIsSafe(node: any): boolean;
-    goNilInitWrittenHelperCall(printed: string): boolean;
-    goNilInitReadIsConcatOperand(node: any): boolean;
+    goUseParent(node: any): {
+        current: any;
+        parent: any;
+    };
     goNilInitEnclosingStatement(node: any): any;
     goNilInitWriteDominates(writes: any[], read: any): boolean;
-    goNilInitReadIsStringSafe(node: any): boolean;
-    goNilInitComparedToNonNil(parent: any, current: any): boolean;
-    goNilInitReadIsPointerSafe(node: any): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
@@ -1230,7 +975,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     appendGoTrailingComma(entry: any): string;
     getGoRuneLength(text: any): number;
     getGoByteLength(text: any): number;
-    printConstructorDeclaration(node: any, identation: any): string;
     printDynamicCall(node: any, identation: any): string;
     printElementAccessExpressionExceptionIfAny(node: any): string;
     printWrappedUnknownThisProperty(node: any, identation?: number): string;
@@ -1244,7 +988,6 @@ export declare class GoTranspiler extends BaseTranspiler {
         def?: any;
         safeDict?: boolean;
     } | undefined;
-    goWsOrderbooksReadText(node: any): string | undefined;
     goOrderBookWriteKeepsType(goType: string, right: any): boolean;
     goOrderBookMemberText(node: any): string | undefined;
     goOrderBookCacheWrite(node: any): string | undefined;
@@ -1290,10 +1033,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBalanceDeleteText(node: any): string | undefined;
     goWsCacheEmptyLiteral(node: any): string | undefined;
     goWsTradesField(node: any): boolean;
+    goBaseExchangeFieldOfType(node: any, type: RegExp, file?: RegExp): boolean;
     goWsTradesRead(node: any): boolean;
-    goWsTradesReadText(node: any): string | undefined;
-    goNilInitCacheLocalType(declaration: any): string | undefined;
-    goNilInitOrderBookLocalType(declaration: any): string | undefined;
+    goIsBaseExchangeMethod(name: any): boolean;
+    goIsPlainEntryRead(inner: any): boolean;
     goIsEqualityToken(kind: any): boolean;
     goNilInitInterfaceLocalType(declaration: any, goType: string): string | undefined;
     goWsCacheReceiverIsCallable(receiver: any, type: any): boolean;
@@ -1303,7 +1046,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     goTypeOfHelpers: Map<string, string>;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
-    printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    printCustomBinaryExpressionIfAny(node: any, identation: any): any;
+    goDestructuringAssignment(node: any, identation: any): string | undefined;
+    goElementWriteAssignment(node: any, identation: any): string | undefined;
+    goInOperator(node: any, identation: any): string | undefined;
+    goHelperBinaryExpression(node: any, identation: any): string | undefined;
     goScalarFamily(node: any): string | undefined;
     goScalarFamilyWithNil(node: any): string | undefined;
     goObjectBoxParameter(node: any): boolean;
@@ -1371,8 +1118,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         obj: any;
         key: any;
     }): boolean;
+    goEnclosingBlocksProve(at: any, listKinds: SyntaxKind[], siblingProves: (st: any) => boolean, ancestorProves: (parent: any, child: any) => boolean): boolean;
     goIsProducerAssignment(statement: any, name: string): boolean;
-    goDominatedByProducerWrite(at: any, name: string): boolean;
     goOrderBookRepairGuard(declaration: any, name: string): any;
     goOrderBookRefIsRead(id: any): boolean;
     goIsOrderBookSideAccess(node: any): boolean;
@@ -1391,14 +1138,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSliceParameterType(fn: any, param: any, index: number): string | undefined;
     goAnnotatedSliceParameterType(param: any): string | undefined;
     goBodyReadsElement(body: any, name: string): boolean;
-    goIsUnifiedBoolParameter(methodName: string, index: number): boolean;
     goIsUnifiedStringParameter(methodName: string, index: number): boolean;
     goIsUnifiedSliceParameter(methodName: string, index: number): boolean;
     goUnifiedSliceParameterType(fn: any, param: any): string | undefined;
     goUnifiedAnySliceParameterType(fn: any, param: any): string | undefined;
     goIsUnifiedAnySliceParameterNode(decl: any): boolean;
     goSliceTableRootParameter(fn: any, param: any): any;
-    goAnnotatedParameterText(param: any): string | undefined;
     goSliceTableDeclarationsMatch(fn: any, annotation: string): boolean;
     goSliceTableCallSitesPass(fn: any, methodName: string, index: number, goType: string): boolean;
     goTextSliceArgumentMatches(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
@@ -1409,12 +1154,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     } | undefined;
     goArrayLiteralSliceType(node: any, depth?: number, want?: string): string | undefined;
     goSliceElementIsString(node: any): boolean;
-    goSliceArgumentType(arg: any, want?: string): string | undefined;
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
     goSliceCallArgs(node: any, identation: any): string | undefined;
     goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
     goRequiredStringParameterType(param: any): string | undefined;
+    goParameterBodyTakes(fn: any, param: any, goType: string): boolean;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
     goWsFrameParameterType(fn: any, param: any): string | undefined;
     goWsFrameReadsStayNative(body: any, param: any): boolean;
@@ -1425,13 +1170,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goHasTreeCallSite(fn: any): boolean;
+    goSliceArgumentType(arg: any, want?: string): string | undefined;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
     goAsyncBooleanParameterType(fn: any, param: any, index: number): string | undefined;
     goCallSitesPassBooleanLiteral(fn: any, index: number): boolean;
     goArgumentIsSyntacticBool(arg: any, checker: any): boolean;
     goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
-    goIsPrivateKeyField(arg: any): boolean;
     goPrintedArgType(arg: any): string | undefined;
     goIsClientUrl(arg: any): boolean;
     goIsClientParameter(node: any): boolean;
@@ -1466,11 +1211,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goCacheField(node: any): boolean;
     goCacheNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
     goBalanceEntryNilCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean, lFam: any, rFam: any): string | undefined;
-    goCacheKeyText(keyNode: any, keyStr: string): string | undefined;
-    goIndexBoundedBy(index: any, list: any, use: any): boolean;
     goCacheKeysRange(declaration: any, declaredType: string, varName: string, identation: any): string | undefined;
     goCacheDuplicateNilTest(node: any): string | undefined;
-    goCacheKeysElementRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
     goCacheRead(node: any, baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string | undefined;
     goCacheWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
     goCacheInitializedBefore(access: any): boolean;
@@ -1494,7 +1236,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilInitContainerLocal(node: any): boolean;
     goNilableMapLocal(node: any): boolean;
     goNilableMapStoreValue(valueNode: any, valueStr: string): string | undefined;
-    goMapLocalIsNeverNil(node: any): boolean;
     goNilableMapLocalStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
     printOptionDictFieldWrite(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goMapWriteValueIsNotPointer(valueNode: any): boolean;
@@ -1508,6 +1249,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goRunsOnMessageLoop(containerNode: any, field: any): boolean;
     goStoreValueIsPlain(valueNode: any, field: any): boolean;
     goEmptyDefaultCall(call: any, field: any): boolean;
+    goNilGuardedKeyWrite(containerStr: string, keyStr: string, valueStr: string, identation: number): string;
     goFieldStoreAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation?: number): string | undefined;
     goWsFieldName(node: any): string | undefined;
     goWsMapFieldType(node: any): string | undefined;
@@ -1529,7 +1271,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goOhlcvsReadKey(keyNode: any): {
         index: string;
     } | undefined;
-    goOhlcvsBookLocal(declaration: any): boolean;
     goOhlcvsBookLocalOf(node: any): any;
     goOhlcvsCacheValue(valueNode: any): boolean;
     goOhlcvsFlatKeyNode(declaration: any): any;
@@ -1545,7 +1286,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;
-    goIsNilTestOf(node: any, ident: any): boolean;
+    goNilComparisonOf(node: any, ident: any, loose: any, strict: any): boolean;
     goStatementAlwaysExits(statement: any): boolean;
     goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
@@ -1555,7 +1296,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     sliceLengthTypes: string[];
     GO_NATIVE_LENGTH_FIELDS: string[];
     printInlineArrayLength(expression: any, printedText: string, lengthNode?: any): string | undefined;
-    goNativeLengthFieldType(printedText: string): string | undefined;
     goLengthFeedsArithmeticClassifier(lengthNode: any): boolean;
     printInlineTernary(condition: string, whenTrue: string, whenFalse: string, resultType?: string): string | undefined;
     goTernaryArmType(node: any, printedText: string): string | undefined;
@@ -1566,7 +1306,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBookReceiver(node: any): boolean;
     goBookEntryText(node: any): string | undefined;
     goUnderNegation(inNode: any): boolean;
-    goInOpMapReceiver(node: any): boolean;
     goDefaultedDictLocal(node: any): boolean;
     goDefaultedDictDeclaration(declaration: any): boolean;
     goDictLocalBacksHoist(declaration: any): boolean;
@@ -1603,6 +1342,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goHasTypeNameCompositeLiteral(text: string): boolean;
     goCompositeLitHasTypeName(text: string, braceIndex: number): boolean;
     goSkipBalanced(text: string, start: number, open: string, close: string): number;
+    goScanUnquoted(text: string, start: number, step: (index: number) => number): void;
     goSkipQuoted(text: string, start: number): number;
     printLeadingComments(node: any, identation: any): string;
     goStatementLevel: number;
@@ -1612,7 +1352,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printSourceFileStatements(node: any, identation: any): string;
     goBinaryMemoized<T>(node: any, key: string, compute: () => T): T;
     goBinaryContextKey(): string;
-    goPrintBinaryMemoized(node: any, identation: number): string;
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     goWsTickersPointerInIf(node: any, identation: any): string | undefined;
@@ -1638,7 +1377,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printInlineOrderedComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     goOrderedComparisonPointerKind(node: any): string | undefined;
     printPointerOrderedComparison(left: any, right: any, leftText: string, rightText: string, operator: string, leftPointee: string | undefined, rightPointee: string | undefined): string | undefined;
-    goIsNonNilTestOf(node: any, ident: any): boolean;
     goIsNilLiteral(node: any): boolean;
     goIsSameSymbol(a: any, b: any): boolean;
     goNilGuardFields: {
@@ -1678,7 +1416,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTupleSlotPointerType(element: any): string | undefined;
     goTupleSlotPointerTypeOf(element: any): string | undefined;
     goTupleSlotStoreText(valueNode: any, valueStr: string): string;
-    goTupleSlotPointerLines(name: string, holder: string, index: number, iden: string): string;
     goTupleSlotNameIsSafe(nameNode: any, declaration: any): boolean;
     goTupleBindingProducerName(declaration: any): string | undefined;
     goTupleBindingIsSliceHolder(declaration: any): boolean;
@@ -1705,6 +1442,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgTupleWriteIsDict(declaration: any, right: any, index: number): boolean;
     goGetArgBindsDictElement(leftElement: any, right: any, index: number): boolean;
     goGetArgParameterType(decl: any): string | undefined;
+    goGetArgCalleeDeclaration(callee: any): any;
     goGetArgPositionIsDefaulted(callee: any, argIndex: number): boolean;
     goGetArgPassesIntoContainerDefault(callee: any, argIndex: number): boolean;
     printFunctionBody(node: any, identation: any, wrapInChannel?: boolean): string;
@@ -1714,15 +1452,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInt64TernaryStore(node: any, identation: any): string | undefined;
     printExpressionStatement(node: any, identation: any): string;
     isInsideAsyncFunction(returnStatementNode: any): any;
-    /**
-     * Statement that terminates an async (channel returning) function body.
-     *
-     * The body is the trampoline's sibling method (`go this.fetchTickerBody(ch, ...)`),
-     * and the synthetic try/catch closures nest inside it: in both cases `return` leaves
-     * a function whose result is a plain `any`, never the channel. The trampoline itself
-     * owns the single `return ch`, emitted by printFunctionBody.
-     */
-    getAsyncReturnStatement(node: any): string;
     printReturnStatement(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation?: number): string;
     printArgsForCallExpression(node: any, identation: any): any;
@@ -1732,7 +1461,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     isArraySliceTypes: string[];
     isArrayNonSliceTypes: string[];
     goIdentifierUsedElsewhere(nameNode: any): boolean;
-    goLocalHoldsOnlyArrays(nameNode: any): boolean;
     goIsSafeContainerIsArray(call: any): boolean;
     printNegatedSafeContainerIsArray(operand: any): string | undefined;
     goSingleWriteSafeContainerKind(nameNode: any): 'list' | 'dict' | undefined;
@@ -1765,6 +1493,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goExcisedSpans: WeakMap<object, [number, number][]>;
     goInsideExcisedSpan(): boolean;
     goStdlibImportIsPlaceable(): boolean;
+    goStringsPairCall(node: any, name: any, parsedArg: any, goFunc: string, helper: string, receiverType?: string): string;
     printStartsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printTrimCall(node: any, identation: any, name?: any): string;
@@ -1816,8 +1545,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         maxProblem: number;
     };
     goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
-    printBinaryExpression(node: any, identation: any): string;
-    goDropRedundantNilGuard(leftVar: string, rightVar: string): string | undefined;
+    printBinaryExpression(node: any, identation: any): any;
     printTryStatement(node: any, identation: number): string;
     /**
      * Strip the printer's own leading indentation from every line of a printed
@@ -1854,13 +1582,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsUrlsWrite(statement: any): boolean;
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
     goKeyIsString(node: any, printed: string): any;
-    goIsDerefStringKeyExpression(node: any): boolean;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     goIntIndexExpression(node: any): boolean;
     goIntOperandIdentifier(node: any): boolean;
     goSafeListUnboxIdentifier(node: any): boolean;
+    goCheckerVariableDeclaration(node: any): any;
     goDeclaredListIdentifier(node: any): boolean;
     goNameWriteSites(scope: any, name: string, declaration?: any): any[];
     goEnclosingLoopExcluding(loop: any, declaration: any): boolean;
@@ -1911,6 +1639,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGb08IsDictExpression(expr: any): boolean;
     goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
     goAwaitedObjectListRead(node: any, keyNode: any): boolean;
+    goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     isInsideVoidFunction(node: Node): boolean;
     /**
@@ -1923,9 +1652,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     blockEndsWithConditionalReturn(statements: NodeArray<Statement>): boolean;
     goMapParamType(node: any): string | undefined;
     goMapParamReadOk(receiver: any, access: any): string | undefined;
-    goMapParamLiteralKey(key: any): boolean;
+    goMapParamOuterParens(access: any): any;
     goMapParamIsWriteValue(access: any): boolean;
     goMapParamMarketRow(node: any): boolean;
+    goRowLocalKeepsRow(node: any, rowCallees: string[]): boolean;
     goMapParamDerefConsumer(access: any): boolean;
     goNonPointerAccessorSource(expr: any): boolean;
     goLiteralDefaultArg(node: any): boolean;
@@ -1961,7 +1691,6 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     goCallSiteParameterCandidates(fn: any, param: any, index: number): string[];
     goFeedsNullableSlot(fn: any, param: any): boolean;
-    goHasDynamicCallee(fn: any, name: string): boolean;
     goAnnotateMethodTypes(methodsTypes: any[], file: any): void;
 }
 export interface GoTranspiler {
