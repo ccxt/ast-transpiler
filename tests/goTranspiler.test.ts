@@ -18395,3 +18395,69 @@ describe('go safeDict locals backing only hoisted literal-key in reads', () => {
         expect(output).toContain('InOp(data, k)');
     });
 });
+
+describe('go conversion helpers on typed operands', () => {
+    test('a *int64 narrowed to a number-literal union prints strconv.FormatInt', () => {
+        const ts =
+        "type Int = number | undefined;\n" +
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const limit = this.safeInteger (a, 'limit');\n" +
+        "        let channel = 'books';\n" +
+        "        if ((limit === 5) || (limit === 50)) {\n" +
+        "            channel += limit.toString ();\n" +
+        "        }\n" +
+        "        return channel;\n" +
+        "    }\n" +
+        "    safeInteger (a: any, k: string): Int { return undefined; }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('channel += strconv.FormatInt(*limit, 10)');
+        expect(output).not.toContain('ToString(limit)');
+    });
+    test('an unnarrowed *int64 keeps ToString', () => {
+        const ts =
+        "type Int = number | undefined;\n" +
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const limit = this.safeInteger (a, 'limit');\n" +
+        "        return 'x' + limit.toString ();\n" +
+        "    }\n" +
+        "    safeInteger (a: any, k: string): Int { return undefined; }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('ToString(limit)');
+    });
+    test('toFixed on a float64 local with a literal digit count prints math.Round', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (a: any) {\n" +
+        "        const nonce = Math.floor (a);\n" +
+        "        return nonce.toFixed (8);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('math.Round(nonce*1e8) / 1e8');
+    });
+    test('toFixed on an any parameter keeps the helper', () => {
+        const ts =
+        "class Test {\n" +
+        "    f (amount: any) {\n" +
+        "        return amount.toFixed (10);\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('toFixed(amount, 10)');
+    });
+    test('the base int field prints strconv.Itoa', () => {
+        const ts =
+        "class Exchange {\n" +
+        "    minFundingAddressLength: number = 1;\n" +
+        "    f () {\n" +
+        "        return 'x' + this.minFundingAddressLength.toString ();\n" +
+        "    }\n" +
+        "}";
+        const output = transpiler.transpileGo(ts).content;
+        expect(output).toContain('strconv.Itoa(this.MinFundingAddressLength)');
+    });
+});

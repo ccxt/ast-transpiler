@@ -15228,7 +15228,15 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the checker narrowed the identifier to a plain number here, or an enclosing guard tests it
     goPointerNumberIsNonNil(ident): boolean {
-        return this.goHasEnclosingNilGuard(ident) || this.goCheckerTypeHasFlags(ident, TypeFlags.NumberLike);
+        return this.goHasEnclosingNilGuard(ident) || this.goCheckerTypeHasFlags(ident, TypeFlags.NumberLike)
+            || this.goCheckerTypeIsNumberUnion(ident);
+    }
+
+    // a union every member of which is a number (`5 | 50` after `(x === 5) || (x === 50)`): no nil member
+    goCheckerTypeIsNumberUnion(node): boolean {
+        const type: any = this.checkerOrUndefined()?.getTypeAtLocation(node);
+        const members = ((type !== undefined) && ((type.flags & TypeFlags.Union) !== 0)) ? (type.getTypes?.() ?? []) : [];
+        return (members.length > 0) && members.every((member) => (member.flags & TypeFlags.NumberLike) !== 0);
     }
 
     // the checker's type at `node` carries one of `flags`
@@ -27460,6 +27468,16 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printToFixedCall(node, identation, name = undefined, parsedArg = undefined) {
+        // a float64 receiver and a small integer literal: ToFixed is math.Round(num*10^d) / 10^d
+        // with math.Pow(10, d) exact for d <= 15, so the literal scale is the same float64
+        const receiver = this.goUnwrapPrintedAssertions(node?.expression?.expression);
+        const digits = node?.arguments?.[0];
+        if ((name !== undefined) && !name.includes('\n') && (receiver?.kind === SyntaxKind.Identifier)
+            && (digits?.kind === SyntaxKind.NumericLiteral) && /^[0-9]$|^1[0-5]$/.test(digits.text)
+            && (this.goOperandStaticType(receiver, name) === 'float64') && this.goStdlibImportIsPlaceable()) {
+            this.goFileStdlibImports.add('math');
+            return `(math.Round(${name.trim()}*1e${digits.text}) / 1e${digits.text})`;
+        }
         return `toFixed(${name}, ${parsedArg})`;
     }
 
@@ -27501,6 +27519,17 @@ ${this.getIden(identation)}${returnStatement}`;
         return `ToString(${name})`;
     }
 
+    // `this.<f>` inside the base class source, where the class prints as `BaseExchange`
+    goOwnBaseIntField(node): boolean {
+        if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (this.GO_THIS_NUMERIC_FIELDS[node.name?.text] !== 'int')) {
+            return false;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.kind === SyntaxKind.ClassDeclaration)
+            && (declaration.parent.name?.text === 'BaseExchange');
+    }
+
     // the Go type of a `.toString()` receiver: the scalar lookup names string/int/int64/float64,
     // while a declared `bool` or `[]string` local (or a parameter typed that way) is only reachable
     // through the declaration itself.
@@ -27508,6 +27537,10 @@ ${this.getIden(identation)}${returnStatement}`;
         const scalar = this.goOperandStaticType(receiver, printedText);
         if (scalar !== undefined) {
             return scalar;
+        }
+        // a hand-written `int` base field read in the base class itself (printed `BaseExchange`) or a venue
+        if (this.goBaseFieldKind(receiver) === 'int' || this.goOwnBaseIntField(receiver)) {
+            return 'int';
         }
         if (receiver?.kind !== SyntaxKind.Identifier) {
             return undefined;
