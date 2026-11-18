@@ -535,6 +535,10 @@ export class RustTranspiler extends BaseTranspiler {
     ]);
 
     printIdentifier(node) {
+        const mapRow = this.annotatedMapRowUse(node);
+        if (mapRow !== undefined) {
+            return this.printNode(mapRow, 0);
+        }
         const name = String(node.text);
         const slotValue = this.printMarketSlotParamValue(node); if (slotValue !== undefined) return slotValue;
         const currencySlot = this.printCurrencySlotParamValue(node) ?? this.printCurrencyLocalValue(node); if (currencySlot !== undefined) return currencySlot;
@@ -39459,6 +39463,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (local === undefined && isIdentifier(inner) && this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) === 'boolean') return `(${this.printNode(arg, identation).trim()}.as_bool() == Some(true))`;
         return this.rustBoolArgumentText(arg, identation);
     }
+
+    // an annotated map row prints its `m[k]` source at its one read (annotatedMapRowSource): no declaration
+    printVariableStatement(node, identation) {
+        return (this.annotatedMapRowSource(node?.declarationList?.declarations?.[0]) !== undefined) ? '' : super.printVariableStatement(node, identation);
+    }
+
 }
 
 

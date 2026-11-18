@@ -18735,3 +18735,25 @@ describe('go asserted list row inside a base-file method', () => {
         expect(go).toContain('GetValue(GetValue(rows, i), 1)');
     });
 });
+
+describe('annotated Dict row read once in the next statement', () => {
+    const src = (decl: string, use = 'return row[tf];', extra = '') => `type Dict = { [key: string]: any };
+class x {
+    conv (m: Dict, s: string, tf: string): any {
+        ${extra}
+        ${decl}
+        ${use}
+    }
+}`;
+    test('POSITIVE prints the m[k] source at the read, no local', () => {
+        const out = transpiler.transpileGo(src('const row: Dict = m[s];')).content;
+        expect(out).not.toMatch(/\brow\b/);
+        expect(out).toContain('GetValue(GetValue(m, s), tf)');
+    });
+    test('a second read, a write, an unannotated or a rebound key keeps the local', () => {
+        expect(transpiler.transpileGo(src('const row: Dict = m[s];', 'return [ row[tf], row[s] ];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row: Dict = m[s];', 'row[tf] = 1;\n        return row;')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row = m[s];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row: Dict = m[s];', 'return row[tf];', 's = s + tf;')).content).toMatch(/\brow\b/);
+    });
+});

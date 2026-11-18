@@ -1071,6 +1071,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printIdentifier(node) {
+        const mapRow = this.annotatedMapRowUse(node);
+        if (mapRow !== undefined) {
+            return this.printNode(mapRow, 0);
+        }
         if (this.csharpActiveShadows.size > 0) {
             const shadow = this.csharpShadowNameOf(node);
             if (shadow !== undefined) {
@@ -1585,6 +1589,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     printVariableStatement(node, identation) {
+        if (this.annotatedMapRowSource(node?.declarationList?.declarations?.[0]) !== undefined) {
+            return '';
+        }
         const plan = this.csharpPromiseAllSites.get(node);
         if (plan === undefined) {
             if (this.isCJSRequireStatement(node)) {

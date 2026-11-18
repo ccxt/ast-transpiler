@@ -28934,6 +28934,9 @@ ${tryBodyBlock}
             return false;
         }
         const init: any = unwrap(declaration.initializer);
+        if (this.annotatedMapRowSource(declaration) !== undefined) {
+            return true;
+        }
         if ((init?.kind !== SyntaxKind.AsExpression) || (init.type?.kind !== SyntaxKind.ArrayType)) {
             return false;
         }

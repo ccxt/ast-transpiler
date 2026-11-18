@@ -1,4 +1,4 @@
-import { SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/unstable/ast";
+import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/unstable/ast";
 import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/unstable/ast/is";
 import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/unstable/ast/is";
 import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/unstable/ast/factory";
@@ -279,6 +279,69 @@ class BaseTranspiler {
         };
         scope.forEachChild(visit);
         return found;
+    }
+
+    // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement: a port
+    // without a typed Map local prints that read as `m[k][key]`, exactly the code before the annotation
+    annotatedMapRowSource(declaration): any {
+        const list: any = declaration?.parent;
+        const init: any = declaration?.initializer;
+        const checker: any = this.checkerOrUndefined();
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.type?.kind !== SyntaxKind.TypeReference) || (declaration.type.typeName?.text !== 'Dict')
+            || (list?.kind !== SyntaxKind.VariableDeclarationList) || (list.declarations.length !== 1) || ((list.flags & NodeFlags.Const) === 0)
+            || (list.parent?.kind !== SyntaxKind.VariableStatement) || (list.parent.parent?.kind !== SyntaxKind.Block)
+            || (init?.kind !== SyntaxKind.ElementAccessExpression) || (init.expression?.kind !== SyntaxKind.Identifier)
+            || (init.argumentExpression?.kind !== SyntaxKind.Identifier) || (checker === undefined)) {
+            return undefined;
+        }
+        const block: any = list.parent.parent;
+        const next: any = block.statements[block.statements.indexOf(list.parent) + 1];
+        let scope: any = block;
+        while ((scope !== undefined) && (scope.kind !== SyntaxKind.MethodDeclaration) && (scope.kind !== SyntaxKind.FunctionDeclaration)) {
+            scope = scope.parent;
+        }
+        if ((next === undefined) || (scope === undefined)) {
+            return undefined;
+        }
+        const declOf = (n: any): any => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const bound = [ declOf(init.expression), declOf(init.argumentExpression) ];
+        if (bound.some((d) => d === undefined)) {
+            return undefined;
+        }
+        let uses = 0;
+        const bad = this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n === declaration.name)) {
+                return false;
+            }
+            const target = declOf(n);
+            const up: any = n.parent;
+            if (bound.includes(target)) {
+                // a write to `m` or `k` anywhere in the method refuses
+                return (((up?.kind === SyntaxKind.BinaryExpression) && (up.left === n) && (up.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                    && (up.operatorToken.kind <= SyntaxKind.LastAssignment)) || (up?.kind === SyntaxKind.PrefixUnaryExpression)
+                    || (up?.kind === SyntaxKind.PostfixUnaryExpression));
+            }
+            if (target !== declaration) {
+                return false;
+            }
+            const grand: any = up?.parent;
+            if ((up?.kind !== SyntaxKind.ElementAccessExpression) || (up.expression !== n) || (n.pos < next.pos) || (n.end > next.end)
+                || ((grand?.kind === SyntaxKind.BinaryExpression) && (grand.left === up)) || (grand?.kind === SyntaxKind.DeleteExpression)) {
+                return true;
+            }
+            uses++;
+            return false;
+        });
+        return (!bad && (uses === 1)) ? init : undefined;
+    }
+
+    annotatedMapRowUse(node): any {
+        if ((node?.parent?.kind !== SyntaxKind.ElementAccessExpression) || (node.parent.expression !== node)) {
+            return undefined;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        return ((declaration === undefined) || (declaration.name === node)) ? undefined : this.annotatedMapRowSource(declaration);
     }
 
     // the checker when a transpilation context is set, undefined otherwise (an in-memory
