@@ -21377,7 +21377,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 // a callee the build names takes a sibling-file passthrough of a unified-string parameter
                 const passthrough = (goType === 'string') && (this.siblingStringPassthroughPattern !== undefined) && this.siblingStringPassthroughPattern.test(name)
                     && (arg !== undefined) && this.goSiblingPassesUnifiedString(arg, tree.fileText.get(site.file) ?? '', site.at);
-                if ((arg === undefined) || !(this.goTextArgMatchesType(arg, goType, site.file, tree, site.at) || passthrough)) {
+                const requiredString = (goType === 'string') && (arg !== undefined) && this.goSiblingRequiredStringParam(arg, tree, site.file, site.at);
+                if ((arg === undefined) || !(this.goTextArgMatchesType(arg, goType, site.file, tree, site.at) || passthrough || requiredString)) {
                     return false;
                 }
             }
@@ -21560,6 +21561,38 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const body = head.substring(last.index + last[0].length);
         return !new RegExp('(?<![\\w.$])' + escaped + '\\s*(?:[-+*/]?=(?!=)|\\+\\+|--)').test(body);
+    }
+
+    // a sibling-file argument that is a required, never-written `x: string` parameter of a non-override
+    // method whose every tree call site passes a string literal there: that parameter prints Go `string`
+    goSiblingRequiredStringParam(argText: string, tree, file: string, at: number | undefined): boolean {
+        const name = /^([A-Za-z_]\w*)$/.exec((argText ?? '').trim())?.[1];
+        const fileText = tree.fileText.get(file) ?? '';
+        if ((name === undefined) || (at === undefined)) {
+            return false;
+        }
+        const head = fileText.substring(0, at);
+        const signature = /\n {4}((?:(?:override|async|public|private|protected) )*)([A-Za-z_$][\w$]*) \(([^\n]*)\)(?:: [^\n{]*)? \{\n/g;
+        let last: RegExpExecArray | null = null;
+        let m: RegExpExecArray | null;
+        while ((m = signature.exec(head)) !== null) {
+            last = m;
+        }
+        const end = (last === null) ? -1 : fileText.indexOf('\n    }\n', at);
+        if ((end < 0) || last[1].includes('override')) {
+            return false;
+        }
+        const params = last[3].split(/,\s*(?![^(<[{]*[)>\]}])/).map((p) => p.trim());
+        const index = params.findIndex((p) => p === (name + ': string'));
+        if (index < 0) {
+            return false;
+        }
+        const body = goMaskTsStrings(fileText.substring(last.index + last[0].length, end).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, ''));
+        if (new RegExp('(?<![\\w$.])' + name + '\\s*(?:[-+*/?|&]*=(?!=)|\\+\\+|--)').test(body)) {
+            return false;
+        }
+        const sites = tree.callIndex.get(last[2]) ?? [];
+        return (sites.length > 0) && sites.every((s) => /^(?:'[^'\\]*'|"[^"\\]*")$/.test((s.args[index] ?? '').trim()));
     }
 
     // a `*string` argument the source itself proves non-nil at the call site — a
