@@ -281,8 +281,9 @@ class BaseTranspiler {
         return found;
     }
 
-    // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement: a port
-    // without a typed Map local prints that read as `m[k][key]`, exactly the code before the annotation
+    // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement, or
+    // `const row: Dict = m[0]` (m not written after it) read only as `row['lit']` later in its block: a port
+    // without a typed Map local prints each read as `m[k][key]`, exactly the code before the annotation
     annotatedMapRowSource(declaration): any {
         const list: any = declaration?.parent;
         const init: any = declaration?.initializer;
@@ -292,9 +293,11 @@ class BaseTranspiler {
             || (list?.kind !== SyntaxKind.VariableDeclarationList) || (list.declarations.length !== 1) || ((list.flags & NodeFlags.Const) === 0)
             || (list.parent?.kind !== SyntaxKind.VariableStatement) || (list.parent.parent?.kind !== SyntaxKind.Block)
             || (init?.kind !== SyntaxKind.ElementAccessExpression) || (init.expression?.kind !== SyntaxKind.Identifier)
-            || (init.argumentExpression?.kind !== SyntaxKind.Identifier) || (checker === undefined)) {
+            || ((init.argumentExpression?.kind !== SyntaxKind.Identifier) && (init.argumentExpression?.kind !== SyntaxKind.NumericLiteral))
+            || (checker === undefined)) {
             return undefined;
         }
+        const literalRow = (init.argumentExpression.kind === SyntaxKind.NumericLiteral);
         const block: any = list.parent.parent;
         const next: any = block.statements[block.statements.indexOf(list.parent) + 1];
         let scope: any = block;
@@ -305,7 +308,7 @@ class BaseTranspiler {
             return undefined;
         }
         const declOf = (n: any): any => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
-        const bound = [ declOf(init.expression), declOf(init.argumentExpression) ];
+        const bound = literalRow ? [ declOf(init.expression) ] : [ declOf(init.expression), declOf(init.argumentExpression) ];
         if (bound.some((d) => d === undefined)) {
             return undefined;
         }
@@ -317,8 +320,8 @@ class BaseTranspiler {
             const target = declOf(n);
             const up: any = n.parent;
             if (bound.includes(target)) {
-                // a write to `m` or `k` anywhere in the method refuses
-                return (((up?.kind === SyntaxKind.BinaryExpression) && (up.left === n) && (up.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                // a write to `m` or `k` anywhere in the method refuses (for `m[0]`: anywhere after the row)
+                return (!literalRow || (n.end > list.parent.pos)) && (((up?.kind === SyntaxKind.BinaryExpression) && (up.left === n) && (up.operatorToken.kind >= SyntaxKind.FirstAssignment)
                     && (up.operatorToken.kind <= SyntaxKind.LastAssignment)) || (up?.kind === SyntaxKind.PrefixUnaryExpression)
                     || (up?.kind === SyntaxKind.PostfixUnaryExpression));
             }
@@ -326,14 +329,16 @@ class BaseTranspiler {
                 return false;
             }
             const grand: any = up?.parent;
-            if ((up?.kind !== SyntaxKind.ElementAccessExpression) || (up.expression !== n) || (n.pos < next.pos) || (n.end > next.end)
+            const inside = literalRow ? ((n.pos >= next.pos) && (n.end <= block.end) && (up?.argumentExpression?.kind === SyntaxKind.StringLiteral))
+                : ((n.pos >= next.pos) && (n.end <= next.end));
+            if ((up?.kind !== SyntaxKind.ElementAccessExpression) || (up.expression !== n) || !inside
                 || ((grand?.kind === SyntaxKind.BinaryExpression) && (grand.left === up)) || (grand?.kind === SyntaxKind.DeleteExpression)) {
                 return true;
             }
             uses++;
             return false;
         });
-        return (!bad && (uses === 1)) ? init : undefined;
+        return (!bad && ((uses === 1) || (literalRow && (uses > 1)))) ? init : undefined;
     }
 
     annotatedMapRowUse(node): any {
