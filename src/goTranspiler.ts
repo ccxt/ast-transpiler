@@ -10877,11 +10877,33 @@ function goStringPtrParamProven (go, param) {
         const arg = (site.args[index] ?? '').trim ();
         const fileText = tree.fileText.get (site.file) ?? '';
         if ((arg !== 'undefined') && !go.goTextArgMatchesType (arg, '*string', site.file, tree, site.at)
-            && !go.goSiblingPassesUnifiedString (arg, fileText, site.at)) {
+            && !go.goSiblingPassesUnifiedString (arg, fileText, site.at) && !goSiblingSoleUseStrParam (arg, fileText, site.at)) {
             return false;
         }
     }
     return go.goParameterBodyTakes (fn, param, '*string');
+}
+
+// a sibling-file `x: Str = undefined` parameter whose only mention in its method is this argument: its
+// GetArg binding is decided by this one use, i.e. by the same proof (printed GetArgStringPtr when it holds)
+function goSiblingSoleUseStrParam (argText: string, fileText: string, at: number | undefined): boolean {
+    const name = /^([A-Za-z_]\w*)$/.exec ((argText ?? '').trim ())?.[1];
+    if ((name === undefined) || (at === undefined)) {
+        return false;
+    }
+    const head = fileText.substring (0, at);
+    const signature = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \(([^\n]*)\)(?:: [^\n{]*)? \{\n/g;
+    let last: RegExpExecArray | null = null;
+    let m: RegExpExecArray | null;
+    while ((m = signature.exec (head)) !== null) {
+        last = m;
+    }
+    const end = (last === null) ? -1 : fileText.indexOf ('\n    }\n', at);
+    if ((end < 0) || !new RegExp ('(?:^|, )' + name + ': (?:Str|string) = undefined(?:,|$)').test (last[1])) {
+        return false;
+    }
+    const body = goMaskTsStrings (fileText.substring (last.index + last[0].length, end).replace (/\/\*[\s\S]*?\*\//g, '').replace (/\/\/.*$/gm, ''));
+    return (body.match (new RegExp ('(?<![\\w$.])' + name + '(?![\\w$])', 'g')) ?? []).length === 1;
 }
 
 // a `Str = undefined` parameter bound by GetArgStringPtr and handed to a venue `Str` parameter: the two
