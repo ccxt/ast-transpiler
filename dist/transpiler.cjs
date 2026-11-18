@@ -60698,8 +60698,21 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   rustStrHandOffDecided(n, top, declaration) {
     const target = _is.isVariableDeclaration.call(void 0, top.parent) ? top.parent : _is.isBinaryExpression.call(void 0, top.parent) && _is.isIdentifier.call(void 0, top.parent.left) ? this.rustDeclaredNode(top.parent.left) : void 0;
     const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== void 0 && _is.isVariableDeclaration.call(void 0, target) && target.initializer !== void 0 && this.literalKindOfNode(target.initializer) !== "null";
+    const nilMoved = !moved && top === n && this.rustReaderDefaultTouched(declaration) && this.rustLocalLastUse(n, declaration) && target !== void 0 && _is.isVariableDeclaration.call(void 0, target) && target !== declaration && (target.initializer === void 0 || this.literalKindOfNode(target.initializer) === "null") && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration) && this.rustNilScalarKind(target) === "ostr" && !this.rustNilTargetReturned(target);
+    if (nilMoved)
+      return { moved: true, solved: false };
     const solved = !moved && top === n && target !== void 0 && _is.isVariableDeclaration.call(void 0, target) && target !== declaration && target.initializer !== void 0 && this.literalKindOfNode(target.initializer) !== "null" && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
     return { moved, solved };
+  }
+  /** The nil-declared receiver is handed back by `return` (its printed type then follows the method's return). */
+  rustNilTargetReturned(target) {
+    let returned = false;
+    this.rustLocalUsesAll(target, String(target.name.text), false, (n) => {
+      if (_is.isReturnStatement.call(void 0, n.parent))
+        returned = true;
+      return true;
+    });
+    return returned;
   }
   /** uc: `const y = c ? x : z` in the local's own function, `y` a scalar-shape candidate: decided with the local. */
   rustStrTernaryArmSolved(ternary, declaration) {

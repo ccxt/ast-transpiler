@@ -1086,6 +1086,8 @@ export declare class RustTranspiler extends BaseTranspiler {
         moved: boolean;
         solved: boolean;
     };
+    /** The nil-declared receiver is handed back by `return` (its printed type then follows the method's return). */
+    rustNilTargetReturned(target: any): boolean;
     /** uc: `const y = c ? x : z` in the local's own function, `y` a scalar-shape candidate: decided with the local. */
     rustStrTernaryArmSolved(ternary: any, declaration: any): boolean;
     rustReaderStrHandedOn(declaration: any): boolean;
