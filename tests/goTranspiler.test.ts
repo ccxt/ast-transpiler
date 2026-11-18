@@ -712,7 +712,8 @@ describe('go pointer-typed Safe* body locals', () => {
         "}";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain("var amount *string = this.SafeString(item, \"income\")");
-        expect(output).toContain("amount = SafeStringPtr(ToUpper(other))");
+        expect(output).toContain("amountStr := ToUpper(other)\n amount = &amountStr");
+        expect(output).not.toContain("SafeStringPtr(ToUpper(other))");
         expect(output).toContain("var stamp any = this.SafeInteger(item, \"time\")");
     });
     test('a Safe* local reassigned from the same Safe* family keeps its pointer type', () => {
@@ -3670,8 +3671,27 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         // the later string write converts at the write site, so the local stays *string
         expect(output).toContain("var timeInForce *string = this.SafeString(order, \"timeInForce\")");
-        expect(output).toContain("timeInForce = SafeStringPtr(\"IOC\")");
+        // a plain Go string stored into the *string local is kept in a typed local and its address taken
+        expect(output).toContain("timeInForceStr := \"IOC\"\n\t\ttimeInForce = &timeInForceStr\n");
+        expect(output).not.toContain("SafeStringPtr(");
         expect(output).toContain("var y bool = (timeInForce != nil && *timeInForce == \"PO\")");
+    });
+    test('string writes into a *string local take numbered typed-local addresses', () => {
+        const input =
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    safeString (a, b): Str { return a; }\n" +
+        "    f (order: any) {\n" +
+        "        let side = this.safeString (order, 'side');\n" +
+        "        if (side === undefined) { side = 'buy'; } else if (side === 'x') { side = 'sell'; }\n" +
+        "        const y = (side !== undefined) && (side === 'PO');\n" +
+        "        return y;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("sideStr := \"buy\"\n\t\tside = &sideStr\n");
+        expect(output).toContain("sideStr2 := \"sell\"\n\t\tside = &sideStr2\n");
+        expect(output).not.toContain("SafeStringPtr(");
     });
     test('two nullable boxes of the same family compare natively', () => {
         const input =
@@ -4809,7 +4829,8 @@ describe('go string concat chains -> native +', () => {
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
         expect(output).toContain('var fromId *string = this.SafeString(item, "from")');
-        expect(output).toContain('fromId = SafeStringPtr("override")');
+        expect(output).toContain('fromIdStr := "override"\n fromId = &fromIdStr');
+        expect(output).not.toContain('SafeStringPtr("override")');
     });
     test('a pointer local written a nil keeps its pointer type; a non-string write still rejects', () => {
         const input =

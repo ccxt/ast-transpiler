@@ -4563,6 +4563,10 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
         }
         return '\n' + goTranspiler.getIden (identation) + leftVar + ' = ' + conversion + '(PanicOnError(' + rightVar.trim () + '))';
     }
+    const stored = (conversion === 'SafeStringPtr') ? goTranspiler.goStringPointerStore (node, rightVar, identation) : undefined;
+    if (stored !== undefined) {
+        return stored; // a plain Go string: kept in a typed local, the pointer is its address
+    }
     const separator = goTranspiler.goBinarySeparator ('=', rightVar.trim (), node.left, node.right);
     return leftVar + separator + '=' + separator + conversion + '(' + rightVar.trim () + ')';
 }
@@ -15437,7 +15441,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // result is kept in a typed local and the pointer takes its address (statement-level assignments
     // only; `value` is the printed call). undefined: the caller prints its SafeStringPtr box.
     goStringPointerStore(node, value: string, identation): string | undefined {
-        const local = (node.parent?.kind === SyntaxKind.ExpressionStatement) ? this.goStringCallLocalName(node.right) : undefined;
+        const statement = node.parent?.kind === SyntaxKind.ExpressionStatement;
+        const local = statement ? (this.goStringCallLocalName(node.right) ?? this.goStringValueLocalName(node)) : undefined;
         if (local === undefined) {
             return undefined;
         }
@@ -15476,17 +15481,31 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goStringCallLocals = new WeakMap<object, Map<string, { clash: boolean, names: Map<any, string> }>>();
 
+    // any other Go string stored into a *string identifier (`side = "buy"`): kept in `<target>Str`, numbered
+    // per function like the call locals, so the pointer is the local's address; undefined keeps the box
+    goStringValueLocalName(node): string | undefined {
+        if ((node?.left?.kind !== SyntaxKind.Identifier) || (this.goTypeOfInitializer(node.right, this.printNode(node.right, 0)) !== 'string')
+            && (node.right?.kind !== SyntaxKind.StringLiteral) && (node.right?.kind !== SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return undefined;
+        }
+        return this.goNumberedLocalName(node.right, this.printNode(node.left, 0) + 'Str');
+    }
+
     // the typed local (`<name>Text`, `<name>Text2`, ... in source order, stable per call node) that keeps a
     // string-returning `this.<name>(..)` call; undefined keeps the SafeStringPtr box.
     goStringCallLocalName(call): string | undefined {
         if (!this.goStringReturningThisCall(call)) {
             return undefined;
         }
-        const scope: any = this.goOutermostFunction(call);
+        return this.goNumberedLocalName(call, call.expression.name.text + 'Text');
+    }
+
+    // `<base>`, `<base>2`, ... per outermost function, stable per node; undefined when a TS name is spelled so
+    goNumberedLocalName(node, base: string): string | undefined {
+        const scope: any = this.goOutermostFunction(node);
         if (scope === undefined) {
             return undefined;
         }
-        const base = call.expression.name.text + 'Text';
         let families = this.goStringCallLocals.get(scope);
         if (families === undefined) {
             families = new Map();
@@ -15504,10 +15523,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (family.clash) {
             return undefined;
         }
-        let name = family.names.get(call);
+        let name = family.names.get(node);
         if (name === undefined) {
             name = (family.names.size === 0) ? base : base + (family.names.size + 1);
-            family.names.set(call, name);
+            family.names.set(node, name);
         }
         return name;
     }
