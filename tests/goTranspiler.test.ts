@@ -11863,6 +11863,17 @@ describe ('goPrinterHooks', () => {
             const other = hooked.split (/\nfunc /).find ((f) => f.indexOf ('Other(') >= 0) ?? '';
             expect (other).not.toContain ('api[0]');
         });
+        test('sign typing: a hex/base64 this.hash digest declares a Go string local (fails on the base printer)', () => {
+            const src = 'class Exchange {\n    hash (a: any, b: any, c: any = undefined): any { return a; }\n'
+                + '    f (m: any): string {\n        const h = this.hash (m, m, \'hex\');\n        const b = this.hash (m, m, \'base64\');\n        const r = this.hash (m, m);\n        const q = this.hash (m, m, \'binary\');\n        return h;\n    }\n}\n';
+            const base = print (false, src);
+            const hooked = print (true, src);
+            expect (base).not.toContain ('var h string');
+            expect (hooked).toContain ('var h string');
+            expect (hooked).toContain ('var b string');
+            expect (hooked).not.toContain ('var r string');
+            expect (hooked).not.toContain ('var q string');
+        });
         test('installCcxtGoHooks installs every hook once (idempotent)', () => {
             const t = new Transpiler ({ 'verbose': false, 'go': {} });
             installCcxtGoHooks (t.goTranspiler);
