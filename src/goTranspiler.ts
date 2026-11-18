@@ -5903,6 +5903,79 @@ function ccxtGoEndpointLocalParserRead (node) {
     return (callee.expression?.kind === ts.SyntaxKind.Identifier) && (callee.expression.text === 'Object') && (name === 'keys');
 }
 
+// `Array.isArray (<name>)`, parentheses ignored
+function ccxtGoIsArrayTestOf (node, name) {
+    while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    const callee = node?.expression;
+    const arg = node?.arguments?.[0];
+    return (node?.kind === ts.SyntaxKind.CallExpression) && (node.arguments.length === 1) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === ts.SyntaxKind.Identifier) && (callee.expression.text === 'Array') && (callee.name?.text === 'isArray')
+        && (arg?.kind === ts.SyntaxKind.Identifier) && (arg.text === name);
+}
+
+// A `[]any` endpoint local's typed view is ListTyped(Raw): nil exactly when the JSON body is not an array. The test
+// itself reads `x != nil`; a non-write use dominated by that test (if-then, ?: whenTrue, && right) sees the same slice.
+function ccxtGoEndpointListGuardedUse (n) {
+    const name = n.text;
+    let child = n;
+    let node = n.parent;
+    if ((node?.kind === ts.SyntaxKind.BinaryExpression) && (node.left === n) && (node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (node.operatorToken.kind <= ts.SyntaxKind.LastAssignment)) {
+        return false;
+    }
+    if (ccxtGoIsArrayTestOf (node, name)) {
+        return true;
+    }
+    while ((node !== undefined) && !ts.isFunctionLike (node)) {
+        if (((node.kind === ts.SyntaxKind.IfStatement) && (node.thenStatement === child) && ccxtGoIsArrayTestOf (node.expression, name))
+            || ((node.kind === ts.SyntaxKind.ConditionalExpression) && (node.whenTrue === child) && ccxtGoIsArrayTestOf (node.condition, name))
+            || ((node.kind === ts.SyntaxKind.BinaryExpression) && (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken)
+                && (node.right === child) && ccxtGoIsArrayTestOf (node.left, name))) {
+            return true;
+        }
+        child = node;
+        node = node.parent;
+    }
+    return false;
+}
+
+function ccxtGoEndpointListLocalIsTyped (goTranspiler, arg, init, inFlight) {
+    inFlight.add (arg);
+    try {
+        return ccxtGoAwaitReceiveUnbox (goTranspiler, init, goTranspiler.printNode (init, 0))?.goType === '[]any';
+    } finally {
+        inFlight.delete (arg);
+    }
+}
+
+// `Array.isArray (x)` on a local declared from a `[]any` endpoint receive: the typed view is nil exactly when IsArray(Raw) is false
+function installCcxtGoEndpointListIsArray (goTranspiler) {
+    // the shipped bool-condition, bool-initializer and negation rules all consult this predicate
+    const shipped = goTranspiler.goIsSafeContainerIsArray;
+    const inFlight = new Set ();
+    goTranspiler.goIsSafeContainerIsArray = function (call) {
+        if (shipped.call (this, call)) {
+            return true;
+        }
+        const arg = call?.arguments?.[0];
+        if (!ccxtGoIsArrayTestOf (call, arg?.text) || inFlight.has (arg)) {
+            return false;
+        }
+        const init = this.goDeclarationOfIdentifier (arg)?.initializer;
+        return (init?.kind === ts.SyntaxKind.AwaitExpression) && (ccxtGoEndpointElement (this, init.expression) === '[]any')
+            && ccxtGoEndpointListLocalIsTyped (this, arg, init, inFlight);
+    };
+    const printIsArray = goTranspiler.printNativeIsArray;
+    goTranspiler.printNativeIsArray = function (node, parsedArg) {
+        const shippedText = printIsArray.call (this, node, parsedArg);
+        if ((shippedText !== undefined) || (typeof parsedArg !== 'string') || parsedArg.includes ('\n') || !this.goIsSafeContainerIsArray (node)) {
+            return shippedText;
+        }
+        return '(' + parsedArg + ' != nil)';
+    };
+}
+
 function ccxtGoParentPastParens (node) {
     let parent = node.parent;
     while (parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
@@ -6201,7 +6274,8 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
         // another type or any read that would answer differently for a typed nil keeps the
         // box -- the shipped scanner applies exactly those vetoes
         const safe = goTranspiler.goDeclaredLocalTypeIfSafe (declaration, goType,
-            (n) => ccxtGoAsyncReceiveReadsTheValue (goTranspiler, n, goType)
+            (n) => ((endpoint === '[]any') && ccxtGoEndpointListGuardedUse (n))
+                || ccxtGoAsyncReceiveReadsTheValue (goTranspiler, n, goType)
                 || ((endpoint !== undefined) && ccxtGoEndpointLocalParserRead (n)),
             (n) => ccxtGoIsNotAReference (goTranspiler, n, declaration));
         if (safe === undefined) {
@@ -6640,6 +6714,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     };
     installCcxtGoAsyncForwardRebox (goTranspiler);
     installCcxtGoEndpointConsumers (goTranspiler);
+    installCcxtGoEndpointListIsArray (goTranspiler);
     installCcxtGoProducerDeclarations (goTranspiler);
     // destructured element read straight into a scalar local
     installCcxtGoElementReadJoins (goTranspiler);

@@ -12510,6 +12510,38 @@ describe ('goEndpointReceiveTypedView', () => {
         });
     });
 
+    describe('Array.isArray on a []any endpoint local is the typed view nil test', () => {
+        const venueWith = (body: string): string =>
+            "import Exchange from './abstract/ex.js';\n" +
+            "import { Dict, List } from './base/types.js';\n" +
+            'export default class ex extends Exchange {\n' + body + '}\n';
+        const guarded = '    async fetchRows (params = {}) {\n        const response = await this.privateGetRows (params);\n' +
+            '        let rows: List = [];\n        if (Array.isArray (response)) {\n            rows = response;\n        }\n' +
+            "        return this.indexBy (rows, 'id');\n    }\n";
+        test('a guarded list local prints the nil test of its typed view', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (guarded));
+            expect (out).toContain ('var response []any = responseRecv.Value');
+            expect (out).toMatch (/if response != nil \{/);
+            expect (out).not.toContain ('IsArray(response)');
+        });
+        test('an unguarded value use keeps the box and the helper', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchRows (params = {}) {\n        const response = await this.privateGetRows (params);\n' +
+                "        if (Array.isArray (response)) {\n            return this.indexBy (response, 'id');\n        }\n        return { 'info': response };\n    }\n"));
+            expect (out).toContain ('IsArray(response)');
+            expect (out).not.toContain ('var response []any');
+        });
+        test('a map stub keeps the helper', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith (
+                '    async fetchThing (params = {}) {\n        const response = await this.privateGetOrdersId (params);\n' +
+                "        let rows: List = [];\n        if (Array.isArray (response)) {\n            rows = response;\n        }\n        return rows;\n    }\n"));
+            expect (out).toContain ('IsArray(response)');
+        });
+        test('without the receiver stub table the helper stays', () => {
+            expect (print (undefined, true, venueWith (guarded))).toContain ('IsArray(response)');
+        });
+    });
+
     describe('a one-line []any endpoint receive is bound to a holder named after its target', () => {
         const venueWith = (body: string): string =>
             "import Exchange from './abstract/ex.js';\n" +
