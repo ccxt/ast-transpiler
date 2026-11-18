@@ -926,7 +926,13 @@ class BaseTranspiler {
         } else {
             parsedExpression = this.printNode(expression, 0);
         }
-        return removeParenthesis ? parsedExpression : parsedExpression + "(" + parsedArgs + ")";
+        if (removeParenthesis) return parsedExpression;
+        return this.printCallHead(node, parsedExpression, parsedArgs);
+    }
+
+    /** `callee(args)` of a plain call; a language may name the callee's path from the node. */
+    printCallHead(node, parsedExpression: string, parsedArgs: string): string {
+        return parsedExpression + "(" + parsedArgs + ")";
     }
 
     printClassBody(node, identation) {

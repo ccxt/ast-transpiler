@@ -204,6 +204,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
     csharpIsDictParamsBag(node: any): boolean;
+    printParameteCustomName(node: any, name: any, defaultValue?: boolean): any;
     csharpMissingKeyFieldRead(expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpBaseDictionaryView(node: any): string | undefined;
     csharpBaseDictionaryViewKeyKind(key: any): 'string' | 'object' | undefined;
@@ -474,6 +475,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         rights: any[];
     } | undefined;
     csharpObjectStringConcat(base: any, rights: any[]): string | undefined;
+    csharpGuardedStringConcatLocal(identifier: any): boolean;
     csharpObjectStringLocal(identifier: any, depth?: number): boolean;
     csharpIsStringValued(node: any, depth?: number): boolean;
     csharpCheckedStringOrNull(node: any): boolean;
@@ -512,6 +514,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSourceLocalType(node: any): string | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     csharpOmitMemberLocalType(declaration: any): string | undefined;
+    csharpWsCacheMapEntryLocalType(declaration: any): string | undefined;
     csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;

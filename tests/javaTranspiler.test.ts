@@ -10385,6 +10385,277 @@ describe('Promise.all over a list in the ts/src tiers', () => {
         expect(testTier).toContain('Helpers.promiseAll(tasks)');
     });
 });
+describe('ral-77j3 primitive base numeric fields in comparisons', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-77j3-fields-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    const base = 'export default class Exchange {\n'
+        + '    minFundingAddressLength: number = 1;\n'
+        + '    fetchHistoryCacheSize: number = 0;\n'
+        + '    rateLimit: number = 2000;\n'
+        + '    other: number = 3;\n'
+        + '    check (address: string) {\n'
+        + '        if (address.length < this.minFundingAddressLength) {\n'
+        + '            return 1;\n'
+        + '        }\n'
+        + '        const enabled = this.fetchHistoryCacheSize > 0;\n'
+        + '        if (this.rateLimit > 0) {\n'
+        + '            return enabled;\n'
+        + '        }\n'
+        + '        return this.other > 0;\n'
+        + '    }\n'
+        + '}\n';
+    let out: string;
+    beforeAll(() => {
+        out = transpiler.transpileJavaByPath(write('ts/src/base/Exchange.ts', base)).content;
+    });
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    test('a field the hand-written base declares as a primitive compares natively', () => {
+        expect(out).toContain('.length() < this.minFundingAddressLength');
+        expect(out).toContain('(this.fetchHistoryCacheSize > 0)');
+        expect(out).toContain('(this.rateLimit > 0)');
+    });
+    test('any other numeric field keeps the helper', () => {
+        expect(out).toMatch(/Helpers\.isGreaterThan\(this\.other, 0\)|BiPredicate/);
+        expect(out).not.toContain('(this.other > 0)');
+    });
+});
+
+describe('ral-84j1: a local declared String takes String methods, keys and String args with no checkcast', () => {
+    // build/java-local-types.js publishes `String k` for element locals whose TS type is a plain string
+    // and whose list holds only Strings; every String-method receiver, delete key and String core
+    // argument on it then prints the bare local. Without a resolver the casts stay byte-identically.
+    const input = `
+class T {
+    keep (s: string): string { return s; }
+    run (m: any, keys: string[]) {
+        for (let i = 0; i < keys.length; i++) {
+            const k = keys[i];
+            if (k.startsWith ('a') && k.indexOf ('b') >= 0 && k.length > 2) {
+                delete m[k];
+            }
+            const u = k.toUpperCase ();
+            const parts = k.split (':');
+        }
+    }
+}
+`;
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    test('declared String local prints native receivers and key', () => {
+        withResolver((d: any) => (d?.name?.text === 'k' ? 'String' : undefined), () => {
+            const out = transpiler.transpileJava(input).content;
+            expect(out).toContain('k.startsWith(');
+            expect(out).toContain('k.toUpperCase()');
+            expect(out).toContain('k.length()');
+            expect(out).toContain('.remove(k)');
+            expect(out).not.toContain('((String)k)');
+            expect(out).not.toContain('(String)k)');
+        });
+    });
+    test('an undeclared local keeps every cast', () => {
+        withResolver(() => undefined, () => {
+            const out = transpiler.transpileJava(input).content;
+            expect(out).toContain('((String)k).toUpperCase()');
+            expect(out).toContain('.remove((String)k)');
+        });
+    });
+});
+
+describe('ral-84j1: an element local declared Map<String, Object> is already the json-box argument', () => {
+    // javaNativeArgumentAlreadyTyped decides whether a fixed json-box parameter needs `(Map) (arg)`:
+    // a `const row = rows[i]` local the embedding layer declares Map<String, Object> does not
+    const input = `
+class T {
+    run (rows: any[], m: any) {
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const other = m;
+            this.use (row, other);
+        }
+    }
+    use (a: any, b: any) { return a; }
+}
+`;
+    test('element-read local declared Map is typed; a non-element local and an undeclared one are not', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        const seen: any = {};
+        const original = printer.javaNativeArgumentAlreadyTyped.bind(printer);
+        try {
+            printer.javaDeclaredLocalTypeResolver = (d: any) => (['row', 'other'].includes(d?.name?.text) ? 'java.util.Map<String, Object>' : undefined);
+            printer.javaNativeCallParameterTypes = () => ['java.util.Map<String, Object>', 'java.util.Map<String, Object>'];
+            printer.javaNativeArgumentAlreadyTyped = (arg: any, type: string) => {
+                const r = original(arg, type);
+                seen[arg.text] = r;
+                return r;
+            };
+            const out = transpiler.transpileJava(input).content;
+            expect(seen.row).toBe(true);
+            expect(seen.other).toBe(false);
+            expect(out).toContain('this.use(row, (java.util.Map<String, Object>) (other))');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+            delete printer.javaNativeCallParameterTypes;
+            delete printer.javaNativeArgumentAlreadyTyped;
+        }
+    });
+});
+
+describe('ral-84j1: `x as string` on an element local declared String prints the bare local', () => {
+    const input = `
+class T {
+    run (t: any) {
+        const m = {};
+        const symbol = t['symbol'];
+        m[(symbol as string)] = t;
+        const other = t['other'];
+        m[(other as string)] = t;
+        return m;
+    }
+}
+`;
+    test('declared String drops the assertion and the put-key casts; undeclared keeps them', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'symbol' ? 'String'
+                : (d?.name?.text === 'm' ? 'java.util.Map<String, Object>' : undefined));
+            const out = transpiler.transpileJava(input).content;
+            expect(out).toContain('m.put(symbol, t)');
+            expect(out).toContain('m.put((String)((String)other), t)');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    });
+});
+
+describe('ral-84j7: length of a declared List local prints a bare .size()', () => {
+    const LIST_TYPE = 'java.util.List<Object>';
+    const withResolver = (resolver: any, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = resolver;
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const input =
+    "class T {\\n" +
+    "    test(): number {\\n" +
+    "        const xs = this.make();\\n" +
+    "        return xs.length;\\n" +
+    "    }\\n" +
+    "    make(): string[][] { return []; }\\n" +
+    "}";
+    test('declared List local: no receiver cast', () => {
+        withResolver((d: any) => (d?.name?.text === 'xs' ? LIST_TYPE : undefined), () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('xs.size()');
+            expect(output).not.toContain('((java.util.List<?>)xs).size()');
+        });
+    });
+    test('no declared type: the cast stays', () => {
+        withResolver(() => undefined, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('((java.util.List<?>)xs).size()');
+        });
+    });
+});
+
+describe('ral-87j2 handler tables read by element access', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-r87j2-handlers-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    write('ts/src/base/types.ts', 'export type Dict = { [key: string]: any };\n');
+    let venue = 0;
+    const transpile = (body: string): string =>
+        transpiler.transpileJavaByPath(write(`ts/src/pro/r87venue${venue++}.ts`, body)).content;
+    const header = "import { Dict } from '../base/types.js';\nclass Client { }\n";
+
+    test('methods[key] after Object.keys / in prints the typed table get and a switch dispatch', () => {
+        const output = transpile(header + `
+export default class V {
+    handleMessage (client: Client, message: Dict) {
+        const methods: Dict = {
+            'ticker': this.handleTicker,
+            'trade': this.handleTrades,
+        };
+        const topic: string = this.safeString (message, 'topic');
+        const exact = this.safeValue (methods, topic);
+        if (exact !== undefined) {
+            exact.call (this, client, message);
+            return;
+        }
+        if (topic in methods) {
+            const direct = methods[topic];
+            direct.call (this, client, message);
+        }
+        const keys = Object.keys (methods);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (topic.indexOf (key) >= 0) {
+                const method = methods[key];
+                method.call (this, client, message);
+                return;
+            }
+        }
+    }
+    handleTicker (client: Client, message: Dict) {
+    }
+    handleTrades (client: Client, message: Dict) {
+    }
+}
+`);
+        expect(output).toContain('java.util.Map<String, String> methods = new java.util.HashMap<String, String>() {{');
+        expect(output).toContain('String method = methods.get(key);');
+        expect(output).toContain('String direct = methods.get(topic);');
+        expect(output).toContain('switch (method) {');
+        expect(output).toContain('switch (direct) {');
+        expect(output).not.toContain('callDynamically(this, method');
+        expect(output).not.toContain('callDynamically(this, direct');
+        expect(output).not.toContain('Map<String, Object>)methods');
+        expect(output).toContain('new java.util.ArrayList<Object>(methods.keySet())');
+    });
+
+    test('a table written by element access keeps the untyped table', () => {
+        const output = transpile(header + `
+export default class V {
+    handleMessage (client: Client, message: Dict) {
+        const methods: Dict = { 'ticker': this.handleTicker };
+        const topic: string = this.safeString (message, 'topic');
+        methods['extra'] = this.handleTicker;
+        const method = methods[topic];
+        method.call (this, client, message);
+    }
+    handleTicker (client: Client, message: Dict) {
+    }
+}
+`);
+        expect(output).not.toContain('java.util.Map<String, String> methods');
+        expect(output).not.toContain('switch (method) {');
+    });
+});
 
 describe('GetValue on a map read keyed by a guarded list read or an asserted string key', () => {
     const withResolver = (types: { [name: string]: string }, body: () => void) => {

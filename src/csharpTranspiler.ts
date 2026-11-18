@@ -3007,8 +3007,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         let type = handlerType !== undefined ? handlerType : this.printParameterType(node);
         type = type ? type : "";
         if (defaultValue && (type === 'object') && this.csharpIsDictParamsBag(node)) {
-            this.csharpParamTypes.set(node, 'Dictionary<string, object>');
-            return 'Dictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
+            this.csharpParamTypes.set(node, 'IDictionary<string, object>');
+            return 'IDictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
         }
         this.csharpParamTypes.set(node, type); // see csharpPrintedParamType
 
@@ -3035,6 +3035,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         const camel = (method.name as any)?.text ?? '';
         const pascal = camel.charAt(0).toUpperCase() + camel.slice(1);
         return this.csharpDictParamsMethods.has(camel) || this.csharpDictParamsMethods.has(pascal);
+    }
+
+    // an override printed from its parent's parameter list (the first own parameter is untyped):
+    // a parent `params = {}` of a csharpDictParamsMethods method prints the same Dictionary as the
+    // parent's own signature, since C# overrides are invariant on parameter types
+    printParameteCustomName(node, name, defaultValue = true) {
+        if (defaultValue && this.csharpIsDictParamsBag(node) && (this.printParameterType(node) === 'object')) {
+            return 'IDictionary<string, object> ' + name + this.SPACE_DEFAULT_PARAM + '=' + this.SPACE_DEFAULT_PARAM + 'null';
+        }
+        return super.printParameteCustomName(node, name, defaultValue);
     }
 
     // ==== hand-written runtime members, base fields and their views ====
@@ -6527,6 +6537,14 @@ export class CSharpTranspiler extends BaseTranspiler {
             // `add (x, y)` -> `(x + y)`: the build layer's hook (declarations it retypes after printing), then the
             // printer's own proof (same-class typed returns + literals), then an object/string spine
             const spine = (op === SyntaxKind.PlusToken) ? this.csharpPlusSpine(node) : undefined;
+            // a chain over a read the build layer types `string?` but leaves to the guarded form keeps the
+            // untyped local's add(object, object) value; the native rules below would drop its null
+            if (spine !== undefined && isIdentifier(spine.base) && this.csharpGuardedStringConcatLocal(spine.base)) {
+                const guardedChain = this.csharpObjectStringConcat(spine.base, spine.rights);
+                if (guardedChain !== undefined) {
+                    return guardedChain;
+                }
+            }
             const nativeOperator = (op === SyntaxKind.PlusToken)
                 ? (this.csharpNativeStringConcat(left, right, leftText, rightText)
                     ?? this.csharpPrinterStringConcat(left, right, leftText, rightText)
@@ -6853,7 +6871,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (local?.kind === SyntaxKind.ParenthesizedExpression) {
             local = local.expression;
         }
-        if (!isIdentifier(local) || !this.csharpObjectStringLocal(local)) {
+        if (!isIdentifier(local) || !(this.csharpObjectStringLocal(local) || this.csharpGuardedStringConcatLocal(local))) {
             return undefined;
         }
         const texts: string[] = [];
@@ -6866,6 +6884,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const name = this.printNode(local, 0);
         return `((object)(${name} == null ? null : ${name} + ${texts.join(' + ')}))`;
+    }
+
+    // ral-84c8: a read the build layer declares `string?` (a string or null box, exactly what the untyped local
+    // held) whose `+` it leaves to this guarded form: the null test plus the concatenation is add(object, object)
+    // of that box, so the read keeps the helper's null answer under the typed declaration. Default: no such read.
+    csharpGuardedStringConcatLocal(identifier): boolean {
+        return false;
     }
 
     // a single-binding local whose printed declaration is the untyped box and whose initializer and every write
@@ -7632,6 +7657,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         const localType = isNew ? 'var' : this.getCSharpLocalType(declaration);
         const declaredType = (localType === this.VAR_TOKEN && node.declarations.length === 1)
             ? (this.csharpOmitMemberLocalType(declaration) ?? this.csharpMemberAliasLocalType(declaration) ?? localType) : localType;
+        const cacheEntryType = (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) ? this.csharpWsCacheMapEntryLocalType(declaration) : undefined;
+        if (cacheEntryType !== undefined) {
+            this.csharpTypedLocals.set(declaration, cacheEntryType);
+            return this.getIden(identation) + cacheEntryType + " " + this.printNode(declaration.name) + " = ((" + cacheEntryType + ")" + parsedValue + ")";
+        }
         if (!isNew && declaredType === this.VAR_TOKEN && node.declarations.length === 1) {
             const rowType = this.csharpElementRowLocalType(declaration);
             if (rowType !== undefined) {
@@ -7661,6 +7691,38 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const member = this.csharpMemberReceiver(this.csharpUnwrapAssertion(call.arguments[0]));
         return (member !== undefined && member.kind === 'dict' && member.declared) ? 'Dictionary<string, object>' : undefined;
+    }
+
+    // `const x = this.F[k]` / `const x = this.safeValue (this.F, k)` where the base field F is declared
+    // `Dictionary<ArrayCache>` (ts/src/base/Exchange.ts): every entry is an ArrayCache-family box or absent,
+    // so the const local names the cache class and its `append` binds natively; a miss reads null either way.
+    csharpWsCacheMapEntryLocalType(declaration): string | undefined {
+        if (declaration?.name?.kind !== SyntaxKind.Identifier || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        const init = this.csharpUnwrapAssertion(declaration.initializer);
+        let field: any = undefined;
+        if (init?.kind === SyntaxKind.ElementAccessExpression) {
+            field = init.expression;
+        } else if (init?.kind === SyntaxKind.CallExpression && init.arguments?.length === 2 && isPropertyAccessExpression(init.expression)
+            && init.expression.expression?.kind === SyntaxKind.ThisKeyword && init.expression.name?.text === 'safeValue') {
+            field = init.arguments[0];
+        }
+        if (field === undefined || !isPropertyAccessExpression(field) || field.expression?.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        let declared: any;
+        try {
+            declared = this.getChecker().getSymbolAtLocation(field.name)?.valueDeclaration?.resolve();
+        } catch (e) {
+            return undefined;
+        }
+        const type: any = declared?.type;
+        const ok = declared?.kind === SyntaxKind.PropertyDeclaration
+            && /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange\.ts$/.test(String(declared.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/'))
+            && type?.kind === SyntaxKind.TypeReference && type.typeName?.text === 'Dictionary' && type.typeArguments?.length === 1
+            && type.typeArguments[0].kind === SyntaxKind.TypeReference && type.typeArguments[0].typeName?.text === 'ArrayCache';
+        return ok ? 'ccxt.pro.ArrayCache' : undefined;
     }
 
     // `const x = this.<member>` over a member DECLARED a string-keyed dictionary (Exchange.Options.cs): the const

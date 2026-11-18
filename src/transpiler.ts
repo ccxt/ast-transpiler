@@ -10,7 +10,7 @@ import { Logger } from './logger.js';
 import { Languages, TranspilationMode, IFileExport, IFileImport, ITranspiledFile, IInput, ITranspileContext, ITranspileProgramCache } from './types.js';
 import { GoTranspiler, alignGoTrailingComments } from './goTranspiler.js';
 import { JavaTranspiler } from './javaTranspiler.js';
-import { RustTranspiler, RUST_DECLARED_DICT_LOCALS } from './rustTranspiler.js';
+import { RustTranspiler, RUST_DECLARED_DICT_LOCALS, rustDispatch } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
 import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
@@ -308,6 +308,18 @@ function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[
     return [snapshot, program, checker];
 }
 
+// A REST venue `ts/src/<id>.ts` with a ws class `ts/src/pro/<id>.ts`: the Rust printer proves a REST helper's typed
+// slot from every caller, so its program loads the ws subclass too (the ws program already imports the REST file;
+// both programs then hold the same callers and take the same decision).
+function wsSiblingRoots(file: string): string[] {
+    const m = String(file).replace(/\\/g, "/").match(/^(.*(?:^|\/)ts\/src\/)([^/]+\.ts)$/);
+    if (m === null) {
+        return [];
+    }
+    const sibling = m[1] + "pro/" + m[2];
+    return fs.existsSync(sibling) ? [sibling] : [];
+}
+
 export default class Transpiler {
     config;
     pythonTranspiler: PythonTranspiler;
@@ -407,12 +419,12 @@ export default class Transpiler {
         return this.setSnapshotContext(snapshot, program, checker, inMemoryFilePath);
     }
 
-    createProgramByPathAndSetContext(filePath): ITranspileContext {
-        const shared = this.findSharedProgramFile(filePath);
+    createProgramByPathAndSetContext(filePath, extraRoots: string[] = []): ITranspileContext {
+        const shared = extraRoots.length === 0 ? this.findSharedProgramFile(filePath) : undefined;
         if (shared !== undefined) {
             return this.setContext(shared);
         }
-        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, globalsShimPath], { [globalsShimPath]: globalsShim });
+        const [snapshot, program, checker] = createSnapshotProgram(this.programCache, [filePath, ...extraRoots, globalsShimPath], { [globalsShimPath]: globalsShim });
         return this.setSnapshotContext(snapshot, program, checker, filePath);
     }
 
@@ -501,7 +513,7 @@ export default class Transpiler {
         // improve this logic later
         if (createContext) {
             if (mode === TranspilationMode.ByPath) {
-                this.createProgramByPathAndSetContext(file);
+                this.createProgramByPathAndSetContext(file, lang === Languages.Rust ? wsSiblingRoots(file) : []);
             } else {
                 this.createProgramInMemoryAndSetContext(file);
             }
@@ -518,6 +530,7 @@ export default class Transpiler {
 
         let transpiledContent = undefined;
         let stdlibImports = undefined;
+        let rustSignatures = undefined;
         switch(lang) {
         case Languages.Python:
             this.pythonTranspiler.asyncTranspiling = !sync;
@@ -542,7 +555,9 @@ export default class Transpiler {
             transpiledContent = this.javaTranspiler.printNode(src, -1);
             break;
         case Languages.Rust:
+            this.rustTranspiler.rustSignatureTable = new Map();
             transpiledContent = this.rustTranspiler.printNode(src, -1);
+            rustSignatures = [ ...this.rustTranspiler.rustSignatureTable.values() ].filter(sig => sig.file === src).map(({ name, params, ret, returns }) => ({ name, params, ret, returns }));
             break;
         case Languages.Cpp:
             transpiledContent = this.cppTranspiler.printNode(src, -1);
@@ -569,7 +584,8 @@ export default class Transpiler {
             imports,
             exports,
             methodsTypes,
-            stdlibImports
+            stdlibImports,
+            rustSignatures
         };
     }
 
@@ -835,6 +851,8 @@ export {
     // the rust declared-Dict locals vocabulary + entry shape, so the
     // helper-removal consumers can import them from the package entry
     RUST_DECLARED_DICT_LOCALS,
+    // the by-name dispatch conversions per parameter / return kind (ccxt builds the arms from `rustSignatures`)
+    rustDispatch,
     // ccxt's Go printer hooks
     installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
     installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads,

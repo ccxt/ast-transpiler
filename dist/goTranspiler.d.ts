@@ -1,6 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { SyntaxKind } from 'typescript/unstable/ast';
 import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
+import * as tsAst from 'typescript/unstable/ast';
 export declare const ts: any;
 export declare function urlsDescribeStringProducer(initializer: any): boolean;
 export declare function installNilDeclaredTupleJoins(goTranspiler: any): void;
@@ -610,6 +611,7 @@ export declare class GoNilDeclaredValueAssignmentScan extends GoNilDeclaredAssig
     valueTypeOf(rhs: any): "bool" | "float64" | "int";
     classifyIdentifier(node: any, assigned: any): any;
     isStringWrite(rhs: any): boolean;
+    boolSlotWrite(node: any): boolean;
 }
 export declare function installCcxtGoNilDeclaredValueJoins(goTranspiler: any): void;
 export declare function ccxtGoNilDeclaredParseNumberJoin(goTranspiler: any, declaration: any): any;
@@ -666,6 +668,9 @@ export declare class GoTranspiler extends BaseTranspiler {
         };
     };
     unifiedBoolParams: {
+        [method: string]: number[];
+    };
+    unifiedNullableInt64Params: {
         [method: string]: number[];
     };
     uncalledStringParams: {
@@ -732,6 +737,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printGoSignature(node: any, identation: any, receiver: string): string;
+    goStrPtrFamilyReturnType(node: any): string | undefined;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): string;
@@ -857,6 +863,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInsideNonNilBlock(use: any, name: string): boolean;
     goMapLocalUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
     goSafeDictMapLocal(declaration: any): string | undefined;
+    goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
@@ -1148,7 +1155,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         name: string;
         params: string[];
     } | undefined;
-    goArrayLiteralSliceType(node: any, depth?: number): string | undefined;
+    goArrayLiteralSliceType(node: any, depth?: number, want?: string): string | undefined;
     goSliceElementIsString(node: any): boolean;
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
@@ -1166,7 +1173,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
     goHasTreeCallSite(fn: any): boolean;
-    goSliceArgumentType(arg: any): string | undefined;
+    goSliceArgumentType(arg: any, want?: string): string | undefined;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
     goAsyncBooleanParameterType(fn: any, param: any, index: number): string | undefined;
     goCallSitesPassBooleanLiteral(fn: any, index: number): boolean;
@@ -1368,6 +1375,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsBareStringOperand(node: any): boolean;
     goDeclaredContainerOperand(node: any): string | undefined;
     printInlineEquality(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    goParseToNumericBoxCompare(local: any, localText: string, other: any, otherText: string, isEq: boolean): string | undefined;
     goNativeNumericEqualityKind(left: any, leftText: string, right: any, rightText: string): string | undefined;
     goOperandNumericKind(node: any, printedText: string): string | undefined;
     goLiteralTypedLocalKind(node: any): string | undefined;
@@ -1710,4 +1718,103 @@ export interface GoTranspiler {
     goInHoistName(inNode: any): string | undefined;
     goInHoistCondition(condition: any, statement: any, minimum: number): any[] | undefined;
     goInHoistPrint(node: any, identation: any, hoisted: any[], print: () => string): string | undefined;
+}
+export interface GoTranspiler {
+    goSafeDictMapPredictionAsWs: boolean;
+}
+export interface GoTranspiler {
+    goHandleOptionTrueLocal(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goReusableFutureCall(node: any): boolean;
+    goReusableFutureLocal(declaration: any): boolean;
+    goReusableFutureLocalCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goTernaryJoinParts(declaration: any): {
+        goType: string;
+        derefTrue: boolean;
+        derefFalse: boolean;
+    } | undefined;
+    goTernaryJoinPartsUncached(declaration: any): {
+        goType: string;
+        derefTrue: boolean;
+        derefFalse: boolean;
+    } | undefined;
+    goTernaryJoinHasForeignComparison(declaration: any, goType: string): boolean;
+    goTernaryJoinArmType(node: any): string | undefined;
+    goTernaryJoinConditionDefines(condition: any, name: string, outcome: boolean): boolean;
+    goTernaryJoinDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    goClientFuturesTable(node: any): boolean;
+    goClientFutureReadKey(initializer: any): Node | undefined;
+    goClientFutureCheckerStringKey(key: any): boolean;
+    goClientFutureLocal(declaration: any): boolean;
+    goClientFutureLocalCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goSubscriptionPresenceLocal(declaration: any): boolean;
+    goSubscriptionPresenceCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goOhlcvsReadCacheType(declaration: any): string | undefined;
+}
+export interface GoTranspiler {
+    goTernaryJoinProvisional(): boolean;
+    goTernaryJoinFeedsAnotherTernary(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoinFeedsParameterCopy(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoinR87HasNativeRead(declaration: any, kind: string): boolean;
+}
+export interface GoTranspiler {
+    go90g3SideKeys(key: any): string[] | undefined;
+    go90g3ComputedSideLocal(declaration: any): {
+        book: tsAst.Identifier;
+        key: tsAst.Identifier;
+        sides: string[];
+    } | undefined;
+    go90g3ComputedSideCache: WeakMap<object, {
+        book: tsAst.Identifier;
+        key: tsAst.Identifier;
+        sides: string[];
+    } | null>;
+    go90g3PromiseLocal(declaration: any): boolean;
+    go90g3StringCharRead(node: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90DictArm(node: any): {
+        container: any;
+        key: any;
+    } | undefined;
+    goTernaryJoin90DictUsesAreNative(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90IntOperand(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90IntArm(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90HasArithmeticUse(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryJoin90SafeReaderArgument(node: any): boolean;
+}
+export interface GoTranspiler {
+    go92g7Int64Operands(call: any): Node[] | undefined;
+    go92g7MinMaxName(call: any): string | undefined;
+    go92g7OperandText(operand: any, index: number): string;
+    go92g7HasNumericUse(declaration: any): boolean;
+    go92g7IsBaseSum(call: any): boolean;
+}
+export interface GoTranspiler {
+    go93g4PointerOperands(call: any, self?: Node): string[] | undefined;
+    go93g4HasNumericUse(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goOrderBookCacheLocal(declaration: any): boolean;
+    goOrderBookCacheLocalCache: WeakMap<object, boolean>;
+}
+export interface GoTranspiler {
+    goTernaryJoin93StatementGuarded(declaration: any, ident: any): boolean;
 }
