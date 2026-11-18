@@ -51431,6 +51431,9 @@ var JavaTranspiler = class extends BaseTranspiler {
         return this.javaSliceBoundExpression(value, length);
       }
       const t = bounds[0].text;
+      if (this.javaSliceNonNegativeBound(args[0])) {
+        return `Math.min(${t}, ${length})`;
+      }
       return `Math.min(Math.max(${t} < 0 ? ${length} + ${t} : ${t}, 0), ${length})`;
     };
     const endText = () => {
@@ -51441,7 +51444,13 @@ var JavaTranspiler = class extends BaseTranspiler {
       if (value !== void 0) {
         return `${length} - ${-value}`;
       }
+      if (this.javaSliceIsOwnLength(args[1], receiver)) {
+        return length;
+      }
       const t = bounds[1].text;
+      if (this.javaSliceNonNegativeBound(args[1])) {
+        return `Math.min(${t}, ${length})`;
+      }
       return `Math.min(${t} < 0 ? ${length} + ${t} : ${t}, ${length})`;
     };
     const open = args.length === 1;
@@ -51451,6 +51460,48 @@ var JavaTranspiler = class extends BaseTranspiler {
     const full = open ? `(${name} == null ? null : ${recv}.substring(${cast(from)}))` : `(${name} == null ? null : ${recv}.substring(${cast(from)}, (int) ${to}))`;
     const budget = open ? 200 : Math.max(220, 392 - identation * 4 - 50);
     return full.length > budget ? void 0 : full;
+  }
+  // a slice bound that can never be negative: the helper's count-from-the-end branch is dead, so
+  // the native form only clamps it to the length (`x.length`, `++` counters from a literal >= 0,
+  // non-negative literals, `+`/`*` of those, and const locals initialised to one of them)
+  javaSliceNonNegativeBound(node, depth = 0) {
+    const n = this.unwrapParenthesized(node);
+    if (n === void 0 || depth > 4) {
+      return false;
+    }
+    switch (n.kind) {
+      case SyntaxKind6.NumericLiteral:
+        return !/[.eE]/.test(n.text) && Number(n.text) <= 2147483647;
+      case SyntaxKind6.PropertyAccessExpression:
+        return n.name?.text === "length" && this.javaLengthIntRead(n);
+      case SyntaxKind6.BinaryExpression: {
+        const op = n.operatorToken.kind;
+        return (op === SyntaxKind6.PlusToken || op === SyntaxKind6.AsteriskToken) && this.javaSliceNonNegativeBound(n.left, depth + 1) && this.javaSliceNonNegativeBound(n.right, depth + 1);
+      }
+      case SyntaxKind6.Identifier: {
+        const declaration = this.javaDeclarationOfIdentifier(n);
+        if (declaration === void 0 || declaration.kind !== SyntaxKind6.VariableDeclaration) {
+          return false;
+        }
+        const forStatement = this.javaForCounterStatement(declaration);
+        if (forStatement !== void 0) {
+          const symbol = this.getChecker().getSymbolAtLocation(n);
+          const start = this.javaSliceLiteralBound(declaration.initializer);
+          const step = forStatement.incrementor;
+          return start !== void 0 && start >= 0 && step?.kind === SyntaxKind6.PostfixUnaryExpression && step.operator === SyntaxKind6.PlusPlusToken && isIdentifier2(step.operand) && step.operand.text === n.text && this.javaCounterHasNoBoxWrite(n, symbol);
+        }
+        const list = declaration.parent;
+        return list !== void 0 && (getCombinedNodeFlags(declaration) & NodeFlags4.Const) !== 0 && declaration.initializer !== void 0 && this.javaSliceNonNegativeBound(declaration.initializer, depth + 1);
+      }
+      default:
+        return false;
+    }
+  }
+  // `s.slice (a, s.length)`: the end bound is the receiver's own length, which is its clamped value
+  javaSliceIsOwnLength(node, receiver) {
+    const n = this.unwrapParenthesized(node);
+    const r = this.unwrapParenthesized(receiver);
+    return n !== void 0 && r !== void 0 && n.kind === SyntaxKind6.PropertyAccessExpression && n.name?.text === "length" && isIdentifier2(r) && isIdentifier2(n.expression) && n.expression.text === r.text && this.javaLengthIntRead(n);
   }
   // `x.replaceAll (literal, replacement)` -> String.replace for a plain-string replacement
   javaTypedStringReplaceAllCall(node, name, parsedArg, parsedArg2) {

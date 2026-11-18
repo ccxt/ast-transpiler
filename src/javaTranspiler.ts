@@ -8568,6 +8568,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 return this.javaSliceBoundExpression(value, length);
             }
             const t = bounds[0].text;
+            if (this.javaSliceNonNegativeBound(args[0])) {
+                return `Math.min(${t}, ${length})`;
+            }
             return `Math.min(Math.max(${t} < 0 ? ${length} + ${t} : ${t}, 0), ${length})`;
         };
         // the end clamps to the length but, like the helper, may land below 0 (both forms then throw)
@@ -8579,7 +8582,13 @@ export class JavaTranspiler extends BaseTranspiler {
             if (value !== undefined) {
                 return `${length} - ${-value}`;
             }
+            if (this.javaSliceIsOwnLength(args[1], receiver)) {
+                return length;
+            }
             const t = bounds[1].text;
+            if (this.javaSliceNonNegativeBound(args[1])) {
+                return `Math.min(${t}, ${length})`;
+            }
             return `Math.min(${t} < 0 ? ${length} + ${t} : ${t}, ${length})`;
         };
         const open = args.length === 1;
@@ -8593,6 +8602,55 @@ export class JavaTranspiler extends BaseTranspiler {
         // an open-end form shares its line with the surrounding expression: keep it short
         const budget = open ? 200 : Math.max(220, 392 - identation * 4 - 50);
         return full.length > budget ? undefined : full;
+    }
+
+    // a slice bound that can never be negative: the helper's count-from-the-end branch is dead, so
+    // the native form only clamps it to the length (`x.length`, `++` counters from a literal >= 0,
+    // non-negative literals, `+`/`*` of those, and const locals initialised to one of them)
+    javaSliceNonNegativeBound(node, depth = 0): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || depth > 4) {
+            return false;
+        }
+        switch (n.kind) {
+        case SyntaxKind.NumericLiteral:
+            return !/[.eE]/.test(n.text) && Number(n.text) <= 2147483647;
+        case SyntaxKind.PropertyAccessExpression:
+            return n.name?.text === 'length' && this.javaLengthIntRead(n);
+        case SyntaxKind.BinaryExpression: {
+            const op = n.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.AsteriskToken)
+                && this.javaSliceNonNegativeBound(n.left, depth + 1) && this.javaSliceNonNegativeBound(n.right, depth + 1);
+        }
+        case SyntaxKind.Identifier: {
+            const declaration: any = this.javaDeclarationOfIdentifier(n);
+            if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration) {
+                return false;
+            }
+            const forStatement = this.javaForCounterStatement(declaration);
+            if (forStatement !== undefined) {
+                const symbol = this.getChecker().getSymbolAtLocation(n);
+                const start = this.javaSliceLiteralBound(declaration.initializer);
+                const step = forStatement.incrementor;
+                return start !== undefined && start >= 0 && step?.kind === SyntaxKind.PostfixUnaryExpression
+                    && step.operator === SyntaxKind.PlusPlusToken && isIdentifier(step.operand) && step.operand.text === n.text
+                    && this.javaCounterHasNoBoxWrite(n, symbol);
+            }
+            const list = declaration.parent;
+            return list !== undefined && (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== 0
+                && declaration.initializer !== undefined && this.javaSliceNonNegativeBound(declaration.initializer, depth + 1);
+        }
+        default:
+            return false;
+        }
+    }
+
+    // `s.slice (a, s.length)`: the end bound is the receiver's own length, which is its clamped value
+    javaSliceIsOwnLength(node, receiver): boolean {
+        const n = this.unwrapParenthesized(node);
+        const r = this.unwrapParenthesized(receiver);
+        return n !== undefined && r !== undefined && n.kind === SyntaxKind.PropertyAccessExpression && n.name?.text === 'length'
+            && isIdentifier(r) && isIdentifier(n.expression) && n.expression.text === r.text && this.javaLengthIntRead(n);
     }
 
     // `x.replaceAll (literal, replacement)` -> String.replace for a plain-string replacement
