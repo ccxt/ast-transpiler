@@ -263,6 +263,7 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
     MarketId: string;
     Currency: string;
     MarketSymbols: string;
+    CreateExpiredOptionMarket: string;
     PriceToPrecision: string;
     AmountToPrecision: string;
     DecimalToPrecision: string;

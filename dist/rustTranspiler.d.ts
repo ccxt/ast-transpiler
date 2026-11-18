@@ -70,7 +70,7 @@ interface RustScopeIndex {
     byName: Map<string, number[]> | undefined;
 }
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -2562,6 +2562,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A ws `super.parseX (x, market)` to a fixed-arity parser with a lent market slot: by-value locals are cloned
      *  as on the slice path (the parent call takes them by value). */
     printSuperMarketSlotCall(node: any, methodName: string, identation: number): string | undefined;
+    /** The same local is also a bare earlier argument of this call (`f(x, k, x)`): the later one is its last read. */
+    rustReadEarlierInCall(node: any, at: number): boolean;
     rustSliceArgText(a: string): string;
     rustCalleeIsRuntimeBase(node: any): boolean;
     rustCallsTestExchange(node: any): boolean;
@@ -3229,6 +3231,25 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_PLAIN_DICT_BUILDERS;
     /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
     private static readonly RUST_REQUEST_TUPLE_HELPERS;
+    /** The base `handleUntilOption` declaration itself. */
+    rustUntilPairMethod(node: any): boolean;
+    /** A `this.handleUntilOption (..)` call resolving to the base declaration. */
+    rustUntilPairCall(node: any): boolean;
+    /** `return [ a, b ]` in the base helper: each slot is a map argument (or its `omit`), unboxed once. */
+    printRustUntilPairReturn(fn: any, exp: any): string | undefined;
+    /** The pair call as printed, unboxed (`undefined` when `node` is not one). */
+    rustUntilPairText(node: any): string | undefined;
+    private rustUntilPairRaw;
+    /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
+    printRustUntilPairBox(node: any): string | undefined;
+    /** `this.handleUntilOption (..)[i]` with a literal 0 / 1: that map, boxed where the read took a `Value`. */
+    printRustUntilPairSlotRead(node: any): string | undefined;
+    /** Each slot written from map `__untilN`: the typed slot printer's own `Value::Dict(m).into_dict()` collapses to the move of `m`. */
+    rustUntilSlotText(line: string, slot: string): string;
+    /** `const [ a, b ] = this.handleUntilOption (..)`: `let (__until0, __until1) = ..;` then each slot from its map. */
+    printRustUntilPairDestructure(declaration: any, parsedElements: string[], indent: string): string | undefined;
+    /** `[ a, b ] = this.handleUntilOption (..)`: one block, each slot written from its map. */
+    printRustUntilPairWrite(left: any, right: any): string | undefined;
     rustNativeDictInsert(baseExpr: any, keyNode: any, keyText: string, valueText: string): string | undefined;
     /** A local (single binding in its function, no closure capture of a write)
      *  whose declaration and every write is a plain-dict source or nullish. A
@@ -5624,5 +5645,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A checker-`boolean` argument for a `bool` slot: native where it already is one, an `Option<bool>` local or a
      *  `Value` compared with `Some(true)` (its variant is `Bool` or `Null`), else its truthiness. */
     rustVenueBoolArgText(arg: any, identation: number): string;
+    printVariableStatement(node: any, identation: any): string;
 }
 export {};

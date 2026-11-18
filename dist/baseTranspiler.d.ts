@@ -163,6 +163,8 @@ declare class BaseTranspiler {
     getSrc(): SourceFile;
     getChecker(): Checker;
     hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean;
+    annotatedMapRowSource(declaration: any): any;
+    annotatedMapRowUse(node: any): any;
     checkerOrUndefined(): Checker | undefined;
     getProgram(): Program;
     initOperators(): void;
