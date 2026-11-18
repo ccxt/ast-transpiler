@@ -11906,6 +11906,14 @@ describe ('goGeneralParamRules', () => {
             expect(out).toContain('len(deltas)');
             expect(go(ts)).not.toContain('deltas []any');
         });
+        test('a string[] table slot prints []any and the native length', () => {
+            const ts = 'class Exchange {\n    async watchTradesForSymbols (symbols: string[], params = {}): Promise<any> {\n        const n = symbols.length;\n        return n;\n    }\n}\n';
+            const out = go(ts, { 'unifiedSliceParams': { 'watchTradesForSymbols': { 0: '[]any' } } });
+            expect(out).toContain('symbols []any');
+            expect(out).toContain('len(symbols)');
+            expect(out).not.toContain('GetArrayLength(symbols)');
+            expect(go(ts)).not.toContain('symbols []any');
+        });
         test('a venue parse* row list with element reads is typed when every caller passes a []any', () => {
             const ts = 'class Exchange {}\nclass ex extends Exchange {\n' +
                 '    parseRows (rows: Dict[], params: Dict = {}): Dict[] {\n        const out: Dict[] = [];\n        for (let i = 0; i < rows.length; i++) {\n            out.push (this.extend (rows[i], params));\n        }\n        return out;\n    }\n' +

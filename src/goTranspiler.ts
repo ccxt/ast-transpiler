@@ -20656,8 +20656,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const element = checker.getIndexTypeOfType(type, IndexKind.Number);
-        // an `any[]` / `number[]` slot boxes every element as `any` too, so it is the same `[]any`
-        const anyElement = (element !== undefined) && ((element.flags & (TypeFlags.Any | TypeFlags.Number)) !== 0);
+        // an `any[]` / `number[]` / `string[]` slot boxes every element as `any` too, so it is the same `[]any`
+        const anyElement = (element !== undefined) && ((element.flags & (TypeFlags.Any | TypeFlags.Number | TypeFlags.String)) !== 0);
         if ((element === undefined) || (!(element.flags & TypeFlags.Object) && !anyElement)) {
             return undefined;
         }

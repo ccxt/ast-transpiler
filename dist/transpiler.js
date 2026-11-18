@@ -29537,7 +29537,7 @@ ${iden}}`;
       return void 0;
     }
     const element = checker.getIndexTypeOfType(type, IndexKind2.Number);
-    const anyElement = element !== void 0 && (element.flags & (TypeFlags4.Any | TypeFlags4.Number)) !== 0;
+    const anyElement = element !== void 0 && (element.flags & (TypeFlags4.Any | TypeFlags4.Number | TypeFlags4.String)) !== 0;
     if (element === void 0 || !(element.flags & TypeFlags4.Object) && !anyElement) {
       return void 0;
     }
