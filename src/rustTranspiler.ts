@@ -222,7 +222,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -234,7 +234,7 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
 
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
 const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct' ]);
@@ -337,6 +337,7 @@ export const rustDispatch = {
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
         case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
+        case 'dictpair': return `crate::Value::from(${call})`;
         default: return call;
         }
     },
@@ -2255,6 +2256,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // Array destructuring reassignment: [a, b] = expr → bind once, reassign each
         if (isAssign && left.kind === SyntaxKind.ArrayLiteralExpression) {
+            const untilWrite = this.printRustUntilPairWrite(left, right); if (untilWrite !== undefined) return untilWrite;
             const tmpName = '__destr_tmp';
             const rhs = this.printNode(right, 0);
             const nativeList = this.rustNativeListSource(right);
@@ -2450,6 +2452,7 @@ export class RustTranspiler extends BaseTranspiler {
         const bookDecl = node.declarations.length === 1 && declaration?.name.kind === SyntaxKind.Identifier ? this.printWsBookLocalDeclaration(declaration, this.printNode(declaration.name, 0), indent) : undefined; if (bookDecl !== undefined) return bookDecl;
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const parsedElements = declaration.name.elements.map(e => this.printNode(e.name, 0));
+            const untilDecl = this.printRustUntilPairDestructure(declaration, parsedElements, indent); if (untilDecl !== undefined) return untilDecl;
             const syntheticName = parsedElements.join('') + 'Variable';
             const nativeList = this.rustNativeListSource(declaration.initializer);
             const head = nativeList
@@ -15191,6 +15194,7 @@ export class RustTranspiler extends BaseTranspiler {
         '': 'void', 'Value': 'value', 'crate::Value': 'value', 'Option<String>': 'ostr', 'i64': 'int', 'String': 'string', 'bool': 'bool',
         'crate::value::Dict': 'dict', 'crate::value::List': 'list', 'Option<crate::value::Dict>': 'optdict',
         'crate::types::Market': 'struct', 'crate::types::Currency': 'struct', 'Option<crate::types::Market>': 'struct',
+        '(crate::value::Dict, crate::value::Dict)': 'dictpair',
     };
 
     rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
@@ -17113,6 +17117,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printRustFunctionType(node): string {
         if (this.rustReturnsMarket(node)) return 'crate::types::Market';
+        if (this.rustUntilPairMethod(node)) return '(crate::value::Dict, crate::value::Dict)';
         if (this.rustReturnsOptMarket(node)) return 'Option<crate::types::Market>';
         if (this.rustReturnsCurrency(node)) return 'crate::types::Currency';
         // An internal `: Str` method that proves the conversion prints the
@@ -17828,6 +17833,7 @@ export class RustTranspiler extends BaseTranspiler {
         const limitCall = this.rustLimitCallText(node); if (limitCall !== undefined) return `Value::from(${limitCall})`;
         const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
         const typedReturn = this.printRustBaseTypedReturnCall(node); if (typedReturn !== undefined) return typedReturn;
+        const untilBox = this.printRustUntilPairBox(node); if (untilBox !== undefined) return untilBox;
         const bytesCall = this.printRustBytesCall(node, identation); if (bytesCall !== undefined) return bytesCall;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
@@ -20502,6 +20508,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const untilSlot = this.printRustUntilPairSlotRead(node); if (untilSlot !== undefined) return untilSlot;
         const sideRead = this.printBookSideRead(node); if (sideRead !== undefined) return sideRead;
         const bookRead = this.printWsBookMapRead(node) ?? this.printWsBookFieldRead(node); if (bookRead !== undefined) return bookRead;
         const typedElem = this.printTypedResultElemRead(node); if (typedElem !== undefined) return typedElem;
@@ -21839,6 +21846,7 @@ export class RustTranspiler extends BaseTranspiler {
         // native payload (a nullish literal is the `None` arm).
         const fn: any = findAncestor(node.parent, isFunctionLike);
         const typedReturn = this.printRustBaseTypedReturn(fn, exp); if (typedReturn !== undefined) return `${idn}return ${typedReturn};`;
+        const untilPair = this.printRustUntilPairReturn(fn, exp); if (untilPair !== undefined) return `${idn}return ${untilPair};`;
         if (this.rustReturnsMarket(fn)) return `${idn}return ${this.printMarketReturnValue(exp)};`;
         const byIdReturn = this.print65eByIdReturnValue(exp); if (byIdReturn !== undefined) return `${idn}return ${byIdReturn};`;
         if (this.rustReturnsOptMarket(fn)) return `${idn}return ${this.printOptMarketReturnValue(exp)};`;
@@ -21890,6 +21898,92 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
     private static readonly RUST_REQUEST_TUPLE_HELPERS = new Set([ 'handleUntilOption' ]);
+
+    // ── `handleUntilOption` as a native `(Dict, Dict)` pair ──
+    // The base helper builds both slots from map arguments, so it returns the two maps unboxed; callers destructure the
+    // pair (`let (a, b) = ..`), read `.0` / `.1`, and box it once (`Value::from`) anywhere a `Value` is still taken.
+
+    /** The base `handleUntilOption` declaration itself. */
+    rustUntilPairMethod(node): boolean {
+        return node?.kind === SyntaxKind.MethodDeclaration && node.body !== undefined && isIdentifier(node.name)
+            && RustTranspiler.RUST_REQUEST_TUPLE_HELPERS.has(String(node.name.text)) && RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''));
+    }
+
+    /** A `this.handleUntilOption (..)` call resolving to the base declaration. */
+    rustUntilPairCall(node): boolean {
+        return this.checkerOrUndefined() !== undefined && this.rustBaseCallNamed(node, RustTranspiler.RUST_REQUEST_TUPLE_HELPERS);
+    }
+
+    /** `return [ a, b ]` in the base helper: each slot is a map argument (or its `omit`), unboxed once. */
+    printRustUntilPairReturn(fn, exp): string | undefined {
+        if (!this.rustUntilPairMethod(fn)) return undefined;
+        const list: any = this.unwrapParens(exp);
+        if (!isArrayLiteralExpression(list) || list.elements.length !== 2) return undefined;
+        const [ a, b ] = list.elements.map((e: any) => this.printNode(e, 0).trim());
+        return `(${a}.into_dict(), ${b}.into_dict())`;
+    }
+
+    /** The pair call as printed, unboxed (`undefined` when `node` is not one). */
+    rustUntilPairText(node): string | undefined {
+        const call: any = this.unwrapParens(node);
+        if (!this.rustUntilPairCall(call)) return undefined;
+        this.rustUntilPairRaw.add(call);
+        try {
+            return this.printNode(call, 0).trim();
+        } finally {
+            this.rustUntilPairRaw.delete(call);
+        }
+    }
+
+    private rustUntilPairRaw = new Set<any>();
+
+    /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
+    printRustUntilPairBox(node): string | undefined {
+        if (this.rustUntilPairRaw.has(node) || !this.rustUntilPairCall(node)) return undefined;
+        const text = this.rustUntilPairText(node);
+        return text === undefined ? undefined : `Value::from(${text})`;
+    }
+
+    /** `this.handleUntilOption (..)[i]` with a literal 0 / 1: that map, boxed where the read took a `Value`. */
+    printRustUntilPairSlotRead(node): string | undefined {
+        if (!isElementAccessExpression(node) || !isNumericLiteral(node.argumentExpression)) return undefined;
+        const index = String(node.argumentExpression.text);
+        if (index !== '0' && index !== '1') return undefined;
+        const text = this.rustUntilPairText(node.expression);
+        return text === undefined ? undefined : `Value::Dict(${text}.${index})`;
+    }
+
+    /** Each slot written from map `__untilN`: the typed slot printer's own `Value::Dict(m).into_dict()` collapses to the move of `m`. */
+    rustUntilSlotText(line: string, slot: string): string {
+        return line.split(`Value::Dict(${slot}).into_dict()`).join(slot);
+    }
+
+    /** `const [ a, b ] = this.handleUntilOption (..)`: `let (__until0, __until1) = ..;` then each slot from its map. */
+    printRustUntilPairDestructure(declaration, parsedElements: string[], indent: string): string | undefined {
+        const text = this.rustUntilPairText(declaration.initializer);
+        const elements: any[] = Array.from(declaration.name.elements);
+        if (text === undefined || elements.length > 2 || elements.some((e: any) => e.kind !== SyntaxKind.BindingElement || e.dotDotDotToken !== undefined || e.initializer !== undefined)) return undefined;
+        const lines = elements.map((e: any, idx: number) => {
+            const slot = `__until${idx}`;
+            const read = `Value::Dict(${slot})`;
+            return this.rustUntilSlotText(this.printRustHandedDictSlot(e, parsedElements[idx], read, indent) ?? `${indent}let mut ${parsedElements[idx]}: Value = ${read}`, slot);
+        });
+        return `${indent}let (__until0, __until1) = ${text};\n` + lines.join(';\n');
+    }
+
+    /** `[ a, b ] = this.handleUntilOption (..)`: one block, each slot written from its map. */
+    printRustUntilPairWrite(left, right): string | undefined {
+        const elements: any[] = Array.from(left.elements);
+        if (elements.length > 2 || elements.some((e: any) => !isIdentifier(e))) return undefined;
+        const text = this.rustUntilPairText(right);
+        if (text === undefined) return undefined;
+        const writes = elements.map((e: any, idx: number) => {
+            const slot = `__until${idx}`;
+            const read = `Value::Dict(${slot})`;
+            return this.rustUntilSlotText(this.printRustNilSlotWrite(e, read) ?? `${this.printNode(e, 0)} = ${read}`, slot);
+        });
+        return `{ let (__until0, __until1) = ${text}; ${writes.join('; ')}; }`;
+    }
 
     rustNativeDictInsert(baseExpr, keyNode, keyText: string, valueText: string): string | undefined {
         if (!isIdentifier(baseExpr) || !this.rustLocalStaysPlain(baseExpr)) {

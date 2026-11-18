@@ -9791,7 +9791,7 @@ describe('rust request maps merged as the extend head', () => {
     });
     test('the request slot is a shared map: native key write, lent then moved as the extend head', () => {
         const thing = out.slice (out.indexOf ('fn fetchThing'), out.indexOf ('fn fetchOther'));
-        expect(thing).toMatch(/let mut requestUntil: crate::value::Dict = \w+\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(thing).toContain('let mut requestUntil: crate::value::Dict = __until0;');
         expect(thing).toContain('std::sync::Arc::make_mut(&mut requestUntil).insert("limit".into(), limit.clone())');
         expect(thing).toContain('self.extend(&requestUntil, &[&paramsUntil])');
         expect(thing).toMatch(/self\.extend\(requestUntil(\.clone\(\))?, &\[Value::Map/);
@@ -12785,7 +12785,8 @@ describe('rust map literal written back through handleUntilOption (ral-pb)', () 
     });
     test('the literal moves into the call and slot 0 takes the map back', () => {
         expect(output).toMatch(/self\.handleUntilOption\(Value::Str\("end"\.into\(\)\), Value::Dict\(request\), /);
-        expect(output).toContain('request = __destr_tmp.get(0).cloned().unwrap_or(Value::Null).into_dict()');
+        expect(output).toContain('{ let (__until0, __until1) = self.handleUntilOption(Value::Str("end".into()), Value::Dict(request), ');
+        expect(output).toContain('request = __until0;');
         expect(output).toContain('std::sync::Arc::make_mut(&mut request).insert("since".into()');
     });
 });
@@ -12821,7 +12822,7 @@ describe('rust safeDict rows pushed / stored into a local container (ral-qe)', (
         expect(output).toMatch(/let mut anyOther: Value = /);
     });
     test('slot 0 of handleUntilOption over a map literal is that map: read by key and moved into a literal', () => {
-        expect(output).toMatch(/let mut requestUntil: crate::value::Dict = \w+\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
+        expect(output).toContain('let mut requestUntil: crate::value::Dict = __until0;');
         expect(output).toContain('m.insert("q".to_string(), Value::Dict(requestUntil));');
     });
     test('negative: a row stored into a this.* field keeps its Value', () => {
@@ -13944,7 +13945,7 @@ describe('ral-wf: tuple-slot map literals hold the shared Dict', () => {
         const body = out.slice (out.indexOf ('fn fetchFills'), out.indexOf ('fn fetchPage'));
         expect(body).toMatch(/let mut request: crate::value::Dict = /);
         expect(body).toContain('Arc::make_mut(&mut request).insert("symbol".into()');
-        expect(body).toMatch(/handleUntilOption\(Value::Str\("endAt"\.into\(\)\), Value::Dict\(request\), [\s\S]*?request = __destr_tmp\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
+        expect(body).toMatch(/let \(__until0, __until1\) = self\.handleUntilOption\(Value::Str\("endAt"\.into\(\)\), Value::Dict\(request\), [^\n]*request = __until0;/);
         expect(body).not.toContain('request.clone()');
     });
     test('an empty literal overwritten by a params slot before any read is the slot map', () => {
@@ -15896,6 +15897,38 @@ describe('41i: handleUntilOption request local and slot', () => {
     });
 });
 
+describe('handleUntilOption returns a native (Dict, Dict) pair', () => {
+    const fx = (name: string, base: string, venue: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), venue);
+        return path.join (dir, 'ts/src/venue.ts');
+    };
+    const b = "export interface Dict { [key: string]: any }\nexport type Int = number | undefined;\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    extend (a: any, b: any): Dict { return a; }\n    omit (a: any, k: any): Dict { return a; }\n    safeInteger2 (o: any, k1: any, k2: any, d: Int = undefined): Int { return o; }\n    parseToInt (x: any): number { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    handleUntilOption (key: string, request: Dict, params: Dict, multiplier: number = 1): [Dict, Dict] {\n        const until = this.safeInteger2 (params, 'until', 'till');\n        if (until !== undefined) {\n            request[key] = this.parseToInt (until * multiplier);\n        }\n        const paramsOmitted = (until !== undefined) ? this.omit (params, [ 'until', 'till' ]) : params;\n        return [ request, paramsOmitted ];\n    }\n    handleOtherPair (request: Dict, params: Dict): [Dict, Dict] {\n        return [ request, params ];\n    }\n}\n";
+    const v = "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    decl (params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ('end', request, params);\n        return this.hold (this.extend (requestUntil, paramsUntil));\n    }\n    first (params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        const r = this.handleUntilOption ('end', request, params)[0];\n        return this.hold (r);\n    }\n    whole (params: Dict = {}) {\n        const request: Dict = { 'a': 1 };\n        return this.handleUntilOption ('end', request, params);\n    }\n    other (params: Dict = {}) {\n        const [ r, p ] = this.handleOtherPair ({ 'a': 1 }, params);\n        return this.hold (this.extend (r, p));\n    }\n}\n";
+    test('the base helper prints `-> (Dict, Dict)`; a destructure binds the pair natively with no slot unbox', () => {
+        const out = transpiler.transpileRustByPath (fx ('until-pair', b, v)).content;
+        const d = out.slice (out.indexOf ('fn decl'), out.indexOf ('fn first'));
+        expect(d).toContain('let (__until0, __until1) = self.handleUntilOption(');
+        expect(d).toContain('let mut requestUntil: crate::value::Dict = __until0;');
+        expect(d).toContain('let mut paramsUntil: crate::value::Dict = __until1;');
+        expect(d).not.toContain('.into_dict()');
+        expect(d).not.toContain('.as_array().cloned().unwrap_or_default()');
+        const f = out.slice (out.indexOf ('fn first'), out.indexOf ('fn whole'));
+        expect(f).toMatch(/Value::Dict\(self\.handleUntilOption\([^\n]*\)\.0\)/);
+        const w = out.slice (out.indexOf ('fn whole'), out.indexOf ('fn other'));
+        expect(w).toMatch(/return Value::from\(self\.handleUntilOption\(/);
+        // another `[Dict, Dict]` helper keeps its boxed list
+        const o = out.slice (out.indexOf ('fn other'));
+        expect(o).not.toContain('__until0');
+        const baseOut = transpiler.transpileRustByPath (path.join (rustFixtureRoot, 'until-pair', 'ts/src/base/Exchange.ts')).content;
+        expect(baseOut).toMatch(/fn handleUntilOption\([^\n]*\) -> \(crate::value::Dict, crate::value::Dict\)/);
+        expect(baseOut).toMatch(/return \(request\.into_dict\(\), paramsOmitted\.into_dict\(\)\);/);
+        expect(baseOut).toMatch(/fn handleOtherPair\([^\n]*\) -> Value/);
+    });
+});
+
 describe('ral-41a: nil locals written from a venue `Num` parse helper', () => {
     const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Num = number | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    parseNumber (value: any, d: Num = undefined): number { return value; }\n}\n";
     const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Num } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseX18 (value: Str): Num {\n        if (value === undefined) {\n            return undefined;\n        }\n        return this.parseNumber (this.safeString ({ 'v': value }, 'v'));\n    }\n    parseLoose (value: any): Num {\n        return this.parseNumber (value);\n    }\n    parseOrder (order: Dict) {\n        let price = undefined;\n        let loose = undefined;\n        if (order['p'] !== undefined) {\n            price = this.parseX18 (this.safeString (order, 'p'));\n            loose = this.parseLoose (order['p']);\n        }\n        return { 'price': price, 'loose': loose };\n    }\n}\n";
@@ -17692,7 +17725,7 @@ describe('ral-50b: map-literal producers (handleUntilOption list write, aeo writ
         const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         const u = out.slice(out.indexOf('fn until'), out.indexOf('fn rebuilt'));
         expect(u).toContain('let mut request: crate::value::Dict =');
-        expect(u).toMatch(/request = self\.[A-Za-z_]+\([^\n]*Value::Dict\(request\)[^\n]*\)\.into_dict\(\);/);
+        expect(u).toMatch(/request = Value::from\(self\.[A-Za-z_]+\([^\n]*Value::Dict\(request\)[^\n]*\)\)\.into_dict\(\);/);
         // a reuse literal written at literal keys through the helper (`impl AddTarget for Dict`) and stored into a cache field via a cast
         const s = out.slice(out.indexOf('fn store'));
         expect(s).toContain('let mut current: crate::value::Dict =');
