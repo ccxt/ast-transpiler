@@ -37365,3 +37365,36 @@ const goInBackedDictLocals = new WeakSet<any> ();
         return shippedValue.call (this, declaration, identation);
     };
 }
+
+// ===== []any table slot: inline safeList argument (begin) =====
+// At a unified `[]any` parameter slot an inline `this.safeList (m, k, [])` argument prints as the receiver
+// method SafeListSlice: the same member list (or the empty default), as the `[]any` the slot declares.
+{
+    const sliceCallArgs = GoTranspiler.prototype.goSliceCallArgs;
+    GoTranspiler.prototype.goSliceCallArgs = function (node, identation) {
+        const shipped = sliceCallArgs.call(this, node, identation);
+        const callee: any = node.expression;
+        const name = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
+        const args = node.arguments ?? [];
+        if ((shipped !== undefined) || (typeof name !== 'string') || args.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+            return shipped;
+        }
+        const inlineList = (a, i: number): boolean => (this.goCallSliceArgumentType(node, name, i) === GO_SAFE_LIST_LOCAL_TYPE)
+            && this.goIsUnifiedSliceParameter(name, i) && (a.kind === SyntaxKind.CallExpression)
+            && (a.expression?.kind === SyntaxKind.PropertyAccessExpression) && (a.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (a.expression.name?.text === 'safeList') && (a.arguments.length === 3)
+            && (a.arguments[2].kind === SyntaxKind.ArrayLiteralExpression) && (a.arguments[2].elements.length === 0);
+        if (!args.some(inlineList)) {
+            return undefined;
+        }
+        const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
+        return args.map((a, i) => this.goWithExprDepth(depth, () => {
+            if (!inlineList(a, i)) {
+                return this.printNode(a, identation).trim();
+            }
+            const inner = a.arguments.map((x) => this.printNode(x, 0).trim());
+            return `this.SafeListSlice(${inner.join(', ')})`;
+        })).join(', ');
+    };
+}
+// ===== []any table slot: inline safeList argument (end) =====

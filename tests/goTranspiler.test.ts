@@ -18480,3 +18480,25 @@ describe('go conversion helpers on typed operands', () => {
         expect(output).toContain('strconv.Itoa(this.MinFundingAddressLength)');
     });
 });
+
+describe ('go []any table slot inline safeList argument', () => {
+    const config = (go: any) => ({ 'verbose': false, 'go': Object.assign({ 'parser': { 'NUM_LINES_END_FILE': 0 } }, go) });
+    const go = (ts: string, extra: any = {}) => new Transpiler(config(extra)).transpileGo(ts).content;
+    const ts = (dflt: string) => 'class Exchange {\n' +
+        '    safeList (d: any, k: any, v: any = undefined): any[] {\n        return v;\n    }\n' +
+        '    handleDeltas (bookside: any, deltas: any[]) {\n        for (let i = 0; i < deltas.length; i++) {\n            bookside.push (i);\n        }\n    }\n' +
+        '    run (m: any, b: any) {\n        this.handleDeltas (b, this.safeList (m, \'a\', ' + dflt + '));\n    }\n}\n';
+    const table = { 'unifiedSliceParams': { 'handleDeltas': { 1: '[]any' } } };
+    test('an inline safeList with an empty default prints SafeListSlice at the slot', () => {
+        const out = go(ts('[]'), table);
+        expect(out).toContain('deltas []any');
+        expect(out).toContain('len(deltas)');
+        expect(out).toContain('this.SafeListSlice(m, "a", []any{})');
+    });
+    test('without the table slot the argument stays SafeList', () => {
+        expect(go(ts('[]'))).not.toContain('SafeListSlice');
+    });
+    test('a non-empty default keeps SafeList', () => {
+        expect(go(ts('[ 1 ]'), table)).not.toContain('SafeListSlice');
+    });
+});
