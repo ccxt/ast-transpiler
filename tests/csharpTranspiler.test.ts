@@ -5144,6 +5144,18 @@ describe('printed parameter / declaration equality and inOp', () => {
         const output = t.transpileCSharpByPath(src).content;
         expect(output).toContain('(q is IDictionary<string, object> inOpDict0 && inOpDict0.ContainsKey("k"))');
     });
+    test('an object local inside an isDictionary branch gets the typed inOp', () => {
+        const t = make();
+        const dir = path.join(fs.mkdtempSync(path.join(require('os').tmpdir(), 'inop-')), 'ts', 'src');
+        fs.mkdirSync(dir, { recursive: true });
+        const src = path.join(dir, 'venue.ts');
+        fs.writeFileSync(src, 'class Test {\n    isDictionary (a) { return true; }\n    sv (a, b) { return a; }\n    f (rs) {\n        let r = this.sv (rs, 0);\n        if (Array.isArray (r)) {\n            return 2;\n        } else if (this.isDictionary (r)) {\n            if (\'k\' in r) {\n                return 1;\n            }\n        }\n        if (\'m\' in r) {\n            return 3;\n        }\n        if (this.isDictionary (r) && (\'n\' in r)) {\n            return 4;\n        }\n        if (this.isDictionary (r)) {\n            r = rs;\n            return (\'w\' in r);\n        }\n        return 0;\n    }\n}');
+        const output = t.transpileCSharpByPath(src).content;
+        expect(output).toContain('(r is IDictionary<string, object> inOpDict0 && inOpDict0.ContainsKey("k"))');
+        expect(output).toContain('inOp(r, "m")'); // outside the branch
+        expect(output).toContain('inOp(r, "n")'); // in the condition, not the branch
+        expect(output).toContain('inOp(r, "w")'); // the branch rewrites the local
+    });
     test('the dictionary-or-null inOp stays the helper outside exchange sources', () => {
         const t = make();
         const input = 'class Test {\n    f (params = {}) {\n        const q: any = params;\n        return (\'k\' in q);\n    }\n}';

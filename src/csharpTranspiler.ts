@@ -9001,13 +9001,36 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(obj)?.valueDeclaration?.resolve();
-        if ((declaration === undefined) || !isVariableDeclaration(declaration) || !this.csharpDictOrNullValue(obj, 0)) {
+        if ((declaration === undefined) || !isVariableDeclaration(declaration)
+            || (!this.csharpDictOrNullValue(obj, 0) && !this.csharpIsDictionaryNarrowed(obj, declaration))) {
             return undefined;
         }
         const file: any = obj.getSourceFile?.();
         const next = (this.csharpInOpDictCounters.get(file) ?? 0);
         this.csharpInOpDictCounters.set(file, next + 1);
         return `(${this.printNode(obj, 0)} is IDictionary<string, object> inOpDict${next} && inOpDict${next}.ContainsKey(${this.printNode(key, 0)}))`;
+    }
+
+    // `obj` sits in the then-branch of `if (this.isDictionary (obj) [&& ...])` and nothing in that branch writes it:
+    // the box is a dictionary there, so the type test plus ContainsKey is inOp's own dictionary answer
+    csharpIsDictionaryNarrowed(obj, declaration): boolean {
+        const isGuard = (c) => isCallExpression(c) && isPropertyAccessExpression(c.expression) && (c.expression.expression.kind === SyntaxKind.ThisKeyword)
+            && (c.expression.name.text === 'isDictionary') && (c.arguments.length === 1) && isIdentifier(c.arguments[0])
+            && (this.checkerOrUndefined()?.getSymbolAtLocation(c.arguments[0])?.valueDeclaration?.resolve() === declaration);
+        const guarded = (c) => {
+            while (isParenthesizedExpression(c)) {
+                c = c.expression;
+            }
+            return isGuard(c) || (isBinaryExpression(c) && (c.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) && (guarded(c.left) || guarded(c.right)));
+        };
+        for (let n: any = obj; (n !== undefined) && !isFunctionLike(n); n = n.parent) {
+            const branch = n.parent;
+            if ((branch !== undefined) && isIfStatement(branch) && (branch.thenStatement === n) && guarded(branch.expression)) {
+                const holder: any = { body: n };
+                return this.csharpParamWrites(holder, declaration).length === 0;
+            }
+        }
+        return false;
     }
 
     csharpDictOrNullValue(node, depth: number): boolean {
