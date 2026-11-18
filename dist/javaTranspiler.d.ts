@@ -247,6 +247,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredReturnTarget(node: any, target: string): boolean;
     javaConcreteStructureType(type: any): boolean;
     isJavaMapStructureType(type: any): boolean;
+    isJavaListStructureType(type: any): boolean;
     tupleRequiredElementCount(type: any): number;
     isJavaArrayStructureType(type: any): boolean;
     javaSideEffectFreeReference(node: any): any;
@@ -384,6 +385,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaForCounterStatement(declaration: any): any;
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
+    javaWidenedNumericKind(node: any): string | undefined;
     javaWidenedAddKind(node: any): "double" | "long";
     printWidenedNativeAdd(left: any, right: any, leftText: any, rightText: any): string;
     printBoxedLongLiteralAdd(left: any, right: any, leftText: any, rightText: any): string;

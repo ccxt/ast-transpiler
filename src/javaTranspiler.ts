@@ -4211,6 +4211,11 @@ export class JavaTranspiler extends BaseTranspiler {
         return fileName !== undefined && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
     }
 
+    // tuples are List<Object> in the Java port; the embedding layer reads this to bind List.get
+    isJavaListStructureType(type) {
+        return this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type);
+    }
+
     tupleRequiredElementCount(type) {
         const flags = ((type as any)?.isTypeReference?.() ? (type as any).getTarget().elementFlags : undefined) ?? (type as any)?.elementFlags ?? [];
         let required = 0;
@@ -5191,7 +5196,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (splitRead !== undefined) {
             return splitRead;
         }
-        if (this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type)) {
+        if (this.isJavaListStructureType(type)) {
             if (index >= this.tupleRequiredElementCount(type)) {
                 return undefined;
             }
@@ -6734,7 +6739,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         if (node.kind === SyntaxKind.ParenthesizedExpression) {
-            return this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
+            return widened ? this.javaWidenedNumericKind(node.expression)
+                : this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
         }
         if (isNumericLiteral(node)) {
             const text = node.text;
@@ -6987,9 +6993,14 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // the kind of a nested native `+` this rule prints, or undefined when it keeps the helper
+    // the numeric kind of one `+` operand; the embedding layer extends this operand table
+    javaWidenedNumericKind(node): string | undefined {
+        return this.javaProvableNumericKind(node, true, true);
+    }
+
     javaWidenedAddKind(node) {
-        const leftKind = this.javaProvableNumericKind(node.left, true, true);
-        const rightKind = this.javaProvableNumericKind(node.right, true, true);
+        const leftKind = this.javaWidenedNumericKind(node.left);
+        const rightKind = this.javaWidenedNumericKind(node.right);
         if (leftKind === undefined || rightKind === undefined) {
             return undefined;
         }
@@ -6998,8 +7009,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // the native form of a numeric `+`, or undefined to keep Helpers.add
     printWidenedNativeAdd(left, right, leftText, rightText) {
-        const leftKind = this.javaProvableNumericKind(left, true, true);
-        const rightKind = this.javaProvableNumericKind(right, true, true);
+        const leftKind = this.javaWidenedNumericKind(left);
+        const rightKind = this.javaWidenedNumericKind(right);
         if (leftKind === undefined || rightKind === undefined) {
             return undefined;
         }

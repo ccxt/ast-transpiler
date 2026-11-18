@@ -46372,6 +46372,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     const fileName = _optionalChain([declaration, 'optionalAccess', _9520 => _9520.getSourceFile, 'optionalCall', _9521 => _9521(), 'optionalAccess', _9522 => _9522.fileName]);
     return fileName !== void 0 && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
   }
+  // tuples are List<Object> in the Java port; the embedding layer reads this to bind List.get
+  isJavaListStructureType(type) {
+    return this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type);
+  }
   tupleRequiredElementCount(type) {
     const flags = _nullishCoalesce(_nullishCoalesce((_optionalChain([type, 'optionalAccess', _9523 => _9523.isTypeReference, 'optionalCall', _9524 => _9524()]) ? type.getTarget().elementFlags : void 0), () => ( _optionalChain([type, 'optionalAccess', _9525 => _9525.elementFlags]))), () => ( []));
     let required = 0;
@@ -47222,7 +47226,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (splitRead !== void 0) {
       return splitRead;
     }
-    if (this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type)) {
+    if (this.isJavaListStructureType(type)) {
       if (index >= this.tupleRequiredElementCount(type)) {
         return void 0;
       }
@@ -48518,7 +48522,7 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
     if (node.kind === _ast.SyntaxKind.ParenthesizedExpression) {
-      return this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
+      return widened ? this.javaWidenedNumericKind(node.expression) : this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
     }
     if (_is.isNumericLiteral.call(void 0, node)) {
       const text = node.text;
@@ -48747,9 +48751,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     return this.javaLengthKind(node.expression) !== void 0;
   }
   // the kind of a nested native `+` this rule prints, or undefined when it keeps the helper
+  // the numeric kind of one `+` operand; the embedding layer extends this operand table
+  javaWidenedNumericKind(node) {
+    return this.javaProvableNumericKind(node, true, true);
+  }
   javaWidenedAddKind(node) {
-    const leftKind = this.javaProvableNumericKind(node.left, true, true);
-    const rightKind = this.javaProvableNumericKind(node.right, true, true);
+    const leftKind = this.javaWidenedNumericKind(node.left);
+    const rightKind = this.javaWidenedNumericKind(node.right);
     if (leftKind === void 0 || rightKind === void 0) {
       return void 0;
     }
@@ -48757,8 +48765,8 @@ var JavaTranspiler = class extends BaseTranspiler {
   }
   // the native form of a numeric `+`, or undefined to keep Helpers.add
   printWidenedNativeAdd(left, right, leftText, rightText) {
-    const leftKind = this.javaProvableNumericKind(left, true, true);
-    const rightKind = this.javaProvableNumericKind(right, true, true);
+    const leftKind = this.javaWidenedNumericKind(left);
+    const rightKind = this.javaWidenedNumericKind(right);
     if (leftKind === void 0 || rightKind === void 0) {
       return void 0;
     }
