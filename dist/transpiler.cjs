@@ -53864,7 +53864,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   rustOwnedSelfWrite(node) {
     let up = node.parent;
     while (up !== void 0 && !_is.isStatement.call(void 0, up) && !(_is.isBinaryExpression.call(void 0, up) && up.operatorToken.kind === _ast.SyntaxKind.EqualsToken)) {
-      if (_chunkQUQI36POcjs.isFunctionLike.call(void 0, up) || _is.isConditionalExpression.call(void 0, up) || up.kind === _ast.SyntaxKind.ArrayLiteralExpression)
+      if (_chunkQUQI36POcjs.isFunctionLike.call(void 0, up) || _is.isConditionalExpression.call(void 0, up))
+        return false;
+      if (up.kind === _ast.SyntaxKind.ArrayLiteralExpression && !(_is.isBinaryExpression.call(void 0, up.parent) && up.parent.right === up && up.elements.includes(node)))
         return false;
       up = up.parent;
     }
@@ -70521,7 +70523,11 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return void 0;
     const params = this.rustCalleeParams(node);
     const optName = this.rustOptReaderPrint.has(node) ? this.rustOptReaderName(node) : void 0;
-    const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== void 0 || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : (at < fixed || this.rustReadEarlierInCall(node, at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `${a}` : this.rustSliceArgText(a));
+    const readEarlier = (at) => {
+      const arg = this.unwrapParens(node.arguments[at]);
+      return _is.isIdentifier.call(void 0, arg) && node.arguments.slice(0, at).some((e) => _is.isIdentifier.call(void 0, e) && e.text === arg.text);
+    };
+    const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== void 0 || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : (at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `${a}` : this.rustSliceArgText(a));
     if (optName !== void 0) {
       this.rustOptReaderPrinted.add(node);
       const head = optName.key !== void 0 ? [cloned[0], optName.key] : cloned.slice(0, fixed);
@@ -70538,11 +70544,6 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return void 0;
     const args = this.rustPrintedArgs(node, identation, params).map((a, at) => this.rustMarketSlot(params, at) ? a : this.rustSliceArgText(a));
     return _nullishCoalesce(this.rustSlotCallHead(node, args.join(", ")), () => ( `super.${methodName}(${args.join(", ")})`));
-  }
-  /** The same local is also a bare earlier argument of this call (`f(x, k, x)`): the later one is its last read. */
-  rustReadEarlierInCall(node, at) {
-    const arg = this.unwrapParens(node.arguments[at]);
-    return _is.isIdentifier.call(void 0, arg) && node.arguments.slice(0, at).some((e) => _is.isIdentifier.call(void 0, e) && e.text === arg.text);
   }
   rustSliceArgText(a) {
     return /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(a) && a !== "self" ? `${a}.clone()` : a;

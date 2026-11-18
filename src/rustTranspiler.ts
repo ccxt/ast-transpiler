@@ -575,7 +575,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustOwnedSelfWrite(node): boolean {
         let up: any = node.parent;
         while (up !== undefined && !isStatement(up) && !(isBinaryExpression(up) && up.operatorToken.kind === SyntaxKind.EqualsToken)) {
-            if (isFunctionLike(up) || isConditionalExpression(up) || up.kind === SyntaxKind.ArrayLiteralExpression) return false;
+            // a list literal is ordered only as the whole right side (`x = [x]`): never a reshaped `Promise.all` operand
+            if (isFunctionLike(up) || isConditionalExpression(up)) return false;
+            if (up.kind === SyntaxKind.ArrayLiteralExpression && !(isBinaryExpression(up.parent) && up.parent.right === up && up.elements.includes(node))) return false;
             up = up.parent;
         }
         if (up === undefined || !isBinaryExpression(up) || up.parent?.kind !== SyntaxKind.ExpressionStatement || !isIdentifier(up.left)) return false;
@@ -17360,7 +17362,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (args.length < fixed || (args.length > 0 && args[args.length - 1].startsWith('&[') && !this.rustOmitLiteralKeys(node))) return undefined;
         const params = this.rustCalleeParams(node);
         const optName = this.rustOptReaderPrint.has(node) ? this.rustOptReaderName(node) : undefined;
-        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || this.rustReadEarlierInCall(node, at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
+        // the same local is also a bare earlier argument (`f(x, k, x)`): the later one is its last read
+        const readEarlier = (at: number): boolean => {
+            const arg: any = this.unwrapParens(node.arguments[at]);
+            return isIdentifier(arg) && node.arguments.slice(0, at).some((e: any) => isIdentifier(e) && e.text === arg.text);
+        };
+        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
         if (optName !== undefined) {
             // ral-62o: the `Option<String>` twin of the reader, chosen from the call node (`_k` when the key is a plain literal)
             this.rustOptReaderPrinted.add(node);
@@ -17378,12 +17385,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (params === undefined || !params.some((_p: any, at: number) => this.rustMarketSlot(params, at))) return undefined;
         const args = this.rustPrintedArgs(node, identation, params).map((a, at) => (this.rustMarketSlot(params, at) ? a : this.rustSliceArgText(a)));
         return this.rustSlotCallHead(node, args.join(', ')) ?? `super.${methodName}(${args.join(', ')})`;
-    }
-
-    /** The same local is also a bare earlier argument of this call (`f(x, k, x)`): the later one is its last read. */
-    rustReadEarlierInCall(node, at: number): boolean {
-        const arg: any = this.unwrapParens(node.arguments[at]);
-        return isIdentifier(arg) && node.arguments.slice(0, at).some((e: any) => isIdentifier(e) && e.text === arg.text);
     }
 
     rustSliceArgText(a: string): string {
