@@ -11963,6 +11963,10 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.EthEncodeStructuredData": "[]uint8",
   // exchange_market_type.go (hand-written)
   "this.MarketSymbols": "[]string",
+  // absent input answers a nil slice
+  "this.MarketCodes": "[]any",
+  // exchange_prediction.go, retyped `string` on its only return path
+  "this.ShortenSlug": "string",
   "this.Capitalize": "string",
   "this.Uuid16": "string",
   "this.Uuid22": "string",
@@ -44106,6 +44110,16 @@ function goListElementIsPlainValue(goTranspiler, node) {
   GoTranspiler.prototype.goGb08BoundedListRead = function(node, keyNode) {
     const shipped = gb08Bounded.call(this, node, keyNode);
     return shipped === "deref" && this.goListElementsArePointerFree(node.expression) ? "native" : shipped;
+  };
+}
+{
+  const inlineEquality = GoTranspiler.prototype.printInlineEquality;
+  const isNil = (node) => node?.kind === SyntaxKind5.UndefinedKeyword || node?.kind === SyntaxKind5.NullKeyword || node?.kind === SyntaxKind5.Identifier && node.text === "undefined";
+  GoTranspiler.prototype.printInlineEquality = function(left, right, leftText, rightText, isEq) {
+    if (isNil(right) && this.goDeclaredTypeOfIdentifier(left) === "string" || isNil(left) && this.goDeclaredTypeOfIdentifier(right) === "string") {
+      return isEq ? "false" : "true";
+    }
+    return inlineEquality.call(this, left, right, leftText, rightText, isEq);
   };
 }
 

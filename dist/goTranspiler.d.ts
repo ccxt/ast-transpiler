@@ -35,6 +35,8 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.StringToCharsArray': string;
     'this.EthEncodeStructuredData': string;
     'this.MarketSymbols': string;
+    'this.MarketCodes': string;
+    'this.ShortenSlug': string;
     'this.Capitalize': string;
     'this.Uuid16': string;
     'this.Uuid22': string;

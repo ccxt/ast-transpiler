@@ -18842,3 +18842,32 @@ describe('safeMarket binds its marketId slot as *string', () => {
         expect(go).not.toContain('var marketId *string');
     });
 });
+
+describe('hand-written marketCodes / shortenSlug results print native nil tests', () => {
+    const emit = (body: string): string => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        const input = "class T {\n" +
+            "    marketCodes (codes: string[] = undefined): string[] { return codes; }\n" +
+            "    shortenSlug (s: string): string { return s; }\n" +
+            "    other (s: string): any { return s; }\n" +
+            "    f (codes: string[], name: string) {\n" + body + "    }\n}\n";
+        return inst.transpileGo(input).content;
+    };
+    test('a marketCodes local is a []any and its nil test is native', () => {
+        const out = emit("        const v = this.marketCodes (codes);\n        if (v === undefined) { return 1; }\n        return v;\n");
+        expect(out).toContain('var v []any = this.MarketCodes(codes)');
+        expect(out).toContain('v == nil');
+        expect(out).not.toContain('IsEqual(v, nil)');
+    });
+    test('a shortenSlug local is a string whose nil test is constant', () => {
+        const out = emit("        const s = this.shortenSlug (name);\n        if ((s !== undefined) && (s !== '')) { return s; }\n        return '';\n");
+        expect(out).toContain('var s string = this.ShortenSlug(name)');
+        expect(out).toContain('(true) && (s != "")');
+        expect(out).not.toContain('IsEqual(s, nil)');
+    });
+    test('an untyped result keeps the helper nil test', () => {
+        const out = emit("        const s = this.other (name);\n        if (s !== undefined) { return s; }\n        return '';\n");
+        expect(out).toContain('IsEqual(s, nil)');
+    });
+});
