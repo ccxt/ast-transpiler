@@ -3634,8 +3634,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (declared.routed === true) {
             // an owner-routed ws cache (the accessors hand the value to the ws owner): membership and size go
             // through the interface the property declares; its element reads stay with the ws cache layer
-            return /^IDictionary<string, object>$/.test(type)
-                ? { text: printed, type, kind: 'dict', declared: false, routed: true, nullTest: printed }
+            // a typed-row cache (`IDictionary<string, IDictionary<string, object>>`) keys the same way
+            return /^IDictionary<string, (?:object|IDictionary<string, object>)>$/.test(type)
+                ? { text: printed, type: 'IDictionary<string, object>', kind: 'dict', declared: false, routed: true, nullTest: printed }
                 : undefined;
         }
         if (CSHARP_LIST_DECLARATION.test(type)) {

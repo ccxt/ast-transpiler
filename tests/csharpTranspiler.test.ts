@@ -8093,6 +8093,24 @@ describe ('csharp object-key ws cache reads', () => {
             expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
             expect(out).not.toContain('getValue(this.ohlcvs');
         });
+        test('a typed-row routed ws cache keys like the object cache', () => {
+            DECLARED['ohlcvs'] = { type: 'IDictionary<string, IDictionary<string, object>>', initializer: 'null', routed: true };
+            try {
+                const out = printed('        return this.ohlcvs[symbol];', 'string?');
+                expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
+                expect(out).not.toContain('getValue(this.ohlcvs');
+            } finally {
+                DECLARED['ohlcvs'] = { type: 'IDictionary<string, object>', initializer: 'null', routed: true };
+            }
+        });
+        test('a routed ws cache of another element type keeps the helper', () => {
+            DECLARED['ohlcvs'] = { type: 'IDictionary<string, List<object>>', initializer: 'null', routed: true };
+            try {
+                expect(printed('        return this.ohlcvs[symbol];', 'string?')).toContain('getValue(this.ohlcvs, symbol)');
+            } finally {
+                DECLARED['ohlcvs'] = { type: 'IDictionary<string, object>', initializer: 'null', routed: true };
+            }
+        });
         test('orderbooks keeps the helper the ws transpile maps to getOrderBook', () => {
             expect(printed('        return this.orderbooks[symbol];', 'string?')).toContain('getValue(this.orderbooks, symbol)');
         });
