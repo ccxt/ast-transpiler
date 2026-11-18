@@ -17771,6 +17771,57 @@ describe('an async venue Str parameter fed pointers and unwritten string paramet
     });
 });
 
+describe('a venue Str parameter whose method name is quoted only as an inert option key', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'str-ptr-quoted-name-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (mention: string, fixture?: string): string => {
+        const dir = path.join(tmp, 'ts', 'src');
+        fs.rmSync(path.join(tmp, 'ts'), { 'recursive': true, 'force': true });
+        fs.mkdirSync(path.join(dir, 'base'), { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), 'export type Str = string | undefined;\nexport class Exchange {\n'
+            + '    safeString (a: any, b: any, c: any = undefined): Str { return c; }\n'
+            + '    handleOptionAndParams (p: any, m: string, k: string): any[] { return [ undefined, p ]; }\n}\n');
+        if (fixture !== undefined) {
+            fs.mkdirSync(path.join(dir, 'test', 'static'), { 'recursive': true });
+            fs.writeFileSync(path.join(dir, 'test', 'static', 'ex.json'), fixture);
+        }
+        const file = path.join(dir, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, Str } from './base/Exchange';\nexport class ex extends Exchange {\n"
+            + '    async zero (o: object) {\n' + mention + "        const side = this.safeString (o, 'side');\n        return await this.buildRequest (side);\n    }\n"
+            + "    async buildRequest (side: Str) {\n        if (side === 'sell') {\n            return 1;\n        }\n        return 2;\n    }\n}\n");
+        const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoLocalTypes(inst.goTranspiler);
+        const cwd = process.cwd();
+        process.chdir(tmp);
+        try {
+            return inst.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    test('an option-reader argument naming the method keeps the pointer proof', () => {
+        const output = run("        const r = this.handleOptionAndParams (o, 'buildRequest', 'x');\n");
+        expect(output).toContain('buildRequestBody(ch chan any, side *string)');
+        expect(output).toContain('side != nil && *side == "sell"');
+        expect(output).not.toContain('IsEqual(side');
+    });
+    test('an object key naming the method keeps the pointer proof', () => {
+        const output = run("        const opts = { 'buildRequest': true };\n");
+        expect(output).toContain('buildRequestBody(ch chan any, side *string)');
+    });
+    test('a quoted name that may be dispatched keeps the box', () => {
+        const output = run("        const name = 'buildRequest';\n");
+        expect(output).toContain('buildRequestBody(ch chan any, side any)');
+        expect(output).not.toContain('*side == "sell"');
+    });
+    test('a test fixture naming the method keeps the box', () => {
+        const output = run("        const opts = { 'buildRequest': true };\n", '{ "methods": { "buildRequest": [] } }');
+        expect(output).toContain('buildRequestBody(ch chan any, side any)');
+    });
+});
+
 describe('ral-93g7 ternary joins over int / int64 operands', () => {
     const head = 'type Int = number | undefined;\n'
         + 'class BaseExchange {\n'

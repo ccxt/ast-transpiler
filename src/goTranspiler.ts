@@ -10619,28 +10619,100 @@ function installStringPtrParamProof (goTranspiler) {
 // the method is reached only through plain `this.<name> (..)` calls: no file of the tree quotes the name
 // (dispatch by string), and in the files of the class's own lineage every code mention is a call or the declaration
 function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass) {
-    const quoted = new RegExp ('[\'"`]' + name + '[\'"`]');
     const anyRef = new RegExp ('(?<![\\w$])' + name + '(?![\\w$])', 'g');
     const direct = new RegExp ('\\bthis\\s*\\.\\s*' + name + '\\s*\\(', 'g');
     const declared = new RegExp ('^ {4}(?:(?:async|public|private|protected|override) )*' + name + ' \\(', 'gm');
+    if (goNameInTestFixtures (tree, name)) {
+        return false; // the static/ws test runners dispatch fixture method names by string
+    }
     for (const [ file, text ] of tree.fileText) {
         if (!text.includes (name)) {
             continue;
         }
-        if (quoted.test (text)) {
+        if (!goQuotedNameNeverDispatched (file, text, name)) {
             return false;
         }
         if (!go.goTsSrcFileDerivesFrom (tree, file, myClass)) {
             continue;
         }
-        const code = text.replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, '');
+        const code = goMaskTsStrings (text.replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, ''));
         const refs = (code.match (anyRef) ?? []).length;
         const calls = (code.match (direct) ?? []).length + (code.match (declared) ?? []).length;
         if (refs !== calls) {
-            return false; // a method reference, a foreign receiver or a doc mention: fail closed
+            return false; // a method reference or a foreign receiver: fail closed
         }
     }
     return true;
+}
+
+// a quoted method name is inert as an object key, a comparison operand, or a direct argument of a base
+// option/accessor reader (none of them index `this` by its argument); any other quote, and any quote in a
+// test file, may reach `this[name] (..)` / fetchPaginatedCall* / CallInternal with an untyped box
+const GO_INERT_NAME_READERS = /^(?:handle\w*AndParams\w*|safe\w*|getBybitType|handleStockParams|handleApiKeyIndex|handleAccountIndex|handleRouteAndParams)$/;
+function goQuotedNameNeverDispatched (file: string, text: string, name: string): boolean {
+    const quoted = new RegExp ('[\'"`]' + name + '[\'"`]', 'g');
+    let m: RegExpExecArray | null;
+    while ((m = quoted.exec (text)) !== null) {
+        if (/^(?:pro\/)?test\//.test (file)) {
+            return false;
+        }
+        const before = text.substring (Math.max (0, m.index - 200), m.index);
+        const after = text.substring (m.index + m[0].length, m.index + m[0].length + 8);
+        const key = /[{,]\s*$/.test (before) && /^\s*:/.test (after);
+        const compared = /^\s*(?:===|!==|==|!=)/.test (after) || /(?:===|!==|==|!=)\s*$/.test (before);
+        if (key || compared) {
+            continue;
+        }
+        const call = /\bthis\s*\.\s*([A-Za-z_$][\w$]*)\s*\(\s*(?:[A-Za-z_$][\w$.]*\s*,\s*)?$/.exec (before);
+        if ((call !== null) && GO_INERT_NAME_READERS.test (call[1])) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+// string literal bodies blanked (quotes kept): an error message naming the method is not a reference
+function goMaskTsStrings (code: string): string {
+    return code.replace (/'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"/g, (q) => q[0] + ' '.repeat (q.length - 2) + q[0]);
+}
+
+// the JSON fixtures under test/ name the methods the static request/response and ws runners call by string
+const GO_FIXTURE_TEXT_CACHE = new Map<any, string> ();
+function goNameInTestFixtures (tree, name: string): boolean {
+    let text = GO_FIXTURE_TEXT_CACHE.get (tree);
+    if (text === undefined) {
+        const anyFile = [ ...tree.relativeOf.entries () ][0];
+        const root = (anyFile === undefined) ? undefined : anyFile[0].substring (0, anyFile[0].length - anyFile[1].length);
+        const chunks: string[] = [];
+        const walk = (dir: string) => {
+            let entries;
+            try {
+                entries = fs.readdirSync (dir, { withFileTypes: true });
+            } catch (e) {
+                return;
+            }
+            for (const entry of entries) {
+                const full = path.join (dir, entry.name);
+                if (entry.isDirectory ()) {
+                    walk (full);
+                } else if (entry.name.endsWith ('.json')) {
+                    try {
+                        chunks.push (fs.readFileSync (full, 'utf8'));
+                    } catch (e) {
+                        // unreadable fixture: nothing to add
+                    }
+                }
+            }
+        };
+        if (root !== undefined) {
+            walk (path.join (root, 'test'));
+            walk (path.join (root, 'pro', 'test'));
+        }
+        text = chunks.join ('\n');
+        GO_FIXTURE_TEXT_CACHE.set (tree, text);
+    }
+    return text.includes ('"' + name + '"');
 }
 
 function goStringPtrParamProven (go, param) {
