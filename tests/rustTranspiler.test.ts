@@ -8731,13 +8731,13 @@ describe('rust ws client handle', () => {
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('a client local served only by the handle is declared as the handle', () => {
-        expect(out).toContain('let mut client: crate::pro::ws_client::ClientHandle = crate::pro::ws_client::ClientHandle::from_value(self.client(');
+        expect(out).toContain('let mut client: crate::pro::ws_client::ClientHandle = crate::pro::ws_client::ClientHandle::from_value(&self.client(');
         expect(out).toContain('if !(client.has_subscription(&messageHash)) {');
         expect(out).toContain('client.add_subscription(&messageHash, Value::Bool(true))');
         expect(out).toContain('(client).futures.clone()');
     });
     test('a client parameter binds the handle once and reads through it', () => {
-        expect(out).toMatch(/let mut __ch = crate::pro::ws_client::ClientHandle::from_value\(client\.clone\(\)\);\n\s*if \(__ch\.has_subscription\(&messageHash\)\) \{/);
+        expect(out).toMatch(/let mut __ch = crate::pro::ws_client::ClientHandle::from_value\(&client\);\n\s*if \(__ch\.has_subscription\(&messageHash\)\) \{/);
         expect(out).toContain('__ch.remove_subscription(&messageHash)');
         expect(out).toContain('if (__ch.has_future(&messageHash)) {');
     });
@@ -8745,7 +8745,7 @@ describe('rust ws client handle', () => {
         expect(out).toContain('__ch.url.as_str().unwrap_or("").contains("spot")');
     });
     test('a field read after a write of that field keeps the live lookup', () => {
-        expect(out).toContain('let mut __ch = crate::pro::ws_client::ClientHandle::from_value(client.clone());');
+        expect(out).toContain('let mut __ch = crate::pro::ws_client::ClientHandle::from_value(&client);');
         expect(out).toContain('let mut left: Value = client.subscriptions;');
     });
 });

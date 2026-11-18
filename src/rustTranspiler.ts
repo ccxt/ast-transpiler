@@ -9733,7 +9733,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (plan === undefined || plan.kind !== 'local' || plan.decl !== declaration) return undefined;
         const indent = this.getIden(identation);
         const type = RustTranspiler.RUST_CLIENT_HANDLE_TYPE;
-        if (plan.typed) return `${indent}let mut client: ${type} = ${type}::from_value(${this.printNode(declaration.initializer, 0).trim()})`;
+        if (plan.typed) return `${indent}let mut client: ${type} = ${type}::from_value(&${this.printNode(declaration.initializer, 0).trim()})`;
         this.rustClientHandleDeclPrinting = true;
         let text: string;
         try {
@@ -9752,7 +9752,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustClientHandleFinish(method: any, statements: string, identation: number): { statements: string, head: string } {
         const mark = RustTranspiler.RUST_CLIENT_HANDLE_MARK;
         const plan = this.rustClientHandlePlan(method);
-        const binding = (indent: string) => `${indent}let ${plan.mut ? 'mut ' : ''}__ch = ${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}::from_value(client.clone())`;
+        const binding = (indent: string) => `${indent}let ${plan.mut ? 'mut ' : ''}__ch = ${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}::from_value(&client)`;
         if (plan === undefined || plan.typed) return { statements, head: '' };
         if (plan.kind === 'param') return { statements, head: plan.touched ? `${binding(this.getIden(identation + 2))};\n` : '' };
         return { statements: statements.split(mark).join(plan.touched ? `;\n${binding(plan.indent)}` : ''), head: '' };
