@@ -18757,3 +18757,26 @@ class x {
         expect(transpiler.transpileGo(src('const row: Dict = m[s];', 'return row[tf];', 's = s + tf;')).content).toMatch(/\brow\b/);
     });
 });
+
+describe('safeMarket binds its marketId slot as *string', () => {
+    const src = (body: string) => `class x {
+    safeMarket (marketId: Str = undefined, market: Market = undefined, delimiter: Str = undefined, marketType: Str = undefined): any {
+        if (marketId !== undefined) {
+            ${body}
+        }
+        return market;
+    }
+}`;
+    test('split / indexOf reads under the nil guard keep the pointer', () => {
+        const go = transpiler.transpileGo(src('const parts = marketId.split (\'-\'); const i = marketId.indexOf (\'-C\'); return [ parts, i ];')).content;
+        expect(go).toContain('var marketId *string = GetArgStringPtr(optionalArgs, 0, nil)');
+    });
+    test('another method with the same read keeps the box', () => {
+        const go = transpiler.transpileGo(src('const parts = marketId.split (\'-\'); return parts;').replace('safeMarket', 'otherMarket')).content;
+        expect(go).not.toContain('var marketId *string');
+    });
+    test('a bare read handed on as any keeps the box', () => {
+        const go = transpiler.transpileGo(src('const parts = marketId.split (\'-\'); return marketId;')).content;
+        expect(go).not.toContain('var marketId *string');
+    });
+});

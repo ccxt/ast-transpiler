@@ -5125,6 +5125,8 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     // typed/typed-by-ABI methods of the port: GetArg derefs, so a pointer or a container reads
     // exactly like the raw value (measured consumers)
     'Market': '*', 'MarketId': '*', 'Currency': '*', 'MarketSymbols': '*',
+    // every override reads its `symbol any` only through Split/GetIndexOf/EndsWith (deref)
+    'CreateExpiredOptionMarket': '*',
     'PriceToPrecision': '*', 'AmountToPrecision': '*', 'DecimalToPrecision': '*',
     'ImplodeParams': '*', 'ParseTimeframe': {'0': 'unsafe'},
     'HandleOptionAndParams': '*', 'HandleMarketTypeAndParams': '*', 'HandleSubTypeAndParams': '*',
@@ -13709,6 +13711,11 @@ function goBalancedSliceArgs (text: string, open: number): string[] | undefined 
 
 // implicit endpoints pass api (['v1', 'private']) and params (a list for batch orders) untyped;
 // exchange overrides of sign/fetch2/request usually omit the base `api: any` annotation
+// string methods whose Go print (helper or nil-guarded native) reads a *string receiver as its value
+const GO_STRING_PTR_SAFE_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith' ];
+// methods whose every such read sits under a `marketId !== undefined` guard
+const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket' ];
+
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'fetch2': [ 1, 3 ],
     'request': [ 1, 3 ],
@@ -25989,6 +25996,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if (nilable && !pointer && this.goGetArgPassesIntoContainerDefault(callee, argIndex)) {
                     return false;
                 }
+                return true;
+            }
+            // `x.split (..)` / `x.indexOf (..)` on a *string: the native form is nil-guarded, the helper derefs
+            if ((goType === '*string') && GO_STRING_PTR_METHOD_PARAMS.includes(param.parent?.name?.text) && (parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
+                && GO_STRING_PTR_SAFE_METHODS.includes(parent.name?.text) && (parent.parent?.kind === SyntaxKind.CallExpression)
+                && (parent.parent.expression === parent)) {
                 return true;
             }
             // `_ = x` and other inert statements
