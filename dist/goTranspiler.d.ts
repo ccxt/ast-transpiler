@@ -1190,6 +1190,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBoundIdentifierType(arg: any): string | undefined;
     goUncalledStringParameterType(param: any): string | undefined;
     goSiblingPassesUnifiedString(argText: string, fileText: string, at: number | undefined): boolean;
+    goSiblingRequiredStringParam(argText: string, tree: any, file: string, at: number | undefined): boolean;
     goNilProvenStringPtrArg(arg: any): boolean;
     goSafeStringLiteralDefaultCall(call: any): boolean;
     goHasExitingNilGuard(ident: any): boolean;
