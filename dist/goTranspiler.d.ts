@@ -797,6 +797,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
+    goPushedStringPointerIsNonNil(pushNode: any): boolean;
     goResolvedLocalGoType(receiver: any): string | undefined;
     goStringListAppendsAString(pushNode: any): boolean;
     goStringValueNodeIsProven(node: any): boolean;

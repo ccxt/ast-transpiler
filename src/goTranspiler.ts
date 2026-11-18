@@ -15484,6 +15484,24 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return this.printNode(receiver, 0);
     }
 
+    // `x.push(id)` on a native []any local with a `*string` id that a nil test proves non-nil at the
+    // push: it prints `append(x, *id)`, so the list holds a plain string (DerefScalar's own answer)
+    goPushedStringPointerIsNonNil(pushNode): boolean {
+        const arg: any = pushNode?.arguments?.[0];
+        if (arg?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        // syntactic pre-filter: a type query on any other pushed local would poison its own typing
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
+            || ((init?.kind !== SyntaxKind.Identifier) && !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`)))) {
+            return false;
+        }
+        return (this.goNativeAppendReceiver(pushNode) !== undefined)
+            && this.goInOpPointerKeyProvenNonNil(pushNode.parent, arg);
+    }
+
     // the Go type of an identifier: the memoised verdict, or a fresh resolution when the cache
     // holds the `any` a nested query answered before the declaration printed
     goResolvedLocalGoType(receiver): string | undefined {
@@ -27354,6 +27372,9 @@ ${this.getIden(identation)}${returnStatement}`;
         // a `[]any` local is the slice itself, so it appends natively
         const nativeReceiver = this.goNativeAppendReceiver(node);
         if (nativeReceiver !== undefined) {
+            if (this.goPushedStringPointerIsNonNil(node) && /^\w+$/.test(parsedArg ?? '')) {
+                return `${nativeReceiver} = append(${nativeReceiver}, *${parsedArg})`;
+            }
             return `${nativeReceiver} = append(${nativeReceiver}, ${parsedArg})`;
         }
         // a map/slice index or a GetValue box is not addressable: copy it into a local first
@@ -28918,7 +28939,7 @@ ${tryBodyBlock}
                     return false;
                 }
                 if (method === 'push') {
-                    return call.arguments.every((a: any) => dictElement(a));
+                    return call.arguments.every((a: any) => dictElement(a)) || this.goPushedStringPointerIsNonNil(call);
                 }
                 return (method === 'pop') || (method === 'shift');
             }

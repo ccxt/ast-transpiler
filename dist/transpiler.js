@@ -25092,6 +25092,20 @@ func New${this.capitalize(this.className)}() *${this.className} {
     }
     return this.printNode(receiver, 0);
   }
+  // `x.push(id)` on a native []any local with a `*string` id that a nil test proves non-nil at the
+  // push: it prints `append(x, *id)`, so the list holds a plain string (DerefScalar's own answer)
+  goPushedStringPointerIsNonNil(pushNode) {
+    const arg = pushNode?.arguments?.[0];
+    if (arg?.kind !== SyntaxKind5.Identifier) {
+      return false;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    const init = this.goUnwrapParenthesizedNode(decl?.initializer);
+    if (decl?.kind !== SyntaxKind5.VariableDeclaration || this.goDeclaredTypeInProgress.has(decl) || init?.kind !== SyntaxKind5.Identifier && !(init?.kind === SyntaxKind5.CallExpression && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ""}`))) {
+      return false;
+    }
+    return this.goNativeAppendReceiver(pushNode) !== void 0 && this.goInOpPointerKeyProvenNonNil(pushNode.parent, arg);
+  }
   // the Go type of an identifier: the memoised verdict, or a fresh resolution when the cache
   // holds the `any` a nested query answered before the declaration printed
   goResolvedLocalGoType(receiver) {
@@ -35409,6 +35423,9 @@ ${this.getIden(identation)}${returnStatement}`;
     }
     const nativeReceiver = this.goNativeAppendReceiver(node);
     if (nativeReceiver !== void 0) {
+      if (this.goPushedStringPointerIsNonNil(node) && /^\w+$/.test(parsedArg ?? "")) {
+        return `${nativeReceiver} = append(${nativeReceiver}, *${parsedArg})`;
+      }
       return `${nativeReceiver} = append(${nativeReceiver}, ${parsedArg})`;
     }
     if (name?.startsWith("GetValue") || /[\])]$/.test(name ?? "")) {
@@ -36766,7 +36783,7 @@ ${this.getIden(level)}}()`;
           return false;
         }
         if (method === "push") {
-          return call.arguments.every((a) => dictElement(a));
+          return call.arguments.every((a) => dictElement(a)) || this.goPushedStringPointerIsNonNil(call);
         }
         return method === "pop" || method === "shift";
       }

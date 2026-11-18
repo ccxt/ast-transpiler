@@ -6899,6 +6899,26 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(scalar).toContain('DerefScalar(rows[i])');
     });
 
+    test('a nil-checked *string pushed into a []any local appends its value and the list reads drop DerefScalar', () => {
+        const hooked = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoHooks(hooked.goTranspiler);
+        const transpile = (ts: string) => squash(hooked.transpileGo(ts).content);
+        const cls = (body: string) =>
+            "class Test {\n    safeString (a, b) { return undefined; }\n    f (a: any, xs: any[]) {\n" + body + "        return a;\n    }\n}\n";
+        const loop = "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n";
+        const thrown = transpile(cls("        const rows: string[] = [];\n        for (let j = 0; j < xs.length; j++) {\n            const id = this.safeString (xs[j], 'id');\n            if (id === undefined) {\n                throw new Error ('x');\n            }\n            rows.push (id);\n        }\n" + loop));
+        expect(thrown).toContain('rows = append(rows, *id)');
+        expect(thrown).toContain('SafeStringPtr(rows[i])');
+        expect(thrown).not.toContain('DerefScalar(rows[i])');
+        const guarded = transpile(cls("        const rows: string[] = [];\n        const id = this.safeString (a, 'id');\n        if (id !== undefined) {\n            rows.push (id);\n        }\n" + loop));
+        expect(guarded).toContain('rows = append(rows, *id)');
+        expect(guarded).not.toContain('DerefScalar(rows[i])');
+        // negative: an unguarded pointer push keeps the pointer and DerefScalar
+        const bare = transpile(cls("        const rows: string[] = [];\n        const id = this.safeString (a, 'id');\n        rows.push (id);\n" + loop));
+        expect(bare).toContain('rows = append(rows, id)');
+        expect(bare).toContain('DerefScalar(rows[i])');
+    });
+
     test('pushed concatenations, case conversions and plain-typed locals drop DerefScalar', () => {
         const hooked = new Transpiler({ verbose: false, go: {} });
         installCcxtGoHooks(hooked.goTranspiler);
