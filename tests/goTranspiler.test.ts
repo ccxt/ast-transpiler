@@ -18842,3 +18842,23 @@ describe('safeMarket binds its marketId slot as *string', () => {
         expect(go).not.toContain('var marketId *string');
     });
 });
+
+describe('nested safeDict {}-default local reads the map natively', () => {
+    const go = (body: string) => {
+        const inst = new Transpiler({ 'verbose': false });
+        installCcxtGoLocalTypes((inst as any).goTranspiler);
+        return inst.transpileGo("class Exchange {\n    safeDict (a: any, b: any, c: any = undefined): any { return a; }\n" + body + "}\n").content;
+    };
+    test('an any container indexed by a string local prints two comma-ok assertions, no SafeMapTyped', () => {
+        const out = go("    f (fee: any, i: number) {\n        const rk = 'a' + i.toString ();\n        const r = this.safeDict (fee['n'], rk, {});\n        fee['z'] = r['z'];\n        return fee;\n    }\n");
+        expect(out).toContain('\tvar r map[string]any\n\tif rSrc, ok := GetValue(fee, "n").(map[string]any); ok {\n\t\tr, _ = rSrc[rk].(map[string]any)\n\t}\n');
+        expect(out).not.toContain('SafeMapTyped');
+    });
+    test('a non-string key, a missing default and a non-element container keep SafeMapTyped', () => {
+        const out = go("    f (fee: any, other: string | undefined, i: number) {\n        const b = this.safeDict (fee['n'], other, {});\n        fee['x'] = b['x'];\n        const c = this.safeDict (fee['n'], 'k');\n        fee['y'] = c['y'];\n        const rk = 'a' + i.toString ();\n        const d = this.safeDict (fee, rk, {});\n        fee['w'] = d['w'];\n        return fee;\n    }\n");
+        expect(out).toContain('var b map[string]any = SafeMapTyped(GetValue(fee, "n"), other)');
+        expect(out).toContain('var c map[string]any = SafeMapTyped(GetValue(fee, "n"), "k")');
+        expect(out).toContain('var d map[string]any = SafeMapTyped(fee, rk)');
+        expect(out).not.toContain(', ok := ');
+    });
+});

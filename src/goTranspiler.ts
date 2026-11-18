@@ -6736,6 +6736,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoTupleResults (goTranspiler);
     installSelfMapWrites (goTranspiler);
     installB02SafeBalanceLocals (goTranspiler); // safeBalance map locals
+    installCcxtGoNestedSafeDictRead (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
@@ -37722,3 +37723,54 @@ function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
     };
 }
 // ===== list elements: plain pushed values (end) =====
+
+// `const d = this.safeDict (c[k1], k2, {})` with `c[k1]` an `any` and `k2` a string, typed map local: the
+// SafeMapTyped read becomes two comma-ok map assertions (a non-map container or member answers nil, as
+// SafeValue / SafeMapTyped do; the `{}` default is dropped exactly as for the SafeMapTyped form)
+function installCcxtGoNestedSafeDictRead (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoNestedSafeDictReadInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const shipped = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const printed = shipped.call (this, node, identation);
+        const declaration = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const call = declaration?.initializer;
+        if ((typeof printed !== 'string') || (declaration?.name?.kind !== ts.SyntaxKind.Identifier) || (call?.kind !== ts.SyntaxKind.CallExpression)
+            || (call.expression?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== ts.SyntaxKind.ThisKeyword)
+            || (call.expression.name?.text !== 'safeDict') || (call.arguments.length !== 3)
+            || (call.arguments[2].kind !== ts.SyntaxKind.ObjectLiteralExpression) || (call.arguments[2].properties.length !== 0)
+            || (call.arguments[0].kind !== ts.SyntaxKind.ElementAccessExpression)) {
+            return printed;
+        }
+        const checker = (typeof this.checkerOrUndefined === 'function') ? this.checkerOrUndefined () : undefined;
+        const containerType = checker?.getTypeAtLocation (call.arguments[0]);
+        const keyType = checker?.getTypeAtLocation (call.arguments[1]);
+        if ((containerType === undefined) || (keyType === undefined) || ((containerType.flags & ts.TypeFlags.Any) === 0)
+            || ((keyType.flags & ts.TypeFlags.StringLike) === 0) || ((keyType.flags & ts.TypeFlags.Union) !== 0)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const match = /^(\t*)var (\w+) map\[string\]any = SafeMapTyped\((.*)\)$/.exec (printed.replace (/^\n+/, ''));
+        const key = this.printNode (call.arguments[1], 0);
+        // the key must print as a native Go string: a local declared `string`, or an index into a `[]string` local
+        const keyNode = call.arguments[1];
+        const keyRoot = (keyNode.kind === ts.SyntaxKind.ElementAccessExpression) ? keyNode.expression : keyNode;
+        const keyGoType = (typeof this.goDeclaredTypeOfIdentifier === 'function') ? this.goDeclaredTypeOfIdentifier (keyRoot) : undefined;
+        const keyIsString = (keyNode === keyRoot) ? ((keyGoType === 'string') && /^\w+$/.test (key))
+            : ((keyGoType === '[]string') && /^\w+\[\w+\]$/.test (key));
+        if (!keyIsString || (match === null) || (match[2] !== name) || !match[3].endsWith (', ' + key)) {
+            return printed;
+        }
+        const container = match[3].substring (0, match[3].length - key.length - 2);
+        const source = name + 'Src';
+        if (container.includes (source) || key.includes (source)) {
+            return printed;
+        }
+        const ind = match[1];
+        return ind + 'var ' + name + ' map[string]any\n'
+            + ind + 'if ' + source + ', ok := ' + container + '.(map[string]any); ok {\n'
+            + ind + '\t' + name + ', _ = ' + source + '[' + key + '].(map[string]any)\n'
+            + ind + '}';
+    };
+}
