@@ -8538,6 +8538,7 @@ describe('the base pair twins bind natively at every call site', () => {
         + '        return [ callerMethodName, paramsCallerMethodName ];\n    }\n'
         + '    safeString (a: any, b: any, c: any = undefined): Str { return a; }\n'
         + '    omit (a: any, b: any): Dict { return a; }\n'
+        + '    handleMaxEntriesPerRequestAndParams (method: string, n: any = undefined, params: Dict = {}): [any, any] { return [ n, params ]; }\n'
         + '    checkAddress (a: any, b: any = undefined, c: any = undefined): void {}\n}\n';
     const run = (body: string, own = false): string => {
         const dir = path.join(tmp, 'ts', 'src', 'base');
@@ -8594,6 +8595,11 @@ describe('the base pair twins bind natively at every call site', () => {
         // the option pair binds both results: no holder, no slot read
         expect(output).toContain('value, paramsOption1 := this.HandleOptionAndParams(params, "run", "o1")');
         expect(output).not.toContain('GetValue(valueparamsOption1Variable, 1)');
+    });
+    test('handleMaxEntriesPerRequestAndParams binds the hand-written Go pair', () => {
+        const output = run("        const [ limit, rest ] = this.handleMaxEntriesPerRequestAndParams ('run', undefined, params);\n        this.checkAddress (limit);\n        return rest;\n");
+        expect(output).toContain('limit, rest := this.HandleMaxEntriesPerRequestAndParams("run", nil, params)');
+        expect(output).not.toContain('GetValue(limitrestVariable');
     });
     test('the value slot of a base handleOptionAndParams holder reads by index', () => {
         const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        this.checkAddress (value);\n        return paramsOption1;\n");
