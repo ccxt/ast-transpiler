@@ -53599,6 +53599,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // the typed signature table (`Ticker`, `Order`, ..: a map at runtime) or a list of one, and every declaration of the name
     // in its venue family spells the same type. The local is then decided by the existing container-local rules.
     this.rustVenueContainerDecisions = /* @__PURE__ */ new WeakMap();
+    /** A local whose declaration printed `Value`, read through `impl KeyRead`: `&Value` reads the same map / list the clone held.
+     *  Refused when another argument of the call names the local (a moved default would conflict with the borrow). */
+    this.rustPlainValueDecls = /* @__PURE__ */ new WeakSet();
     this.rustOptBoolReading = false;
     this.rustOptReaderPrint = /* @__PURE__ */ new WeakSet();
     this.rustOptReaderPrinted = /* @__PURE__ */ new WeakSet();
@@ -55751,6 +55754,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return `${indent}let mut ${varName}: Option<String> = ${optRead}`;
       return `${indent}let mut ${varName}: Option<String> = ${parsedValue}${nativeStr ? "" : ".as_str().map(str::to_owned)"}`;
     }
+    if (node.declarations.length === 1)
+      this.rustPlainValueDecls.add(declaration);
     return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
   }
   /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
@@ -81382,7 +81387,28 @@ ${iden}}`;
       return `&*${text}`;
     if (this.rustUntilHeadReaderUse(node) && this.rustUntilHeadSlot(declaration))
       return `&${text}`;
-    return this.rustContainerBoxUses.get(node) !== void 0 && this.rustReadBearerKind(node) !== void 0 ? `&${text}` : void 0;
+    if (this.rustContainerBoxUses.get(node) !== void 0 && this.rustReadBearerKind(node) !== void 0)
+      return `&${text}`;
+    return this.rustPlainValueReaderLend(node, declaration, call) ? `&${text}` : void 0;
+  }
+  rustPlainValueReaderLend(node, declaration, call) {
+    if (this.rustTestTierSource(call) || !this.rustPlainValueDecls.has(declaration) || !_is.isIdentifier.call(void 0, declaration.name))
+      return false;
+    if (this.rustScalarLocalOf(node) !== void 0 || this.rustBytesLocal(declaration) || this.rustOptContainerLocals.has(declaration))
+      return false;
+    const init = this.unwrapParens(declaration.initializer);
+    if (init === void 0 || init.kind === _ast.SyntaxKind.NewExpression)
+      return false;
+    const name = String(declaration.name.text);
+    let named = false;
+    const visit = (n) => {
+      if (_is.isIdentifier.call(void 0, n) && String(n.text) === name)
+        named = true;
+      else
+        n.forEachChild(visit);
+    };
+    Array.from(call.arguments).slice(1).forEach((a) => visit(a));
+    return !named;
   }
   /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
   rustBorrowedDictSource(call) {

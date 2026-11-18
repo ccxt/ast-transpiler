@@ -2587,6 +2587,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${indent}let mut ${varName}: Option<String> = ${parsedValue}${nativeStr ? '' : '.as_str().map(str::to_owned)'}`;
         }
         // A callee returning `Option<String>` into a boxed local keeps the box.
+        if (node.declarations.length === 1) this.rustPlainValueDecls.add(declaration);
         return `${indent}let mut ${varName}: Value = ${nativeStr ? this.rustNativeStrValueBox(parsedValue) : parsedValue}`;
     }
 
@@ -28119,7 +28120,24 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustBearerReaderLend(node) && this.rustDictBearerDeclaration(node) !== undefined) return `&${text}`;
         if (this.rustMarketStoreElementOf(node) !== undefined) return `&*${text}`;
         if (this.rustUntilHeadReaderUse(node) && this.rustUntilHeadSlot(declaration)) return `&${text}`;
-        return this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined ? `&${text}` : undefined;
+        if (this.rustContainerBoxUses.get(node) !== undefined && this.rustReadBearerKind(node) !== undefined) return `&${text}`;
+        return this.rustPlainValueReaderLend(node, declaration, call) ? `&${text}` : undefined;
+    }
+
+    /** A local whose declaration printed `Value`, read through `impl KeyRead`: `&Value` reads the same map / list the clone held.
+     *  Refused when another argument of the call names the local (a moved default would conflict with the borrow). */
+    private rustPlainValueDecls = new WeakSet<any>();
+
+    rustPlainValueReaderLend(node: any, declaration: any, call: any): boolean {
+        if (this.rustTestTierSource(call) || !this.rustPlainValueDecls.has(declaration) || !isIdentifier(declaration.name)) return false;
+        if (this.rustScalarLocalOf(node) !== undefined || this.rustBytesLocal(declaration) || this.rustOptContainerLocals.has(declaration)) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (init === undefined || init.kind === SyntaxKind.NewExpression) return false;
+        const name = String(declaration.name.text);
+        let named = false;
+        const visit = (n: any) => { if (isIdentifier(n) && String(n.text) === name) named = true; else n.forEachChild(visit); };
+        Array.from(call.arguments).slice(1).forEach((a: any) => visit(a));
+        return !named;
     }
 
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */

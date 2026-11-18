@@ -6551,7 +6551,8 @@ describe('borrowed dict locals', () => {
     test('negative: a dict local that escapes to a Value slot keeps its box', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'borrowed-dict', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut kept: Value = ');
-        expect(out).not.toMatch(/safe_string_k(?:_opt)?\(&kept/);
+        // the box stays; its key read lends the Value instead of cloning it
+        expect(out).toMatch(/safe_string_k(?:_opt)?\(&kept, "k"/);
     });
 });
 
@@ -26820,5 +26821,18 @@ class x {
         expect(transpiler.transpileRust(src('const row: Dict = m[0];', 'row[\'a\'] = 1;\n        return row[\'b\'];')).content).toMatch(/\brow\b/);
         expect(transpiler.transpileRust(src('const row: Dict = m[0];', 'const a = row[\'a\'];\n        m = {};\n        return a;')).content).toMatch(/\brow\b/);
         expect(transpiler.transpileRust(src('const row: Dict = m[0];', 'return row;')).content).toMatch(/\brow\b/);
+    });
+});
+
+describe('plain Value locals lent to KeyRead readers', () => {
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-pvl-'));
+    fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+    fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o; }\n    hold (x: any): any { return x; }\n}\n");
+    fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThing (resp: any) {\n        const kept = this.hold (resp);\n        const a = this.safeString (kept, 'a');\n        const b = this.safeValue (kept, 'b', kept);\n        return this.hold ([ a, b, kept ]);\n    }\n}\n");
+    test('a Value local read by key is lent, and a call that also names it as the default keeps the clone', () => {
+        const out = transpiler.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content;
+        expect (out).toContain ('let mut kept: Value = self.hold(resp);');
+        expect (out).toContain ('self.safe_string_k_opt(&kept, "a", &[])');
+        expect (out).toContain ('(kept.clone(), Value::Str("b".into()), &[kept.clone()])');
     });
 });
