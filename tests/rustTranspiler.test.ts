@@ -2174,6 +2174,32 @@ describe('rust checker-typed native container access', () => {
         expect(output).not.toContain('Value::Int(0)');
     });
 
+    test('element length read on a split list bearer indexes the Vec natively', () => {
+        const ts =
+            "function h(txid: string) {\n" +
+            "    const parts = txid.split ('@');\n" +
+            "    if (parts[1].length > 1) { return parts[1]; }\n" +
+            "    return parts[0];\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let mut parts: Vec<Value> = ');
+        expect(output).toContain('parts.get(1).cloned().unwrap_or(Value::Null).len()');
+        expect(output).not.toContain('get_value(&parts');
+    });
+
+    test('element length read keeps the helper on an untyped receiver or a written list', () => {
+        const ts =
+            "function h(xs: any, s: string) {\n" +
+            "    const parts = s.split ('@');\n" +
+            "    parts[0] = 'x';\n" +
+            "    return xs[1].length + parts[1].length;\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('get_value(&xs, &Value::Int(1))');
+        expect(output).toContain('get_value(&parts, &Value::Int(1))');
+        expect(output).not.toContain('parts: Vec<Value>');
+    });
+
     test('array destructuring reassignment over a tuple emits native reads', () => {
         const ts =
             "function g(): [string, number] { return ['a', 1]; }\n" +

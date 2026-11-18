@@ -20509,7 +20509,8 @@ export class RustTranspiler extends BaseTranspiler {
         // One checker proof per chain: the emitted text replaces `get_value` only
         // when it is legal at the position the whole chain occupies.
         const selfWrite = isIdentifier(current) && this.rustDictBearerDeclaration(current) !== undefined ? this.rustBearerSelfWriteHost(node, String(current.text)) : undefined;
-        const nativeAllowed = this.isNativeAccessPositionSafe(node, selfWrite) && !this.isNativeWriteTargetBase(node);
+        const bearerLength = chain.length === 1 && this.rustReadBearerKind(current) === 'list' && this.rustElementLengthRead(node);
+        const nativeAllowed = (bearerLength || this.isNativeAccessPositionSafe(node, selfWrite)) && !this.isNativeWriteTargetBase(node);
         // A two-level bearer reads both levels in one lookup.
         if (nativeAllowed && chain.length === 2 && isIdentifier(current)) {
             const nested = this.rustNestedBearerRead(current, chain[0].argumentExpression, chain[1].argumentExpression);
@@ -35272,8 +35273,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (up !== undefined && (isDeleteExpression(up) || (isBinaryExpression(up) && up.left === root && rustIsAssignmentOperator(up.operatorToken.kind))
             || (isCallExpression(up) && up.expression === root)
             || up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression)) return false;
-        // The printer proves the position on the outermost chain node.
-        if (!this.isNativeAccessPositionSafe(root) || this.isNativeWriteTargetBase(root)) return false;
+        // The printer proves the position on the outermost chain node; `xs[i].length` is a pure read of the element.
+        const lengthRead = kind === 'list' && root === access && this.rustElementLengthRead(root);
+        if (!(lengthRead || this.isNativeAccessPositionSafe(root)) || this.isNativeWriteTargetBase(root)) return false;
         if (this.isWriteBackBindRead(access)) return false;
         const keyOk = this.rustReadBearerKeyOk(kind, access.argumentExpression);
         // stack-90r: remember a bearer admitted through the ral-90rb compare-left read (its declaration prints a move)
@@ -35284,6 +35286,15 @@ export class RustTranspiler extends BaseTranspiler {
             if (bearer !== undefined) this.rust90rCompareLeftBearers.add(bearer);
         }
         return keyOk;
+    }
+
+    /** `xs[i].length` read (not written, not stepped): the element read feeds `Value::len` alone. */
+    rustElementLengthRead(access: any): boolean {
+        const up: any = access.parent;
+        if (!isPropertyAccessExpression(up) || up.expression !== access || String(up.name.text) !== 'length') return false;
+        const top: any = up.parent;
+        return !(isCallExpression(top) && top.expression === up) && top?.kind !== SyntaxKind.PrefixUnaryExpression
+            && top?.kind !== SyntaxKind.PostfixUnaryExpression && !(isBinaryExpression(top) && top.left === up && rustIsAssignmentOperator(top.operatorToken.kind));
     }
 
     /** Key a read-only bearer serves natively: a literal string for a map, a
