@@ -6899,6 +6899,51 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(scalar).toContain('DerefScalar(rows[i])');
     });
 
+    test('pushed concatenations, case conversions and plain-typed locals drop DerefScalar', () => {
+        const hooked = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoHooks(hooked.goTranspiler);
+        const transpile = (ts: string) => squash(hooked.transpileGo(ts).content);
+        const cls = (body: string) =>
+            "class Test {\n    safeString (a, b) { return undefined; }\n    f (a: any, s: string) {\n" + body + "        return a;\n    }\n}\n";
+        const loop = "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n";
+        const concat = transpile(cls("        const rows = [];\n        rows.push ('x:' + this.safeString (a, 'k'));\n        rows.push (s.toLowerCase ());\n" + loop));
+        expect(concat).toContain('rows[i]');
+        expect(concat).not.toContain('DerefScalar(rows[i])');
+        const local = transpile(cls("        const rows = [];\n        const m = {};\n        rows.push (m);\n" + loop));
+        expect(local).not.toContain('DerefScalar(rows[i])');
+        // negatives: a pushed Safe* scalar local, a pushed conditional
+        const ptr = transpile(cls("        const rows = [];\n        const id = this.safeString (a, 'x');\n        rows.push (id);\n" + loop));
+        expect(ptr).toContain('DerefScalar(rows[i])');
+        const cond = transpile(cls("        const rows = [];\n        rows.push (a ? this.safeString (a, 'x') : 'y');\n" + loop));
+        expect(cond).toContain('DerefScalar(rows[i])');
+    });
+
+    test('a prediction-tier bounded read of a list fed plain pushed values drops DerefScalar', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h6g10-'));
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'prediction'), { recursive: true });
+        const file = path.join(dir, 'ts', 'src', 'prediction', 'ex.ts');
+        const body = (push: string) => "export default class Ex {\n    safeString (a, b) { return undefined; }\n    f (a: any, tags: string[]) {\n        const rows = [];\n"
+            + "        for (let i = 0; i < tags.length; i++) {\n            rows.push (" + push + ");\n        }\n"
+            + "        for (let wi = 0; wi < rows.length; wi++) {\n            a = a + rows[wi];\n        }\n        return a;\n    }\n}\n";
+        try {
+            process.chdir(dir);
+            const run = (push: string) => {
+                fs.writeFileSync(file, body(push));
+                const t = new Transpiler({ verbose: false, go: {} });
+                installCcxtGoHooks(t.goTranspiler);
+                return t.transpileGoByPath(file).content;
+            };
+            const lower = run('tags[i].toLowerCase ()');
+            expect(lower).toContain('rows[wi]');
+            expect(lower).not.toContain('DerefScalar(rows[wi])');
+            expect(run("this.safeString (a, 'x')")).toContain('DerefScalar(rows[wi])');
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     test('negative controls keep the guard closure', () => {
         // a counter that moves in the body
         expect(transpile(fixture("for (let i = 0; i < list.length; i++)", "i = i + 1; const v = list[i]; a += v;"))).toContain('if i >= 0 && i < len(list)');
@@ -12561,6 +12606,27 @@ describe ('goEndpointReceiveTypedView', () => {
         });
     });
 
+    describe('a venue list parameter fed an endpoint-receive []any local', () => {
+        const venueWith = (arg: string): string =>
+            "import Exchange from './abstract/ex.js';\n" +
+            "import { Dict } from './base/types.js';\n" +
+            'export default class ex extends Exchange {\n' +
+            '    parseRows (rows: Dict[]): number {\n        let n = 0;\n' +
+            '        for (let i = 0; i < rows.length; i++) {\n            n = n + 1;\n        }\n        return n;\n    }\n' +
+            '    async fetchRows (params = {}) {\n        const response = await this.' + arg + ' (params);\n' +
+            '        return this.parseRows (response);\n    }\n}\n';
+        test('takes []any and reads len natively', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith ('privateGetRows'));
+            expect (out).toMatch (/ParseRows\(rows \[\]any\)/);
+            expect (out).toContain ('len(rows)');
+            expect (out).not.toContain ('GetArrayLength(rows)');
+        });
+        test('a map receive argument keeps the box', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, venueWith ('privateGetOrdersId'));
+            expect (out).toMatch (/ParseRows\(rows any\)/);
+        });
+    });
+
     describe('a one-line []any endpoint receive is bound to a holder named after its target', () => {
         const venueWith = (body: string): string =>
             "import Exchange from './abstract/ex.js';\n" +
@@ -14015,7 +14081,7 @@ describe ('goPredictionBoundedListReads', () => {
             expect (out).not.toContain (GUARD);
         });
 
-        test('elements that are not provably dictionaries keep the DerefScalar but lose the guard', () => {
+        test('parse* and literal pushed elements are pointer-free and lose the guard', () => {
             const out = go (
                 '        const rows: any[] = [];\n' +
                 "        rows.push (this.parseRow (response['x']));\n" +
@@ -14024,7 +14090,7 @@ describe ('goPredictionBoundedListReads', () => {
                 '            const row = rows[i];\n' +
                 '            this.parseRow (row);\n' +
                 '        }');
-            expect (out).toContain ('DerefScalar(rows[i])');
+            expect (out).toContain ('var row any = rows[i]');
             expect (out).not.toContain (GUARD);
         });
 
@@ -17874,6 +17940,53 @@ describe('a venue Str parameter whose method name is quoted only as an inert opt
     });
 });
 
+describe('a GetArg-bound Str parameter handed to a venue Str parameter', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'str-ptr-getarg-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (extra: string): string => {
+        const dir = path.join(tmp, 'ts', 'src');
+        fs.rmSync(path.join(tmp, 'ts'), { 'recursive': true, 'force': true });
+        fs.mkdirSync(path.join(dir, 'base'), { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), 'export type Str = string | undefined;\nexport class Exchange {\n'
+            + '    safeValue (a: any, b: any): any { return a; }\n    currency (c: string): any { return {}; }\n}\n');
+        const file = path.join(dir, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, Str } from './base/Exchange';\nexport class ex extends Exchange {\n"
+            + "    async fetchDeposits (code: Str = undefined, params = {}) {\n        if (code === 'USDT') {\n            return 3;\n        }\n"
+            + "        return await this.fetchHelper ('deposits', code, params);\n    }\n"
+            + "    async fetchHelper (type: string, code: Str, params = {}) {\n        let currency = undefined;\n"
+            + '        if (code !== undefined) {\n            currency = this.currency (code);\n        }\n        return currency;\n    }\n' + extra + '}\n');
+        const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoLocalTypes(inst.goTranspiler);
+        const cwd = process.cwd();
+        process.chdir(tmp);
+        try {
+            return inst.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    test('both the GetArg binding and the callee parameter print *string', () => {
+        const output = run('');
+        expect(output).toContain('var code *string = GetArgStringPtr(optionalArgs, 0, nil)');
+        expect(output).toContain('code != nil && *code == "USDT"');
+        expect(output).toContain('fetchHelperBody(ch chan any, typeVar string, code *string');
+        expect(output).not.toContain('IsEqual(code');
+    });
+    test('another caller passing a box keeps both boxes', () => {
+        const output = run("    async other (o: any) {\n        return await this.fetchHelper ('x', this.safeValue (o, 'c'));\n    }\n");
+        expect(output).toContain('code := GetArg(optionalArgs, 0, nil)');
+        expect(output).toContain('fetchHelperBody(ch chan any, typeVar string, code any');
+        expect(output).not.toContain('*code == "USDT"');
+    });
+    test('a callee whose name may be dispatched keeps both boxes', () => {
+        const output = run("    async other () {\n        const m = 'fetchHelper';\n        return m;\n    }\n");
+        expect(output).toContain('code := GetArg(optionalArgs, 0, nil)');
+        expect(output).toContain('code any');
+    });
+});
+
 describe('ral-93g7 ternary joins over int / int64 operands', () => {
     const head = 'type Int = number | undefined;\n'
         + 'class BaseExchange {\n'
@@ -18500,5 +18613,125 @@ describe ('go []any table slot inline safeList argument', () => {
     });
     test('a non-empty default keeps SafeList', () => {
         expect(go(ts('[ 1 ]'), table)).not.toContain('SafeListSlice');
+    });
+});
+
+describe('a sibling Object.keys element proves a nullable string parameter', () => {
+    const BASE =
+        "export class Exchange {\n" +
+        "    safeString (a, b, c?) { return undefined; }\n" +
+        "    safeValue (a, b, c?) { return undefined; }\n" +
+        "}\n";
+    const EX =
+        "import { Exchange } from './base/Exchange';\n" +
+        "type Str = string | undefined;\n" +
+        "export class ex extends Exchange {\n" +
+        "    coinToId (coin: Str): Str {\n" +
+        "        if (coin === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        return coin.replace (':', '-');\n" +
+        "    }\n" +
+        "    use (o) {\n" +
+        "        return this.coinToId (this.safeString (o, 'coin'));\n" +
+        "    }\n" +
+        "}\n";
+    const run = (name: string, body: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), name));
+        const src = path.join(root, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE);
+        fs.writeFileSync(path.join(src, 'ex.ts'), EX);
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
+            "import { ex } from '../ex';\n" +
+            "export class expro extends ex {\n" +
+            "    handle (mids) {\n" + body +
+            "    }\n" +
+            "}\n");
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes((t as any).goTranspiler);
+            return [ t.transpileGoByPath(path.join(src, 'ex.ts')).content, t.transpileGoByPath(path.join(src, 'pro', 'ex.ts')).content ];
+        } finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    test('a key of Object.keys is a non-nil string at the sibling site', () => {
+        const [ venue, pro ] = run('okeys-pos-',
+            "        const keys = Object.keys (mids);\n" +
+            "        for (let i = 0; i < keys.length; i++) {\n" +
+            "            const name = keys[i];\n" +
+            "            this.coinToId (name);\n" +
+            "        }\n");
+        expect(venue).toContain('func (this *ex) CoinToId(coin *string) any {');
+        expect(venue).toContain('strings.Replace(*coin, ":", "-", 1)');
+        expect(pro).toContain('this.CoinToId(&name)');
+    });
+    test('an element of a list that is not Object.keys keeps the box', () => {
+        const [ venue ] = run('okeys-neg-list-',
+            "        const keys = this.safeValue (mids, 'k');\n" +
+            "        for (let i = 0; i < keys.length; i++) {\n" +
+            "            const name = keys[i];\n" +
+            "            this.coinToId (name);\n" +
+            "        }\n");
+        expect(venue).toContain('func (this *ex) CoinToId(coin any) any {');
+    });
+    test('a rebound key keeps the box', () => {
+        const [ venue ] = run('okeys-neg-rebind-',
+            "        const keys = Object.keys (mids);\n" +
+            "        for (let i = 0; i < keys.length; i++) {\n" +
+            "            let name = keys[i];\n" +
+            "            name = this.safeValue (mids, name);\n" +
+            "            this.coinToId (name);\n" +
+            "        }\n");
+        expect(venue).toContain('func (this *ex) CoinToId(coin any) any {');
+    });
+});
+describe('go asserted list row read at literal indexes', () => {
+    const src = (decl: string, use = 'result.push (row[1]);') => `class x {
+    conv (rows: number[][]): any {
+        const result = [];
+        for (let i = 0; i < rows.length; i++) {
+            ${decl}
+            ${use}
+        }
+        return result;
+    }
+}`;
+    test('the row is inlined back into its reads: no closure, no DerefScalar, no typed wrap', () => {
+        const go = transpiler.transpileGo(src('const row = rows[i] as any[];')).content;
+        expect(go).toContain('GetValue(GetValue(rows, i), 1)');
+        expect(go).not.toContain('func() any');
+        expect(go).not.toContain('DerefScalar');
+        expect(go).not.toContain('ArrayTyped');
+        expect(go).not.toMatch(/var row\b/);
+    });
+    test('a row written or read at a variable index keeps its local', () => {
+        expect(transpiler.transpileGo(src('const row = rows[i] as any[];', 'result.push (row[i]);')).content).toMatch(/var row\b/);
+        expect(transpiler.transpileGo(src('const row = rows[i] as any[];', 'row[0] = 1;')).content).toMatch(/var row\b/);
+    });
+    test('an unasserted row keeps its local', () => {
+        expect(transpiler.transpileGo(src('const row = rows[i];')).content).toMatch(/var row\b/);
+    });
+});
+
+describe('go asserted list row inside a base-file method', () => {
+    test('an inlined row read never prints a slice index or len on its source', () => {
+        const go = transpiler.transpileGo(`class x {
+    conv (rows: number[][], ms = false): any {
+        const result = [];
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i] as any[];
+            const ts = ms ? row[0] : (row[0] / 1000);
+            result.push (ts);
+            result.push (row[1]);
+        }
+        return result;
+    }
+}`).content;
+        expect(go).not.toMatch(/len\(GetValue/);
+        expect(go).not.toMatch(/GetValue\(rows, i\)\[/);
+        expect(go).toContain('GetValue(GetValue(rows, i), 1)');
     });
 });

@@ -1611,6 +1611,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBoundedLoopListRead(node: any): boolean;
     goSafeListContainerAdmitted(container: any): boolean;
     goListElementsArePointerFree(list: any, depth?: number): boolean;
+    goAssertedRowLocal(base: any): boolean;
+    goAssertedRowDeclaration(declaration: any): boolean;
+    goAssertedRows: WeakMap<any, boolean>;
+    printBlock(node: any, identation: any, chainBlock?: boolean): string;
+    goAssertedRowDeclarationUncached(declaration: any): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
     generatedListCallees: Set<string>;
     goHostListCalleeType(callee: string, initializer: any): string | undefined;

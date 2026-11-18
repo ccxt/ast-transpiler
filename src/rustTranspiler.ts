@@ -2636,13 +2636,16 @@ export class RustTranspiler extends BaseTranspiler {
             if (bearer !== 'list' || !this.rustReadBearerKeyOk('list', key)) return undefined;
             arm = 'bearer';
         } else {
-            if (this.printOptListElement(receiver, key) !== undefined || this.rustLentListUse(receiver) || this.rustParamShadowOf(receiver) !== undefined) return undefined;
-            if (this.rustVecLocalDeclarationOf(receiver) === undefined) return undefined;
+            // a list parameter shadow (`let xs = xs.as_array().unwrap_or(&__xs_empty)`) is a read-only slice borrow too
+            const shadowed = this.rustParamShadowOf(receiver) !== undefined;
+            if (this.printOptListElement(receiver, key) !== undefined || this.rustLentListUse(receiver) || (shadowed && this.rustParamShadowOf(receiver)!.kind === RUST_PARAM_SHADOWS.MAP)) return undefined;
+            if (!shadowed && this.rustVecLocalDeclarationOf(receiver) === undefined) return undefined;
+            if (shadowed && !(isIdentifier(key) && this.rustI64CounterUse(key))) return undefined;
             if (!isNumericLiteral(key) && (!this.isRustValueIndexKey(key) || this.isWriteBackBindRead(init))) return undefined;
             arm = 'vec';
         }
         const owner: any = this.rustDeclarationOfIdentifier(receiver);
-        if (owner === undefined || !isVariableDeclaration(owner) || !isIdentifier(owner.name)) return undefined;
+        if (owner === undefined || !(isVariableDeclaration(owner) || isParameterDeclaration(owner)) || !isIdentifier(owner.name)) return undefined;
         const scope = this.rustEnclosingFunction(declaration);
         if (scope === undefined || this.rustEnclosingFunction(owner) !== scope) return undefined;
         const readOnly = (n: any): boolean => {
@@ -3171,7 +3174,9 @@ export class RustTranspiler extends BaseTranspiler {
         const name = super.printIdentifier(node);
         if (local.kind === 'str' && (local.declaration.parent.flags & NodeFlags.Const) !== 0) return `Value::from(${name}.as_deref())`;
         // a by-value argument at its last use hands the string over
-        const moved = this.rustOwnedHandOff(node) && this.rustOwnedLastUse(node, local.declaration);
+        // (or as the value of an object-literal property: each property is an ordered insert)
+        const moved = (this.rustOwnedHandOff(node) || (node.parent?.kind === SyntaxKind.PropertyAssignment && node.parent.initializer === node))
+            && this.rustOwnedLastUse(node, local.declaration);
         return local.kind === 'str' ? `${name}${moved ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`
             : (local.kind === 'int' ? `Value::from(${name})` : `${name}.map(Value::from).unwrap_or(Value::Null)`);
     }
@@ -11270,7 +11275,9 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-59x: a string alias (`let y = x`) boxed as the value of the last property of an object literal that reads it
             // moves there, as its `Value` form did (rustOwnedLastUse orders the literal's inserts)
             // ral-84c R2: likewise a nil-declared `let x: Str = undefined` local (its `Value` form moved there too)
-            || (form === 'box' && (this.rust59xAliasDecl(local.declaration) || (isVariableDeclaration(local.declaration) && this.rust84cNilStrInKey(local.declaration)))
+            // a typed string local's last property read in an object literal moves too (each property is an ordered insert)
+            || (form === 'box' && (this.rust59xAliasDecl(local.declaration) || (isVariableDeclaration(local.declaration) && this.rust84cNilStrInKey(local.declaration))
+                || ((local.kind === 'str' || local.kind === 'ostr') && isVariableDeclaration(local.declaration)))
                 && node.parent?.kind === SyntaxKind.PropertyAssignment && node.parent.initializer === node && this.rustOwnedLastUse(node, local.declaration));
         const moved = last ? name : `${name}.clone()`;
         // a string boxed more than once is lent before its last box (`From<&str>`: the one copy the `Value` clone made)

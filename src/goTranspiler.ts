@@ -10594,6 +10594,29 @@ function nullableStringParam (goTranspiler, param) {
         && parts.every ((p) => (p.flags & (ts.TypeFlags.String | ts.TypeFlags.StringLiteral | ts.TypeFlags.Undefined | ts.TypeFlags.Null)) !== 0);
 }
 
+// a sibling-file argument `k` bound once in the same method as `const k = keys[i]` with
+// `const keys = Object.keys (..)`: Go ranges the keys into a []string, so `k` is a non-nil string
+function objectKeysElementArg (argText, fileText, at) {
+    const name = /^([A-Za-z_$][\w$]*)$/.exec ((argText ?? '').trim ())?.[1];
+    if ((name === undefined) || (at === undefined)) {
+        return false;
+    }
+    const head = fileText.substring (0, at);
+    const decls = [ ...head.matchAll (new RegExp ('(?:const|let)\\s+' + name + '\\s*=\\s*(\\w+)\\s*\\[\\s*\\w+\\s*\\];', 'g')) ];
+    const decl = decls[decls.length - 1];
+    if ((decl === undefined) || /^ {4}\}/m.test (head.substring (decl.index))) {
+        return false;
+    }
+    const list = decl[1];
+    const lists = [ ...head.substring (0, decl.index).matchAll (new RegExp ('(?:const|let)\\s+' + list + '\\s*=\\s*Object\\.keys\\s*\\(', 'g')) ];
+    const listDecl = lists[lists.length - 1];
+    if ((listDecl === undefined) || /^ {4}\}/m.test (head.substring (listDecl.index))) {
+        return false;
+    }
+    const rebind = new RegExp ('(?<![\\w.$])(?:' + name + '|' + list + ')\\s*=(?!=)');
+    return !rebind.test (head.substring (listDecl.index + listDecl[0].length).replace (decl[0], ''));
+}
+
 function installStringPtrParams (goTranspiler) {
     const upstreamSites = goTranspiler.goParameterCallSitesPassType;
     const upstreamArgType = goTranspiler.goPrintedArgType;
@@ -10620,7 +10643,8 @@ function installStringPtrParams (goTranspiler) {
                     continue;
                 }
                 const arg = site.args[index];
-                if ((arg === undefined) || !(self.goTextArgMatchesType (arg, '*string', site.file, tree) || textIsStringLiteral (arg))) {
+                if ((arg === undefined) || !(self.goTextArgMatchesType (arg, '*string', site.file, tree) || textIsStringLiteral (arg)
+                    || objectKeysElementArg (arg, tree.fileText.get (site.file) ?? '', site.at))) {
                     return false;
                 }
             }
@@ -10828,7 +10852,7 @@ function goStringPtrParamProven (go, param) {
         if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) {
             return false;
         }
-        if (isUndefined (arg)) {
+        if (isUndefined (arg) || goStringPtrAssumedArg (go, arg)) {
             continue;
         }
         const t = go.goPrintedArgType (arg);
@@ -10850,6 +10874,34 @@ function goStringPtrParamProven (go, param) {
         }
     }
     return go.goParameterBodyTakes (fn, param, '*string');
+}
+
+// a `Str = undefined` parameter bound by GetArgStringPtr and handed to a venue `Str` parameter: the two
+// proofs depend on each other, so the callee is proven with the GetArg parameter assumed `*string`
+// (the assumption only answers while that GetArg binding is itself being decided)
+const GO_STR_PTR_ASSUMED = new Set<any> ();
+function goStringPtrAssumedArg (go, arg): boolean {
+    if ((arg?.kind !== ts.SyntaxKind.Identifier) || (GO_STR_PTR_ASSUMED.size === 0)) {
+        return false;
+    }
+    const decl = go.goGetArgCalleeDeclaration (arg);
+    return (decl !== undefined) && GO_STR_PTR_ASSUMED.has (decl);
+}
+function goStringPtrFlowsIntoProvenParam (go, param, callee, argIndex: number): boolean {
+    const decl: any = go.goGetArgCalleeDeclaration (callee);
+    const target: any = (decl?.kind === ts.SyntaxKind.MethodDeclaration) ? decl.parameters?.[argIndex] : undefined;
+    if ((target === undefined) || (param?.kind !== ts.SyntaxKind.Parameter) || !nullableStringParam (go, param)) {
+        return false;
+    }
+    if (GO_STR_PTR_ASSUMED.has (param)) {
+        return goStringPtrParamProven (go, target);
+    }
+    GO_STR_PTR_ASSUMED.add (param);
+    try {
+        return goStringPtrParamProven (go, target);
+    } finally {
+        GO_STR_PTR_ASSUMED.delete (param);
+    }
 }
 
 // a Go `string` parameter or local that is never rebound is handed to a `*string` slot as `&x`:
@@ -25931,7 +25983,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 // GetArg folds a nil map box to its default, and a defaulted position binds through GetArg or its
                 // twins, which deref a pointer and fold a nil one: both read it as absent
                 if (verdict === 'unknown') {
-                    return ((nilable && (goType === 'map[string]any')) || pointer) && this.goGetArgPositionIsDefaulted(callee, argIndex);
+                    return ((nilable && (goType === 'map[string]any')) || pointer)
+                        && (this.goGetArgPositionIsDefaulted(callee, argIndex) || ((goType === '*string') && goStringPtrFlowsIntoProvenParam(this, param, callee, argIndex)));
                 }
                 if (nilable && !pointer && this.goGetArgPassesIntoContainerDefault(callee, argIndex)) {
                     return false;
@@ -26960,6 +27013,15 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIdentifier(node) {
+        const row: any = (node?.parent?.kind === SyntaxKind.ElementAccessExpression) && (node.parent.expression === node)
+            ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+        if ((row !== undefined) && (row.name !== node) && this.goAssertedRowDeclaration(row)) {
+            let init: any = row.initializer;
+            while ((init?.kind === SyntaxKind.ParenthesizedExpression) || (init?.kind === SyntaxKind.AsExpression)) {
+                init = init.expression;
+            }
+            return this.printNode(init, 0);
+        }
         const printed = super.printIdentifier(node);
         const parent: any = node.parent;
         if ((parent?.kind !== SyntaxKind.CallExpression) || !(parent.arguments ?? []).includes(node)) {
@@ -28716,7 +28778,8 @@ ${tryBodyBlock}
             }
             // a scalar that prints as a plain Go value: a literal or a proven Go string
             if ((value?.kind === SyntaxKind.StringLiteral) || (value?.kind === SyntaxKind.NumericLiteral)
-                || (value?.kind === SyntaxKind.NoSubstitutionTemplateLiteral) || this.goStringValueNodeIsProven(value)) {
+                || (value?.kind === SyntaxKind.NoSubstitutionTemplateLiteral) || this.goStringValueNodeIsProven(value)
+                || goListElementIsPlainValue(this, value)) {
                 return true;
             }
             try {
@@ -28822,6 +28885,102 @@ ${tryBodyBlock}
         });
     }
 
+    // `const row = rows[i] as T[]` read only as `row[N]`, with `rows` and `i` never rebound past the loop step: Go has no
+    // guarded read without a closure and a typed row costs a wrap, so the row is not declared and each read prints
+    // `rows[i][N]` exactly as before the assertion (GetValue's nil/out-of-range answers unchanged)
+    goAssertedRowLocal(base): boolean {
+        const declaration: any = (base?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.() : undefined;
+        return (declaration !== undefined) && this.goAssertedRowDeclaration(declaration);
+    }
+
+    goAssertedRowDeclaration(declaration): boolean {
+        if (this.goAssertedRows.has(declaration)) {
+            return this.goAssertedRows.get(declaration)!;
+        }
+        let ok = false;
+        try {
+            ok = this.goAssertedRowDeclarationUncached(declaration);
+        } catch (e) {
+            ok = false;
+        }
+        this.goAssertedRows.set(declaration, ok);
+        return ok;
+    }
+
+    goAssertedRows = new WeakMap<any, boolean>();
+
+    // the row's dropped declaration leaves no blank line behind
+    printBlock(node, identation, chainBlock = false) {
+        if (!(node?.statements ?? []).some((st: any) => (st.kind === SyntaxKind.VariableStatement) && (st.declarationList?.declarations?.length === 1)
+            && this.goAssertedRowDeclaration(st.declarationList.declarations[0]))) {
+            return super.printBlock(node, identation, chainBlock);
+        }
+        const printed = node.statements.map((st: any) => this.printNode(st, identation + 1)).filter((t: string, i: number) => (t !== '')
+            || (node.statements[i].kind !== SyntaxKind.VariableStatement));
+        return this.getBlockOpen(identation) + printed.join('\n') + this.getBlockClose(identation, chainBlock);
+    }
+
+    goAssertedRowDeclarationUncached(declaration): boolean {
+        const unwrap = (e: any): any => {
+            while (e?.kind === SyntaxKind.ParenthesizedExpression) {
+                e = e.expression;
+            }
+            return e;
+        };
+        const list: any = declaration?.parent;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (list?.kind !== SyntaxKind.VariableDeclarationList) || (list.declarations.length !== 1) || ((list.flags & NodeFlags.Const) === 0)
+            || (list.parent?.kind !== SyntaxKind.VariableStatement) || (list.parent.parent?.kind !== SyntaxKind.Block)) {
+            return false;
+        }
+        const init: any = unwrap(declaration.initializer);
+        if ((init?.kind !== SyntaxKind.AsExpression) || (init.type?.kind !== SyntaxKind.ArrayType)) {
+            return false;
+        }
+        const row: any = unwrap(init.expression);
+        const rows: any = row?.expression;
+        const key: any = row?.argumentExpression;
+        if ((row?.kind !== SyntaxKind.ElementAccessExpression) || (rows?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        const scope: any = this.goEnclosingFunction(declaration);
+        const checker: any = this.checkerOrUndefined();
+        if ((scope === undefined) || (checker === undefined)) {
+            return false;
+        }
+        const declOf = (n: any): any => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const rowsDecl = declOf(rows);
+        const keyDecl = declOf(key);
+        // the counter of the enclosing `for`: its only write is the loop step
+        const loop: any = keyDecl?.parent?.parent;
+        if ((rowsDecl === undefined) || (loop?.kind !== SyntaxKind.ForStatement) || (loop.initializer !== keyDecl.parent)
+            || (declaration.pos < loop.statement.pos) || (declaration.end > loop.statement.end)
+            || (this.goNameWriteSites(scope, rows.text, rowsDecl).length !== 0)) {
+            return false;
+        }
+        const step: any = loop.incrementor;
+        const keyWrites = this.goNameWriteSites(scope, key.text, keyDecl);
+        if (!keyWrites.every((w: any) => (step !== undefined) && (w.pos >= step.pos) && (w.end <= step.end))) {
+            return false;
+        }
+        // every use is an rvalue read at a non-negative integer literal
+        let uses = 0;
+        const name = declaration.name.text;
+        const bad = this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name) || (declOf(n) !== declaration)) {
+                return false;
+            }
+            const up: any = n.parent;
+            if ((up?.kind !== SyntaxKind.ElementAccessExpression) || (up.expression !== n) || (up.argumentExpression?.kind !== SyntaxKind.NumericLiteral)
+                || !/^\d+$/.test(up.argumentExpression.text) || this.isGoElementAccessAssignmentTarget(up)) {
+                return true;
+            }
+            uses++;
+            return false;
+        });
+        return !bad && (uses > 0);
+    }
+
     // `x[k]` on a local the printer declared []any is a slice index: GetValue answered nil for an
     // absent index (negative or out of range) and derefs a pointer element, so the native read is
     // the same index behind that guard. Only a key printed as an `int` carries it; every other
@@ -28835,6 +28994,10 @@ ${tryBodyBlock}
         const readBase: any = node?.expression;
         if ((readBase?.kind === SyntaxKind.Identifier)
             && this.goSliceParamKeepsGetValue(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
+            return undefined;
+        }
+        // an inlined asserted row (goAssertedRowLocal) prints its `rows[i]` source, which is not a slice
+        if (this.goAssertedRowLocal(readBase)) {
             return undefined;
         }
         const bounded = this.goGb08BoundedListRead(node, keyNode);
@@ -30630,6 +30793,9 @@ const goInHoistVarShipped = GoTranspiler.prototype.printVariableStatement;
 GoTranspiler.prototype.printVariableStatement = function (node, identation) {
     const declarations = node?.declarationList?.declarations ?? [];
     const declaration: any = declarations[0];
+    if ((declarations.length === 1) && this.goAssertedRowDeclaration (declaration)) {
+        return '';
+    }
     if ((declarations.length === 1) && (declaration.name?.kind === SyntaxKind.Identifier) && (declaration.initializer !== undefined)
         && ((node.parent?.kind === SyntaxKind.Block) || (node.parent?.kind === SyntaxKind.SourceFile))) {
         const hoisted = this.goInHoistCondition (declaration.initializer, node, 1);
@@ -37398,3 +37564,60 @@ const goInBackedDictLocals = new WeakSet<any> ();
     };
 }
 // ===== []any table slot: inline safeList argument (end) =====
+
+// ===== list params: endpoint-receive []any locals as call-site arguments =====
+// `const r = await this.<endpoint> (..)` prints `var r []any = rRecv.Value`; Go fixes that local's
+// type, so a call-site proof may read the argument as the `[]any` it is declared with.
+{
+    const printedArgType = GoTranspiler.prototype.goPrintedArgType;
+    const inFlight = new Set<any>();
+    GoTranspiler.prototype.goPrintedArgType = function (arg) {
+        const shipped = printedArgType.call(this, arg);
+        if ((shipped !== undefined) || (arg?.kind !== SyntaxKind.Identifier) || inFlight.has(arg)) {
+            return shipped;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve();
+        const init = decl?.initializer;
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.AwaitExpression)) {
+            return shipped;
+        }
+        inFlight.add(arg);
+        try {
+            return (this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType === '[]any') ? '[]any' : shipped;
+        } finally {
+            inFlight.delete(arg);
+        }
+    };
+}
+// ===== list params: endpoint-receive []any locals (end) =====
+// ===== list elements: plain pushed values (begin) =====
+// A pushed value that prints as a non-pointer Go value: `+ - * / %` (native operators or Add/Multiply/..,
+// which deref their operands and return a plain value), toLowerCase/toUpperCase (Go string), or a
+// local declared as a plain scalar or container type. derefScalar of such an element is the element.
+const GO_PLAIN_VALUE_LOCAL_TYPES = new Set<string> (['string', 'int64', 'float64', 'bool', 'map[string]any', '[]any', '[]string']);
+function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
+    while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression)) {
+        node = node.expression;
+    }
+    if (node?.kind === SyntaxKind.BinaryExpression) {
+        const op = node.operatorToken.kind;
+        return (op === SyntaxKind.PlusToken) || (op === SyntaxKind.MinusToken) || (op === SyntaxKind.AsteriskToken)
+            || (op === SyntaxKind.SlashToken) || (op === SyntaxKind.PercentToken);
+    }
+    if ((node?.kind === SyntaxKind.CallExpression) && (node.arguments.length === 0) && (node.expression?.kind === SyntaxKind.PropertyAccessExpression)) {
+        return /^to(Lower|Upper)Case$/.test (`${node.expression.name?.text ?? ''}`);
+    }
+    if (node?.kind === SyntaxKind.Identifier) {
+        return GO_PLAIN_VALUE_LOCAL_TYPES.has (`${goTranspiler.goDeclaredTypeOfIdentifier (node) ?? ''}`);
+    }
+    return false;
+}
+// the prediction-tier bounded read (gb08) also drops DerefScalar on a list the write proof above clears
+{
+    const gb08Bounded = GoTranspiler.prototype.goGb08BoundedListRead;
+    GoTranspiler.prototype.goGb08BoundedListRead = function (node, keyNode): 'native' | 'deref' | undefined {
+        const shipped = gb08Bounded.call (this, node, keyNode);
+        return ((shipped === 'deref') && this.goListElementsArePointerFree (node.expression)) ? 'native' : shipped;
+    };
+}
+// ===== list elements: plain pushed values (end) =====

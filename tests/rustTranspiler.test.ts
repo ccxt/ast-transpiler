@@ -20558,6 +20558,35 @@ describe('ral-59x: an Option<String> reader receiver lends at a same-function st
     });
 });
 
+describe('a typed string local moves at its last object-literal property read', () => {
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeOrder (m: Dict): Dict { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseOrder (order: Dict): Dict {\n" + body + "    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('the earlier property lends a copy, the last one moves', () => {
+        const out = run ('mv-last-prop', "        const stopPrice = this.safeString (order, 'stop_price');\n        return this.safeOrder ({\n            'stopPrice': stopPrice,\n            'triggerPrice': stopPrice,\n        });\n");
+        expect(out).toContain('let mut stopPrice: Option<String> = ');
+        expect(out).toContain('m.insert("stopPrice".to_string(), stopPrice.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('m.insert("triggerPrice".to_string(), stopPrice.map(Value::from).unwrap_or(Value::Null));');
+    });
+    test('a nil-declared string local moves at its last property read', () => {
+        const out = run ('mv-last-prop-nil', "        let orderType: Str = undefined;\n        if (order['t'] === '1') {\n            orderType = 'limit';\n        }\n        return this.safeOrder ({\n            'a': orderType,\n            'type': orderType,\n        });\n");
+        expect(out).toContain('m.insert("a".to_string(), orderType.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('m.insert("type".to_string(), orderType.map(Value::from).unwrap_or(Value::Null));');
+    });
+    test('negative: inside a loop the last property read keeps the clone', () => {
+        const out = run ('mv-last-prop-loop', "        const stopPrice = this.safeString (order, 'stop_price');\n        const r = [];\n        for (let i = 0; i < 2; i++) {\n            r.push ({ 'triggerPrice': stopPrice });\n        }\n        return this.safeOrder ({ 'r': r });\n");
+        expect(out).not.toContain('stopPrice.map(Value::from)');
+    });
+    test('negative: a later statement read keeps the clone', () => {
+        const out = run ('mv-last-prop-later', "        const stopPrice = this.safeString (order, 'stop_price');\n        const o = { 'triggerPrice': stopPrice };\n        o['x'] = stopPrice;\n        return this.safeOrder (o);\n");
+        expect(out).toContain('"triggerPrice".to_string(), stopPrice.clone()');
+    });
+});
+
 describe('ral-59k: the outer key of a two-level field READ this.F[k0][k] lends a typed currency code (binance pro handleBalance code)', () => {
     const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    balance: Dict = {};\n    safeString (o: any, k: any, d: any = undefined): Str { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeCurrencyCode (id: Str, c: any = undefined): Str { return id; }\n    account (): Dict { return {}; }\n}\n";
     const write = (name: string, read: string) => {
@@ -22925,7 +22954,8 @@ describe('ral-67e: same-named sibling-block declarations are typed by their own 
             const out = transpiler.transpileRustByPath (path.join (root, 'cancels', 'ts/src/venue.ts')).content;
             expect(out).toContain('let mut order: Option<String> = success.get(i as usize).and_then(Value::as_str).map(str::to_owned);');
             expect(out).toContain('m.insert("info".to_string(), Value::from(order.as_deref()));');
-            expect(out).toContain('m.insert("id".to_string(), Value::from(order.as_deref()));');
+            // the last property read moves the element (no copy)
+            expect(out).toContain('m.insert("id".to_string(), order.map(Value::from).unwrap_or(Value::Null));');
             // the sibling twin keeps its own (Dict) decision
             expect(out).toContain('let mut order: Option<crate::value::Dict> = data.get(i as usize)');
         } finally {
@@ -26665,5 +26695,26 @@ describe('rust lent amountToPrecision / costToPrecision value slots', () => {
         expect(base).toMatch(/let mut qty: Option<f64> = /);
         expect(base).toMatch(/self\.amountToPrecision\([^;]*, qty\)/);
         expect(base).toMatch(/self\.costToPrecision\([^;]*, notional\)/);
+    });
+});
+
+describe('rust row of a list parameter shadow read at literal indexes', () => {
+    const src = (use: string) => `class x {
+    conv (rows: number[][]): any {
+        const result = [];
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i] as any[];
+            ${use}
+        }
+        return result;
+    }
+}`;
+    test('borrows the row from the slice: no Value local', () => {
+        const rs = transpiler.transpileRust(src('result.push (row[1]);')).content;
+        expect(rs).toContain('let row: &Value = rows.get(i as usize).unwrap_or(&Value::Null);');
+        expect(rs).not.toContain('let mut row: Value');
+    });
+    test('a row read at a variable index keeps the Value local', () => {
+        expect(transpiler.transpileRust(src('result.push (row[i]);')).content).not.toContain('let row: &Value');
     });
 });
