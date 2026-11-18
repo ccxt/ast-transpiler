@@ -10161,7 +10161,7 @@ describe('per-venue string parameters', () => {
         expect(out).toContain('let mut upper: String = ');
         expect(out).not.toContain('let mut upper: Value');
         expect(out).toContain('self.orderRequest("sell", kind.as_deref(), &[])');
-        expect(out).toContain('self.orderRequest("sell", Some(name.clone().as_str()), &[Value::from(name.clone())])');
+        expect(out).toContain('self.orderRequest("sell", Some(name.clone().as_str()), &[Value::from(name)])');
         expect(out).toContain('pub fn cleanPath(&self, path: &str) -> Option<String> {');
         expect(out).toContain('return Some(result);');
     });
@@ -26749,5 +26749,22 @@ describe('rust row of a list parameter shadow read at literal indexes', () => {
     });
     test('a row read at a variable index keeps the Value local', () => {
         expect(transpiler.transpileRust(src('result.push (row[i]);')).content).not.toContain('let row: &Value');
+    });
+});
+
+describe('a local read twice in one call moves at its last argument', () => {
+    const transpiler = new Transpiler({ rust: {} } as any);
+    const cls = (body: string) => `class E {\n    safeDict (a: any, b: any, c: any = undefined): any { return a; }\n    f (o: any) {\n${body}\n    }\n}`;
+    test('the default slot of a reader moves the local the key cloned', () => {
+        const out = transpiler.transpileRust(cls('        const d = this.safeDict (o, \'x\');\n        return this.safeDict (d, \'y\', d);')).content;
+        expect(out).toContain('self.safeDict(d.clone(), Value::Str("y".into()), &[d])');
+    });
+    test('a later read in another statement keeps both clones', () => {
+        const out = transpiler.transpileRust(cls('        const d = this.safeDict (o, \'x\');\n        const r = this.safeDict (d, \'y\', d);\n        return [ r, d ];')).content;
+        expect(out).toContain('&[d.clone()]');
+    });
+    test('a call whose arguments ccxt hoists keeps the clone', () => {
+        const out = transpiler.transpileRust(cls('        const d = this.safeDict (o, \'x\');\n        const fetch = this.safeDict (d, \'y\', d);\n        return fetch;')).content;
+        expect(out).toContain('&[d.clone()]');
     });
 });
