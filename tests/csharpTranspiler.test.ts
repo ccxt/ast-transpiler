@@ -5039,7 +5039,7 @@ describe('ws cache class parameters', () => {
     test('a configured params bag prints Dictionary<string, object>', () => {
         const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'dictParamsMethods': [ 'FetchMyBuys' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         const output = t.transpileCSharp('class Test {\n    fetchMyBuys (symbol, params = {}) {\n        return params;\n    }\n    other (params = {}) {\n        return params;\n    }\n}').content;
-        expect(output).toContain('fetchMyBuys(object symbol, Dictionary<string, object> parameters = null)');
+        expect(output).toContain('fetchMyBuys(object symbol, IDictionary<string, object> parameters = null)');
         expect(output).toContain('other(object parameters = null)');
     });
     test('configured core argument types print on the signature, a written one reads an object shadow', () => {
@@ -8197,5 +8197,46 @@ describe('ws future settle calls bind the declared Future methods', () => {
         expect(output).toContain("((Future)future).reject(e);");
         expect(output).toContain("other.resolve(cache);");
         expect(output).not.toContain("return (future as Future)");
+    });
+});
+
+describe('csharp ws cache-map entry locals', () => {
+    const root = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cs-cachemap-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    write('ts/src/base/ws/Cache.ts', 'export class ArrayCache {\n    append (item: any) {}\n}\n');
+    write('ts/src/base/Exchange.ts', "import { ArrayCache } from './ws/Cache.js';\nexport interface Dictionary<T> { [key: string]: T }\nexport default class Exchange {\n    positionsByType: Dictionary<ArrayCache> = {};\n    loose: any = {};\n    safeValue (obj: any, key: any, defaultValue: any = undefined): any { return obj[key]; }\n}\n");
+    const venue = write('ts/src/pro/venue.ts', "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    a (type: string, p: any) {\n        const cache = this.positionsByType[type];\n        cache.append (p);\n        const other = this.safeValue (this.positionsByType, type);\n        other.append (p);\n        const plain = this.safeValue (this.loose, type);\n        return plain;\n    }\n}\n");
+    test('a const read of a Dictionary<ArrayCache> base field names the cache class', () => {
+        const output = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(venue).content;
+        expect(output).toMatch(/ccxt\.pro\.ArrayCache cache = \(\(ccxt\.pro\.ArrayCache\)/);
+        expect(output).toMatch(/ccxt\.pro\.ArrayCache other = \(\(ccxt\.pro\.ArrayCache\)this\.safeValue\(this\.positionsByType, type\)\)/);
+        expect(output).not.toMatch(/ccxt\.pro\.ArrayCache plain/);
+    });
+});
+
+describe('ral-77c1 dict params bag on parent-printed overrides', () => {
+    test('an override printed from its parent parameter list keeps the Dictionary params bag', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'dictParamsMethods': [ 'cancelOrders' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const input = 'class Base {\n    cancelOrders (ids: string[], symbol: string = undefined, params = {}) {\n        return params;\n    }\n}\nclass Venue extends Base {\n    cancelOrders (ids, symbol = undefined, params = {}) {\n        return params;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).not.toMatch(/cancelOrders\([^)]*object parameters = null\)/);
+        expect((output.match(/cancelOrders\([^)]*IDictionary<string, object> parameters = null\)/g) || []).length).toBe(2);
+    });
+});
+
+describe('ral-84c8 guarded concat over a build-typed string? local', () => {
+    test('a read the hook names prints the null-guarded concatenation instead of add()', () => {
+        const t = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        const csharp = t.csharpTranspiler;
+        csharp.csharpGuardedStringConcatLocal = (identifier) => identifier.text === 'head';
+        const input = 'function f (a, b) {\n    const head = a;\n    const other = b;\n    return [ head + \'/\' + b, other + \'/\' + b ];\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('((object)(head == null ? null : head + "/" + (string)(object)(b)))');
+        expect(output).toContain('add(add(other, "/"), b)');
     });
 });

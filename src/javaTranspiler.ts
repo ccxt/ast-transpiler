@@ -160,6 +160,7 @@ const JAVA_MAP_WRITE_FIELDS: Set<string> = new Set([
     'quoteCurrencies',
     'tickers',
     'trades',
+    'positionsByType',
     'transformedApi',
     'urls',
     'userAgents',
@@ -188,6 +189,7 @@ const JAVA_PLAIN_MAP_FIELDS: Set<string> = new Set([
     'tickers',
     'timeframes',
     'trades',
+    'positionsByType',
     'transformedApi',
 ]);
 
@@ -203,7 +205,7 @@ const JAVA_OWNER_MEMBER_NAME = /^(?:handle[A-Z]\w*|parseWSBalances)$/;
 // absent: assigning them to a Map needs a cast javaBaseMapFieldLocalType forbids.
 const JAVA_DECLARED_MAP_FIELD_NAMES: Set<string> = new Set<string>([
     'markets', 'markets_by_id', 'has', 'features', 'options', 'balance',
-    'tickers', 'fundingRates', 'bidsasks', 'trades', 'orderbooks', 'ohlcvs',
+    'tickers', 'fundingRates', 'bidsasks', 'trades', 'orderbooks', 'ohlcvs', 'positionsByType',
     'commonCurrencies', 'networkAliases',
 ]);
 
@@ -619,6 +621,7 @@ const JAVA_HASH_MAP_FIELDS: { [name: string]: true } = {
     'tickers': true,
     'bidsasks': true,
     'trades': true,
+    'positionsByType': true,
     'fees': true,
     'urls': true,
     'markets_by_id': true,
@@ -1694,6 +1697,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (arg.kind === SyntaxKind.NullKeyword) {
             return true;
         }
+        // ral-84j1: an element-read local the embedding layer declares with the parameter's json-box type
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isIdentifier(arg)
+            && String(this.javaDeclaredElementLocalType(arg, arg.text) ?? '').replace(/\s+/g, '').replace(/^java\.util\./, '') === 'Map<String,Object>') {
+            return true;
+        }
         // an object literal prints a `HashMap<String, Object>` instance, already a Map
         if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isObjectLiteralExpression(arg)) {
             return true;
@@ -1717,7 +1725,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (isStringLiteralLikeNode(arg)) {
             return true;
         }
-        return this.javaProvableString(arg);
+        // ral-84j1: an element-read local the embedding layer declares a Java String
+        return this.javaProvableString(arg) || (isIdentifier(arg) && this.javaDeclaredStringElementLocal(arg, arg.text));
     }
 
     // the native printed type of each argument position of a call, when the resolved
@@ -3936,8 +3945,16 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printJavaLength(expression, leftSide) {
         const kind = this.javaLengthKind(expression);
+        if (kind === 'List' && isIdentifier(expression)) {
+            // ral-84j7: a local the embedding layer declared a java.util.List (a typed
+            // parse*/filter return) needs no receiver cast; same int, same NPE on null
+            const declaredList = this.javaDeclaredTypeOf(expression);
+            if (declaredList !== undefined && JAVA_DECLARED_LIST_TYPES.test(declaredList)) {
+                return `${leftSide}.size()`;
+            }
+        }
         if (kind !== undefined) {
-            const read = kind.startsWith('String') ? `((String)${leftSide}).length()` : `((java.util.List<?>)${leftSide}).size()`;
+            const read = kind.startsWith('String') ? `${this.javaStringReceiverText(expression, leftSide)}.length()` : `((java.util.List<?>)${leftSide}).size()`;
             return kind.endsWith('OrNull') ? `(${leftSide} == null ? 0 : ${read})` : read;
         }
         // a receiver the embedding pass declared a java.util.List (`List<Object> response =
@@ -4194,6 +4211,11 @@ export class JavaTranspiler extends BaseTranspiler {
         return fileName !== undefined && /(^|\/)ts\/src\/base\/types\.ts$/.test(fileName);
     }
 
+    // tuples are List<Object> in the Java port; the embedding layer reads this to bind List.get
+    isJavaListStructureType(type) {
+        return this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type);
+    }
+
     tupleRequiredElementCount(type) {
         const flags = ((type as any)?.isTypeReference?.() ? (type as any).getTarget().elementFlags : undefined) ?? (type as any)?.elementFlags ?? [];
         let required = 0;
@@ -4444,7 +4466,9 @@ export class JavaTranspiler extends BaseTranspiler {
         }
 
         if (type.kind === SyntaxKind.StringKeyword) {
-            return `((String)${this.printNode(node.expression, identation)})`;
+            const operand = this.printNode(node.expression, identation);
+            // ral-84j1: an element local already declared String needs no checkcast
+            return this.javaDeclaredStringElementLocal(node.expression, operand) ? operand : `((String)${operand})`;
         }
 
         if (type.kind === SyntaxKind.ArrayType) {
@@ -5172,7 +5196,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (splitRead !== undefined) {
             return splitRead;
         }
-        if (this.javaConcreteStructureType(type) && this.getChecker().isTupleType(type)) {
+        if (this.isJavaListStructureType(type)) {
             if (index >= this.tupleRequiredElementCount(type)) {
                 return undefined;
             }
@@ -5196,7 +5220,20 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
-        return this.printCheckerTypedElementAccessRead(node) ?? super.printElementAccessExpression(node, identation);
+        return this.printJavaHandlerElementRead(node) ?? this.printCheckerTypedElementAccessRead(node) ?? super.printElementAccessExpression(node, identation);
+    }
+
+    // ral-87j2: `methods[key]` on a proven handler table prints the typed table's own get (the table is a
+    // fresh non-null HashMap<String, String>; get answers null for a missing or null key)
+    printJavaHandlerElementRead(node) {
+        if (!isElementAccessExpression(node) || !isIdentifier(node.expression)) {
+            return undefined;
+        }
+        this.javaScanHandlerTables(node);
+        if (!this.javaHandlerReads.has(this.javaHandlerKey(node))) {
+            return undefined;
+        }
+        return `${this.printNode(node.expression, 0).trim()}.get(${this.printNode(node.argumentExpression, 0).trim()})`;
     }
 
     // `Helpers.GetValue(book, "asks")` on a receiver declared the ws order book class: the class's
@@ -5268,7 +5305,19 @@ export class JavaTranspiler extends BaseTranspiler {
     // a key proven by the checker to be a string prints as a java String: the read is
     // the same expression, only the key needs the (String) cast the typed put demands
     elementWriteKeyText(key, keyText: string): string {
-        return isStringLiteral(key) ? keyText : `(String)${keyText}`;
+        if (isStringLiteral(key)) {
+            return keyText;
+        }
+        // ral-84j1: `m[(k as string)] = v` where k is a String-declared element local: the assertion
+        // already printed bare (printAsExpression), so the put key needs no checkcast either
+        // decided from the AST: the identifier under the assertion is the bare-printed local
+        const inner: Node | undefined = this.unwrapParenthesized(key);
+        if (inner !== undefined && isAsExpression(inner) && inner.type?.kind === SyntaxKind.StringKeyword
+            && isIdentifier(inner.expression)
+            && this.javaDeclaredStringElementLocal(inner.expression, inner.expression.text)) {
+            return keyText;
+        }
+        return `(String)${keyText}`;
     }
 
     // Receivers that are a plain java.util.HashMap at runtime, where ".put" and the helper's map branch
@@ -5490,15 +5539,18 @@ export class JavaTranspiler extends BaseTranspiler {
 
     printDeleteExpression(node, _identation) {
         const object = this.printNode(node.expression.expression, 0);
-        const key = this.printNode(node.expression.argumentExpression, 0);
+        const keyNode = node.expression.argumentExpression;
+        const printedKey = this.printNode(keyNode, 0);
+        // ral-84j1: a key declared a Java String already is remove(String)'s argument
+        const key = this.javaDeclaredStringElementLocal(keyNode, printedKey) ? printedKey : `(String)${printedKey}`;
         // a ws Client map (or a local bound to it) already binds `remove` with no receiver cast
         if (this.javaWsClientMapReceiver(node.expression.expression)) {
-            return `${object}.remove((String)${key})`;
+            return `${object}.remove(${key})`;
         }
         if (this.javaBaseDeclaredMapCacheField(node.expression.expression)) {
-            return `${object}.remove((String)${key})`;
+            return `${object}.remove(${key})`;
         }
-        return `((java.util.Map<String,Object>)${object}).remove((String)${key})`;
+        return `((java.util.Map<String,Object>)${object}).remove(${key})`;
     }
 
     // `this.<field>` resolving to an Exchange.ts field of JAVA_BASE_DECLARED_MAP_CACHE_FIELDS
@@ -6349,6 +6401,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (primitive !== undefined) {
             return { kind: primitive === 'double' ? 'double' : 'long', boxed: false };
         }
+        const baseField = this.javaPrimitiveBaseFieldKind(inner);
+        if (baseField !== undefined) {
+            return { kind: baseField, boxed: false };
+        }
         if (!isIdentifier(inner) || !this.javaIdentifierPrintsDeclaredName(inner)) {
             return undefined;
         }
@@ -6361,6 +6417,27 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const kind = (declared === 'Double' || declared === 'double') ? 'double' : 'long';
         return { kind, boxed: JAVA_BOXED_NUMERIC_TYPES.has(declared) };
+    }
+
+    // ral-77j3: `this.<field>` read of a numeric field the hand-written BaseExchange declares as a Java
+    // primitive (`public int minFundingAddressLength`, `public double rateLimit`): never null, and
+    // its static kind is fixed whatever a venue's describe() writes into it. Only a field whose TS
+    // declaration is the base class's own (no venue redeclares it) qualifies.
+    javaPrimitiveBaseFieldKind(node): 'long' | 'double' | undefined {
+        if (node === undefined || !isPropertyAccessExpression(node) || node.expression.kind !== SyntaxKind.ThisKeyword) {
+            return undefined;
+        }
+        const kind = ({ minFundingAddressLength: 'long', fetchHistoryCacheSize: 'long', rateLimit: 'double' } as const)[String(node.name.text)];
+        if (kind === undefined) {
+            return undefined;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declaration = checker?.getSymbolAtLocation(node.name)?.valueDeclaration?.resolve();
+        const file = String(declaration?.getSourceFile?.()?.fileName ?? '');
+        if (!/(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(file)) {
+            return undefined;
+        }
+        return kind;
     }
 
     printDeclaredNumericComparison(left, right, op): string | undefined {
@@ -6662,7 +6739,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         if (node.kind === SyntaxKind.ParenthesizedExpression) {
-            return this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
+            return widened ? this.javaWidenedNumericKind(node.expression)
+                : this.javaProvableNumericKind(node.expression, allowDeclaredLocals, widened);
         }
         if (isNumericLiteral(node)) {
             const text = node.text;
@@ -6915,9 +6993,14 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // the kind of a nested native `+` this rule prints, or undefined when it keeps the helper
+    // the numeric kind of one `+` operand; the embedding layer extends this operand table
+    javaWidenedNumericKind(node): string | undefined {
+        return this.javaProvableNumericKind(node, true, true);
+    }
+
     javaWidenedAddKind(node) {
-        const leftKind = this.javaProvableNumericKind(node.left, true, true);
-        const rightKind = this.javaProvableNumericKind(node.right, true, true);
+        const leftKind = this.javaWidenedNumericKind(node.left);
+        const rightKind = this.javaWidenedNumericKind(node.right);
         if (leftKind === undefined || rightKind === undefined) {
             return undefined;
         }
@@ -6926,8 +7009,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // the native form of a numeric `+`, or undefined to keep Helpers.add
     printWidenedNativeAdd(left, right, leftText, rightText) {
-        const leftKind = this.javaProvableNumericKind(left, true, true);
-        const rightKind = this.javaProvableNumericKind(right, true, true);
+        const leftKind = this.javaWidenedNumericKind(left);
+        const rightKind = this.javaWidenedNumericKind(right);
         if (leftKind === undefined || rightKind === undefined) {
             return undefined;
         }
@@ -7914,11 +7997,39 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaScalarFamily(receiver) !== 'string' || this.javaScalarFamily(separator) !== 'string') {
             return undefined;
         }
-        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg)}${this.ARRAY_CLOSING_TOKEN}`;
+        return `${this.ARRAY_OPENING_TOKEN}${this.javaNativeSplitText(name, parsedArg, receiver)}${this.ARRAY_CLOSING_TOKEN}`;
     }
 
-    javaNativeSplitText(name, parsedArg): string {
-        return `((String)${name}).split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    javaNativeSplitText(name, parsedArg, receiver = undefined): string {
+        return `${this.javaStringReceiverText(receiver, name)}.split(java.util.regex.Pattern.quote(${parsedArg}))`;
+    }
+
+    // ral-84j1: the text of a String-method receiver (or String argument). An identifier the
+    // embedding layer declares a Java String (javaDeclaredStringType, decided from the TS checker
+    // there) already has the static type the method needs, so the checkcast every Object local
+    // takes is not printed; anything else keeps `((String)x)`.
+    javaStringReceiverText(receiver, name): string {
+        return this.javaDeclaredStringElementLocal(receiver, name) ? name : `((String)${name})`;
+    }
+
+    // ral-84j1: `k` printed bare, bound to a `const k = xs[..]` element read (the element-read lane's
+    // own shape, from the AST) that the embedding layer declares a Java String
+    javaDeclaredStringElementLocal(node, printed: string): boolean {
+        return this.javaDeclaredElementLocalType(node, printed) !== undefined && this.javaDeclaredStringType(node);
+    }
+
+    // the declared Java type of a bare-printed `const x = xs[..]` element-read local, as the embedding
+    // layer publishes it (undefined for any other binding or when nothing is published)
+    javaDeclaredElementLocalType(node, printed: string): string | undefined {
+        if (node === undefined || !isIdentifier(node) || printed !== node.text) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined
+            || !isElementAccessExpression(this.unwrapParenthesized(declaration.initializer))) {
+            return undefined;
+        }
+        return this.javaDeclaredTypeOf(node);
     }
 
     // `s.split (<literal>)[<int literal>]` on the native split: the helper's List branch answers
@@ -8037,7 +8148,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (!castText && this.javaScalarFamily(receiver) !== 'string') {
             return undefined;
         }
-        const receiverText = castText ? name : `((String)${name})`;
+        const receiverText = castText ? name : this.javaStringReceiverText(receiver, name);
         const length = args[0].text;
         const character = args[1].text[0];
         const pad = `'${character === "'" || character === '\\' ? `\\${character}` : character}'`;
@@ -8086,7 +8197,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         if (this.javaProvableString(arg)) {
-            return `((String)${name}).indexOf(${parsedArg})`;
+            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${parsedArg})`;
         }
         const argType: any = this.javaTry(() => checker.getTypeAtLocation(arg));
         if (argType === undefined) {
@@ -8096,7 +8207,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // the printer's own startsWith/endsWith argument shape
         if (argType.getAliasSymbol?.() === undefined && this.isStringType(argType.flags)
             && (isIdentifier(arg) || isPropertyAccessExpression(arg))) {
-            return `((String)${name}).indexOf(((String)${parsedArg}))`;
+            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${this.javaStringReceiverText(arg, parsedArg)})`;
         }
         return undefined;
     }
@@ -8105,20 +8216,20 @@ export class JavaTranspiler extends BaseTranspiler {
         return this.javaNativeIndexOfCall(node, name, parsedArg) ?? this.javaNarrowedIndexOf(node, name, parsedArg) ?? `${this.INDEXOF_WRAPPER_OPEN}${name}, ${parsedArg}${this.INDEXOF_WRAPPER_CLOSE}`;
     }
 
-    printSearchCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).indexOf(${parsedArg})`;
+    printSearchCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.indexOf(${parsedArg})`;
     }
 
-    printStartsWithCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).startsWith(((String)${parsedArg}))`;
+    printStartsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.startsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
     }
 
-    printEndsWithCall(_node, _identation, name = undefined, parsedArg = undefined) {
-        return `((String)${name}).endsWith(((String)${parsedArg}))`;
+    printEndsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.endsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
     }
 
-    printTrimCall(_node, _identation, name = undefined) {
-        return `((String)${name}).trim()`;
+    printTrimCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.trim()`;
     }
 
     printJoinCall(_node, _identation, name = undefined, parsedArg = undefined) {
@@ -8142,12 +8253,12 @@ export class JavaTranspiler extends BaseTranspiler {
         return `String.valueOf(${name})`;
     }
 
-    printToUpperCaseCall(_node, _identation, name = undefined) {
-        return `((String)${name}).toUpperCase()`;
+    printToUpperCaseCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.toUpperCase()`;
     }
 
-    printToLowerCaseCall(_node, _identation, name = undefined) {
-        return `((String)${name}).toLowerCase()`;
+    printToLowerCaseCall(node, _identation, name = undefined) {
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.toLowerCase()`;
     }
 
     printSliceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -8500,7 +8611,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (argument === undefined) {
             return undefined;
         }
-        const wsMap = this.javaWsClientMapReceiver(argument);
+        // a proven handler table is a fresh non-null HashMap<String, String>: the same key copy
+        const wsMap = this.javaWsClientMapReceiver(argument) || this.javaHandlerTableIdentifier(argument);
         if (!wsMap && isPropertyAccessExpression(argument)) {
             return this.printNativeBaseMapFieldKeys(argument);
         }
@@ -9660,12 +9772,49 @@ export class JavaTranspiler extends BaseTranspiler {
         return failed ? undefined : references;
     }
 
-    // the table is read only as the first argument of `this.safeValue (methods, key)`
+    // the table is read only as the first argument of `this.safeValue (methods, key)`, or as the
+    // receiver of a `methods[key]` read with a string key (ral-87j2: both answer the entry or null)
     javaIsHandlerTableRead(call, read) {
+        if (call !== undefined && isElementAccessExpression(call) && call.expression === read) {
+            return !this.isLeftSideOfAssignment(call) && call.parent?.kind !== SyntaxKind.DeleteExpression
+                && this.javaHandlerStringKey(call.argumentExpression);
+        }
         return call !== undefined && isCallExpression(call) && call.arguments?.[0] === read
             && isPropertyAccessExpression(call.expression)
             && call.expression.name?.text === 'safeValue'
             && call.expression.expression?.kind === SyntaxKind.ThisKeyword;
+    }
+
+    // ral-87j2: a key whose checker type is string (undefined allowed): HashMap.get answers null for a
+    // missing or null key, like the helper's map branch
+    javaHandlerStringKey(key) {
+        const checker = this.checkerOrUndefined();
+        if (key === undefined || checker === undefined) {
+            return false;
+        }
+        if (isStringLiteralLikeNode(key)) {
+            return true;
+        }
+        let type;
+        try {
+            type = checker.getNonNullableType(checker.getTypeAtLocation(key));
+        } catch (e) {
+            return false;
+        }
+        return type !== undefined && (type.flags & TypeFlags.StringLike) !== 0;
+    }
+
+    // ral-87j2: a read that only asks for the table's keys (`Object.keys (methods)`, `k in methods`):
+    // the keys are the literal's, whatever the value box is
+    javaIsHandlerKeyRead(read) {
+        const parent = read.parent;
+        if (parent !== undefined && isCallExpression(parent) && parent.arguments?.length === 1 && parent.arguments[0] === read
+            && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+            && parent.expression.expression.text === 'Object' && parent.expression.name?.text === 'keys') {
+            return true;
+        }
+        return parent !== undefined && parent.kind === SyntaxKind.BinaryExpression && parent.right === read
+            && parent.operatorToken.kind === SyntaxKind.InKeyword;
     }
 
     // the local a table read is bound to: its declaration, or the plain write that reassigns it
@@ -9708,7 +9857,8 @@ export class JavaTranspiler extends BaseTranspiler {
                 ? (current.whenTrue === undefined ? current.whenFalse : current.whenTrue)
                 : current.expression;
         }
-        const read = current?.kind === SyntaxKind.CallExpression ? current.arguments?.[0] : undefined;
+        const read = current?.kind === SyntaxKind.CallExpression ? current.arguments?.[0]
+            : (current !== undefined && isElementAccessExpression(current) ? current.expression : undefined);
         if (current === undefined || read === undefined || read.kind !== SyntaxKind.Identifier
             || read.text !== tableName.text) {
             return false;
@@ -9790,6 +9940,9 @@ export class JavaTranspiler extends BaseTranspiler {
             const readCalls: any[] = [];
             let proven = true;
             for (const read of reads) {
+                if (this.javaIsHandlerKeyRead(read)) {
+                    continue;
+                }
                 const call = read.parent;
                 if (!this.javaIsHandlerTableRead(call, read)) {
                     proven = false;
@@ -9856,6 +10009,20 @@ export class JavaTranspiler extends BaseTranspiler {
         const key = this.printNode(node.arguments[1], 0).trim();
         // safeValue's map branch with a null key answers null; HashMap.get does the same
         return `${table}.get(${key})`;
+    }
+
+    // ral-87j2: an identifier naming the local a proven handler table literal initialises
+    javaHandlerTableIdentifier(node) {
+        if (node === undefined || !isIdentifier(node)) {
+            return false;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || declaration.name.text !== node.text
+            || declaration.initializer === undefined) {
+            return false;
+        }
+        return this.javaHandlerDeclarationType(declaration) === JAVA_HANDLER_TABLE_TYPE;
     }
 
     // the declared Java type of the table local or of the local bound to one of its reads

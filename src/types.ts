@@ -59,6 +59,8 @@ interface ITranspiledFile {
     methodsTypes?: IMethodType[];
     // Go only: the stdlib packages the printed file's native emissions call (sorted)
     stdlibImports?: string[];
+    // Rust only: every printed method's dispatch signature (snake name, parameter kinds, return kind)
+    rustSignatures?: Array<{ name: string, params: Array<{ name: string, kind: string, type: string }>, ret: string, returns: string }>;
 }
 
 enum Languages {

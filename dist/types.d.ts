@@ -45,6 +45,16 @@ interface ITranspiledFile {
     exports: IFileExport[];
     methodsTypes?: IMethodType[];
     stdlibImports?: string[];
+    rustSignatures?: Array<{
+        name: string;
+        params: Array<{
+            name: string;
+            kind: string;
+            type: string;
+        }>;
+        ret: string;
+        returns: string;
+    }>;
 }
 declare enum Languages {
     Python = 0,
