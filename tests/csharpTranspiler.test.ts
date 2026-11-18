@@ -5052,6 +5052,14 @@ describe('ws cache class parameters', () => {
         expect(output).toContain('sign(string path, object api = null)');
         expect(output).not.toContain('pathVar');
     });
+    test('a dictionary core argument with a {} default and no body write keeps no object shadow', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'coreArgTypes': { 'pick': { 1: 'Dictionary<string, object>' }, 'fill': { 1: 'Dictionary<string, object>' }, 'seeded': { 1: 'Dictionary<string, object>' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        const input = 'class Test {\n    pick (key, mapping = {}) {\n        return Object.keys (mapping);\n    }\n    fill (key, mapping = {}) {\n        mapping = { \'a\': 1 };\n        return mapping;\n    }\n    seeded (key, mapping = { \'a\': 1 }) {\n        return mapping;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('pick(object key, Dictionary<string, object> mapping = null)');
+        expect(output).not.toContain('object mappingVar = mapping;\n        mappingVar ??= new Dictionary<string, object>();\n        return new List<object>(((IDictionary<string,object>)mappingVar).Keys);');
+        expect(output.split('object mappingVar = mapping;').length - 1).toBe(2); // a body write or a non-empty default keeps the slot
+    });
     test('configured call-site argument types convert this./base. arguments in exchange sources', () => {
         const fs = require('fs');
         const os = require('os');

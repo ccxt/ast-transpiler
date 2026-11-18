@@ -8563,7 +8563,10 @@ var CSharpTranspiler = class extends BaseTranspiler {
     if (!literalDefault && writes.length === 0) {
       return false;
     }
-    return !(wanted === "IList<object>" && isArrayLiteralExpression2(init) && writes.length === 0);
+    if (wanted === "IList<object>" && isArrayLiteralExpression2(init) && writes.length === 0) {
+      return false;
+    }
+    return !(/^I?Dictionary<string, object>$/.test(wanted) && isObjectLiteralExpression2(init) && init.properties.length === 0 && writes.length === 0);
   }
   // the right-hand sides (undefined for ++/--/compound writes) of every write to the parameter in the body
   csharpParamWrites(method, param) {
