@@ -8554,13 +8554,18 @@ describe('the base pair twins bind natively at every call site', () => {
     });
     test('the params slot of a base handleOptionAndParams holder reads by index', () => {
         const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        if (value !== undefined) {\n            const paramsOmitted = this.omit (paramsOption1, 'o2');\n            return [ value, paramsOmitted ];\n        }\n        return this.handleOptionAndParams (paramsOption1, 'run', 'o2');\n");
-        expect(output).toContain('valueparamsOption1Variable[1]');
+        // the option pair binds both results: no holder, no slot read
+        expect(output).toContain('value, paramsOption1 := this.HandleOptionAndParams(params, "run", "o1")');
         expect(output).not.toContain('GetValue(valueparamsOption1Variable, 1)');
     });
     test('the value slot of a base handleOptionAndParams holder reads by index', () => {
         const output = run("        const [ value, paramsOption1 ] = this.handleOptionAndParams (params, 'run', 'o1');\n        this.checkAddress (value);\n        return paramsOption1;\n");
-        expect(output).toContain('value := valueparamsOption1Variable[0]');
+        expect(output).toContain('value, paramsOption1 := this.HandleOptionAndParams(params, "run", "o1")');
         expect(output).not.toContain('GetValue(valueparamsOption1Variable, 0)');
+    });
+    test('a kept option-pair tuple is a []any TupleSlice', () => {
+        const output = run("        const res = this.handleOptionAndParams (params, 'run', 'o1');\\n        this.checkAddress (res);\\n        return params;\\n");
+        expect(output).toContain('var res []any = TupleSlice(this.HandleOptionAndParams(params, "run", "o1"))');
     });
     test('a same-named venue method keeps the value slot on GetValue', () => {
         const venue = path.join(tmp, 'ts', 'src', 'venue.ts');

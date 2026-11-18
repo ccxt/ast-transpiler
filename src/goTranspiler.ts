@@ -9501,12 +9501,14 @@ const CCXT_GO_TUPLE_RESULT_METHODS = [ 'handleMarketTypeAndParams', 'handleSubTy
     'handleOptionBoolAndParams', 'handleOptionBoolAndParams2', 'handleOptionIntegerAndParams', 'handleOptionIntegerAndParams2',
     'handleOptionStringAndParams2',
     'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
-    'handleParamInteger', 'handleParamInteger2' ];
+    'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2' ];
 // element 0 unwrap per method (element 1 is always the params map); default SafeStringPtr
 const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handleOptionBoolAndParams': 'GetValueBool',
     'handleOptionBoolAndParams2': 'GetValueBool', 'handleOptionIntegerAndParams': 'Int64Value',
     'handleOptionIntegerAndParams2': 'Int64Value', 'handleParamBool': 'SafeBoolPtr', 'handleParamBool2': 'SafeBoolPtr',
-    'handleParamInteger': 'SafeIntegerPtr', 'handleParamInteger2': 'SafeIntegerPtr' };
+    'handleParamInteger': 'SafeIntegerPtr', 'handleParamInteger2': 'SafeIntegerPtr',
+    // the Go pair's `any` slot 0 is already the derefScalar'd option value, read as is
+    'handleOptionAndParams': 'Raw', 'handleOptionAndParams2': 'Raw' };
 // pair twins with their slot-0 Go type: the printed base twins (GO_BASE_PAIR_TWINS) and the hand-written pairs
 const CCXT_GO_PAIR_SLOT_0 = { 'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool', 'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
@@ -9860,7 +9862,7 @@ function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, firs
         // element 0 must already be the typed unwrap; element 1 is the map itself. A bare write of
         // element 0 into an existing local is exact for bool (GetValue derefs the *bool box to bool)
         const ok = (h === holder) && (index === i - 1)
-            && ((wrap === '') ? ((index === 1) || (declare && (first !== 'GetValueBool')) || (first === 'MapTyped')
+            && ((wrap === '') ? ((index === 1) || (declare && (first !== 'GetValueBool')) || (first === 'MapTyped') || (first === 'Raw')
                 || (!declare && ((first === 'GetValueBool') || (first === 'Int64Value'))))
                 : (wrap === ((index === 0) ? first : 'MapTyped')));
         if (!ok) {
@@ -10081,7 +10083,11 @@ function installCcxtGoTupleResults (goTranspiler) {
                 return this.getIden (identation) + holderSlots.names.join (', ') + ' := ' + bound;
             }
         }
-        const printed = printDeclaration.call (this, node, identation);
+        let printed = printDeclaration.call (this, node, identation);
+        // a kept option-pair tuple is the []any TupleSlice returns
+        if ((typeof printed === 'string') && (CCXT_GO_TUPLE_RESULT_ELEMENT_0[declaration?.initializer?.expression?.name?.text] === 'Raw') && ccxtGoTupleResultCall (declaration.initializer)) {
+            printed = printed.replace (/^(\s*var \w+ )any( = (?:ccxt\.)?TupleSlice\()/, '$1[]any$2');
+        }
         const readSlot = (node?.declarations?.length === 1) ? ccxtGoPairHolderRead (this, declaration?.initializer) : undefined;
         if ((typeof printed === 'string') && (readSlot !== undefined)) {
             return ccxtGoPairSlotConsumer (printed, readSlot, ccxtGoPairHolderSlots (this, ccxtGoPairHolderDeclaration (this, declaration.initializer.expression)).pointer);
@@ -10170,7 +10176,7 @@ function installCcxtGoTupleResults (goTranspiler) {
         const first = CCXT_GO_TUPLE_RESULT_ELEMENT_0[name] ?? 'SafeStringPtr';
         const [ a, b ] = expr.elements.map ((e) => this.printNode (e, 0).trim ());
         const bare = ccxtGoJoinedParamsLocal (this, expr.elements[1]);
-        return m[1] + first + '(' + a + '), ' + (bare ? b : 'MapTyped(' + b + ')') + m[3];
+        return m[1] + ((first === 'Raw') ? a : first + '(' + a + ')') + ', ' + (bare ? b : 'MapTyped(' + b + ')') + m[3];
     };
 }
 
