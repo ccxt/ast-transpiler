@@ -7222,8 +7222,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!literalDefault && (writes.length === 0)) {
             return false;
         }
-        // a list target with an `[]` default and no body write keeps the parameter
-        return !((wanted === 'IList<object>') && isArrayLiteralExpression(init) && (writes.length === 0));
+        // a list target with an `[]` default, or a dictionary target with a `{}` default, and no body write keeps the parameter
+        if ((wanted === 'IList<object>') && isArrayLiteralExpression(init) && (writes.length === 0)) {
+            return false;
+        }
+        return !(/^I?Dictionary<string, object>$/.test(wanted) && isObjectLiteralExpression(init) && (init.properties.length === 0) && (writes.length === 0));
     }
 
     // the right-hand sides (undefined for ++/--/compound writes) of every write to the parameter in the body
