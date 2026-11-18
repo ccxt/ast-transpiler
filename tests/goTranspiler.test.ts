@@ -18842,3 +18842,37 @@ describe('safeMarket binds its marketId slot as *string', () => {
         expect(go).not.toContain('var marketId *string');
     });
 });
+
+describe('list narrowers built on an array-literal local print []any', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'class base {}\n'
+        + 'export class ex extends base {\n'
+        + '    narrow (response: Dict | Dict[] | string): Dict[] {\n'
+        + '        let result: Dict[] = [];\n'
+        + '        if (Array.isArray (response)) {\n'
+        + '            result = response;\n'
+        + '        }\n'
+        + '        return result;\n'
+        + '    }\n';
+    test('an Array.isArray-guarded write keeps the never-nil []any return', () => {
+        const out = goTranspile92g8(head
+            + '    g (r: Dict) {\n'
+            + '        const rows = this.narrow (r);\n'
+            + '        return rows.length;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain(') Narrow(response any) []any {');
+        expect(out).toContain('result = ArrayTyped(response)');
+        expect(out).toContain('var rows []any = this.Narrow(r)');
+    });
+    test('an unguarded write of the param keeps the boxed return', () => {
+        const out = goTranspile92g8(head.replace('        if (Array.isArray (response)) {\n            result = response;\n        }\n', '        result = response as Dict[];\n')
+            + '}\n');
+        expect(out).not.toContain(') Narrow(response any) []any {');
+    });
+    test('a guard on a different name keeps the boxed return', () => {
+        const out = goTranspile92g8(head.replace('if (Array.isArray (response))', 'if (Array.isArray (this))')
+            + '}\n');
+        expect(out).not.toContain(') Narrow(response any) []any {');
+    });
+});

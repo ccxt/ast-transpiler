@@ -10364,7 +10364,9 @@ function goLocalContainerNeverNil (goTranspiler, identifier) {
                 const parent = n.parent;
                 if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.left === n)
                     && (parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment)) {
-                    unsafe = (parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || !ccxtGoContainerNeverNil (goTranspiler, parent.right);
+                    // a list-guarded `x = y` of an array-literal local prints `x = ArrayTyped(y)`, never nil
+                    const guarded = ccxtGoArrayLiteralIsEmpty (declaration.initializer) && ccxtGoArrayWriteIsGuarded (goTranspiler, parent);
+                    unsafe = (parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || (!guarded && !ccxtGoContainerNeverNil (goTranspiler, parent.right));
                 } else if (isDestructuringTarget (n)) {
                     unsafe = true;
                 }
