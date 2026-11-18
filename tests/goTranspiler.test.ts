@@ -18271,3 +18271,58 @@ describe('several `key in dict` reads bound before the statement', () => {
         expect(output).toContain('InOp(m, "a")');
     });
 });
+
+describe('nullable bool option pairs bind as Go (*bool, map[string]any)', () => {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nullable-bool-pairs-'));
+    const cwd = process.cwd();
+    afterAll(() => {
+        process.chdir(cwd);
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const head = 'type Dict = { [key: string]: any };\ntype Bool = boolean | undefined;\n'
+        + 'class Exchange {\n    handleOptionBoolAndParams (params: Dict, m: string, o: string, d: Bool = undefined): [Bool, Dict] { return [ d, params ]; }\n'
+        + '    send (a: any, b: any = undefined): void {}\n}\n'
+        + 'export default class ex extends Exchange {\n';
+    const run = (body: string): string => {
+        const root = fs.mkdtempSync(path.join(tmp, 'tree-'));
+        const dir = path.join(root, 'ts', 'src');
+        fs.mkdirSync(dir, { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'ex.ts'), head + body + '}\n');
+        process.chdir(root);
+        try {
+            const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+            installCcxtGoHooks(inst.goTranspiler);
+            return inst.transpileGoByPath(path.join('ts', 'src', 'ex.ts')).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    const method = (decl: string, use: string) => '    a (params: Dict = {}, uta: Bool = undefined) {\n' + decl + use + '    }\n';
+    const DECL = "        const [ utaOption, paramsUta ] = this.handleOptionBoolAndParams (params, 'a', 'uta', uta);\n";
+    test('a variable default binds the pair and the truthy test reads the *bool', () => {
+        const out = run(method(DECL, '        if (utaOption) {\n            this.send (paramsUta);\n        }\n'));
+        expect(out).toContain('utaOption, paramsUta := this.HandleOptionBoolAndParamsNullable(params, "a", "uta", uta)');
+        expect(out).toContain('if utaOption != nil && *utaOption {');
+        expect(out).not.toContain('utaOptionparamsUtaVariable');
+        expect(out).not.toContain('MapTyped(paramsUta');
+    });
+    test('a negated test inside && reads the *bool too', () => {
+        const out = run(method(DECL, '        if (!utaOption && (paramsUta !== undefined)) {\n            this.send (paramsUta);\n        }\n'));
+        expect(out).toContain('utaOption, paramsUta := this.HandleOptionBoolAndParamsNullable(');
+        expect(out).toContain('!(utaOption != nil && *utaOption)');
+    });
+    test('a literal default keeps the value pair', () => {
+        const out = run(method("        const [ utaOption, paramsUta ] = this.handleOptionBoolAndParams (params, 'a', 'uta', false);\n",
+            '        if (utaOption) {\n            this.send (paramsUta);\n        }\n'));
+        expect(out).not.toContain('Nullable');
+    });
+    test('a value use keeps the value box, read from the pair pointer', () => {
+        const out = run(method(DECL, '        this.send (utaOption, paramsUta);\n'));
+        expect(out).toContain('utaOptionPtr, paramsUta := this.HandleOptionBoolAndParamsNullable(');
+        expect(out).toContain('return *utaOptionPtr');
+        expect(out).not.toContain('utaOptionparamsUtaVariable');
+    });
+});

@@ -9463,14 +9463,17 @@ function ccxtGoTupleResultCall (node) {
         && (CCXT_GO_TUPLE_RESULT_METHODS.includes (callee.name?.text) || (ccxtGoVenuePairOfCall (node) !== undefined))
         && ((callee.expression?.kind === ts.SyntaxKind.ThisKeyword) || (callee.expression?.kind === ts.SyntaxKind.SuperKeyword)
             || isIdentifierNamed (callee.expression, 'exchange'))
-        && !ccxtGoTupleBoolCallIsNullable (node);
+        && (!ccxtGoTupleBoolCallIsNullable (node) || CCXT_GO_NULLABLE_BOOL_PAIRS.includes (callee.name?.text));
 }
+// the `defaultValue?: Bool` twins print <Name>Nullable, a Go (*bool, map[string]any) pair
+const CCXT_GO_NULLABLE_BOOL_PAIRS = [ 'handleOptionBoolAndParams', 'handleOptionBoolAndParams2' ];
 
 // the call is a pair twin with a pointer slot 0 and resolves to the BaseExchange declaration
 function ccxtGoPairSlot0 (goTranspiler, call) {
     const name = call?.expression?.name?.text;
     const venue = ccxtGoVenuePairOfCall (call);
-    const slot = CCXT_GO_PAIR_SLOT_0[name] ?? ((venue?.type === '*string') ? '*string' : undefined);
+    const nullableBool = CCXT_GO_NULLABLE_BOOL_PAIRS.includes (name) && ccxtGoTupleBoolCallIsNullable (call);
+    const slot = (nullableBool ? '*bool' : CCXT_GO_PAIR_SLOT_0[name]) ?? ((venue?.type === '*string') ? '*string' : undefined);
     if ((slot === undefined) || !ccxtGoTupleResultCall (call)) {
         return undefined;
     }
@@ -9673,14 +9676,14 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
     } else if ((m = new RegExp ('^(\\w+) = GetValueBool\\(' + h + ', 0, (true|false)\\)$').exec (code[at] ?? '')) !== null) {
         value = { 'kind': 'reset', 'name': m[1], 'isNew': false, 'reset': m[2] };
         at += 1;
-    } else if ((m = new RegExp ('^var (\\w+) \\*int64 = nil$').exec (code[at] ?? '')) !== null) {
-        const assertion = new RegExp ('^if p, ok := ' + h + '\\[0\\]\\.\\(\\*int64\\); ok \\{ ?' + m[1] + ' = p ?\\}?$');
+    } else if ((m = new RegExp ('^var (\\w+) \\*(int64|bool) = nil$').exec (code[at] ?? '')) !== null) {
+        const assertion = new RegExp ('^if p, ok := ' + h + '\\[0\\]\\.\\(\\*' + m[2] + '\\); ok \\{ ?' + m[1] + ' = p ?\\}?$');
         const joined = code.slice (at + 1, at + 4).join (' ');
         const one = assertion.test (code[at + 1] ?? '');
-        if (!one && !new RegExp ('^if p, ok := ' + h + '\\[0\\]\\.\\(\\*int64\\); ok \\{ ' + m[1] + ' = p \\}$').test (joined.replace (/\s+/g, ' '))) {
+        if (!one && !new RegExp ('^if p, ok := ' + h + '\\[0\\]\\.\\(\\*' + m[2] + '\\); ok \\{ ' + m[1] + ' = p \\}$').test (joined.replace (/\s+/g, ' '))) {
             return undefined;
         }
-        value = { 'kind': 'typed', 'name': m[1], 'type': '*int64', 'isNew': true };
+        value = { 'kind': 'typed', 'name': m[1], 'type': '*' + m[2], 'isNew': true };
         at += one ? 2 : 4;
     } else {
         return undefined;
@@ -9739,6 +9742,9 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
 }
 
 function ccxtGoTupleResultFirst (call) {
+    if (CCXT_GO_NULLABLE_BOOL_PAIRS.includes (call.expression.name.text) && ccxtGoTupleBoolCallIsNullable (call)) {
+        return 'SafeBoolPtr';
+    }
     return CCXT_GO_TUPLE_RESULT_ELEMENT_0[call.expression.name.text] ?? ccxtGoVenuePairOfCall (call)?.first ?? 'SafeStringPtr';
 }
 
@@ -9975,7 +9981,12 @@ function installCcxtGoTupleResults (goTranspiler) {
         const printed = printCall.call (this, node, identation);
         if (ccxtGoTupleBoolCallIsNullable (node) && ((node.expression.expression?.kind === ts.SyntaxKind.ThisKeyword)
             || isIdentifierNamed (node.expression.expression, 'exchange'))) {
-            return printed.replace (/\b(HandleOption(?:Bool|Integer)AndParams2?)\(/, '$1Nullable(');
+            const renamed = printed.replace (/\b(HandleOption(?:Bool|Integer)AndParams2?)\(/, '$1Nullable(');
+            if (!ccxtGoTupleResultCall (node)) {
+                return renamed;
+            }
+            const indent = /^\s*/.exec (renamed)[0];
+            return indent + 'TupleSlice(' + renamed.slice (indent.length) + ')';
         }
         if (!ccxtGoTupleResultCall (node)) {
             return printed;
@@ -10008,9 +10019,13 @@ function installCcxtGoTupleResults (goTranspiler) {
         }
         const pairSlot = ccxtGoPairSlot0 (this, declaration.initializer);
         const ofBase = Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, declaration.initializer.expression.name.text);
+        const nullableBool = CCXT_GO_NULLABLE_BOOL_PAIRS.includes (declaration.initializer.expression.name.text) && ccxtGoTupleBoolCallIsNullable (declaration.initializer);
         const pairBind = (pairSlot !== undefined) && (declaration.name.elements.length === 2)
             ? () => ccxtGoPairBind (this, printed, node, pairSlot) : () => undefined;
-        const pairFirst = ofBase ? pairBind () : undefined;
+        const pairFirst = (ofBase || nullableBool) ? pairBind () : undefined;
+        if (nullableBool) {
+            return pairFirst ?? printed;
+        }
         if (pairFirst !== undefined) {
             return pairFirst;
         }
@@ -10038,9 +10053,10 @@ function installCcxtGoTupleResults (goTranspiler) {
             return printed;
         }
         const pairSlot = ccxtGoPairSlot0 (this, node.right);
+        const nullableBool = CCXT_GO_NULLABLE_BOOL_PAIRS.includes (node.right.expression.name.text) && ccxtGoTupleBoolCallIsNullable (node.right);
         const pairBind = (pairSlot !== undefined) && (node.left.elements.length === 2)
             ? () => ccxtGoPairBind (this, printed, node, pairSlot) : () => undefined;
-        if (Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, node.right.expression.name.text)) {
+        if (Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, node.right.expression.name.text) || nullableBool) {
             return pairBind () ?? printed;
         }
         return ccxtGoTupleResultJoin (printed, node.left.elements.length, false, false, ccxtGoTupleResultFirst (node.right)) ?? pairBind () ?? printed;
@@ -26168,6 +26184,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (op === SyntaxKind.PlusToken) {
                 return true;
             }
+            if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
+                return (goType === '*bool') && this.goTuplePointerSlotTruthyOperand(parent);
+            }
             return (op === SyntaxKind.EqualsToken) && allowStore && (parent.right === current)
                 && (parent.left?.kind === SyntaxKind.ElementAccessExpression)
                 && (parent.parent?.kind === SyntaxKind.ExpressionStatement)
@@ -26175,6 +26194,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         case SyntaxKind.PrefixUnaryExpression:
             return (parent.operator === SyntaxKind.ExclamationToken) && (goType === '*bool');
+        case SyntaxKind.IfStatement:
+        case SyntaxKind.WhileStatement:
+            // a *bool read as a condition is EvalTruthy's own answer: nil and false are both falsy
+            return (goType === '*bool') && (parent.expression === current);
         case SyntaxKind.CallExpression: {
             const callee: any = parent.expression;
             return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
@@ -26184,6 +26207,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return (parent.expression === current) && (parent.name?.text === 'length');
         }
         return false;
+    }
+
+    // an `&&` / `||` chain whose value only feeds a condition (if / while / `!` / another such chain)
+    goTuplePointerSlotTruthyOperand(chain): boolean {
+        let child: any = chain;
+        let parent: any = chain.parent;
+        while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            child = parent;
+            parent = parent.parent;
+        }
+        if ((parent?.kind === SyntaxKind.IfStatement) || (parent?.kind === SyntaxKind.WhileStatement)) {
+            return parent.expression === child;
+        }
+        if ((parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator === SyntaxKind.ExclamationToken)) {
+            return this.goTuplePointerSlotTruthyOperand(parent);
+        }
+        const op = (parent?.kind === SyntaxKind.BinaryExpression) ? parent.operatorToken?.kind : undefined;
+        return ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) && this.goTuplePointerSlotTruthyOperand(parent);
     }
 
     // an enclosing `if (x !== undefined)` / `x !== undefined && …` / ternary arm proves the read non-nil:
