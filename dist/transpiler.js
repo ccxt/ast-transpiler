@@ -19069,7 +19069,8 @@ var CCXT_GO_TUPLE_RESULT_METHODS = [
   "handleParamInteger",
   "handleParamInteger2",
   "handleOptionAndParams",
-  "handleOptionAndParams2"
+  "handleOptionAndParams2",
+  "handleTriggerDirectionAndParams"
 ];
 var CCXT_GO_TUPLE_RESULT_ELEMENT_0 = {
   "handleUntilOption": "MapTyped",
@@ -19097,7 +19098,8 @@ var CCXT_GO_PAIR_SLOT_0 = {
   "handleSubTypeAndParams": "*string",
   "handleOptionStringAndParams": "*string",
   "handleOptionStringAndParams2": "*string",
-  "handleMarginModeAndParams": "*string"
+  "handleMarginModeAndParams": "*string",
+  "handleTriggerDirectionAndParams": "*string"
 };
 var CCXT_GO_TUPLE_BOOL_DEFAULT_SLOT = {
   "handleOptionBoolAndParams": 3,
@@ -23254,7 +23256,8 @@ var GO_BASE_PAIR_TWINS = {
   "handleParamBool": "*bool",
   "handleParamBool2": "*bool",
   "handleParamInteger": "*int64",
-  "handleParamInteger2": "*int64"
+  "handleParamInteger2": "*int64",
+  "handleTriggerDirectionAndParams": "*string"
 };
 var GO_PARAMS_TUPLE_HELPERS = {
   "handleUntilOption": 1,
@@ -23281,7 +23284,8 @@ var GO_TUPLE_NATIVE_BINDING_PRODUCERS = [
   "HandleParamInteger",
   "HandleParamInteger2",
   "HandleParamBool",
-  "HandleParamBool2"
+  "HandleParamBool2",
+  "HandleTriggerDirectionAndParams"
 ];
 var GO_TUPLE_POINTER_SLOT_PRODUCERS = {
   "handleParamString": { "goType": "*string", "safe": "SafeStringPtr" },

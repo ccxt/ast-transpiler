@@ -8534,6 +8534,23 @@ describe('the base pair twins bind natively at every call site', () => {
         expect(output).not.toContain('TupleSlice');
         expect(output).not.toContain('GetValue(');
     });
+    test('handleTriggerDirectionAndParams prints the pair and binds natively', () => {
+        const extra = '    handleTriggerDirectionAndParams (params: Dict, exchangeSpecificKey: Str = undefined, allowEmpty: boolean = false): [Str, Dict] {\n'
+            + '        const d = this.safeString (params, \'triggerDirection\');\n        return [ d, params ];\n    }\n';
+        const dir = path.join(tmp, 'ts', 'src', 'base');
+        fs.mkdirSync(dir, { 'recursive': true });
+        const file = path.join(dir, 'Exchange.ts');
+        const body = "        const [ direction, rest ] = this.handleTriggerDirectionAndParams (params, 'triggerType', true);\n        this.checkAddress (direction);\n        return rest;\n";
+        fs.writeFileSync(file, base.replace('export class BaseExchange {\n', 'export class BaseExchange {\n' + extra) + 'export default class Exchange extends BaseExchange {\n    run (params: Dict = {}) {\n' + body + '    }\n}\n');
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        const output = inst.transpileGoByPath(file).content;
+        expect(output).toContain('(*string, map[string]any)');
+        expect(output).toContain('return d, MapTyped(params)');
+        expect(output).toContain(', rest := this.HandleTriggerDirectionAndParams(params, "triggerType", true)');
+        expect(output).not.toContain('[]any = this.HandleTriggerDirectionAndParams');
+        expect(output).not.toContain('len(directionrestVariable)');
+    });
     test('the twin prints the Go pair signature and return', () => {
         const output = run('');
         expect(output).toContain('HandleParamString(params any, paramName any, optionalArgs ...any) (*string, map[string]any)');
