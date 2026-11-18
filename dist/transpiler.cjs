@@ -19822,7 +19822,8 @@ function goLocalContainerNeverNil(goTranspiler, identifier) {
       if (ts.isIdentifier(n) && n.text === name && n !== declaration.name) {
         const parent = n.parent;
         if (_optionalChain([parent, 'optionalAccess', _3170 => _3170.kind]) === ts.SyntaxKind.BinaryExpression && parent.left === n && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
-          unsafe = parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !ccxtGoContainerNeverNil(goTranspiler, parent.right);
+          const guarded = ccxtGoArrayLiteralIsEmpty(declaration.initializer) && ccxtGoArrayWriteIsGuarded(goTranspiler, parent);
+          unsafe = parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken || !guarded && !ccxtGoContainerNeverNil(goTranspiler, parent.right);
         } else if (isDestructuringTarget(n)) {
           unsafe = true;
         }
