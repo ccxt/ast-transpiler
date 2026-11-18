@@ -2562,8 +2562,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A ws `super.parseX (x, market)` to a fixed-arity parser with a lent market slot: by-value locals are cloned
      *  as on the slice path (the parent call takes them by value). */
     printSuperMarketSlotCall(node: any, methodName: string, identation: number): string | undefined;
-    /** The same local is also a bare earlier argument of this call (`f(x, k, x)`): the later one is its last read. */
-    rustReadEarlierInCall(node: any, at: number): boolean;
     rustSliceArgText(a: string): string;
     rustCalleeIsRuntimeBase(node: any): boolean;
     rustCallsTestExchange(node: any): boolean;

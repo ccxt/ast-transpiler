@@ -324,6 +324,26 @@ describe('rust transpiling tests', () => {
         expect(out).toContain('self.m(p.clone())');
     });
 
+    test('a list literal that is the whole right side of a self-write moves its own element; other list elements keep the clone', () => {
+        const ts = [
+            'class A {',
+            '    m (x: any) { return x; }',
+            '    run (a: any, b: any) {',
+            '        if (!Array.isArray (a)) {',
+            '            a = [ a ];',
+            '        }',
+            '        b = [ b, this.m (b) ];',
+            '        const c = [ a ];',
+            '        return [ this.m (a), b, c ];',
+            '    }',
+            '}',
+        ].join('\n');
+        const out = transpiler.transpileRust(ts).content;
+        expect(out).toContain('a = Value::from(vec![a]);');
+        expect(out).toContain('b = Value::from(vec![b.clone(), self.m(b.clone())]);');
+        expect(out).toContain('Value::from(vec![a.clone()])');
+    });
+
     test('a required argument of a defaulted transpiled method and a later object-literal property move at their last use', () => {
         const ts = [
             'class A {',
