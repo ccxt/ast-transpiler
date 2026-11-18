@@ -31597,7 +31597,8 @@ function ral84g6NameBacksIn(goTranspiler: GoTranspiler, scope, name: string, dep
     return goTranspiler.hasNodeWhere(scope, (n) => {
         if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)
             && (n.right?.kind === SyntaxKind.Identifier) && (n.right.text === name)) {
-            return true;
+            // a literal-key read the if-init clause or the `_, hasN :=` hoist prints is the plain comma-ok
+            return (goTranspiler.goUnwrapParenthesizedNode(n.left)?.kind !== SyntaxKind.StringLiteral) || !goTranspiler.goWsFrameInOpHasInitClause(n, undefined);
         }
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name)) {
             return false;
@@ -37183,5 +37184,55 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
     GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
         const shipped = getGoLocalType.call (this, declaration, parsedValue);
         return ((shipped === 'any') && goIntSeedInt64Local (this, declaration)) ? 'int64' : shipped;
+    };
+}
+
+// ---- safeDict locals backing only native `in` reads ----
+const goInBackedDictLocals = new WeakSet<any> ();
+// The shipped dict-local rule keeps the box for a local read by `k in x`, because a typed map read used to
+// print a comma-ok closure. A read the if-init clause or the `_, hasN := m[k]` hoist prints is the plain
+// comma-ok on the map: type the local when every `in` over it sits there with a literal key.
+{
+    const shippedStandard = GoTranspiler.prototype.goSafeDictLocalUnboxStandard;
+    GoTranspiler.prototype.goSafeDictLocalUnboxStandard = function (declaration) {
+        const shipped = shippedStandard.call (this, declaration);
+        const scope: any = this.goEnclosingFunction (declaration);
+        const name = declaration?.name?.text;
+        if ((shipped !== undefined) || (scope === undefined) || (name === undefined)
+            || (this.goSafeAccessorLocalArgs (declaration.initializer, 'safeDict') === undefined)) {
+            return shipped;
+        }
+        let reads = 0;
+        const foreign = this.hasNodeWhere (scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.InKeyword)) {
+                return false;
+            }
+            const dict: any = this.goUnwrapParenthesizedNode (n.right);
+            if ((dict?.kind !== SyntaxKind.Identifier) || (dict.text !== name)) {
+                return false;
+            }
+            reads += 1;
+            const key: any = this.goUnwrapParenthesizedNode (n.left);
+            return (key?.kind !== SyntaxKind.StringLiteral) || (this.goDeclarationOfIdentifier (dict) !== declaration)
+                || !this.goWsFrameInOpHasInitClause (n, declaration);
+        });
+        if (foreign || (reads === 0)) {
+            return undefined;
+        }
+        const typed = this.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_DICT_LOCAL_TYPE,
+            (n) => this.goSafeDictUseReadsTheMap (n) || this.goIsNilComparisonOperand (n, n.parent));
+        if (typed !== undefined) {
+            goInBackedDictLocals.add (declaration);
+        }
+        return typed;
+    };
+    // the declaration reads the member through the receiver twin `MapTyped(SafeDict(..))`: the same value, nil when absent
+    const shippedValue = GoTranspiler.prototype.goSafeDictUnboxValue;
+    GoTranspiler.prototype.goSafeDictUnboxValue = function (declaration, identation: number) {
+        if (goInBackedDictLocals.has (declaration) && (this.goSafeDictLocalUnbox (declaration) === GO_SAFE_DICT_LOCAL_TYPE)) {
+            const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, (i === 0) ? identation : 0).trimStart ());
+            return 'this.SafeDictMap(' + args.join (', ') + ')';
+        }
+        return shippedValue.call (this, declaration, identation);
     };
 }

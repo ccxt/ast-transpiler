@@ -1209,9 +1209,10 @@ describe('go pointer-typed Safe* body locals', () => {
         "    }\n" +
         "}\n";
         const output = squash(transpiler.transpileGo(input).content);
-        // a typed map answers `in` with a pasted comma-ok closure: the box keeps the helper
-        expect(output).toContain("var data any = this.SafeDict(item, \"data\")");
-        expect(output).not.toContain("_, ok := data[");
+        // the literal-key `in` prints the if-init comma-ok on the typed map, never a pasted closure
+        expect(output).toContain("var data map[string]any = this.SafeDictMap(item, \"data\")");
+        expect(output).toContain("if _, ok := data[\"oi\"]; ok {");
+        expect(output).not.toContain("func() bool");
     });
     test('a SafeDict local whose truthiness is read stays any', () => {
         const input =
@@ -18324,5 +18325,41 @@ describe('nullable bool option pairs bind as Go (*bool, map[string]any)', () => 
         expect(out).toContain('utaOptionPtr, paramsUta := this.HandleOptionBoolAndParamsNullable(');
         expect(out).toContain('return *utaOptionPtr');
         expect(out).not.toContain('utaOptionparamsUtaVariable');
+    });
+});
+
+describe('go safeDict locals backing only hoisted literal-key in reads', () => {
+    let transpiler: Transpiler;
+    beforeAll(() => {
+        transpiler = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    });
+    test('a safeDict local read by two hoisted literal `in` reads is a map with comma-ok reads', () => {
+        const input = "class Test {\n" +
+            "    run (message) {\n" +
+            "        const data = this.safeDict (message, 'data');\n" +
+            "        if ((data !== undefined) && (('oi' in data) || ('orderId' in data))) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return 2;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain('var data map[string]any = this.SafeDictMap(message, "data")');
+        expect(output).toContain('_, has1 := data["oi"]');
+        expect(output).not.toContain('InOp(data');
+    });
+    test('an identifier-keyed `in` read keeps the box', () => {
+        const input = "class Test {\n" +
+            "    run (message, k) {\n" +
+            "        const data = this.safeDict (message, 'data');\n" +
+            "        if ((data !== undefined) && ((k in data) || ('orderId' in data))) {\n" +
+            "            return 1;\n" +
+            "        }\n" +
+            "        return 2;\n" +
+            "    }\n" +
+            "}\n";
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain('var data map[string]any');
+        expect(output).toContain('InOp(data, k)');
     });
 });
