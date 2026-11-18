@@ -6880,6 +6880,25 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(mixed).not.toContain('var v any = ids[j]');
     });
 
+    test('toArray of an endpoint response, a let rebound only by endpoint awaits and string-literal pushes drop DerefScalar', () => {
+        const hooked = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoHooks(hooked.goTranspiler);
+        const transpile = (ts: string) => squash(hooked.transpileGo(ts).content);
+        const cls = (body: string) =>
+            "class Test {\n    toArray (a) { return a; }\n    safeString (a, b) { return undefined; }\n    publicGetRows (p) { return undefined; }\n    privateGetRows (p) { return undefined; }\n    async f (a: any) {\n" + body + "        return a;\n    }\n}\n";
+        const loop = "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n";
+        const toArray = transpile(cls("        let response = undefined;\n        if (a) {\n            response = await this.publicGetRows (a);\n        } else {\n            response = await this.privateGetRows (a);\n        }\n        const rows = this.toArray (response);\n" + loop));
+        expect(toArray).toContain('var v any = rows[i]');
+        const literals = transpile(cls("        const rows = [];\n        rows.push ('a');\n        rows.push ('b');\n" + loop));
+        expect(literals).toContain('rows[i]');
+        expect(literals).not.toContain('DerefScalar(rows[i])');
+        // negatives: a non-endpoint write, a pushed Safe* scalar
+        const foreign = transpile(cls("        let response = undefined;\n        response = await this.publicGetRows (a);\n        response = a;\n        const rows = this.toArray (response);\n" + loop));
+        expect(foreign).not.toContain('var v any = rows[i]');
+        const scalar = transpile(cls("        const rows = [];\n        rows.push (this.safeString (a, 'x'));\n" + loop));
+        expect(scalar).toContain('DerefScalar(rows[i])');
+    });
+
     test('negative controls keep the guard closure', () => {
         // a counter that moves in the body
         expect(transpile(fixture("for (let i = 0; i < list.length; i++)", "i = i + 1; const v = list[i]; a += v;"))).toContain('if i >= 0 && i < len(list)');

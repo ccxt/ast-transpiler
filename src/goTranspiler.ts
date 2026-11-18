@@ -28714,6 +28714,11 @@ ${tryBodyBlock}
             if (thisCall(value, (name) => /^(parse[A-Z]\w*|safeDict2?)$/.test(name))) {
                 return true;
             }
+            // a scalar that prints as a plain Go value: a literal or a proven Go string
+            if ((value?.kind === SyntaxKind.StringLiteral) || (value?.kind === SyntaxKind.NumericLiteral)
+                || (value?.kind === SyntaxKind.NoSubstitutionTemplateLiteral) || this.goStringValueNodeIsProven(value)) {
+                return true;
+            }
             try {
                 return objectType(checker.getTypeAtLocation(value));
             } catch (err) {
@@ -28736,6 +28741,11 @@ ${tryBodyBlock}
             if (thisCall(value, (name) => name === 'arrayConcat')) {
                 return (value.arguments.length === 2) && value.arguments.every((a: any) => listValue(a, hops + 1, self));
             }
+            // toArray / sortBy / filterBy / arraySlice hand back elements (or dict values) of a decoded JSON document
+            if (thisCall(value, (name) => /^(toArray|sortBy2?|filterBy|arraySlice)$/.test(name)) && (value.arguments.length >= 1)) {
+                const source: any = unwrap(value.arguments[0]);
+                return (hops < 3) && (listValue(source, hops + 1) || this.goJsonOriginContainer(source));
+            }
             // Object.values (dict): the Go dictionary stores plain values (element writes deref), so
             // its values are not scalar pointers
             if ((value?.kind === SyntaxKind.CallExpression) && (value.expression?.kind === SyntaxKind.PropertyAccessExpression)
@@ -28753,6 +28763,17 @@ ${tryBodyBlock}
                     && (this.goEnclosingFunction(hop) === this.goEnclosingFunction(value))
                     && (this.goNameWriteSites(this.goEnclosingFunction(hop), value.text, hop).length === 0)) {
                     return listValue(hop.initializer, hops + 1);
+                }
+                // `let response = undefined` rebound only by `response = await this.<endpoint>(..)`: a JSON document or nil
+                const absent = (e: any): boolean => (e === undefined) || (unwrap(e)?.kind === SyntaxKind.NullKeyword)
+                    || ((unwrap(e)?.kind === SyntaxKind.Identifier) && (unwrap(e).text === 'undefined'));
+                const scope: any = this.goEnclosingFunction(hop);
+                if ((hop?.kind === SyntaxKind.VariableDeclaration) && (scope === this.goEnclosingFunction(value))
+                    && (absent(hop.initializer) || listValue(hop.initializer, hops + 1))) {
+                    const writes = this.goNameWriteSites(scope, value.text, hop);
+                    return (writes.length > 0) && writes.every((site: any) => (site.parent?.kind === SyntaxKind.BinaryExpression)
+                        && (site.parent.left === site) && (site.parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                        && (unwrap(site.parent.right)?.kind === SyntaxKind.AwaitExpression) && listValue(site.parent.right, hops + 1));
                 }
             }
             try {
