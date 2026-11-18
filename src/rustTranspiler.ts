@@ -20173,6 +20173,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeMapAccess(receiverText: string, receiverNode: Node, keyText: string): string | undefined {
+        // an inlined map row prints its source read, which is not a declared Dict local
+        if (isIdentifier(receiverNode) && (this.annotatedMapRowUse(receiverNode) !== undefined)) return undefined;
         // ral-50c: an `Option<Market>` local reads through `KeyRead` (Null when empty), as `printOptMarketKeyRead` does
         if (isIdentifier(receiverNode) && this.rustOptMarketLocalOf(receiverNode) !== undefined && RustTranspiler.rustBearerKeyTextOk(keyText)) {
             return `crate::value::KeyRead::key_read(&&${receiverText}, "${this.escapeRustStringLiteral(keyText)}")`;
@@ -26656,6 +26658,8 @@ export class RustTranspiler extends BaseTranspiler {
             return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}")`;
         }
         if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
+        // an inlined map row (annotatedMapRowSource) has no local: its read prints through the row's source
+        if (this.annotatedMapRowUse(recv) !== undefined) return undefined;
         const optMarket = this.printOptMarketKeyRead(node); if (optMarket !== undefined) return optMarket;
         if (this.rustMarketSlotParamOf(recv) !== undefined) {
             const k = isElementAccessExpression(node) ? String((this.rustSkipWrappers(node.argumentExpression) as any).text) : String(node.name.text);

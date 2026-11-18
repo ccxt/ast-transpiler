@@ -370,15 +370,17 @@ var BaseTranspiler = class {
     scope.forEachChild(visit);
     return found;
   }
-  // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement: a port
-  // without a typed Map local prints that read as `m[k][key]`, exactly the code before the annotation
+  // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement, or
+  // `const row: Dict = m[0]` (m not written after it) read only as `row['lit']` later in its block: a port
+  // without a typed Map local prints each read as `m[k][key]`, exactly the code before the annotation
   annotatedMapRowSource(declaration) {
     const list = declaration?.parent;
     const init = declaration?.initializer;
     const checker = this.checkerOrUndefined();
-    if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name?.kind !== SyntaxKind.Identifier || declaration.type?.kind !== SyntaxKind.TypeReference || declaration.type.typeName?.text !== "Dict" || list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0 || list.parent?.kind !== SyntaxKind.VariableStatement || list.parent.parent?.kind !== SyntaxKind.Block || init?.kind !== SyntaxKind.ElementAccessExpression || init.expression?.kind !== SyntaxKind.Identifier || init.argumentExpression?.kind !== SyntaxKind.Identifier || checker === void 0) {
+    if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name?.kind !== SyntaxKind.Identifier || declaration.type?.kind !== SyntaxKind.TypeReference || declaration.type.typeName?.text !== "Dict" || list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0 || list.parent?.kind !== SyntaxKind.VariableStatement || list.parent.parent?.kind !== SyntaxKind.Block || init?.kind !== SyntaxKind.ElementAccessExpression || init.expression?.kind !== SyntaxKind.Identifier || init.argumentExpression?.kind !== SyntaxKind.Identifier && init.argumentExpression?.kind !== SyntaxKind.NumericLiteral || checker === void 0) {
       return void 0;
     }
+    const literalRow = init.argumentExpression.kind === SyntaxKind.NumericLiteral;
     const block = list.parent.parent;
     const next = block.statements[block.statements.indexOf(list.parent) + 1];
     let scope = block;
@@ -389,7 +391,7 @@ var BaseTranspiler = class {
       return void 0;
     }
     const declOf = (n) => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
-    const bound = [declOf(init.expression), declOf(init.argumentExpression)];
+    const bound = literalRow ? [declOf(init.expression)] : [declOf(init.expression), declOf(init.argumentExpression)];
     if (bound.some((d) => d === void 0)) {
       return void 0;
     }
@@ -401,19 +403,20 @@ var BaseTranspiler = class {
       const target = declOf(n);
       const up = n.parent;
       if (bound.includes(target)) {
-        return up?.kind === SyntaxKind.BinaryExpression && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment || up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression;
+        return (!literalRow || n.end > list.parent.pos) && (up?.kind === SyntaxKind.BinaryExpression && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment || up?.kind === SyntaxKind.PrefixUnaryExpression || up?.kind === SyntaxKind.PostfixUnaryExpression);
       }
       if (target !== declaration) {
         return false;
       }
       const grand = up?.parent;
-      if (up?.kind !== SyntaxKind.ElementAccessExpression || up.expression !== n || n.pos < next.pos || n.end > next.end || grand?.kind === SyntaxKind.BinaryExpression && grand.left === up || grand?.kind === SyntaxKind.DeleteExpression) {
+      const inside = literalRow ? n.pos >= next.pos && n.end <= block.end && up?.argumentExpression?.kind === SyntaxKind.StringLiteral : n.pos >= next.pos && n.end <= next.end;
+      if (up?.kind !== SyntaxKind.ElementAccessExpression || up.expression !== n || !inside || grand?.kind === SyntaxKind.BinaryExpression && grand.left === up || grand?.kind === SyntaxKind.DeleteExpression) {
         return true;
       }
       uses++;
       return false;
     });
-    return !bad && uses === 1 ? init : void 0;
+    return !bad && (uses === 1 || literalRow && uses > 1) ? init : void 0;
   }
   annotatedMapRowUse(node) {
     if (node?.parent?.kind !== SyntaxKind.ElementAccessExpression || node.parent.expression !== node) {
@@ -37465,7 +37468,8 @@ ${ind}}
     if (shapedRead !== void 0) {
       return shapedRead;
     }
-    if (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" || this.goBaseCacheField(baseExpr) === "Balance") {
+    const literalRow = this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind5.NumericLiteral;
+    if (!literalRow && (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" || this.goBaseCacheField(baseExpr) === "Balance")) {
       if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node) && !this.goMarketComparisonElementRead(node)) {
         return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
       }
@@ -37477,7 +37481,7 @@ ${ind}}
         return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
       }
     }
-    if (this.goNativeMapLocalRead(node, baseExpr, keys[0], keyStrs[0])) {
+    if (!literalRow && this.goNativeMapLocalRead(node, baseExpr, keys[0], keyStrs[0])) {
       return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
     }
     let acc = containerStr;
@@ -73348,6 +73352,8 @@ ${ind}let ${view}: &${map} = &${arc};
     }
   }
   printNativeMapAccess(receiverText, receiverNode, keyText) {
+    if (isIdentifier3(receiverNode) && this.annotatedMapRowUse(receiverNode) !== void 0)
+      return void 0;
     if (isIdentifier3(receiverNode) && this.rustOptMarketLocalOf(receiverNode) !== void 0 && _RustTranspiler.rustBearerKeyTextOk(keyText)) {
       return `crate::value::KeyRead::key_read(&&${receiverText}, "${this.escapeRustStringLiteral(keyText)}")`;
     }
@@ -79753,6 +79759,8 @@ ${iden}}`;
       return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}")`;
     }
     if (recv === void 0 || !isIdentifier3(recv) || !this.rustDictKeyReadUse(recv))
+      return void 0;
+    if (this.annotatedMapRowUse(recv) !== void 0)
       return void 0;
     const optMarket = this.printOptMarketKeyRead(node);
     if (optMarket !== void 0)

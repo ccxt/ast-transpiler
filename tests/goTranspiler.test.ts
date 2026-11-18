@@ -18761,6 +18761,18 @@ class x {
         expect(transpiler.transpileGo(src('const row = m[s];')).content).toMatch(/\brow\b/);
         expect(transpiler.transpileGo(src('const row: Dict = m[s];', 'return row[tf];', 's = s + tf;')).content).toMatch(/\brow\b/);
     });
+    test('POSITIVE an m[0] row read by literal keys in later statements prints its source, no local', () => {
+        const out = transpiler.transpileGo(src('const row: Dict = m[0];', 'const a = row[\'a\'];\n        return [ a, row[\'b\'] ];')).content;
+        expect(out).not.toMatch(/\brow\b/);
+        expect(out).toContain('GetValue(GetValue(m, 0), "a")');
+        expect(out).not.toContain('GetValue(m, 0)["');
+    });
+    test('an m[0] row read by a variable key, written, or with m written after it keeps the local', () => {
+        expect(transpiler.transpileGo(src('const row: Dict = m[0];', 'return [ row[\'a\'], row[tf] ];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row: Dict = m[0];', 'row[\'a\'] = 1;\n        return row[\'b\'];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row: Dict = m[0];', 'const a = row[\'a\'];\n        m = {};\n        return a;')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileGo(src('const row: Dict = m[0];', 'return row;')).content).toMatch(/\brow\b/);
+    });
 });
 
 describe('safeMarket binds its marketId slot as *string', () => {

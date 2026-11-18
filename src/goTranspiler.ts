@@ -29743,7 +29743,9 @@ ${tryBodyBlock}
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
         // yields the identical value without the helper call
-        if ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || (this.goBaseCacheField(baseExpr) === 'Balance')) {
+        // an inlined `m[0]` map row (annotatedMapRowSource) prints its source read, which is not a Go map
+        const literalRow = (this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind.NumericLiteral);
+        if (!literalRow && ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || (this.goBaseCacheField(baseExpr) === 'Balance'))) {
             if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)
                 && !this.goMarketComparisonElementRead(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
@@ -29764,7 +29766,7 @@ ${tryBodyBlock}
             }
         }
 
-        if (this.goNativeMapLocalRead(node, baseExpr, keys[0], keyStrs[0])) {
+        if (!literalRow && this.goNativeMapLocalRead(node, baseExpr, keys[0], keyStrs[0])) {
             return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
         }
 
