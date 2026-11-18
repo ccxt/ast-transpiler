@@ -6416,6 +6416,7 @@ describe ('csharp base dictionary views', () => {
             const out = printed('        this.currencies[\'BTC\'] = code;\n        delete this.currencies[\'ETH\'];');
             expect(out).not.toContain('currenciesDict');
         });
+
     });
 });
 
@@ -7380,6 +7381,40 @@ describe ('csharp declared member types', () => {
             const noViews = printed(ts, true, { ...THIS, urls: { type: 'IDictionary<string, object>', initializer: 'new dict()' } });
             expect(noViews).not.toContain('urlsApiSections');
             expect(noViews).not.toContain('RefreshUrlsViews');
+        });
+
+        test('a getter-only entry view declared in Exchange.Options.cs replaces the nested read; a settable one does not', () => {
+            const os = require('os');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csv-'));
+            const file = path.join(dir, 'ts', 'src', 'venue.ts');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.mkdirSync(path.join(dir, 'cs', 'ccxt', 'base'), { recursive: true });
+            fs.writeFileSync(file, 'class Exchange {\n    exceptions: any;\n    options: any;\n    f () { const a = this.exceptions["ws"]["exact"]; const b = this.options["ws"]["x"]; return [ a, b ]; }\n}\n');
+            fs.writeFileSync(path.join(dir, 'cs', 'ccxt', 'base', 'Exchange.Options.cs'), [
+                'public partial class BaseExchange',
+                '{',
+                '    public IDictionary<string, object> exceptions { get; set; } = new dict();',
+                '    public IDictionary<string, object> options { get; set; } = new dict();',
+                '    public IDictionary<string, object> exceptionsWs',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("ws")) ? d["ws"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> optionsWs { get; set; }',
+                '}',
+            ].join('\n'));
+            const out = new Transpiler(config as any).transpileCSharpByPath(file).content;
+            expect(out).toContain('object a = (this.exceptionsWs != null && this.exceptionsWs.ContainsKey("exact") ? this.exceptionsWs["exact"] : null);');
+            expect(out).not.toContain('optionsWs');
+            expect(out).toContain('getValue((this.options != null && this.options.ContainsKey("ws") ? this.options["ws"] : null), "x")');
+        });
+
+        test('a section read with a string-declared key carries the helper null-key test', () => {
+            const ts = BASE + '    f (part: string) { return this.urls["api"]["ws"][part]; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.urlsApiSections.ContainsKey("ws") && part != null && this.urlsApiSections["ws"].ContainsKey((string)part) ? this.urlsApiSections["ws"][(string)part] : null)');
+            expect(out).not.toContain('getValue(');
+            const numeric = BASE + '    f (part: number) { return this.urls["api"]["ws"][part]; }\n}';
+            expect(printed(numeric, true)).not.toContain('urlsApiSections');
         });
 
         test('a nested write below an entry owes no refresh and a comparison is no write', () => {

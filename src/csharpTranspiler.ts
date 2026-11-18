@@ -353,7 +353,7 @@ function csharpReadDeclaredMembers(root: string, owner: 'this' | 'client'): Map<
         content = (at < 0) ? '' : content.slice(at);
     }
     const lines = content.split('\n');
-    const members = new Map<string, { type: string, initializer?: string, routed: boolean }>();
+    const members = new Map<string, { type: string, initializer?: string, routed: boolean, body?: string }>();
     for (let i = 0; i < lines.length; i++) {
         const match = CSHARP_DECLARED_LINE.exec(lines[i]);
         if (match === null || /^(?:class|enum|interface|struct|delegate|event|const)$/.test(match[1])) {
@@ -365,18 +365,21 @@ function csharpReadDeclaredMembers(root: string, owner: 'this' | 'client'): Map<
         }
         let initializer: string | undefined;
         let routed = false;
+        let body: string | undefined;
         if (rest.startsWith('=')) {
             initializer = rest.slice(1).replace(/;.*$/, '').trim();
         } else if (rest.startsWith('{')) {
             const block = csharpBraceBlock(lines, i);
+            body = block;
             routed = block.includes('wrapWsCache');
             const after = /\}\s*=\s*([^;]*);/.exec(block.split('\n')[0]);
             initializer = (after === null) ? undefined : after[1].trim();
         } else if (rest === '') {
-            routed = csharpBraceBlock(lines, i + 1).includes('wrapWsCache');
+            body = csharpBraceBlock(lines, i + 1);
+            routed = body.includes('wrapWsCache');
         }
         if (!members.has(name)) {
-            members.set(name, { type: type.replace(/\s+/g, ' ').trim(), initializer, routed });
+            members.set(name, { type: type.replace(/\s+/g, ' ').trim(), initializer, routed, body });
         }
     }
     const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
@@ -387,6 +390,15 @@ function csharpReadDeclaredMembers(root: string, owner: 'this' | 'client'): Map<
             const match = new RegExp('^' + name + '([A-Z]\\w*)Sections$').exec(view);
             if (match !== null && /^Dictionary<string,\s*IDictionary<string,\s*object>>$/.test(other.type)) {
                 views[match[1].charAt(0).toLowerCase() + match[1].slice(1)] = { view: name + match[1], sections: view };
+            }
+        }
+        // a getter-only `<name><Key>` dictionary property reading `this.<name>`'s literal entry (exceptionsWs -> exceptions['ws'])
+        for (const [ view, other ] of members) {
+            const match = new RegExp('^' + name + '([A-Z]\\w*)$').exec(view);
+            const key = (match === null) ? '' : match[1].charAt(0).toLowerCase() + match[1].slice(1);
+            if (match !== null && views[key] === undefined && /^IDictionary<string,\s*object>$/.test(other.type) && other.body !== undefined
+                && !/\bset\b/.test(other.body) && other.body.includes('this.' + name) && other.body.includes('ContainsKey("' + key + '")')) {
+                views[key] = { view };
             }
         }
         if (Object.keys(views).length > 0) {
@@ -3522,7 +3534,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     // urlsApiSections): the section read becomes the view's two indexers, carrying the helper's missing-key tests. The view is re-derived by the refresh method after every write
     // of the member (csharpMemberRefresh)
     csharpMemberSectionRead(expression, argumentExpression): string | undefined {
-        if (!isStringLiteralLikeNode(argumentExpression)) {
+        const literalKey = isStringLiteralLikeNode(argumentExpression);
+        if (!literalKey && !(isIdentifier(argumentExpression) && this.csharpIsPlainRead(argumentExpression.parent))) {
             return undefined;
         }
         const section = this.csharpUnwrapAssertion(expression);
@@ -3545,6 +3558,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         const sections = `this.${view.sections}`;
         const first = this.printNode(section.argumentExpression, 0);
         const second = this.printNode(argumentExpression, 0);
+        if (!literalKey) {
+            // an identifier key: the helper's null-key test, and its `(string)` cast for an object key
+            const kind = this.csharpMemberKeyKind(argumentExpression);
+            if (kind !== 'string' && kind !== 'string?' && kind !== 'object' && kind !== 'param') {
+                return undefined;
+            }
+            const key = (kind === 'object' || kind === 'param') ? `(string)${second}` : second;
+            return `(${sections}.ContainsKey(${first}) && ${second} != null && ${sections}[${first}].ContainsKey(${key}) ? ${sections}[${first}][${key}] : null)`;
+        }
         return `(${sections}.ContainsKey(${first}) && ${sections}[${first}].ContainsKey(${second}) ? ${sections}[${first}][${second}] : null)`;
     }
 
