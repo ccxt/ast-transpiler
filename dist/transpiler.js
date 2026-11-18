@@ -83164,7 +83164,7 @@ ${iden}}`;
    *  every write is `d[x] = v` with v one resolved kind (cache or dict), read only by `d[..]` and one `Object.keys (d)`,
    *  and `k` an element of that keys list: the element is present and holds that kind. Decided from the AST. */
   rust92rfKeyedLocalElementKind(x, depth = 0) {
-    let n = this.rustStripWrappers(x);
+    const n = this.rustStripWrappers(x);
     if (n === void 0 || depth > 2)
       return void 0;
     const constLocal = (id) => {

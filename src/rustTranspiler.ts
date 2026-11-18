@@ -30155,7 +30155,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  every write is `d[x] = v` with v one resolved kind (cache or dict), read only by `d[..]` and one `Object.keys (d)`,
      *  and `k` an element of that keys list: the element is present and holds that kind. Decided from the AST. */
     rust92rfKeyedLocalElementKind(x: Node, depth = 0): 'cache' | 'dict' | undefined {
-        let n: Node | undefined = this.rustStripWrappers(x);
+        const n: Node | undefined = this.rustStripWrappers(x);
         if (n === undefined || depth > 2) return undefined;
         const constLocal = (id: Node | undefined): VariableDeclaration | undefined => {
             const d: Node | undefined = id !== undefined && isIdentifier(id) ? this.rustDeclarationOfIdentifier(id) : undefined;
