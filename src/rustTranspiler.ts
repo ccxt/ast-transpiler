@@ -19320,7 +19320,26 @@ export class RustTranspiler extends BaseTranspiler {
             node.forEachChild(visit);
         };
         (fn as any).body.forEachChild(visit);
+        if (ok && this.rustShadowEnumKeysLocal(fn, name, paramSymbol)) return undefined;
         return ok && reads > 0 ? { reads } : undefined;
+    }
+
+    /** A param read by `Object.keys/values` whose `x[k]` / `k in x` key is a local: the local's own typing
+     *  depends on the box, so the parameter keeps it. */
+    private rustShadowEnumKeysLocal(fn: Node, name: string, paramSymbol: any): boolean {
+        let enumUse = false, localKey = false;
+        const visit = (node: Node) => {
+            if (isIdentifier(node) && node.text === name && this.rustSymbolOf(node) === paramSymbol) {
+                const up: any = node.parent;
+                if (isCallExpression(up) && this.bearerEnumArg(up) !== undefined) enumUse = true;
+                const key: any = isElementAccessExpression(up) && up.expression === node ? up.argumentExpression
+                    : isBinaryExpression(up) && up.right === node ? up.left : undefined;
+                if (key !== undefined && isIdentifier(key) && !isParameterDeclaration(this.rustDeclarationOfIdentifier(key) as any)) localKey = true;
+            }
+            node.forEachChild(visit);
+        };
+        (fn as any).body.forEachChild(visit);
+        return enumUse && localKey;
     }
 
     /** One reference of a shadow candidate: true only for a read the shadow can
@@ -19350,6 +19369,8 @@ export class RustTranspiler extends BaseTranspiler {
         // `this.safe<Type>(x, 'k'[, default])` — the read families the shadow
         // inlines (literal keys only). Any other call keeps the box.
         if (isCallExpression(parent) && kind === RUST_PARAM_SHADOWS.MAP) {
+            // `Object.keys/values(x)` outside the ws tier: the shadow map's own iterators (no ws tag to filter)
+            if (this.bearerEnumArg(parent) !== undefined) return !literalKeys && !this.rust40bProTier(id) && parent.arguments[0] === id;
             if (this.rustShadowSafeCallee(parent) === undefined) return false;
             const args: NodeArray<Expression> = parent.arguments;
             if (args[0] !== id || args.length < 2 || args.length > 3) return false;
@@ -21328,12 +21349,20 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::Bool(${this.nativeValuePredicateText('array', node?.arguments?.[0], parsedArg) ?? `is_array(&${parsedArg})`})`;
     }
 
+    /** `Object.keys/values(p)` on a shadowed Dict parameter (`IndexMap`; `Null` shadows the empty map, the helper's `[]`). */
+    printShadowEnum(node: any, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const shadow = arg === undefined ? undefined : this.rustParamShadowOf(arg);
+        if (shadow === undefined || shadow.kind !== RUST_PARAM_SHADOWS.MAP || node.arguments[0] !== arg) return undefined;
+        return kind === 'keys' ? `Value::Array(${shadow.name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${shadow.name}.values().cloned().collect())`;
+    }
+
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
+        return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built

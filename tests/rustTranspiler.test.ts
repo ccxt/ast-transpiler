@@ -4436,6 +4436,35 @@ describe('rust parameter shadows', () => {
         expect(output).toContain('match data.get("ok") { Some(Value::Bool(__b)) => Value::Bool(*__b), _ => Value::Bool(false) }');
     });
 
+    test('Object.keys / Object.values read the shadow map', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        const keys = Object.keys (data);\n" +
+            "        const values = Object.values (data);\n" +
+            "        return [ keys, values, data['id'] ];\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('let data = data.as_map().unwrap_or(&__data_empty);');
+        expect(output).toContain('Value::Array(data.keys().cloned().map(Value::from).collect())');
+        expect(output).toContain('Value::Array(data.values().cloned().collect())');
+        expect(output).not.toContain('object_keys(');
+        expect(output).not.toContain('object_values(');
+    });
+
+    test('Object.keys keeps the helper when the parameter is also written', () => {
+        const ts = DICT_DECL +
+            "class C {\n" +
+            "    f (data: Dict): any {\n" +
+            "        data = {};\n" +
+            "        return Object.keys (data);\n" +
+            "    }\n" +
+            "}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('__data_empty');
+    });
+
     test('the `in` operator reads the shadow', () => {
         const ts = DICT_DECL +
             "class C {\n" +
