@@ -9501,7 +9501,8 @@ const CCXT_GO_TUPLE_RESULT_METHODS = [ 'handleMarketTypeAndParams', 'handleSubTy
     'handleOptionBoolAndParams', 'handleOptionBoolAndParams2', 'handleOptionIntegerAndParams', 'handleOptionIntegerAndParams2',
     'handleOptionStringAndParams2',
     'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
-    'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2' ];
+    'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2',
+    'handleTriggerDirectionAndParams' ];
 // element 0 unwrap per method (element 1 is always the params map); default SafeStringPtr
 const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handleOptionBoolAndParams': 'GetValueBool',
     'handleOptionBoolAndParams2': 'GetValueBool', 'handleOptionIntegerAndParams': 'Int64Value',
@@ -9513,7 +9514,7 @@ const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handl
 const CCXT_GO_PAIR_SLOT_0 = { 'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool', 'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
     'handleMarketTypeAndParams': '*string', 'handleSubTypeAndParams': '*string', 'handleOptionStringAndParams': '*string',
-    'handleOptionStringAndParams2': '*string', 'handleMarginModeAndParams': '*string' };
+    'handleOptionStringAndParams2': '*string', 'handleMarginModeAndParams': '*string', 'handleTriggerDirectionAndParams': '*string' };
 // the value overload (`defaultValue: boolean` / `number`) with a true/false or integer literal default returns
 // Go (bool|int64, map[string]any); every other call is printed as <Name>Nullable with the []any result
 const CCXT_GO_TUPLE_BOOL_DEFAULT_SLOT = { 'handleOptionBoolAndParams': 3, 'handleOptionBoolAndParams2': 4,
@@ -13755,7 +13756,7 @@ const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
 const GO_BASE_PAIR_TWINS: { [name: string]: string } = {
     'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool',
-    'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
+    'handleParamInteger': '*int64', 'handleParamInteger2': '*int64', 'handleTriggerDirectionAndParams': '*string',
 };
 
 // base helpers typed `any[]` that hand back, at this index, the params map they were given
@@ -13775,7 +13776,7 @@ const GO_TUPLE_NATIVE_BINDING_PRODUCERS = [
     'HandleOptionStringAndParams2', 'HandleOptionAndParams', 'HandleOptionAndParams2',
     'HandleNetworkCodeAndParams', 'HandleWithdrawTagAndParams', 'HandlePostOnly',
     'HandleParamString', 'HandleParamString2', 'HandleParamInteger', 'HandleParamInteger2',
-    'HandleParamBool', 'HandleParamBool2',
+    'HandleParamBool', 'HandleParamBool2', 'HandleTriggerDirectionAndParams',
 ];
 
 // slot 0 of the base `[value, params]` helpers: the Go twin boxes a nil-able pointer there. The
