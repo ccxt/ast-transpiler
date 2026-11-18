@@ -44108,6 +44108,30 @@ function goListElementIsPlainValue(goTranspiler, node) {
     return shipped === "deref" && this.goListElementsArePointerFree(node.expression) ? "native" : shipped;
   };
 }
+var GO_DEREF_AT_ENTRY_SAFE_ARG0 = /^safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp)(?:2)?$/;
+function goElementReadHasDerefConsumer(goTranspiler, node) {
+  let child = node;
+  let parent = node?.parent;
+  while (parent?.kind === SyntaxKind5.ParenthesizedExpression || parent?.kind === SyntaxKind5.AsExpression) {
+    child = parent;
+    parent = parent.parent;
+  }
+  if (parent?.kind === SyntaxKind5.CallExpression && parent.arguments[0] === child && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression.expression?.kind === SyntaxKind5.ThisKeyword) {
+    return GO_DEREF_AT_ENTRY_SAFE_ARG0.test(`${parent.expression.name?.text ?? ""}`);
+  }
+  if (parent?.kind === SyntaxKind5.VariableDeclaration && parent.initializer === child) {
+    return ccxtGoScalarElementReadType(goTranspiler, child) !== void 0;
+  }
+  return false;
+}
+{
+  const elementRead = GoTranspiler.prototype.goNativeListElementRead;
+  GoTranspiler.prototype.goNativeListElementRead = function(node, containerStr, keyNode, keyStr) {
+    const shipped = elementRead.call(this, node, containerStr, keyNode, keyStr);
+    const plain = `${containerStr}[${keyStr}]`;
+    return shipped === `DerefScalar(${plain})` && goElementReadHasDerefConsumer(this, node) ? plain : shipped;
+  };
+}
 
 // src/javaTranspiler.ts
 init_esm_shims();

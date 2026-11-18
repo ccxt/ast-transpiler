@@ -6839,6 +6839,16 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(output).not.toContain('func() any');
     });
 
+    test('an unproven list element handed whole to safeString arg 0 drops DerefScalar; other uses keep it', () => {
+        const cls = (body: string) => "class Test {\n    safeString (a, b) { return undefined; }\n    f (a: any) {\n" +
+            "        const list = [ a ];\n        for (let i = 0; i < list.length; i++) {\n            " + body + "\n        }\n        return a;\n    }\n}\n";
+        const safe = transpile(cls("const v = this.safeString (list[i], 'k'); a += v;"));
+        expect(safe).toContain('this.SafeString(list[i], "k")');
+        expect(safe).not.toContain('DerefScalar(list[i])');
+        expect(transpile(cls("const v = this.safeString (a, list[i]); a += v;"))).toContain('DerefScalar(list[i])');
+        expect(transpile(cls("const v = list[i]; a += v;"))).toContain('var v any = DerefScalar(list[i])');
+    });
+
     test('a hoisted length bound that reads this list counts', () => {
         const output = transpile(fixture("for (let i = 0; i < n; i++)", "const v = list[i]; a += v;", "const list = this.safeList (a, 'rows', []);\n        const n = list.length;\n        "));
         expect(output).toContain('var v any = list[i]');
@@ -6916,7 +6926,9 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         // negative: an unguarded pointer push keeps the pointer and DerefScalar
         const bare = transpile(cls("        const rows: string[] = [];\n        const id = this.safeString (a, 'id');\n        rows.push (id);\n" + loop));
         expect(bare).toContain('rows = append(rows, id)');
-        expect(bare).toContain('DerefScalar(rows[i])');
+        // the *string local's SafeStringPtr derefScalars the element itself
+        expect(bare).toContain('SafeStringPtr(rows[i])');
+        expect(bare).not.toContain('var v any = rows[i]');
     });
 
     test('pushed concatenations, case conversions and plain-typed locals drop DerefScalar', () => {
@@ -6935,7 +6947,9 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         const ptr = transpile(cls("        const rows = [];\n        const id = this.safeString (a, 'x');\n        rows.push (id);\n" + loop));
         expect(ptr).toContain('DerefScalar(rows[i])');
         const cond = transpile(cls("        const rows = [];\n        rows.push (a ? this.safeString (a, 'x') : 'y');\n" + loop));
-        expect(cond).toContain('DerefScalar(rows[i])');
+        // the string-typed local's SafeStringPtr derefScalars the element itself
+        expect(cond).toContain('SafeStringPtr(rows[i])');
+        expect(cond).not.toContain('var v any = rows[i]');
     });
 
     test('a prediction-tier bounded read of a list fed plain pushed values drops DerefScalar', () => {
