@@ -786,6 +786,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
+    goCheckerTypeIsNumberUnion(node: any): boolean;
     goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
     goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
@@ -810,7 +811,9 @@ export declare class GoTranspiler extends BaseTranspiler {
         clash: boolean;
         names: Map<any, string>;
     }>>;
+    goStringValueLocalName(node: any): string | undefined;
     goStringCallLocalName(call: any): string | undefined;
+    goNumberedLocalName(node: any, base: string): string | undefined;
     goSafeAccessorLocalArgs(initializer: any, accessor: 'safeDict' | 'safeList'): {
         container: any;
         key: any;
@@ -1436,6 +1439,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         safe?: string;
     } | undefined;
     goTuplePointerSlotReadAdmissible(ident: any, allowStore: boolean, goType?: string): boolean;
+    goTuplePointerSlotTruthyOperand(chain: any): boolean;
     goTuplePointerSlotNilProven(ident: any): boolean;
     goTuplePointerSlotScan(declaration: any, name: string, scope: any, allowStore: boolean, writeType?: {
         goType: string | undefined;
@@ -1512,6 +1516,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToStringCall(node: any, identation: any, name?: any): any;
+    goOwnBaseIntField(node: any): boolean;
     goToStringReceiverType(receiver: any, printedText: string): string | undefined;
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;

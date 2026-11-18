@@ -2836,6 +2836,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  comparison, a marker key) answers undefined and the parameter keeps its
      *  box. */
     private rustParamShadowUseCensus;
+    /** A param read by `Object.keys/values` whose `x[k]` / `k in x` key is a local: the local's own typing
+     *  depends on the box, so the parameter keeps it. */
+    private rustShadowEnumKeysLocal;
     /** One reference of a shadow candidate: true only for a read the shadow can
      *  print exactly (same proofs the emitted forms re-check). */
     private rustParamUseIsRead;
@@ -3142,6 +3145,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static isBoolValueExpression;
     printTernaryArm(node: any, identation?: number): string;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
+    /** `Object.keys/values(p)` on a shadowed Dict parameter (`IndexMap`; `Null` shadows the empty map, the helper's `[]`). */
+    printShadowEnum(node: any, kind: 'keys' | 'values'): string | undefined;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
@@ -5074,6 +5079,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReturnsBuildMapSlot(declaration: any, at: number): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
+    /** `xs[i].length` read (not written, not stepped): the element read feeds `Value::len` alone. */
+    rustElementLengthRead(access: any): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
      *  literal (or proven-number `Value`) index for a list. */
     rustReadBearerKeyOk(kind: 'list' | 'map', keyNode: any): boolean;
