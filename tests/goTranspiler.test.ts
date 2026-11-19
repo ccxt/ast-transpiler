@@ -1,6 +1,7 @@
 import { assert } from 'console';
 import { Transpiler, alignGoTrailingComments, goDictParamTypesSelfTest, goDynamicCallParamsCheck, goHandleErrorsCodeSelfTest, goNilJoinTypeSelfTest, goParseFrameParamTypesSelfTest, installCcxtGoDictParams, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoSignTyping, installFmGo5G01, installFmGo5G04, installFmGo5GP08, installFmGo5OG02, installRfGo5OwnedTables } from '../src/transpiler';
 import { SyntaxKind } from 'typescript/unstable/ast';
+import { ccxtGoWrapUrlsDeclaration } from '../src/goTranspiler';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -14019,6 +14020,18 @@ describe ('goInt64TupleSlot', () => {
             const out = print ({});
             expect (out).not.toContain ('var until *int64');
         });
+    });
+});
+
+describe ('goUrlsStringLeaves', () => {
+    test('a *string declaration of one whole view index reads the typed string-leaf view', () => {
+        expect(ccxtGoWrapUrlsDeclaration('\tvar url *string = this.UrlsApi["ws"]')).toBe('\tvar url *string = this.UrlsApiStrings["ws"]');
+        expect(ccxtGoWrapUrlsDeclaration('\tvar url *string = this.UrlsApiSections["ws"][k]')).toBe('\tvar url *string = this.UrlsApiSectionStrings["ws"][k]');
+    });
+    test('deeper, partial or helper-wrapped reads keep SafeStringPtr', () => {
+        expect(ccxtGoWrapUrlsDeclaration('\tvar url *string = this.UrlsApiSections["ws"]')).toBe('\tvar url *string = SafeStringPtr(this.UrlsApiSections["ws"])');
+        expect(ccxtGoWrapUrlsDeclaration('\tvar url *string = this.UrlsApi["ws"]["a"]')).toBe('\tvar url *string = SafeStringPtr(this.UrlsApi["ws"]["a"])');
+        expect(ccxtGoWrapUrlsDeclaration('\tvar url *string = GetValue(this.UrlsApiSections["a"]["b"], "c")')).toContain('SafeStringPtr(GetValue(');
     });
 });
 
