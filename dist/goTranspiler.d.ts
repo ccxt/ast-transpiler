@@ -359,6 +359,10 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
         '2': string;
         '3': string;
     };
+    ParseFundingHistories: {
+        '2': string;
+        '3': string;
+    };
 };
 export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     AddMarginAsync: string;

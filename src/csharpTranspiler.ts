@@ -774,6 +774,24 @@ const CSHARP_ASSIGNMENT_TOKENS = new Set<SyntaxKind>([
     SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
 ]);
 
+// `this.parseNumber ('0.0025')` in a `tiers` row: parseNumber is Convert.ToDouble(text, Invariant), the
+// correctly rounded double the same C# literal denotes, boxed as double either way
+function csharpFeeTierLiteral (node: any): string | undefined {
+    const arg = node?.arguments?.[0];
+    if ((node?.kind !== SyntaxKind.CallExpression) || (node.arguments.length !== 1) || (arg.kind !== SyntaxKind.StringLiteral)
+        || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (node.expression.name?.text !== 'parseNumber') || !/^-?\d+(\.\d+)?$/.test (arg.text)) { return undefined; }
+    let n = node.parent;
+    if (n?.kind !== SyntaxKind.ArrayLiteralExpression) { return undefined; }
+    while ((n !== undefined) && (n.kind === SyntaxKind.ArrayLiteralExpression || n.kind === SyntaxKind.PropertyAssignment || n.kind === SyntaxKind.ObjectLiteralExpression)) {
+        if ((n.kind === SyntaxKind.PropertyAssignment) && (n.name?.text === 'tiers')) {
+            return arg.text.includes ('.') ? arg.text : arg.text + '.0';
+        }
+        n = n.parent;
+    }
+    return undefined;
+}
+
 export class CSharpTranspiler extends BaseTranspiler {
 
     binaryExpressionsWrappers;
@@ -8684,6 +8702,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `parseInt(...)` / `parseFloat(...)` print the runtime helper call; the folds below replace
     // it with the exact box the helper returns, everything else falls through to the printer
     printCallExpression(node, identation) {
+        const feeTier = csharpFeeTierLiteral(node);
+        if (feeTier !== undefined) {
+            return feeTier;
+        }
         const declaredMember = this.csharpDeclaredDictMemberCall(node); // declared dictionary member call
         if (declaredMember !== undefined) {
             return declaredMember;

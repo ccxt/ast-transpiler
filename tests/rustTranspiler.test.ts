@@ -10666,6 +10666,22 @@ describe('typed market slots of the singular parsers', () => {
     });
 });
 
+describe('precision formatters lend their symbol', () => {
+    test('priceToPrecision / currencyToPrecision take Option<&str>, callers lend the string', () => {
+        const dir = path.join (rustFixtureRoot, 'lent-precision-symbol');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export type Str = string | undefined;\nexport default class Exchange {\n    currencies: any = {};\n    decimalToPrecision (x: any, m: any, p: any): any { return x; }\n    market (symbol: string): any { return undefined; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    priceToPrecision (symbol: Str, price: any): Str {\n        const market = this.market (symbol);\n        return this.decimalToPrecision (price, 0, market['precision']);\n    }\n    currencyToPrecision (code: Str, fee: any, networkCode: Str = undefined): Str {\n        const currency = this.currencies[code];\n        return this.decimalToPrecision (fee, 0, currency);\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    createOrder (symbol: string, price: any, code: string): any {\n        const a = this.priceToPrecision (symbol, price);\n        const b = this.priceToPrecision (symbol, price);\n        const c = this.currencyToPrecision (code, price);\n        return [ a, b, c, symbol, code ];\n    }\n}\n");
+        const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('(&self, symbol: Option<&str>, price: impl Into<crate::Value>)');
+        expect(base).toContain('(&self, code: Option<&str>, fee: Value');
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toMatch(/(?:priceToPrecision|price_to_precision)\(Some\(symbol\.as_str\(\)\)|(?:priceToPrecision|price_to_precision)\(symbol\.as_str\(\)/);
+        expect(out).not.toMatch(/(?:priceToPrecision|price_to_precision)\(symbol\.clone\(\)/);
+        expect(out).not.toMatch(/(?:currencyToPrecision|currency_to_precision)\(code\.clone\(\)/);
+    });
+});
+
 describe('typed market slots of the list helpers', () => {
     test('safeMarket / parseTrades / handleMarketTypeAndParams lend the market, Option<Market> locals lend it as is', () => {
         const dir = path.join (rustFixtureRoot, 'typed-list-market');
@@ -11254,7 +11270,7 @@ describe('rust currency producers return crate::types::Currency and their locals
         base = transpiler.transpileRustByPath(file).content;
     });
     test('currency / safeCurrency return the struct from the typed stores', () => {
-        expect(base).toContain('fn currency(&self, code: Value) -> crate::types::Currency');
+        expect(base).toContain('fn currency(&self, code: Option<&str>) -> crate::types::Currency');
         expect(base).toContain('-> crate::types::Currency {');
         expect(base).toContain('self.currencies_by_code_typed().records_by_id(');
         expect(base).toContain('self.currencies_by_id_typed().records_by_id(');
@@ -11262,11 +11278,11 @@ describe('rust currency producers return crate::types::Currency and their locals
         expect(base).toContain('<crate::types::Currency as crate::types::FromRaw>::from_raw(self.safeCurrencyStructure(');
     });
     test('currency locals are typed: native key reads, lent slot args, Option for nil-declared', () => {
-        expect(base).toContain('let mut currency: crate::types::Currency = self.currency(code);');
+        expect(base).toContain('let mut currency: crate::types::Currency = self.currency(code.as_str());');
         expect(base).toContain('crate::value::KeyRead::key_read(&&currency, "id")');
         expect(base).toContain('Some(&currency)');
         expect(base).toContain('let mut currency: Option<crate::types::Currency> = None;');
-        expect(base).toContain('currency = Some(self.currency(code));');
+        expect(base).toContain('currency = Some(self.currency(code.as_str()));');
         expect(base).toContain('currency.as_ref()');
         expect(base).not.toMatch(/FromRaw>::from_raw\(currency/);
     });
@@ -13059,8 +13075,8 @@ describe('pg: precision formatters answer Option<String> (results of other self 
         base = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'pg-precision', 'ts/src/base/Exchange.ts')).content;
     });
     test('base amountToPrecision / priceToPrecision (TS `Str`) and an override spelling `string` print -> Option<String>', () => {
-        expect(base).toMatch(/pub fn amountToPrecision\(&self, symbol: Value, amount: impl Into<crate::Value>\) -> Option<String> \{/);
-        expect(out).toMatch(/pub fn priceToPrecision\(&self, symbol: Value, price: impl Into<crate::Value>\) -> Option<String> \{/);
+        expect(base).toMatch(/pub fn amountToPrecision\(&self, symbol: Option<&str>, amount: impl Into<crate::Value>\) -> Option<String> \{/);
+        expect(out).toMatch(/pub fn priceToPrecision\(&self, symbol: Option<&str>, price: impl Into<crate::Value>\) -> Option<String> \{/);
     });
     test('their locals are Option<String> and a Value slot boxes the call once', () => {
         expect(out).toMatch(/let mut size: Option<String> = self\.amountToPrecision\(/);
@@ -14864,7 +14880,7 @@ describe('ral-yh: a safeList local rewritten only with its own kind holds the li
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut orders: Option<crate::value::List> = ');
         expect(out).toContain('orders.is_none()');
-        expect(out).toContain('orders = Value::from(vec![]).into_opt_list();');
+        expect(out).toContain('orders = Some(std::sync::Arc::new(vec![]));');
     });
 });
 
@@ -26969,5 +26985,43 @@ describe('rust safeMarket / safeSymbol borrowed marketId', () => {
         write ('ts/src/base/Exchange.ts', head + "    safeMarket (marketId: any = undefined, market: Market = undefined): MarketInterface { return market; }\n}\n");
         const out = transpiler.transpileRustByPath(write ('ts/src/venue.ts', "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseRow (row: any) {\n        return this.safeMarket (row['m']);\n    }\n}\n")).content;
         expect(out).not.toContain('Option<&str>');
+    });
+});
+
+describe('borrowed currency code', () => {
+    test('base currency (code: Str) takes Option<&str>; an any-typed code keeps Value', () => {
+        const dir = path.join (rustFixtureRoot, 'borrowed-currency-code');
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    currencies: Dict = {};\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    currency (code: Str): Dict {\n        if (code === undefined) {\n            return undefined;\n        }\n        return this.currencies[code];\n    }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchBalance (code: Str = undefined, params: Dict = {}): Promise<Dict> {\n        const a = this.currency (code);\n        const b = this.currency ('BNB');\n        return { 'a': a, 'b': b, 'code': code };\n    }\n}\n");
+        fs.mkdirSync (path.join (dir, 'ts/src/other'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/other/Loose.ts'), "export default class Loose {\n    currency (code: any): any {\n        return code;\n    }\n}\n");
+        const base = transpiler.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
+        expect(base).toContain('currency(&self, code: Option<&str>)');
+        expect(base).not.toContain('currency(&self, mut code: Value');
+        const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('self.currency(Some("BNB"))');
+        expect(out).not.toContain('self.currency(code.clone())');
+        const loose = transpiler.transpileRustByPath (path.join (dir, 'ts/src/other/Loose.ts')).content;
+        expect(loose).not.toContain('Option<&str>');
+    });
+});
+
+describe('optional list written a spread-free literal builds the list into Some', () => {
+    const write = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    hold (x: any): any { return x; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    safeString (o: any, k: any): any { return o[k]; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseThem (orders: Dict[]) {\n        const out = [];\n        for (let i = 0; i < orders.length; i++) {\n            out.push (orders[i]);\n        }\n        return out;\n    }\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('orders = [ a, "x" ]: Some(Arc::new(vec![..])), no into_opt_list', () => {
+        const out = write ('h13r15-pos', "    m (params: Dict = {}) {\n        const response = this.hold (params);\n        let orders = this.safeList (response, 'data', []);\n        if (orders === undefined) {\n            orders = [ this.safeString (params, 'a'), 'x' ];\n        }\n        return this.parseThem (orders);\n    }\n");
+        expect(out).toMatch(/orders = Some\(std::sync::Arc::new\(vec!\[.*\]\)\);/);
+        expect(out).not.toMatch(/orders = Value::from\(vec!/);
+    });
+    test('negative: a spread literal keeps the boxed conversion', () => {
+        const out = write ('h13r15-neg', "    m (params: Dict = {}) {\n        const response = this.hold (params);\n        let orders = this.safeList (response, 'data', []);\n        const more = this.safeList (response, 'more', []);\n        if (orders === undefined) {\n            orders = [ ...more ];\n        }\n        return this.parseThem (orders);\n    }\n");
+        expect(out).not.toMatch(/orders = Some\(std::sync::Arc::new/);
     });
 });

@@ -10776,3 +10776,18 @@ describe('java native multiply/replace on printer-proven operands', () => {
         }
     });
 });
+
+describe('fee tier parseNumber literals', () => {
+    const tr = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+    test('a literal parseNumber in a tiers row prints the Double constant', () => {
+        const input = "class A {\n    describe () {\n        return { 'fees': { 'tiers': { 'taker': [ [ this.parseNumber ('0'), this.parseNumber ('0.0025') ] ] } } };\n    }\n}\n";
+        const out = tr.transpileJava(input).content;
+        expect(out).toContain('0.0, 0.0025');
+        expect(out).not.toContain('parseNumber');
+    });
+    test('negatives: outside tiers, non-literal and non-decimal args keep the call', () => {
+        const input = "class A {\n    describe (x) {\n        return { 'a': [ this.parseNumber ('1') ], 'tiers': { 't': [ [ this.parseNumber (x), this.parseNumber ('1e3'), this.parseNumber ('.5') ] ] }, 'b': this.parseNumber ('2') };\n    }\n}\n";
+        const out = tr.transpileJava(input).content;
+        expect((out.match(/parseNumber\(/g) || []).length).toBe(5);
+    });
+});

@@ -11101,6 +11101,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly RUST_LENT_PRECISION_SLOTS = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision' ]);
+    private static readonly RUST_LENT_SYMBOL_PRECISION = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision', 'feeToPrecision', 'currencyToPrecision' ]);
 
     /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
      *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
@@ -26990,7 +26991,7 @@ export class RustTranspiler extends BaseTranspiler {
             const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
             return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
         }
-        return `${name} = ${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`;
+        return `${name} = ${(local.kind === 'list' ? this.rustOptListLiteralSome(right) : undefined) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
     }
 
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
@@ -33290,7 +33291,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printOptListWrite(left: any, right: any): string | undefined {
         if (this.rustOptListOf(left) === undefined) return undefined;
-        return `${this.rustOptListName(left)} = ${this.printNode(right, 0).trim()}.into_opt_list()`;
+        return `${this.rustOptListName(left)} = ${this.rustOptListLiteralSome(right) ?? `${this.printNode(right, 0).trim()}.into_opt_list()`}`;
     }
 
     printOptListNullTest(left: any, right: any, op: any): string | undefined {
@@ -33343,6 +33344,18 @@ export class RustTranspiler extends BaseTranspiler {
     rustOptListLiteralWrite(node: any): boolean {
         const right: any = this.rustSkipWrappers(node);
         return right !== undefined && right.kind === SyntaxKind.ArrayLiteralExpression && !right.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement);
+    }
+
+    /** A spread-free `[..]` written to an optional list builds the list straight into `Some` (`into_opt_list` of the box
+     *  `Value::from(vec![..])` is always `Some` of that same `Arc`), so no box is made and converted. */
+    rustOptListLiteralSome(right: any): string | undefined {
+        if (!this.rustOptListLiteralWrite(right)) return undefined;
+        const printed = this.printNode(right, 0).trim();
+        if (!printed.startsWith('Value::from(vec![') || !printed.endsWith('])')) return undefined;
+        const inner = printed.slice('Value::from('.length, -1);
+        let depth = 0;
+        for (const ch of inner) { depth += ch === '(' || ch === '[' || ch === '{' ? 1 : (ch === ')' || ch === ']' || ch === '}' ? -1 : 0); if (depth < 0) return undefined; }
+        return depth === 0 ? `Some(std::sync::Arc::new(${inner}))` : undefined;
     }
 
     rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined {
@@ -39240,16 +39253,20 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustIsSafeMarketCall(inner) || this.rustIsOptMarketCall(inner) || this.rustIsTypedMarketCall(inner);
     }
 
-    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` and every venue `safeMarket`: a borrowed
+    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` / every venue `safeMarket`, or `code: Str` of `currency`: a borrowed
      *  `Option<&str>` (callers lend their string, the body binds the `Value` once); undefined for any other parameter. */
     rustSafeMarketIdParam(param: any): boolean | undefined {
         const method: any = param?.parent;
         if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || !isIdentifier(method.name) || !isIdentifier(param.name)) return undefined;
         const name = String(method.name.text);
-        if ((name !== 'safeMarket' && name !== 'safeSymbol') || method.parameters[0] !== param || String(param.name.text) !== 'marketId') return undefined;
+        // the leading `symbol` / `code` of the precision formatters is lent the same way (callers keep their string)
+        const precision = RustTranspiler.RUST_LENT_SYMBOL_PRECISION.has(name) && method.parameters[0] === param;
+        const pname = (name === 'currency') ? 'code' : 'marketId';
+        if (!precision && ((name !== 'safeMarket' && name !== 'safeSymbol' && name !== 'currency') || method.parameters[0] !== param || String(param.name.text) !== pname)) return undefined;
+        if (precision && this.rustMethodReferencedAsValue(method)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         if (!/(?:^|\/)ts\/src\/(?:base\/(?:Exchange|\.__ExchangeNoOverloads)|[^/]+)\.ts$/.test(file) || method.body === undefined) return false;
-        return String(param.type?.getText?.() ?? '') === 'Str' && !this.rustLocalIsReassigned(param, 'marketId');
+        return String(param.type?.getText?.() ?? '') === 'Str' && !this.rustLocalIsReassigned(param, pname);
     }
 
     /** `n` is the first argument of a call landing in a borrowed `marketId` slot (rustSafeMarketIdParam). */

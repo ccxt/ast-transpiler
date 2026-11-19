@@ -1694,6 +1694,7 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustSafeDictKeyParam(param: any): boolean;
     private static readonly RUST_LENT_PRECISION_SLOTS;
+    private static readonly RUST_LENT_SYMBOL_PRECISION;
     /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
      *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustPriceSlotParam(param: Node | undefined): boolean;
@@ -4801,6 +4802,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptListIdentifier(node: any, text: string): string | undefined;
     /** `[..]` without spread is always a list, so `into_opt_list` keeps exactly what the box held. */
     rustOptListLiteralWrite(node: any): boolean;
+    /** A spread-free `[..]` written to an optional list builds the list straight into `Some` (`into_opt_list` of the box
+     *  `Value::from(vec![..])` is always `Some` of that same `Arc`), so no box is made and converted. */
+    rustOptListLiteralSome(right: any): string | undefined;
     rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined;
     /** A plain local (not this list, no container rule of its own) that takes a whole optional list as a `Value`. */
     rustOptListAliasTarget(place: any): boolean;
@@ -5607,7 +5611,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCalledFromWsSibling(method: any): boolean;
     /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
     rustMarketArgLends(arg: any): boolean;
-    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` and every venue `safeMarket`: a borrowed
+    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` / every venue `safeMarket`, or `code: Str` of `currency`: a borrowed
      *  `Option<&str>` (callers lend their string, the body binds the `Value` once); undefined for any other parameter. */
     rustSafeMarketIdParam(param: any): boolean | undefined;
     /** `n` is the first argument of a call landing in a borrowed `marketId` slot (rustSafeMarketIdParam). */

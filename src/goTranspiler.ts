@@ -5194,6 +5194,8 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     // tag slot: IsDictionary/IsEqual deref it; a present value is handed back as the tuple's element 0
     'FindNearestCeiling': {'1': 'deref'}, 'ParseToInt': {'0': 'deref'}, 'ParseToNumeric': {'0': 'deref'},
     'ParseBorrowRateHistory': {'1': 'deref', '2': 'deref', '3': 'deref'},
+    // every override reads since/limit only through FilterBy*SinceLimit (bitget ignores them)
+    'ParseFundingHistories': {'2': 'deref', '3': 'deref'},
 };
 
 // Typed async receive: `x := <-this.FooAsync(..)` + PanicOnError(x) becomes
@@ -11057,8 +11059,77 @@ function installStringPtrParams (goTranspiler) {
 function installStringPtrParamProof (goTranspiler) {
     const upstreamOf = goTranspiler.goNativeParameterTypeOf;
     goTranspiler.goNativeParameterTypeOf = function (param) {
-        return upstreamOf.call (this, param) ?? (goStringPtrParamProven (this, param) ? '*string' : undefined);
+        return upstreamOf.call (this, param) ?? (goStringPtrParamProven (this, param) ? '*string' : undefined)
+            ?? (goStringValueParamProven (this, param) ? 'string' : undefined);
     };
+}
+
+// a venue-local `Str` parameter every caller hands a Go `string` or a string literal is never nil:
+// it prints `string` when the body neither writes another type nor nil-tests it
+function goStringValueParamProven (go, param): boolean {
+    if ((param?.kind !== ts.SyntaxKind.Parameter) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.questionToken !== undefined) || (param.name?.kind !== ts.SyntaxKind.Identifier) || !nullableStringParam (go, param)) {
+        return false;
+    }
+    const fn = param.parent;
+    if ((fn?.kind !== ts.SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const name = fn.name.text;
+    const index = fn.parameters.indexOf (param);
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if ((tree === undefined) || go.goMethodKeepsBaseSignature (fn) || go.goIsProHandlerMethod (fn) || !go.goHasTreeCallSite (fn)
+        || !goStringPtrParamOnlyDirectCalls (go, tree, name, go.goEnclosingClassName (fn))) {
+        return false;
+    }
+    for (const call of go.goSameFileCallsOf (fn, name)) {
+        const arg = call.arguments?.[index];
+        if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) {
+            return false;
+        }
+        if ((arg.kind !== ts.SyntaxKind.StringLiteral) && (go.goPrintedArgType (arg) !== 'string')) {
+            return false;
+        }
+    }
+    const myClass = go.goEnclosingClassName (fn);
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    for (const site of tree.callIndex.get (name) ?? []) {
+        if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) {
+            continue;
+        }
+        const arg = (site.args[index] ?? '').trim ();
+        if (!textIsStringLiteral (arg) && !go.goTextArgMatchesType (arg, 'string', site.file, tree, site.at)
+            && !goSiblingLiteralStringLocal (arg, tree.fileText.get (site.file) ?? '', site.at)) {
+            return false;
+        }
+    }
+    return go.goParameterBodyTakes (fn, param, 'string');
+}
+
+// a sibling-file local of the calling method declared `let x: Str = '<lit>'` (or `string`) and only
+// ever re-assigned string literals: Go prints it a `string`, never nil
+function goSiblingLiteralStringLocal (argText: string, fileText: string, at: number | undefined): boolean {
+    const name = /^([A-Za-z_]\w*)$/.exec ((argText ?? '').trim ())?.[1];
+    if ((name === undefined) || (at === undefined)) {
+        return false;
+    }
+    const signature = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \([^\n]*\)(?:: [^\n{]*)? \{\n/g;
+    let start = -1;
+    for (let m = signature.exec (fileText); (m !== null) && (m.index < at); m = signature.exec (fileText)) {
+        start = m.index;
+    }
+    const end = fileText.indexOf ('\n    }\n', at);
+    if ((start < 0) || (end < 0)) {
+        return false;
+    }
+    const raw = fileText.substring (start, end).replace (/\/\*[\s\S]*?\*\//g, '').replace (/\/\/.*$/gm, '');
+    const body = goMaskTsStrings (raw);
+    const lit = String.raw`'[^'\\\n]*';`;
+    const decls = raw.match (new RegExp (String.raw`\b(?:let|const) ` + name + String.raw`(?:: (?:Str|string))? = ` + lit, 'g')) ?? [];
+    const writes = raw.match (new RegExp (String.raw`(?<![\w$.])` + name + ' = ' + lit, 'g')) ?? [];
+    const allWrites = body.match (new RegExp (String.raw`(?<![\w$.])` + name + String.raw`\s*(?:[-+*/|&?]?=(?!=)|\+\+|--)`, 'g')) ?? [];
+    const allDecls = body.match (new RegExp (String.raw`\b(?:let|const|var) ` + name + String.raw`\b`, 'g')) ?? [];
+    return (decls.length === 1) && (allDecls.length === 1) && (allWrites.length === writes.length);
 }
 
 // the method is reached only through plain `this.<name> (..)` calls: no file of the tree quotes the name
@@ -22601,9 +22672,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return true;
             }
             const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
-            if (!isMap || (identifier === null) || (at === undefined)) {
+            if ((identifier === null) || (at === undefined)) {
                 return false;
             }
+            // a list row: a `[]`-defaulted safeList local prints `[]any` (SafeListSlice), never nil
+            const declaredFrom = isMap ? /^this\s*\.\s*market\s*\(/ : /^this\s*\.\s*safeList\s*\([^()]*,\s*\[\]\s*\)$/;
             // the row argument must be the map the sibling file declares it as
             const siblingText = tree.fileText.get(file) ?? '';
             const declRe = new RegExp('(?:const|let|var)\\s+' + identifier[1] + '\\s*(?::[^=]*)?=\\s*([^;\\n]+)', 'g');
@@ -22615,7 +22688,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
                 decl = declMatch;
             }
-            if ((decl === undefined) || !/^this\s*\.\s*market\s*\(/.test(decl[1].trim())) {
+            if ((decl === undefined) || !declaredFrom.test(decl[1].trim())) {
                 return false;
             }
             const tail = siblingText.substring(decl.index + decl[0].length, at);
@@ -26848,7 +26921,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             method = method.parent;
         }
         const methodName = String(method?.name?.text ?? '');
-        return stored && !methodName.endsWith('Request');
+        // under a dominating nil test the store prints the pointee (`*x`), never the pointer
+        return stored && (!methodName.endsWith('Request') || this.goHasEnclosingNilGuard(n));
     }
 
     // element `index` of a tuple-typed call result is `Dict` (`[T, Dict]`); the Go tuple holds
@@ -26975,8 +27049,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const value: any = this.goUnwrapParenthesizedNode(valueNode);
         const declaration: any = (value?.kind === SyntaxKind.Identifier)
             ? this.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve() : undefined;
-        return ((declaration?.kind === SyntaxKind.BindingElement) && (this.goTupleSlotPointerType(declaration) === '*int64')
-            && (this.goHasEnclosingNilGuard(value) || this.goHasExitingNilGuard(value))) ? '*' + valueStr : valueStr;
+        const guarded = (value?.kind === SyntaxKind.Identifier) && (this.goHasEnclosingNilGuard(value) || this.goHasExitingNilGuard(value));
+        // a numeric parameter bound through GetArgInt64Ptr/GetArgFloat64Ptr stores its value the same way
+        const numericParam = (declaration?.kind === SyntaxKind.Parameter) && ['*int64', '*float64'].includes(String(this.goDeclaredTypeOfIdentifier(value)));
+        return guarded && (numericParam || ((declaration?.kind === SyntaxKind.BindingElement) && (this.goTupleSlotPointerType(declaration) === '*int64')))
+            ? '*' + valueStr : valueStr;
     }
 
     // a typed slot local is only printed when every later use reads it as that type: a write, an
@@ -38850,5 +38927,82 @@ function goNeverNilStringWrite (goTranspiler, write) {
             return `(${read} ${isEq ? '==' : '!='} nil)`;
         }
         return safeReaderNilEquality.call(this, left, right, leftText, rightText, isEq);
+    };
+}
+
+// ---- safeDict locals with a non-literal default ----
+// `this.safeDict (c, k, d)` with d another `this.safeDict (..)` (a dict or nil) or a plain identifier prints
+// `this.SafeDictMap(c, k, d)`. An identifier default may be a non-dict box, so it admits map reads only.
+const goDefaultedDictLocals = new WeakSet<any> ();
+{
+    const isSafeDictCall = (n: any): boolean => (n?.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (n.expression.expression?.kind === SyntaxKind.ThisKeyword) && (n.expression.name?.text === 'safeDict');
+    const shippedStandard = GoTranspiler.prototype.goSafeDictLocalUnboxStandard;
+    GoTranspiler.prototype.goSafeDictLocalUnboxStandard = function (declaration) {
+        const shipped = shippedStandard.call (this, declaration);
+        const init: any = declaration?.initializer;
+        const name = declaration?.name?.text;
+        const scope: any = this.goEnclosingFunction (declaration);
+        if ((shipped !== undefined) || (scope === undefined) || (name === undefined) || !isSafeDictCall (init) || (init.arguments.length !== 3)) {
+            return shipped;
+        }
+        const fallback: any = init.arguments[2];
+        const dictDefault = isSafeDictCall (fallback) && (fallback.arguments.length === 2);
+        if (!dictDefault && (fallback.kind !== SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        // `if (x === undefined) { return; }` right after the declaration: later value hand-offs see a non-nil map
+        const statement: any = declaration.parent?.parent;
+        const siblings: any = statement?.parent?.statements;
+        const next: any = (siblings !== undefined) ? siblings[siblings.indexOf (statement) + 1] : undefined;
+        const exitGuarded = dictDefault && (next?.kind === SyntaxKind.IfStatement) && (next.elseStatement === undefined)
+            && (next.expression?.kind === SyntaxKind.BinaryExpression) && this.goIsNilComparisonOperand (next.expression.left, next.expression)
+            && (next.expression.left?.kind === SyntaxKind.Identifier) && (next.expression.left.text === name)
+            && (next.expression.operatorToken?.kind === SyntaxKind.EqualsEqualsEqualsToken) && this.goStatementAlwaysExits (next.thenStatement);
+        const stringKey = (n: any): boolean => {
+            const parent: any = n.parent;
+            const key: any = (parent?.kind === SyntaxKind.ElementAccessExpression) ? parent.argumentExpression
+                : ((parent?.kind === SyntaxKind.CallExpression) ? parent.arguments[1] : undefined);
+            if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments.length === 1)) {
+                return true; // Object.keys (x)
+            }
+            if (key?.kind === SyntaxKind.StringLiteral) {
+                return true;
+            }
+            const checker: any = this.checkerOrUndefined ();
+            const flags = (key !== undefined) && (checker !== undefined) ? checker.getTypeAtLocation (key)?.flags : undefined;
+            return (flags !== undefined) && ((flags & TypeFlags.StringLike) !== 0);
+        };
+        const reads = (n: any): boolean => {
+            const parent: any = n.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
+                // only the literal-key comma-ok the if-init clause prints (a typed map otherwise prints a closure)
+                return (parent.right === n) && (this.goUnwrapParenthesizedNode (parent.left)?.kind === SyntaxKind.StringLiteral)
+                    && this.goWsFrameInOpHasInitClause (parent, declaration);
+            }
+            if (this.goSafeDictUseReadsTheMap (n)) {
+                // an identifier default may be a list: a numeric key reads it where the typed nil map cannot
+                return dictDefault || stringKey (n);
+            }
+            if (dictDefault && this.goIsNilComparisonOperand (n, parent)) {
+                return true;
+            }
+            // a non-nil map handed on as a call argument is the very value the box held
+            return exitGuarded && (parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && (parent.pos > next.end);
+        };
+        const typed = this.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_DICT_LOCAL_TYPE, reads,
+            (n: any) => (n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n));
+        if (typed !== undefined) {
+            goDefaultedDictLocals.add (declaration);
+        }
+        return typed;
+    };
+    const shippedValue = GoTranspiler.prototype.goSafeDictUnboxValue;
+    GoTranspiler.prototype.goSafeDictUnboxValue = function (declaration, identation: number) {
+        if (goDefaultedDictLocals.has (declaration) && (this.goSafeDictLocalUnbox (declaration) === GO_SAFE_DICT_LOCAL_TYPE)) {
+            const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, (i === 0) ? identation : 0).trimStart ());
+            return 'this.SafeDictMap(' + args.join (', ') + ')';
+        }
+        return shippedValue.call (this, declaration, identation);
     };
 }

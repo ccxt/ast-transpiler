@@ -3931,6 +3931,39 @@ describe('go native element assignment', () => {
         // an unguarded read keeps the deref-aware helper
         expect(output).toContain("ToString(limit)");
     });
+    test('an Int parameter stored under a nil guard in a Request builder binds its pointer twin and stores the value', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "type Str = string | undefined;\n" +
+        "class T {\n" +
+        "    prepareXRequest (status: Str, symbol: Str = undefined, since: Int = undefined, limit: Int = undefined, params = {}) {\n" +
+        "        const request: any = {};\n" +
+        "        if (limit !== undefined) {\n" +
+        "            request['limit'] = limit;\n" +
+        "        }\n" +
+        "        if (limit === 5) { request['x'] = 1; }\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var limit *int64 = GetArgInt64Ptr(optionalArgs, 2, nil)");
+        expect(output).toContain("request[\"limit\"] = *limit");
+        expect(output).toContain("limit != nil && *limit == 5");
+        expect(output).not.toContain("IsEqual(limit");
+    });
+    test('an Int parameter stored unguarded in a Request builder keeps the box', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    prepareYRequest (limit: Int = undefined, params = {}) {\n" +
+        "        const request: any = {};\n" +
+        "        request['limit'] = limit;\n" +
+        "        return request;\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("GetArgInt64Ptr(");
+    });
     test('an Int parameter read by toString with an argument keeps the box', () => {
         const input =
         "type Int = number | undefined;\n" +
@@ -19589,5 +19622,48 @@ describe('safeDict / safeList results compare against nil through the typed read
         const out = run("        if (this.safeDict (params, 'a', { 'x': 1 }) === undefined) { return 1; }\n"
             + "        if (this.safeDict (this.markets, 'b') === undefined) { return 2; }\n        return 0;\n");
         expect((out.match(/IsEqual\(/g) || []).length).toBe(2);
+    });
+});
+
+describe('a venue Str parameter every caller hands a Go string or literal prints string', () => {
+    const run = (sub: string, pro: string): string[] => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'str-value-param-'));
+        const cwd = process.cwd();
+        try {
+            const target = path.join(dir, 'ts', 'src', 'ex.ts');
+            fs.mkdirSync(path.join(dir, 'ts', 'src', 'pro'), { recursive: true });
+            fs.writeFileSync(target,
+                'type Str = string | undefined;\nclass Exchange {}\nexport default class ex extends Exchange {\n' + sub + '}\n');
+            fs.writeFileSync(path.join(dir, 'ts', 'src', 'pro', 'ex.ts'),
+                "import exRest from '../ex.js';\ntype Str = string | undefined;\nexport default class ex extends exRest {\n" + pro + '}\n');
+            process.chdir(dir);
+            const x = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes (x.goTranspiler);
+            return [ x.transpileGoByPath(path.join('ts', 'src', 'ex.ts')).content, x.transpileGoByPath(path.join('ts', 'src', 'pro', 'ex.ts')).content ];
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const kind = "    kind (t: Str, m: Str): Str {\n        if (m === 'spot') { return t; }\n        return 'x';\n    }\n";
+    test('same-file literal callers only', () => {
+        const [ out ] = run(kind + "    a (t: Str) { return this.kind (t, 'spot'); }\n", '');
+        expect(out).toContain('Kind(t any, m string) any {');
+    });
+    test('literal and literal-only local callers: native compare', () => {
+        const [ out ] = run(kind + "    a (t: Str) { return this.kind (t, 'spot'); }\n",
+            "    b (t: Str) {\n        let m: Str = 'spot';\n        if (t === 'y') { m = 'contract'; }\n        return this.kind (t, m);\n    }\n");
+        expect(out).toContain('Kind(t any, m string) any {');
+
+    });
+    test('a sibling local written from a box keeps the helper', () => {
+        const [ out ] = run(kind + "    a (t: Str) { return this.kind (t, 'spot'); }\n",
+            "    b (t: Str, o: any) {\n        let m: Str = 'spot';\n        m = o['k'];\n        return this.kind (t, m);\n    }\n");
+        expect(out).toContain('Kind(t any, m any) any {');
+    });
+    test('a nil-tested parameter keeps the helper', () => {
+        const [ out ] = run("    kind (m: Str): Str {\n        if (m === undefined) { return 'n'; }\n        return m;\n    }\n" +
+            "    a () { return this.kind ('spot'); }\n", '');
+        expect(out).not.toContain('Kind(m string)');
     });
 });

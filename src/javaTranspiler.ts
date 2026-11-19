@@ -1750,7 +1750,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printCallExpression(node, identation) {
-        return this.printJavaWsReceiverCall(node, identation) ?? super.printCallExpression(node, identation);
+        return javaFeeTierLiteral(node) ?? this.printJavaWsReceiverCall(node, identation) ?? super.printCallExpression(node, identation);
     }
 
     printDynamicCall(node, identation) {
@@ -10412,4 +10412,23 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return parts;
     }
+}
+
+// `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
+// Double of Double.parseDouble(text), which is the correctly rounded value the Java literal `0.0025`
+// autoboxes to; whole texts print `100.0` so the box stays a Double, never an Integer
+function javaFeeTierLiteral(node: any): string | undefined {
+    const arg = node?.arguments?.[0];
+    if ((node?.kind !== SyntaxKind.CallExpression) || (node.arguments.length !== 1) || (arg.kind !== SyntaxKind.StringLiteral)
+        || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (node.expression.name?.text !== "parseNumber") || !/^-?\d+(\.\d+)?$/.test(arg.text)) { return undefined; }
+    let n = node.parent;
+    if (n?.kind !== SyntaxKind.ArrayLiteralExpression) { return undefined; }
+    while ((n !== undefined) && (n.kind === SyntaxKind.ArrayLiteralExpression || n.kind === SyntaxKind.PropertyAssignment || n.kind === SyntaxKind.ObjectLiteralExpression)) {
+        if ((n.kind === SyntaxKind.PropertyAssignment) && (n.name?.text === "tiers")) {
+            return arg.text.includes(".") ? arg.text : arg.text + ".0";
+        }
+        n = n.parent;
+    }
+    return undefined;
 }

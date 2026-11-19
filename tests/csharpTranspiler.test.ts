@@ -8455,3 +8455,20 @@ describe('Int64 index list reads', () => {
         expect(output).toContain('getValue(other, 0)');
     });
 });
+
+describe('csharp fee tier literals', () => {
+    const wrap = (body: string) => `class A { describe () { return ${body}; } }`;
+    test('tier rows print double constants', () => {
+        const out = transpiler.transpileCSharp(wrap("{ 'tiers': { 'taker': [ [ this.parseNumber ('0'), this.parseNumber ('0.0025') ], [ this.parseNumber ('-5'), this.parseNumber ('500000') ] ] } }")).content;
+        expect(out).toContain('new List<object> {0.0, 0.0025}');
+        expect(out).toContain('new List<object> {-5.0, 500000.0}');
+        expect(out).not.toContain('parseNumber');
+    });
+    test('non-tier, exponent and non-literal calls keep parseNumber', () => {
+        const out = transpiler.transpileCSharp(wrap("{ 'limits': [ this.parseNumber ('0.1') ], 'tiers': [ [ this.parseNumber ('1e-8'), this.parseNumber (x) ] ], 'min': this.parseNumber ('2') }")).content;
+        expect(out.split('parseNumber').length - 1).toBe(4);
+        for (const kept of ['"0.1"', '"1e-8"', ' x ', '"2"']) {
+            expect(out).toContain(`"parseNumber", new object[] {${kept === ' x ' ? ' x ' : ' ' + kept + ' '}}`);
+        }
+    });
+});
