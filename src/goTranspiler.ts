@@ -3767,6 +3767,9 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     let result;
     try {
         result = ccxtGoProveReturnPaths (goTranspiler, node, allowed);
+        if ((result === undefined) && allowed.includes ('string')) {
+            result = goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed);
+        }
         if ((result !== undefined) && !CCXT_GO_PARSE_METHOD.test (name) && !goGeneralReturnKeepsAbsence (goTranspiler, node, result)) {
             result = undefined;
         }
@@ -3777,6 +3780,29 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     return result;
 }
 
+
+// a `string` method whose paths are string values or SafeString calls with a literal default (never nil):
+// those calls print dereferenced, so the method returns `string`
+const GO_DEREF_SAFE_STRING_RETURNS = new WeakSet ();
+function goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) {
+    const returns = collectReturnStatements (node.body);
+    const derefs = returns.filter ((r) => (r.expression !== undefined) && goTranspiler.goDefaultedSafeStringCall (ccxtGoUnwrapParens (r.expression)));
+    if ((derefs.length === 0) || returns.some ((r) => (r.expression === undefined) || isAbsentExpression (r.expression))) {
+        return undefined;
+    }
+    for (const r of returns) {
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        if (!derefs.includes (r) && (ccxtGoReturnExpressionType (goTranspiler, r.expression) !== 'string')) {
+            return undefined;
+        }
+    }
+    derefs.forEach ((r) => GO_DEREF_SAFE_STRING_RETURNS.add (r));
+    return 'string';
+}
 // ---------------------------------------------------------------------------
 // Nil-declared later-write join for scalar pointers: every write a proven *int64/*float64/*bool callee and
 // every read pointer-safe (nil test, `any` container value, derefScalar-normalising callee argument).
@@ -37240,6 +37266,16 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
         return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return SafeListTypedDefault(' + args.join (', ') + ')');
     }
     return printReturnStatementBaseTypedVenue.call (this, node, identation);
+};
+// a literal-defaulted SafeString return of a method proven `string` (goDefaultedSafeStringReturnPaths)
+const printReturnStatementDerefSafeString = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    if (!GO_DEREF_SAFE_STRING_RETURNS.has (node)) {
+        return printReturnStatementDerefSafeString.call (this, node, identation);
+    }
+    const value = this.printNode (node.expression, 0).trim ();
+    const deref = /^(?:this\.)?SafeString\w*\(/.test (value) ? '*' + value : value;
+    return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return ' + deref);
 };
 
 // ===== nil-seeded scalar pointers joined through plain copies (begin) =====
