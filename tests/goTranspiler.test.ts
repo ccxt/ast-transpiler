@@ -12752,6 +12752,57 @@ describe ('goEndpointReceiveTypedView', () => {
             expect (out).not.toContain ('dataRecv');
         });
     });
+
+    describe('a tabled dict parameter fed a nil-seeded local written only by map receives', () => {
+        const BASE2 = BASE.replace ('export class Exchange {\n', 'export class Exchange {\n    safeLedgerEntry (entry: Dict): Dict {\n        return entry;\n    }\n');
+        const venueWith = (body: string, arg: string): string =>
+            "import Exchange from './abstract/ex.js';\n" +
+            "import { Dict } from './base/types.js';\n" +
+            'export default class ex extends Exchange {\n' +
+            '    safeLedgerEntry (entry: Dict): Dict {\n        return this.extend (entry, {});\n    }\n' +
+            '    async fetchEntry (params = {}) {\n' + body + '        return this.safeLedgerEntry (' + arg + ');\n    }\n}\n';
+        const printWith = (body: string, arg = 'response'): string => {
+            const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'g03-'));
+            try {
+                const src = path.join (tmp, 'ts', 'src');
+                fs.mkdirSync (path.join (src, 'base'), { 'recursive': true });
+                fs.mkdirSync (path.join (src, 'abstract'), { 'recursive': true });
+                fs.mkdirSync (path.join (tmp, 'go', 'v4'), { 'recursive': true });
+                fs.writeFileSync (path.join (src, 'base', 'types.ts'), TYPES);
+                fs.writeFileSync (path.join (src, 'base', 'Exchange.ts'), BASE2);
+                fs.writeFileSync (path.join (src, 'abstract', 'ex.ts'), ABSTRACT);
+                fs.writeFileSync (path.join (src, 'ex.ts'), venueWith (body, arg));
+                fs.writeFileSync (path.join (tmp, 'go', 'v4', 'ex_api.go'), stubs ('map[string]any', '[]any'));
+                const t = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async', 'asyncSuffixExemptPaths': [ '(^|/)ts/src/abstract/' ] } });
+                installCcxtGoHooks (t.goTranspiler);
+                return t.transpileGoByPath (path.join (src, 'ex.ts')).content;
+            } finally {
+                fs.rmSync (tmp, { 'recursive': true, 'force': true });
+            }
+        };
+        test('every write a map receive: the parameter prints map[string]any', () => {
+            const out = printWith ('        let response = undefined;\n        if (params) {\n            response = await this.privateGetOrdersId (params);\n        } else {\n            response = await this.privateGetOrdersId ({});\n        }\n');
+            expect (out).toContain ('SafeLedgerEntry(entry map[string]any)');
+            expect (out).toContain ('var response map[string]any = nil');
+        });
+        test('an `as Dict` cast of such a local proves', () => {
+            const out = printWith ('        let first: any = undefined;\n        first = await this.privateGetOrdersId (params);\n', 'first as Dict');
+            expect (out).toContain ('SafeLedgerEntry(entry map[string]any)');
+            expect (out).toContain ('var first map[string]any = nil');
+        });
+        test('a list receive among the writes keeps the box', () => {
+            expect (() => printWith ('        let response = undefined;\n        if (params) {\n            response = await this.privateGetOrdersId (params);\n        } else {\n            response = await this.privateGetRows ({});\n        }\n')).toThrow (/keeps the box: call site passes another type/);
+        });
+        test('a non-receive write keeps the box', () => {
+            expect (() => printWith ('        let response = undefined;\n        response = await this.privateGetOrdersId (params);\n        response = this.extend (params, {});\n')).toThrow (/keeps the box/);
+        });
+        test('a write nested in an expression keeps the box', () => {
+            expect (() => printWith ('        let response = undefined;\n        this.extend (response = await this.privateGetOrdersId (params), {});\n')).toThrow (/keeps the box/);
+        });
+        test('a request() receive keeps the box', () => {
+            expect (() => printWith ('        let response = undefined;\n        response = await this.request ("x", [ "private" ], "POST", params);\n')).toThrow (/keeps the box/);
+        });
+    });
 });
 
 describe ('goBaseMapLocals', () => {

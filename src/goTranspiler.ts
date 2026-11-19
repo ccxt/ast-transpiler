@@ -11753,6 +11753,61 @@ function goIsDictMethodCall (tree: any, text: string): boolean {
     return found > 0;
 }
 
+// an argument the receive hook proves a map: a `const x = await this.<endpoint> (..)` local, `x as Dict` of a
+// printed map, or a nil-seeded `let x` whose every write is such an awaited receive
+function goDictParamAwaitedMapArg (go: any, arg: any): boolean {
+    while ((arg?.kind === SK.AsExpression) || (arg?.kind === SK.ParenthesizedExpression)) { arg = arg.expression; }
+    if (arg?.kind !== SK.Identifier) { return false; }
+    if (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) { return true; }
+    const decl: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
+    if (decl?.kind !== SK.VariableDeclaration) { return false; }
+    return go.goAwaitedMapLocal (decl) || goAwaitedMapWritesOnlyLocal (go, decl);
+}
+
+// `await this.<endpoint> (..)` of an implicit-API stub whose element is map[string]any
+function goAwaitsMapEndpoint (go: any, v: any): boolean {
+    return (v?.kind === SK.AwaitExpression) && (ccxtGoEndpointElement (go, v.expression) === GO_BASE_DICT_PARAM_TYPE);
+}
+
+// `let x[: T] [= undefined]` whose writes are all plain `x = await this.<endpoint> (..)` of a map stub (the
+// endpoint join declares x map[string]any)
+function goAwaitedMapWritesOnlyLocal (go: any, decl: any): boolean {
+    const init: any = decl.initializer;
+    const nilSeed = (init === undefined) || ((init.kind === SK.Identifier) && (init.text === 'undefined'));
+    const body: any = go.goTopFunction (decl);
+    if (!nilSeed || (decl.name?.kind !== SK.Identifier) || (body === undefined) || go.goDeclaredTypeInProgress.has (decl)) { return false; }
+    const checker: any = go.checkerOrUndefined ();
+    let writes = 0;
+    let ok = true;
+    go.goDeclaredTypeInProgress.add (decl);
+    try {
+        const visit = (n: any): void => {
+            if (!ok) { return; }
+            if ((n.kind === SK.Identifier) && (n !== decl.name) && (n.text === decl.name.text)
+                && (checker?.getSymbolAtLocation (n)?.valueDeclaration?.resolve?.() === decl)) {
+                const p: any = n.parent;
+                const isTarget = ((p?.kind === SK.BinaryExpression) && (p.left === n) && (p.operatorToken.kind >= SK.FirstAssignment) && (p.operatorToken.kind <= SK.LastAssignment))
+                    || (p?.kind === SK.PrefixUnaryExpression) || (p?.kind === SK.PostfixUnaryExpression)
+                    || (p?.kind === SK.ArrayLiteralExpression) || (p?.kind === SK.ShorthandPropertyAssignment);
+                if (isTarget) {
+                    const v: any = p.right;
+                    if ((p.kind !== SK.BinaryExpression) || (p.operatorToken.kind !== SK.EqualsToken) || (p.parent?.kind !== SK.ExpressionStatement)
+                        || !goAwaitsMapEndpoint (go, v)) {
+                        ok = false;
+                        return;
+                    }
+                    writes++;
+                }
+            }
+            n.forEachChild (visit);
+        };
+        visit (body);
+    } finally {
+        go.goDeclaredTypeInProgress.delete (decl);
+    }
+    return ok && (writes > 0);
+}
+
 // every call site of `fn` must pass a printed map. Same-file sites are the printer's own proof;
 // in a sibling file the printer only names an identifier bound to `this.market(...)`, so accept
 // the two declarations whose printed Go IS the map: an object literal and `this.safeDict(...)`
@@ -11761,7 +11816,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
     for (const call of go.goSameFileCallsOf (fn, name)) {
         const arg = call.arguments?.[index];
         if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) { return false; }
-        if (go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) { return false; }
+        if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg)) { return false; }
     }
     const tree = go.goTsSrcTree (fn.getSourceFile ());
     if (tree === undefined) { return false; }

@@ -21333,6 +21333,61 @@ function goIsDictMethodCall(tree, text) {
   }
   return found > 0;
 }
+function goDictParamAwaitedMapArg(go, arg) {
+  while (arg?.kind === SK.AsExpression || arg?.kind === SK.ParenthesizedExpression) {
+    arg = arg.expression;
+  }
+  if (arg?.kind !== SK.Identifier) {
+    return false;
+  }
+  if (go.goPrintedArgType(arg) === GO_BASE_DICT_PARAM_TYPE) {
+    return true;
+  }
+  const decl = go.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+  if (decl?.kind !== SK.VariableDeclaration) {
+    return false;
+  }
+  return go.goAwaitedMapLocal(decl) || goAwaitedMapWritesOnlyLocal(go, decl);
+}
+function goAwaitsMapEndpoint(go, v) {
+  return v?.kind === SK.AwaitExpression && ccxtGoEndpointElement(go, v.expression) === GO_BASE_DICT_PARAM_TYPE;
+}
+function goAwaitedMapWritesOnlyLocal(go, decl) {
+  const init = decl.initializer;
+  const nilSeed = init === void 0 || init.kind === SK.Identifier && init.text === "undefined";
+  const body = go.goTopFunction(decl);
+  if (!nilSeed || decl.name?.kind !== SK.Identifier || body === void 0 || go.goDeclaredTypeInProgress.has(decl)) {
+    return false;
+  }
+  const checker = go.checkerOrUndefined();
+  let writes = 0;
+  let ok = true;
+  go.goDeclaredTypeInProgress.add(decl);
+  try {
+    const visit = (n) => {
+      if (!ok) {
+        return;
+      }
+      if (n.kind === SK.Identifier && n !== decl.name && n.text === decl.name.text && checker?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.() === decl) {
+        const p = n.parent;
+        const isTarget = p?.kind === SK.BinaryExpression && p.left === n && p.operatorToken.kind >= SK.FirstAssignment && p.operatorToken.kind <= SK.LastAssignment || p?.kind === SK.PrefixUnaryExpression || p?.kind === SK.PostfixUnaryExpression || p?.kind === SK.ArrayLiteralExpression || p?.kind === SK.ShorthandPropertyAssignment;
+        if (isTarget) {
+          const v = p.right;
+          if (p.kind !== SK.BinaryExpression || p.operatorToken.kind !== SK.EqualsToken || p.parent?.kind !== SK.ExpressionStatement || !goAwaitsMapEndpoint(go, v)) {
+            ok = false;
+            return;
+          }
+          writes++;
+        }
+      }
+      n.forEachChild(visit);
+    };
+    visit(body);
+  } finally {
+    go.goDeclaredTypeInProgress.delete(decl);
+  }
+  return ok && writes > 0;
+}
 function goDictParamCallSitesPassMap(go, fn, index) {
   const name = fn.name.text;
   for (const call of go.goSameFileCallsOf(fn, name)) {
@@ -21340,7 +21395,7 @@ function goDictParamCallSitesPassMap(go, fn, index) {
     if (arg === void 0 || arg.kind === ts.SyntaxKind.SpreadElement) {
       return false;
     }
-    if (go.goPrintedArgType(arg) !== GO_BASE_DICT_PARAM_TYPE) {
+    if (go.goPrintedArgType(arg) !== GO_BASE_DICT_PARAM_TYPE && !goDictParamAwaitedMapArg(go, arg)) {
       return false;
     }
   }
