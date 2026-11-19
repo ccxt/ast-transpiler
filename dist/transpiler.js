@@ -17683,6 +17683,12 @@ var CCXT_GO_PRODUCER_DECLARATIONS = {
   "this.WrapAsPostAction": "map",
   "this.BuildClobOrderBody": "map",
   "this.CreateOrderRequest": "map",
+  "this.FetchOrdersRequest": "map",
+  "this.FetchMyTradesRequest": "map",
+  "this.WithdrawRequest": "map",
+  "this.FetchWithdrawalsRequest": "map",
+  "this.FetchOHLCVRequest": "map",
+  "this.FetchDepositsRequest": "map",
   "this.ExpandGroupRows": "list",
   "this.GetOrderChannelAndMessageHash": "list",
   "this.ParseTradingFee": "map",
@@ -17819,7 +17825,7 @@ function ccxtGoProducerDeclarationType(goTranspiler, declaration, family) {
   }
   const dictLike = family === "map";
   const goType = dictLike ? CCXT_GO_PRODUCER_DICT_TYPE : CCXT_GO_PRODUCER_LIST_TYPE;
-  const neverAbsent = dictLike && (CCXT_GO_PRODUCER_NEVER_ABSENT.indexOf(goName) >= 0 || goName === "Omit" && ccxtGoProducerArgIsMap(goTranspiler, initializer.arguments[0]) || CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT.indexOf(goName) >= 0 && declaredText === "Dict");
+  const neverAbsent = dictLike && (CCXT_GO_PRODUCER_NEVER_ABSENT.indexOf(goName) >= 0 || goName === "Omit" && ccxtGoProducerArgIsMap(goTranspiler, initializer.arguments[0]) || CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT.indexOf(goName) >= 0 && declaredText === "Dict" && (goName === "CreateOrderRequest" || ccxtGoProducerReturnsFreshDict(goTranspiler, callee)));
   const readsTheValue = neverAbsent ? (n) => !ccxtGoProducerUseRebinds(n) : dictLike ? (n) => goTranspiler.goSafeDictUseReadsTheMap(n) : (n) => goTranspiler.goSafeListUseReadsTheList(n) || ccxtGoSafeListIndexedAccessorRead(goTranspiler, n);
   return goTranspiler.goDeclaredLocalTypeIfSafe(declaration, goType, readsTheValue);
 }
@@ -17837,7 +17843,44 @@ var CCXT_GO_PRODUCER_NEVER_ABSENT = [
   // safeMarket: every override returns super.safeMarket or createExpiredOptionMarket (a dict literal)
   "SafeMarket"
 ];
-var CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT = ["CreateOrderRequest"];
+var CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT = [
+  "CreateOrderRequest",
+  "EditOrderRequest",
+  "CancelOrderRequest",
+  "FetchOrdersRequest",
+  "FetchMyTradesRequest",
+  "WithdrawRequest",
+  "FetchWithdrawalsRequest",
+  "FetchOHLCVRequest",
+  "FetchDepositsRequest"
+];
+function ccxtGoProducerReturnsFreshDict(goTranspiler, callee) {
+  let fn = void 0;
+  try {
+    fn = goTranspiler.getChecker().getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+  } catch (e) {
+    return false;
+  }
+  if (fn?.kind !== ts.SyntaxKind.MethodDeclaration || fn.body === void 0) {
+    return false;
+  }
+  const seeds = /* @__PURE__ */ new Set();
+  const returns = [];
+  const walk = (n) => {
+    if (n.kind === ts.SyntaxKind.VariableDeclaration && n.name?.kind === ts.SyntaxKind.Identifier && n.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+      seeds.add(n.name.text);
+    }
+    if (n.kind === ts.SyntaxKind.ReturnStatement) {
+      returns.push(n.expression);
+    }
+    const nested = n !== fn && (n.kind === ts.SyntaxKind.ArrowFunction || n.kind === ts.SyntaxKind.FunctionExpression);
+    if (!nested) {
+      n.forEachChild(walk);
+    }
+  };
+  walk(fn);
+  return returns.length > 0 && returns.every((e) => e !== void 0 && (e.kind === ts.SyntaxKind.Identifier && seeds.has(e.text) || e.kind === ts.SyntaxKind.CallExpression && e.expression?.kind === ts.SyntaxKind.PropertyAccessExpression && e.expression.expression?.kind === ts.SyntaxKind.ThisKeyword && e.expression.name?.text === "extend"));
+}
 function ccxtGoProducerArgIsMap(goTranspiler, arg) {
   if (arg === void 0) {
     return false;
@@ -44235,6 +44278,36 @@ function installCcxtGoNestedSafeDictRead(goTranspiler) {
       return isEq ? "false" : "true";
     }
     return inlineEquality.call(this, left, right, leftText, rightText, isEq);
+  };
+}
+function goSitesPassMapOrDictParam(go, fn, index) {
+  if (goHasDynamicCall(fn, fn.name.text) || typeof go.goGetArgParameterType !== "function") {
+    return false;
+  }
+  const sites = go.goSameFileCallsOf(fn, fn.name.text);
+  const tree = go.goTsSrcTree(fn.getSourceFile());
+  const myFile = tree?.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+  if (sites.length === 0 || tree === void 0 || (tree.callIndex.get(fn.name.text) ?? []).some((site) => site.file !== myFile)) {
+    return false;
+  }
+  return sites.every((site) => {
+    const arg = site.arguments?.[index];
+    if (go.goPrintedArgType(arg) === "map[string]any") {
+      return true;
+    }
+    const decl = arg?.kind === SyntaxKind5.Identifier ? go.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve() : void 0;
+    return decl?.kind === SyntaxKind5.Parameter && go.goGetArgParameterType(decl) === "map[string]any";
+  });
+}
+{
+  const callSiteCandidates = GoTranspiler.prototype.goCallSiteParameterCandidates;
+  GoTranspiler.prototype.goCallSiteParameterCandidates = function(fn, param, index) {
+    const shipped = callSiteCandidates.call(this, fn, param, index);
+    return shipped.length === 0 && this.isAsyncFunction(fn) && goSitesPassMapOrDictParam(this, fn, index) ? ["map[string]any"] : shipped;
+  };
+  const sitesPassType = GoTranspiler.prototype.goParameterCallSitesPassType;
+  GoTranspiler.prototype.goParameterCallSitesPassType = function(fn, index, goType) {
+    return sitesPassType.call(this, fn, index, goType) || goType === "map[string]any" && this.isAsyncFunction(fn) && goSitesPassMapOrDictParam(this, fn, index);
   };
 }
 
