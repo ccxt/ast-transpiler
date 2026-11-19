@@ -8657,6 +8657,18 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
             "        }\n" +
             "        return this.ohlcvs[symbol][timeframe];\n" +
             "    }\n" +
+            "    ohlcvWrite (symbol: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
+            "    ohlcvWriteNoPut (symbol: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
+            "    ohlcvWriteRewritten (symbol: string, other: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol] = {};\n" +
+            "        symbol = other;\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
             "    ohlcvNoPut (symbol: string, timeframe: string) {\n" +
             "        return this.ohlcvs[symbol][timeframe];\n" +
             "    }\n" +
@@ -8689,6 +8701,12 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
         fs.rmSync(TMP, { recursive: true, force: true });
     });
 
+    test('a fresh ohlcvs row write is the typed row put; unanchored or rewritten symbols keep the helper', () => {
+        expect(out).toContain('this.ohlcvs.get(symbol).put(timeframe, stored);');
+        expect(out.split('this.ohlcvs.get(symbol).put(').length).toBe(2);
+        expect(out.split('Helpers.addElementToObject(').length).toBe(4);
+    });
+
     test('client.<owner map>[k] reads natively behind the null guards the helper answers', () => {
         expect(out).toContain('(client.subscriptions == null || key == null ? null : client.subscriptions.get(key))');
         expect(out).toContain('Object b = client.subscriptions.get("authenticated");');
@@ -8712,7 +8730,7 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
     });
 
     test('ohlcvs[symbol][timeframe] after a fresh put under symbol reads the per-symbol map natively', () => {
-        const reads = out.split('\n').filter((line) => line.includes('this.ohlcvs.get('));
+        const reads = out.split('\n').filter((line) => line.includes('this.ohlcvs.get(') && !line.includes('.put('));
         expect(reads.length).toBe(2);
         expect(reads[0]).toContain('((java.util.Map<?, ?>)this.ohlcvs.get(symbol)).get(timeframe)');
     });

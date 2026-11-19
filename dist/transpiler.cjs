@@ -48297,6 +48297,24 @@ var JavaTranspiler = class extends BaseTranspiler {
     }
     return `((java.util.Map<?, ?>)this.ohlcvs.get(${symbolText})).get(${keyText})`;
   }
+  // `this.ohlcvs[s][k] = v` on a fresh row: the base declares the rows `Map<String, Map<String, Object>>`
+  // and every writer stores a plain HashMap, so the put is the helper's Map branch (a null value is kept)
+  javaOhlcvsElementWrite(left, rhs) {
+    const inner = this.unwrapPrintTransparentExpression(left.expression);
+    if (inner === void 0 || !_is.isElementAccessExpression.call(void 0, inner) || !this.javaIsOhlcvsField(inner.expression)) {
+      return void 0;
+    }
+    const symbolNode = inner.argumentExpression;
+    const key = this.unwrapPrintTransparentExpression(left.argumentExpression);
+    if (!_is.isIdentifier.call(void 0, symbolNode) || key === void 0 || !this.javaStringProvenKey(key) || this.printNode(symbolNode, 0).trim() !== symbolNode.text) {
+      return void 0;
+    }
+    const isString = (n) => this.javaScalarFamily(n) === "string" || this.javaDeclaredStringType(n);
+    if (!isString(symbolNode) || !this.javaOhlcvsEntryIsFresh(left, symbolNode)) {
+      return void 0;
+    }
+    return `this.ohlcvs.get(${symbolNode.text}).put(${this.printNode(key, 0).trim()}, ${rhs})`;
+  }
   javaIsOhlcvsField(node) {
     const field = this.unwrapPrintTransparentExpression(node);
     return field !== void 0 && _is.isPropertyAccessExpression.call(void 0, field) && field.expression.kind === _ast.SyntaxKind.ThisKeyword && field.name.text === "ohlcvs";
@@ -49021,7 +49039,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (this.javaWsClientMapReceiver(node.expression.expression)) {
       return `${object}.remove(${key})`;
     }
-    if (this.javaBaseDeclaredMapCacheField(node.expression.expression)) {
+    if (this.javaBaseDeclaredMapCacheField(node.expression.expression) || this.javaIsOhlcvsField(node.expression.expression)) {
       return `${object}.remove(${key})`;
     }
     return `((java.util.Map<String,Object>)${object}).remove(${key})`;
@@ -49553,6 +49571,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     const lastKey = keyStrs[keyStrs.length - 1];
     const rhs = this.printNode(right, 0);
     const keyArg = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
+    const ohlcvsWrite = keys.length === 2 ? this.javaOhlcvsElementWrite(left, rhs) : void 0;
+    if (ohlcvsWrite !== void 0) {
+      return ohlcvsWrite;
+    }
     if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
       const target = keys.length === 1 && (this.javaDeclaredMapReceiver(baseExpr) || this.javaWsClientObjectMapReceiver(baseExpr)) ? acc : `((${this.OBJECT_KEYWORD})${acc})`;
       return `${target}.put(${keyArg}, ${rhs})`;

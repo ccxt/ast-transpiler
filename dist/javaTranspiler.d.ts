@@ -275,6 +275,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDescribeTree(node: any): any;
     javaDescribedDictChainRead(node: any): string | undefined;
     javaOhlcvsElementRead(node: any): string | undefined;
+    javaOhlcvsElementWrite(left: any, rhs: string): string | undefined;
     javaIsOhlcvsField(node: any): boolean;
     javaOhlcvsEntryIsFresh(site: any, symbolNode: any): boolean;
     javaOhlcvsFreshAnchor(statement: any, symbol: any): boolean;
