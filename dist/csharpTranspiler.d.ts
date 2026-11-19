@@ -584,6 +584,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpDictOrNullInExpression(key: any, obj: any): string | undefined;
+    csharpIsDictionaryNarrowed(obj: any, declaration: any): boolean;
     csharpDictOrNullValue(node: any, depth: number): boolean;
     csharpDictOrNullTupleSlot(node: any, depth: number): boolean;
     csharpMemberInExpression(key: any, obj: any): string | undefined;
