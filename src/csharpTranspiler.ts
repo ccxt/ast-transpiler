@@ -8038,6 +8038,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     // check this out later
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
+        // a non-name argument (guarded element read, cast) is evaluated once and bound, not printed three times
+        if (!/^[\w.]+$/.test(String(parsedArg).trim())) {
+            const v = 'hxArr' + node.pos;
+            return `((${parsedArg}) is var ${v} && ((${v} is IList<object>) || (${v}.GetType().IsGenericType && ${v}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))`;
+        }
         return `((${parsedArg} is IList<object>) || (${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
     }
 
