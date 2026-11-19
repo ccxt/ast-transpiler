@@ -14670,7 +14670,7 @@ describe('ral-yc: typed venue results handed whole (lent to a venue Dict slot, b
     });
     const rows: [string, RegExp, boolean][] = [
         [ 'the awaited Dict result is a shared map', /let mut account: crate::value::Dict = self\.fetch_?[aA]cct\(\)\.await\.into_dict\(\);/, true ],
-        [ 'the venue Dict slot takes impl Into<Value>', /fn sign_?[iI]t\(&self, key: &str, account: impl Into<crate::Value>\)/, true ],
+        [ 'the venue Dict slot is a borrowed map', /fn sign_?[iI]t\(&self, key: &str, account: &indexmap::IndexMap<String, Value>\)/, true ],
         [ 'the map is lent to the slot', /self\.sign_?[iI]t\("k", &account\)/, true ],
         [ 'the awaited Ticker result is a shared map', /let mut ticker: crate::value::Dict = self\.tick\("x"\)\.await\.into_dict\(\);/, true ],
         [ 'the ticker is boxed once into the map', /tickers\.insert\([^\n]*, Value::Dict\(ticker\)\);/, true ],
@@ -26934,7 +26934,7 @@ describe('a ws handler handed a safeDict local keeps its Value parameter', () =>
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'h11j05-handler-safedict', 'ts/src/pro/venue.ts')).content;
         expect(out).not.toMatch(/fn handle_?[tT]hing\([^)]*subscription: impl Into<crate::Value>/);
         expect(out).not.toContain('let mut subscription: Value = subscription.into();');
-        expect(out).toMatch(/fn parse_?[tT]hing\([^)]*extra: impl Into<crate::Value>/);
+        expect(out).toMatch(/fn parse_?[tT]hing\([^)]*extra: &indexmap::IndexMap<String, Value>/);
     });
 });
 
