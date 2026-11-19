@@ -39197,3 +39197,70 @@ const goDefaultedDictLocals = new WeakSet<any> ();
         return this.goBoundedLoopListRead (init) && this.goListElementsArePointerFree (init.expression);
     };
 }
+
+// ---- h15x1: a statement ternary prints as a plain if/else, no func literal -------------------------
+// `x = c ? a : b` / `m['k'] = c ? a : b` into an `any` box (or a local of the arms' own type): both arms hold one concrete Go type (a nil arm
+// beside a nilable one, an untyped constant beside a number), so each branch stores exactly what the
+// literal returned, evaluating only the branch TypeScript takes. Boxed or mixed arms keep the literal.
+export interface GoTranspiler {
+    goTernaryStatementArms(ternary): string | undefined;
+    goTernaryStatementIfElse(target: string, ternary, identation: number): string | undefined;
+}
+
+GoTranspiler.prototype.goTernaryStatementArms = function (ternary) {
+    const a = this.goTernaryJoinArmType(ternary.whenTrue);
+    const b = this.goTernaryJoinArmType(ternary.whenFalse);
+    if ((a === undefined) || (b === undefined) || ((a === 'nil') && (b === 'nil'))) {
+        return undefined;
+    }
+    const nilable = (t: string) => t.startsWith('*') || t.startsWith('map[') || t.startsWith('[]');
+    const numeric = (t: string) => t.startsWith('const-') || (t === 'int') || (t === 'int64') || (t === 'float64');
+    if ((a === b) || ((a === 'nil') && nilable(b)) || ((b === 'nil') && nilable(a))
+        || (a.startsWith('const-') && numeric(b)) || (b.startsWith('const-') && numeric(a))) {
+        return (a === 'nil') ? b : a;
+    }
+    return undefined;
+};
+
+GoTranspiler.prototype.goTernaryStatementIfElse = function (target: string, ternary, identation: number) {
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const whenTrue = this.goPrintTernaryBranch(ternary.whenTrue, 1).trim();
+    const whenFalse = this.goPrintTernaryBranch(ternary.whenFalse, 1).trim();
+    if ([ condition, whenTrue, whenFalse ].some((t) => t.includes('\n'))) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    return `${iden}if ${this.goStripControlClauseParens(condition)} {\n${iden}\t${target} = ${whenTrue}\n${iden}} else {\n${iden}\t${target} = ${whenFalse}\n${iden}}`;
+};
+
+const h15x1UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const write: any = node?.expression;
+    const ternary: any = (write?.kind === SyntaxKind.BinaryExpression) && (write.operatorToken?.kind === SyntaxKind.EqualsToken)
+        ? this.goUnwrapParenthesizedNode(write.right) : undefined;
+    if ((ternary?.kind !== SyntaxKind.ConditionalExpression) || this.goIsUrlsWrite(node)) {
+        return h15x1UpstreamExpressionStatement.call(this, node, identation);
+    }
+    const left: any = write.left;
+    const armType = this.goTernaryStatementArms(ternary);
+    let target: string | undefined = undefined;
+    if ((armType !== undefined) && (left.kind === SyntaxKind.Identifier)) {
+        const declared = this.goDeclaredTypeOfIdentifier(left);
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
+        target = ((decl?.kind === SyntaxKind.VariableDeclaration) && ((declared === 'any')
+            || ((declared === armType) && (this.goTernaryJoinArmType(ternary.whenTrue) === this.goTernaryJoinArmType(ternary.whenFalse)))))
+            ? this.printNode(left, 0).trim() : undefined;
+    } else if ((armType !== undefined) && (left.kind === SyntaxKind.ElementAccessExpression) && (left.expression?.kind === SyntaxKind.Identifier)
+        && (left.argumentExpression?.kind === SyntaxKind.StringLiteral) && (this.goDeclaredTypeOfIdentifier(left.expression) === 'map[string]any')) {
+        target = `${this.printNode(left.expression, 0).trim()}[${this.printNode(left.argumentExpression, 0).trim()}]`;
+    }
+    const upstream = h15x1UpstreamExpressionStatement.call(this, node, identation);
+    // only the store the printer left as a plain write of the literal (no helper, no nil-safe twin)
+    const head = (target === undefined) ? -1 : upstream.indexOf(`${this.getIden(identation)}${target} = func() `);
+    if ((head < 0) || ((head > 0) && (upstream[head - 1] !== '\n')) || !upstream.trimEnd().endsWith('}()')) {
+        return upstream;
+    }
+    const printed = this.goTernaryStatementIfElse(target, ternary, identation);
+    return (printed === undefined) ? upstream : upstream.substring(0, head) + printed + upstream.substring(upstream.trimEnd().length);
+};
+
