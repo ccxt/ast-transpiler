@@ -13589,6 +13589,8 @@ export function installNumParams (goTranspiler: any) {
 export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'convertExpireDate': [ 0 ], 'convertExpireDateToMarketIdDate': [ 0 ], 'convertMarketIdExpireDate': [ 0 ],
     'orderbookChecksumMessage': [ 0 ],
+    // every caller passes the handleNetworkCodeAndParams `*string` slot
+    'selectNetworkKeyFromNetworks': [ 1 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
