@@ -11102,6 +11102,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static readonly RUST_LENT_PRECISION_SLOTS = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision' ]);
     private static readonly RUST_LENT_SYMBOL_PRECISION = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision', 'feeToPrecision', 'currencyToPrecision' ]);
+    private static readonly RUST_LENT_OUTCOME_KEY = new Map<string, string>([ [ 'outcome', 'outcomeSymbol' ], [ 'loadOutcome', 'outcomeSymbol' ], [ 'hasOutcome', 'outcomeIdOrSymbol' ], [ 'safeOutcome', 'outcomeIdOrSymbol' ] ]);
 
     /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
      *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
@@ -39274,10 +39275,13 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         // the leading `symbol` / `code` of the precision formatters is lent the same way (callers keep their string)
         const precision = RustTranspiler.RUST_LENT_SYMBOL_PRECISION.has(name) && method.parameters[0] === param;
-        const pname = (name === 'currency') ? 'code' : 'marketId';
-        if (!precision && ((name !== 'safeMarket' && name !== 'safeSymbol' && name !== 'currency') || method.parameters[0] !== param || String(param.name.text) !== pname)) return undefined;
-        if (precision && this.rustMethodReferencedAsValue(method)) return false;
+        const outcomeKey = RustTranspiler.RUST_LENT_OUTCOME_KEY.has(name);
+        const pname = RustTranspiler.RUST_LENT_OUTCOME_KEY.get(name) ?? ((name === 'currency') ? 'code' : 'marketId');
+        if (!precision && ((name !== 'safeMarket' && name !== 'safeSymbol' && name !== 'currency' && !outcomeKey) || method.parameters[0] !== param || String(param.name.text) !== pname)) return undefined;
+        if ((precision || outcomeKey) && this.rustMethodReferencedAsValue(method)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        // the prediction base's outcome lookups take their handle the same way (no venue redeclares them)
+        if (outcomeKey) return /(?:^|\/)ts\/src\/base\/PredictionExchange\.ts$/.test(file) && method.body !== undefined && String(param.type?.getText?.() ?? '') === 'Str' && !this.rustLocalIsReassigned(param, pname);
         if (!/(?:^|\/)ts\/src\/(?:base\/(?:Exchange|\.__ExchangeNoOverloads)|[^/]+)\.ts$/.test(file) || method.body === undefined) return false;
         return String(param.type?.getText?.() ?? '') === 'Str' && !this.rustLocalIsReassigned(param, pname);
     }

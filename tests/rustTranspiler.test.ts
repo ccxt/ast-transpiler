@@ -17640,13 +17640,13 @@ describe('ral-48c prediction outcome accessors', () => {
         const typed = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         const out = typed.transpileRustByPath (path.join (dir, 'ts/src/base/PredictionExchange.ts')).content;
         // ral-50c: `outcome` / `safeOutcome` answer the record again (their consumers are typed in the same change)
-        expect(out).toMatch(/fn outcome\(&self, (?:mut )?outcomeSymbol: Value\) -> Option<crate::types::Market>/);
+        expect(out).toMatch(/fn outcome\(&self, outcomeSymbol: Option<&str>\) -> Option<crate::types::Market>/);
         expect(out).toMatch(/market: Option<&crate::types::Market>\) -> Option<crate::types::Market>/);
         expect(out).toMatch(/fn loadOutcome\([^\n]*-> Option<crate::types::Market>/);
         expect(out).not.toContain('FromRaw>::from_raw(self.safeOutcome(outcomeSymbol, None))');
         // a discarded warm-up stays unboxed, the local is the typed record lent to the market slot
-        expect(out).toMatch(/\n\s*self\.loadOutcome\(outcome\.clone\(\), &\[\]\)\.await;/);
-        expect(out).toContain('let mut outcomeObj: Option<crate::types::Market> = self.loadOutcome(outcome.clone(), &[]).await;');
+        expect(out).toMatch(/\n\s*self\.loadOutcome\(outcome\.as_str\(\), &\[\]\)\.await;/);
+        expect(out).toContain('let mut outcomeObj: Option<crate::types::Market> = self.loadOutcome(outcome.as_str(), &[]).await;');
         expect(out).toContain('let mut other: Option<crate::types::Market>');
         // ral-49c: `x as any` handed whole to a `Value` slot boxes the record's raw (no decode back to Value)
         expect(out).toContain('self.hold(crate::Value::from(outcomeObj.as_ref()))');
@@ -17752,7 +17752,7 @@ describe('ral-50c prediction outcome consumers', () => {
         const out = typed.transpileRustByPath (path.join (dir, 'ts/src/base/PredictionExchange.ts')).content;
         expect(out).toMatch(/fn fetchOutcome\([^\n]*-> Option<crate::types::Market>/);
         // the record is handed on as is: no decode / box round trip
-        expect(out).toContain('return self.safeOutcome(outcomeSymbol, None);');
+        expect(out).toContain('return self.safeOutcome(outcomeSymbol.as_str(), None);');
         expect(out).not.toContain('IntoRaw::into_raw(self.safeOutcome');
         expect(out).not.toContain('IntoRaw::into_raw(self.outcome');
         // the `{}` arm reads as `None` for the key reads it only takes
