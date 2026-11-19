@@ -11876,6 +11876,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'mergeBalanceAccount': [ 0 ],
     // a map receiver every tree call site passes as a map (no site calls it by quoted name)
     'cleanOrderBook': [ 0 ],
+    // its one caller passes a parseTickers map
+    'removeKeysFromDict': [ 0 ],
 };
 const GO_BASE_DICT_PARAM_TYPE = 'map[string]any';
 function goIsBaseExchangeFile (fn: any): boolean {
