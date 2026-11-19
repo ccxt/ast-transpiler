@@ -4133,6 +4133,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printTestReaderArg(node: any, text: string): string | undefined;
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined;
+    /** A local whose declaration printed `Value`, read through `impl KeyRead`: `&Value` reads the same map / list the clone held.
+     *  Refused when another argument of the call names the local (a moved default would conflict with the borrow). */
+    private rustPlainValueDecls;
+    rustPlainValueReaderLend(node: any, declaration: any, call: any): boolean;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
     rustBorrowedDictSource(call: any): boolean;
     private static readonly RUST_RECORD_LOOKUP_SOURCES;
