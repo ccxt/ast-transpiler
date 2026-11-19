@@ -9407,7 +9407,7 @@ export class RustTranspiler extends BaseTranspiler {
             || this.rustWsWatchSlot(parent, parent.arguments.indexOf(n));
         if (isBinaryExpression(parent)) return parent.left === n && this.rustClientHandleIsInTest(parent);
         if (!isElementAccessExpression(parent) || parent.argumentExpression !== n) return false;
-        const access = this.rustClientHandleAccess(parent.expression);
+        const access = this.rustClientHandleAccess(parent.expression, !this.isNativeWriteTargetBase(parent));
         // ral-51s: the key of a `client.subscriptions[k] = v` statement (printed by printClientHandleSubscriptionWrite)
         const up: any = parent.parent;
         if (isBinaryExpression(up) && up.left === parent && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return access?.key === 'subscriptions' && access.write;
@@ -9601,7 +9601,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
      *  when the access is not on the handle or reads a field after the method wrote it. */
-    rustClientHandleAccess(node: any): { plan: any, key: string, write: boolean } | undefined {
+    rustClientHandleAccess(node: any, live = false): { plan: any, key: string, write: boolean } | undefined {
         if (node === undefined || !isPropertyAccessExpression(node) || !isIdentifier(node.expression) || node.expression.text !== 'client') return undefined;
         const key = String(node.name.text);
         if (!RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(key)) return undefined;
@@ -9609,8 +9609,20 @@ export class RustTranspiler extends BaseTranspiler {
         if (plan === undefined || node.pos < plan.bindPos || (!plan.typed && !plan.declOk && !this.rust80bClientDeclPending(plan))) return undefined;
         const write = this.isNativeWriteTargetBase(node);
         const first = plan.firstWrite.get(key);
-        if (!write && first !== undefined && this.rustClientHandleLine(node) >= first && !this.rust90bHandleSyncedInTest(node, plan)) return undefined;
+        // `live`: the use prints a handle key method (`has_|get_|*_keys`), which reads the registry, not the snapshot
+        if (!write && !(live && !this.rustClientHandleWholeWrite(node, key)) && first !== undefined && this.rustClientHandleLine(node) >= first && !this.rust90bHandleSyncedInTest(node, plan)) return undefined;
         return { plan, key, write };
+    }
+
+    /** `client.<key> = v` anywhere in the method: the field itself is replaced, so key methods keep the old guard. */
+    rustClientHandleWholeWrite(node: Node, key: string): boolean {
+        const method: Node | undefined = findAncestor(node, (n) => isMethodDeclaration(n));
+        if (method === undefined) return true;
+        return this.rustScopeNameNodes(method, 'client').some((r: any) => {
+            const p: any = r.parent;
+            return isPropertyAccessExpression(p) && p.expression === r && String(p.name.text) === key && isBinaryExpression(p.parent)
+                && p.parent.left === p && rustIsAssignmentOperator(p.parent.operatorToken.kind);
+        });
     }
 
     /** ral-90b: `k in client.subscriptions` after a write of that field reads the handle's snapshot when every write of
@@ -9675,7 +9687,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */
     printClientHandleInOp(key: any, obj: any, bare: boolean): string | undefined {
-        const access = this.rustClientHandleAccess(this.unwrapParens(obj) ?? obj);
+        const access = this.rustClientHandleAccess(this.unwrapParens(obj) ?? obj, true);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         if (name === undefined) return undefined;
         const call = `${this.rustClientHandleReceiver(access.plan, false)}.has_${name}(${this.rustWsKeyText(key)})`;
@@ -9696,13 +9708,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustClientHandleIsInTest(node: any): boolean {
         if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.InKeyword) return false;
-        const access = this.rustClientHandleAccess(this.unwrapParens(node.right) ?? node.right);
+        const access = this.rustClientHandleAccess(this.unwrapParens(node.right) ?? node.right, true);
         return access !== undefined && !access.write && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined;
     }
 
     /** `client.subscriptions|futures[k]` read with a plain local key: the handle's keyed read. */
     printClientHandleKeyedRead(node: any): string | undefined {
-        const access = this.rustClientHandleAccess(node.expression);
+        const access = this.rustClientHandleAccess(node.expression, !this.isNativeWriteTargetBase(node));
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         if (name === undefined || this.isNativeWriteTargetBase(node)) return undefined;
         const box = (text: string) => (name === 'future' ? this.rustWsFlightBox(node, text) : text);
@@ -9717,7 +9729,7 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = this.unwrapParens(init);
         if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
             || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return undefined;
-        const access = this.rustClientHandleAccess(call.arguments[0]);
+        const access = this.rustClientHandleAccess(call.arguments[0], true);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         return name === undefined ? undefined : `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
     }
