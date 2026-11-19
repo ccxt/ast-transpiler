@@ -44237,6 +44237,68 @@ function installCcxtGoNestedSafeDictRead(goTranspiler) {
     return inlineEquality.call(this, left, right, leftText, rightText, isEq);
   };
 }
+function goNeverNilStringCall(goTranspiler, call) {
+  const callee = call?.expression;
+  if (call?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword) {
+    return false;
+  }
+  const decl = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+  const stmts = decl?.body?.statements;
+  if (decl?.kind !== SyntaxKind5.MethodDeclaration || stmts === void 0 || stmts.length < 2 || decl.type?.kind !== SyntaxKind5.TypeReference || decl.type.typeName?.text !== "Str") {
+    return false;
+  }
+  const last = stmts[stmts.length - 1];
+  const guard = stmts[stmts.length - 2];
+  const name = last?.expression?.text;
+  const test = guard?.expression;
+  const thrown = guard?.thenStatement?.kind === SyntaxKind5.Block ? guard.thenStatement.statements[0] : guard?.thenStatement;
+  if (last?.kind !== SyntaxKind5.ReturnStatement || last.expression?.kind !== SyntaxKind5.Identifier || guard?.kind !== SyntaxKind5.IfStatement || guard.elseStatement !== void 0 || thrown?.kind !== SyntaxKind5.ThrowStatement || test?.kind !== SyntaxKind5.BinaryExpression || test.operatorToken.kind !== SyntaxKind5.EqualsEqualsEqualsToken || test.left?.text !== name || test.right?.kind !== SyntaxKind5.Identifier || test.right.text !== "undefined") {
+    return false;
+  }
+  return !goTranspiler.hasNodeWhere(decl.body, (n) => n.kind === SyntaxKind5.ReturnStatement && n !== last || n.kind === SyntaxKind5.FunctionExpression || n.kind === SyntaxKind5.ArrowFunction);
+}
+function goNeverNilStringWrite(goTranspiler, write) {
+  return write?.kind === SyntaxKind5.BinaryExpression && write.operatorToken?.kind === SyntaxKind5.EqualsToken && write.left?.kind === SyntaxKind5.Identifier && goNeverNilStringCall(goTranspiler, write.right);
+}
+{
+  const neverNilSafe = GoTranspiler.prototype.goLocalIsSafeToType;
+  GoTranspiler.prototype.goLocalIsSafeToType = function(scope, declaration, varName, goType, stringWriteProven = false) {
+    if (neverNilSafe.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+      return true;
+    }
+    if (goType !== "string" || scope === void 0 || declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.initializer?.kind !== SyntaxKind5.StringLiteral) {
+      return false;
+    }
+    let calls = 0;
+    const unsafe = this.hasNodeWhere(scope, (n) => {
+      if (n.kind !== SyntaxKind5.Identifier || n.text !== varName || n === declaration.name) {
+        return false;
+      }
+      const parent = n.parent;
+      if (parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n && parent.operatorToken.kind === SyntaxKind5.EqualsToken) {
+        if (parent.right?.kind === SyntaxKind5.StringLiteral) {
+          return false;
+        }
+        if (goNeverNilStringWrite(this, parent)) {
+          calls += 1;
+          return false;
+        }
+        return true;
+      }
+      const isLitCompare = parent?.kind === SyntaxKind5.BinaryExpression && [SyntaxKind5.EqualsEqualsEqualsToken, SyntaxKind5.ExclamationEqualsEqualsToken].includes(parent.operatorToken.kind) && (parent.left === n && parent.right?.kind === SyntaxKind5.StringLiteral || parent.right === n && parent.left?.kind === SyntaxKind5.StringLiteral);
+      const isStore = parent?.kind === SyntaxKind5.BinaryExpression && parent.right === n && parent.operatorToken.kind === SyntaxKind5.EqualsToken && parent.left?.kind === SyntaxKind5.ElementAccessExpression;
+      return !(isLitCompare || isStore);
+    });
+    return !unsafe && calls > 0;
+  };
+  const neverNilBinary = GoTranspiler.prototype.printBinaryExpression;
+  GoTranspiler.prototype.printBinaryExpression = function(node, identation) {
+    if (goNeverNilStringWrite(this, node) && this.goDeclaredTypeOfIdentifier(node.left) === "string") {
+      return this.printNode(node.left, 0) + " = *" + this.printNode(node.right, identation).trim();
+    }
+    return neverNilBinary.call(this, node, identation);
+  };
+}
 
 // src/javaTranspiler.ts
 init_esm_shims();
