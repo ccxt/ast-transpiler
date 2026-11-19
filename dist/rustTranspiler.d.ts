@@ -69,7 +69,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -1694,7 +1694,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustSafeDictKeyParam(param: any): boolean;
     private static readonly RUST_LENT_PRECISION_SLOTS;
+    /** Methods whose leading `Str` parameter is lent as `Option<&str>`, with that parameter's name. */
+    private static readonly RUST_SAFE_MARKET_ID_SLOTS;
     private static readonly RUST_LENT_SYMBOL_PRECISION;
+    private static readonly RUST_LENT_OUTCOME_KEY;
     /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
      *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustPriceSlotParam(param: Node | undefined): boolean;
@@ -4805,6 +4808,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A spread-free `[..]` written to an optional list builds the list straight into `Some` (`into_opt_list` of the box
      *  `Value::from(vec![..])` is always `Some` of that same `Arc`), so no box is made and converted. */
     rustOptListLiteralSome(right: any): string | undefined;
+    /** A spread-free `{..}` always prints `Value::Map({..})`, which is `Value::Dict(Arc::new(..))`, so `into_dict()` of it
+     *  answers that same map: a typed dict local takes the `Arc` straight, with no box made and converted. */
+    rustDictLiteralArc(right: any, printed: string): string | undefined;
     rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined;
     /** A plain local (not this list, no container rule of its own) that takes a whole optional list as a `Value`. */
     rustOptListAliasTarget(place: any): boolean;
@@ -5618,6 +5624,21 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSafeMarketIdArg(n: any): boolean;
     /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
     rustPositionalValueParam(param: any): boolean;
+    private rustVenueStrListDecisions;
+    /** A required `string[]` parameter of a venue-only method whose body only indexes it, reads its length or hands it
+     *  to another such slot: a lent `&[crate::Value]` (callers lend their list, by-name arms decode once, Null -> empty). */
+    rustVenueStrListParam(param: any): boolean;
+    rustVenueStrListParamUncached(param: any): boolean;
+    /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
+    rustVenueStrListSlotOf(call: any, arg: any): boolean;
+    /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
+    rustVenueStrListArgText(arg: any): string;
+    /** An optional `Str` slot of a sync ws method with no arm whose every caller passes a literal, `undefined`, or a
+     *  typed `Option<String>` local / native string call: `Option<&str>`, callers lend `x.as_deref()` (no box). */
+    rustVenueOptStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
+    /** A required `string` slot of a sync ws method with no arm, never reassigned or compared to `undefined`, whose
+     *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
+    rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     /** The text a call leaves in an omitted positional slot. */
     rustPositionalPad(param: any): string;
     /** `this.safeMarket (..)` / `super.safeMarket (..)` resolving to a method that returns the typed market. */
