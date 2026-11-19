@@ -11160,11 +11160,11 @@ describe('rust base safeCurrency / safeCurrencyCode take a lent Option<&Currency
         caller = transpiler.transpileRustByPath(other).content;
     });
     test('the base methods print the lent currency slot positionally', () => {
-        expect(base).toContain('fn safeCurrency(&self, currencyId: Value, currency: Option<&crate::types::Currency>) -> Value');
+        expect(base).toContain('fn safeCurrency(&self, currencyId: Option<&str>, currency: Option<&crate::types::Currency>) -> Value');
         expect(base).toContain('fn safeCurrencyCode(&self, currencyId: Option<&str>, currency: Option<&crate::types::Currency>) ->');
         expect(base).toContain('(currency.is_some())');
         expect(base).toContain('return crate::Value::from(currency);');
-        expect(base).toContain('self.safeCurrency(currencyId, currency)');
+        expect(base).toContain('self.safeCurrency(currencyId.as_str(), currency)');
     });
     test('the override follows the base signature and hands its slot to super as is', () => {
         expect(venue).toContain('fn safeCurrencyCode(&self, currencyId: Option<&str>, currency: Option<&crate::types::Currency>) ->');

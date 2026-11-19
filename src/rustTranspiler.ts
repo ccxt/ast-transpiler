@@ -11101,6 +11101,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private static readonly RUST_LENT_PRECISION_SLOTS = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision' ]);
+    /** Methods whose leading `Str` parameter is lent as `Option<&str>`, with that parameter's name. */
+    private static readonly RUST_SAFE_MARKET_ID_SLOTS: Record<string, string> = { 'safeMarket': 'marketId', 'safeSymbol': 'marketId', 'currency': 'code', 'symbol': 'symbol', 'marketId': 'symbol', 'safeCurrency': 'currencyId' };
     private static readonly RUST_LENT_SYMBOL_PRECISION = new Set([ 'priceToPrecision', 'amountToPrecision', 'costToPrecision', 'feeToPrecision', 'currencyToPrecision' ]);
     private static readonly RUST_LENT_OUTCOME_KEY = new Map<string, string>([ [ 'outcome', 'outcomeSymbol' ], [ 'loadOutcome', 'outcomeSymbol' ], [ 'hasOutcome', 'outcomeIdOrSymbol' ], [ 'safeOutcome', 'outcomeIdOrSymbol' ] ]);
 
@@ -39276,8 +39278,8 @@ export class RustTranspiler extends BaseTranspiler {
         // the leading `symbol` / `code` of the precision formatters is lent the same way (callers keep their string)
         const precision = RustTranspiler.RUST_LENT_SYMBOL_PRECISION.has(name) && method.parameters[0] === param;
         const outcomeKey = RustTranspiler.RUST_LENT_OUTCOME_KEY.has(name);
-        const pname = RustTranspiler.RUST_LENT_OUTCOME_KEY.get(name) ?? ((name === 'currency') ? 'code' : 'marketId');
-        if (!precision && ((name !== 'safeMarket' && name !== 'safeSymbol' && name !== 'currency' && !outcomeKey) || method.parameters[0] !== param || String(param.name.text) !== pname)) return undefined;
+        const pname = RustTranspiler.RUST_LENT_OUTCOME_KEY.get(name) ?? RustTranspiler.RUST_SAFE_MARKET_ID_SLOTS[name];
+        if (!precision && (pname === undefined || method.parameters[0] !== param || String(param.name.text) !== pname)) return undefined;
         if ((precision || outcomeKey) && this.rustMethodReferencedAsValue(method)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         // the prediction base's outcome lookups take their handle the same way (no venue redeclares them)
