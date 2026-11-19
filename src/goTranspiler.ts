@@ -37764,7 +37764,8 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
         }
         const container = match[3].substring (0, match[3].length - key.length - 2);
         const source = name + 'Src';
-        if (container.includes (source) || key.includes (source)) {
+        // only a container already printed as a native index (`m["k"]`, `m[k]`), never a helper result
+        if (!/^(?:ccxt\.)?[\w.]+\[(?:"\w+"|\w+)\]$/.test (container) || container.includes (source) || key.includes (source)) {
             return printed;
         }
         const ind = match[1];
