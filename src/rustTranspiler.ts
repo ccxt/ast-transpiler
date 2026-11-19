@@ -2563,7 +2563,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${read}.into_dict()`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) : undefined) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -33356,6 +33356,19 @@ export class RustTranspiler extends BaseTranspiler {
         let depth = 0;
         for (const ch of inner) { depth += ch === '(' || ch === '[' || ch === '{' ? 1 : (ch === ')' || ch === ']' || ch === '}' ? -1 : 0); if (depth < 0) return undefined; }
         return depth === 0 ? `Some(std::sync::Arc::new(${inner}))` : undefined;
+    }
+
+    /** A spread-free `{..}` always prints `Value::Map({..})`, which is `Value::Dict(Arc::new(..))`, so `into_dict()` of it
+     *  answers that same map: a typed dict local takes the `Arc` straight, with no box made and converted. */
+    rustDictLiteralArc(right: any, printed: string): string | undefined {
+        const lit: any = this.rustSkipWrappers(right);
+        if (lit === undefined || lit.kind !== SyntaxKind.ObjectLiteralExpression || lit.properties.some((p: any) => p.kind === SyntaxKind.SpreadAssignment)) return undefined;
+        const text = printed.trim();
+        if (!text.startsWith('Value::Map({') || !text.endsWith('})')) return undefined;
+        const inner = text.slice('Value::Map('.length, -1);
+        let depth = 0;
+        for (const ch of inner) { depth += ch === '(' || ch === '[' || ch === '{' ? 1 : (ch === ')' || ch === ']' || ch === '}' ? -1 : 0); if (depth < 0) return undefined; }
+        return depth === 0 ? `std::sync::Arc::new(${inner})` : undefined;
     }
 
     rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined {

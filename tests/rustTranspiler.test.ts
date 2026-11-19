@@ -2617,7 +2617,7 @@ describe('rust error constructor message arguments', () => {
         const ts = "function jwt (r: any, s: any, h: any, isRsa = false, o: any = {}): any { return r; }\n"
             + "class T {\n    f (a: any, b: any) {\n        if (a) {\n            const request = { 'x': a };\n            return jwt (request, b, 'sha256');\n        } else {\n            const request = { 'y': b };\n            return jwt (request, a, 'sha256');\n        }\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output.split('let mut request: crate::value::Dict = Value::Map({').length).toBe(3);
+        expect(output.split('let mut request: crate::value::Dict = std::sync::Arc::new({').length).toBe(3);
         expect(output).not.toContain('let mut request: Value');
     });
 
@@ -2625,7 +2625,7 @@ describe('rust error constructor message arguments', () => {
         const ts = "function jwt (r: any, s: any, h: any, isRsa = false, o: any = {}): any { return r; }\n"
             + "class T {\n    f (a: any, b: any) {\n        const request = { 'access_key': a };\n        request['query_hash'] = b;\n        return jwt (request, b, 'sha256');\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('let mut request: crate::value::Dict = Value::Map({');
+        expect(output).toContain('let mut request: crate::value::Dict = std::sync::Arc::new({');
         expect(output).toContain('jwt(&request, ');
         expect(output).not.toContain('request.clone()');
     });
@@ -5004,7 +5004,7 @@ describe('native element writes on plain-dict locals', () => {
         expect(output).toContain(insert('request', 'b', 'Value::Int(2)'));
         // ral-oc: a literal rebuilt only by `x = this.extend (x, ..)` holds the shared Dict (copy-on-write insert)
         expect(output).toContain('std::sync::Arc::make_mut(&mut merged).insert("d".into(), Value::Int(4));');
-        expect(output).toContain('let mut merged: crate::value::Dict = Value::Map({');
+        expect(output).toContain('let mut merged: crate::value::Dict = std::sync::Arc::new({');
         expect(output).toContain('Value::Dict(merged)');
         // the head moves into extend and the result is taken back without a copy
         expect(output).toContain('merged = self.extend(merged, &[');
@@ -6283,7 +6283,7 @@ describe('typed dict bearers', () => {
         const later = rs("        const out = [];\n        const item = { 'id': v };\n        out.push (item);\n        item['k'] = 1;\n        return out;");
         // ral-oc: no IndexMap bearer; the shared Dict lends an Arc bump to the push and inserts copy-on-write afterwards
         expect(later).not.toContain('indexmap::IndexMap<String, Value> = ({');
-        expect(later).toContain('let mut item: crate::value::Dict = Value::Map({');
+        expect(later).toContain('let mut item: crate::value::Dict = std::sync::Arc::new({');
         expect(later).toContain('out.push(Value::from(&item));');
         expect(later).toContain('std::sync::Arc::make_mut(&mut item).insert("k".into(), Value::Int(1));');
         const twice = rs("        const out = [];\n        const item = { 'id': v };\n        out.push (item);\n        out.push (item);\n        return out;");
@@ -9376,7 +9376,7 @@ describe('rust lookup tables and always-list producers', () => {
     });
     test('negative: a table also handed to another method keeps no IndexMap bearer (ral-oc: shared Dict, lent there)', () => {
         expect(out).not.toContain('let mut kept: indexmap::IndexMap');
-        expect(out).toContain('let mut kept: crate::value::Dict = Value::Map({');
+        expect(out).toContain('let mut kept: crate::value::Dict = std::sync::Arc::new({');
         expect(out).toContain('self.hold(Value::from(&kept));');
     });
 });
