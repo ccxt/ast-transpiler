@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -274,6 +274,8 @@ export const rustDispatch = {
         case 'optcurrency': return `<Option<crate::types::Currency> as crate::types::FromRaw>::from_raw(${arg}).as_ref()`;
         // ral-ve: an order-book side slot wraps the boxed side marker once
         case 'side': return `crate::pro::order_book::Side::of(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
+        // a lent string-list slot: a non-list argument reads as the empty list, as the shadow did
+        case 'vlist': return `args.get(${i}).and_then(crate::Value::as_array).map(Vec::as_slice).unwrap_or_default()`;
         default: return arg;
         }
     },
@@ -291,6 +293,7 @@ export const rustDispatch = {
         case 'str': return rustDispatch.arg(kind, i);
         case 'optstr': return rustDispatch.arg(kind, i);
         case 'side': return rustDispatch.arg(kind, i);
+        case 'vlist': return rustDispatch.arg(kind, i);
         default: return undefined;
         }
     },
@@ -4218,6 +4221,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
         if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param) || this.rustLentSlotParam(param) || this.rustPriceSlotParam(param)) return 'impl Into<crate::Value>';
         if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
+        if (this.rustVenueStrListParam(param)) return '&[crate::Value]';
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
 
@@ -15221,7 +15225,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<f64>': 'optf64', 'Option<i64>': 'opti64', 'i64': 'i64', 'Option<Vec<String>>': 'optstrvec', 'Vec<Vec<String>>': 'strvecvec',
         'impl Into<crate::Params> + Send': 'params', 'crate::value::Dict': 'dict', 'crate::value::List': 'list',
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
-        'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side',
+        'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
     };
 
     private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
@@ -17287,7 +17291,7 @@ export class RustTranspiler extends BaseTranspiler {
                     ? this.rustMapArgumentText(a, 0)
                     : this.rustNativeStrVecArgumentSlot(calleeParams, at)
                         ? this.rustStrVecArgumentText(a, 0)
-                        : (this.rustNativeBoolArgumentSlot(calleeParams, at)
+                        : calleeParams !== undefined && at < calleeParams.length && this.rustVenueStrListParam(calleeParams[at]) ? this.rustVenueStrListArgText(a) : (this.rustNativeBoolArgumentSlot(calleeParams, at)
                             ? this.rustBoolArgumentText(a, 0)
                             : this.rustOptionalBoolSlotArgText(node, calleeParams, at, a));
                 const printArgs = (list, from = 0) => list.map((a, i) => this.rustWsWatchSlot(node, from + i) ? this.rustWsWatchSlotText(a, this.printNode(a, 0)) : printArg(a, from + i)).join(', ');
@@ -17561,6 +17565,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustNativeStrVecArgumentSlot(params, at)) {
                 return this.rustStrVecArgumentText(arg, identation);
             }
+            if (at < params.length && this.rustVenueStrListParam(params[at])) return this.rustVenueStrListArgText(arg);
             return this.rustNativeBoolArgumentSlot(params, at)
                 ? this.rustBoolArgumentText(arg, identation)
                 : this.printNode(arg, identation).trim();
@@ -19253,6 +19258,8 @@ export class RustTranspiler extends BaseTranspiler {
         const lines: string[] = [];
         for (const shadow of table.values()) {
             const empty = `__${shadow.name}_empty`;
+            // a lent string-list parameter is the slice itself: its reads need no binding
+            if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustFunctionDeclaresName(fn, empty)) continue;
             const map = shadow.kind === RUST_PARAM_SHADOWS.MAP;
             const accessor = map ? 'as_map' : 'as_array';
@@ -19408,6 +19415,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (literalKeys) return this.rustShadowKeyIsLiteral(parent.argumentExpression);
             return this.rustShadowKeyIsReadable(parent.argumentExpression, kind);
         }
+        if (kind === RUST_PARAM_SHADOWS.LIST && isCallExpression(parent) && parent.expression !== id && this.rustVenueStrListSlotOf(parent, id)) return true;
         // `x.length` — array length read.
         if (isPropertyAccessExpression(parent) && parent.expression === id) {
             return kind === RUST_PARAM_SHADOWS.LIST && String(parent.name.text) === 'length';
@@ -39303,6 +39311,73 @@ export class RustTranspiler extends BaseTranspiler {
         if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || !isIdentifier(method.name) || String(method.name.text) !== 'safeMarket') return false;
         if (method.parameters[0] !== param || !isIdentifier(param.name) || String(param.name.text) !== 'marketId' || method.parameters.length < 2) return false;
         return this.rustMarketSlotParam(method.parameters[1]);
+    }
+
+    private rustVenueStrListDecisions = new WeakMap<any, boolean>();
+
+    /** A required `string[]` parameter of a venue-only method whose body only indexes it, reads its length or hands it
+     *  to another such slot: a lent `&[crate::Value]` (callers lend their list, by-name arms decode once, Null -> empty). */
+    rustVenueStrListParam(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustVenueStrListDecisions.get(param);
+        if (decision === undefined) {
+            this.rustVenueStrListDecisions.set(param, false); // re-entrancy guard
+            try {
+                decision = this.rustVenueStrListParamUncached(param);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustVenueStrListDecisions.set(param, decision);
+        }
+        return decision;
+    }
+
+    rustVenueStrListParamUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        if (param.type?.kind !== SyntaxKind.ArrayType || param.type.elementType?.kind !== SyntaxKind.StringKeyword) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
+        const params: any[] = Array.from(method.parameters);
+        if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined)) return false;
+        if (!this.rustVenueOnlyMethod(method, String(method.name.text)) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        if (this.rustParamPrintsStrVec(param) || this.rustParamIsLentList(param) || this.rustParamIsLentVenue(param) || this.rustParamReadsByReference(param) || this.rustParameterIsClientHandle(param)) return false;
+        // every caller hands a list it holds by name (a local or a lent parameter): it lends, nothing is rebuilt
+        const at = params.indexOf(param);
+        for (const call of this.rustVenueStrCallSites(method)) {
+            if (Array.from(call.arguments ?? []).some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+            const arg: any = call.arguments?.[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            const decl: any = arg !== undefined && isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
+            if (decl === undefined || decl.name === arg || !(isVariableDeclaration(decl) || (isParameterDeclaration(decl) && decl !== param && this.rustVenueStrListParam(decl)))) return false;
+        }
+        return this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.LIST) !== undefined;
+    }
+
+    /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
+    rustVenueStrListSlotOf(call: any, arg: any): boolean {
+        if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const at = Array.from(call.arguments ?? []).indexOf(arg);
+        const params: any = at < 0 ? undefined : this.rustCalleeParams(call);
+        return params !== undefined && at < params.length && this.rustVenueStrListParam(params[at]);
+    }
+
+    /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
+    rustVenueStrListArgText(arg: any): string {
+        const inner: any = this.unwrapParens(arg);
+        const decl: any = isIdentifier(inner) ? this.rustDeclarationOfIdentifier(inner) : undefined;
+        if (decl !== undefined && isParameterDeclaration(decl) && (this.rustVenueStrListParam(decl) || this.rustParamShadowOf(inner) !== undefined)) return RustTranspiler.rustLentMark(String(inner.text));
+        const text = this.printNode(arg, 0).trim();
+        const arr = /^Value::Arr\((\w+)(?:\.clone\(\))?\)$/.exec(text);
+        if (arr !== null) return `&${arr[1]}`;
+        // an `Option<List>` local: viewed in place, None reads as the empty list
+        const optList = /^(\w+)(?:\.clone\(\))?\.map_or\(Value::Null, Value::Arr\)$/.exec(text);
+        if (optList !== null) return `${optList[1]}.as_deref().map(Vec::as_slice).unwrap_or_default()`;
+        const cloned = /^(\w+)\.clone\(\)$/.exec(text);
+        if (cloned !== null) return `${cloned[1]}.as_array().map(Vec::as_slice).unwrap_or_default()`;
+        // a held `Vec<Value>` / `List` boxed by reference or by copy: lent as it is
+        const vec = /^Value::from\(&?(\w+)(?:\.clone\(\))?\)$/.exec(text);
+        if (vec !== null && (text.startsWith('Value::from(&') || (decl !== undefined && this.rustVecLocalIsTyped(decl)))) return `&${vec[1]}`;
+        return `${/^[\w.]+$/.test(text) ? text : `(${text})`}.as_array().map(Vec::as_slice).unwrap_or_default()`;
     }
 
     /** The text a call leaves in an omitted positional slot. */
