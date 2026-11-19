@@ -35490,7 +35490,25 @@ export class RustTranspiler extends BaseTranspiler {
             const index = Number(key.text);
             return Number.isInteger(index) && index >= 0;
         }
-        return this.isRustValueIndexKey(key);
+        return this.isRustValueIndexKey(key) || (isBinaryExpression(this.unwrapParens(key)) && this.rustI64ArithIndexText(key) !== undefined);
+    }
+
+    /** A typed `i64` sum/difference index (`n - j - 1`): `as usize` wraps a negative out of range, as `get_list_value` does. */
+    rustI64ArithIndexText(key: any, print = false): string | undefined {
+        const node: any = this.unwrapParens(key);
+        if (isNumericLiteral(node)) return Number.isInteger(Number(node.text)) ? String(Number(node.text)) : undefined;
+        if (isIdentifier(node)) {
+            if (this.rustI64CounterOf(node) !== undefined) return print ? (this.rustI64CounterUse(node) ? String(node.text) : undefined) : String(node.text);
+            if (this.rustScalarSolving.size === 0 && this.rustScalarIdentifierKind(node) === 'int') return super.printIdentifier(node);
+            // a `for (let j = 0; ..)` counter not yet registered at the decision: printed as its counter in the loop body
+            return !print && this.isRustValueIndexKey(node) ? String(node.text) : undefined;
+        }
+        if (!isBinaryExpression(node)) return undefined;
+        const op = node.operatorToken.kind;
+        if (op !== SyntaxKind.PlusToken && op !== SyntaxKind.MinusToken) return undefined;
+        const l = this.rustI64ArithIndexText(node.left, print), r = this.rustI64ArithIndexText(node.right, print);
+        if (l === undefined || r === undefined) return undefined;
+        return `(${l} ${op === SyntaxKind.PlusToken ? '+' : '-'} ${r})`;
     }
 
     /** Native read of one bearer level; undefined keeps the helper. */
@@ -35501,6 +35519,10 @@ export class RustTranspiler extends BaseTranspiler {
             return `${receiverText}.get("${this.escapeRustStringLiteral(String((key as any).text))}").cloned().unwrap_or(Value::Null)`;
         }
         if (isNumericLiteral(key)) return `${receiverText}.get(${Number((key as any).text)}).cloned().unwrap_or(Value::Null)`;
+        if (isBinaryExpression(this.unwrapParens(key))) {
+            const arith = this.rustI64ArithIndexText(key, true);
+            return arith === undefined ? undefined : `${receiverText}.get(${arith} as usize).cloned().unwrap_or(Value::Null)`;
+        }
         const keyText = this.printNode(keyNode, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText)) return undefined;
         // A `Value` index: an in-range Int reads, a negative/absent/other key misses
