@@ -38499,6 +38499,7 @@ export class RustTranspiler extends BaseTranspiler {
             const callee: any = isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === at ? up.expression : undefined;
             if (callee !== undefined && isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
                 && (callee.name.text === 'numberToString' || callee.name.text === 'parseToInt') && this.rustCalleeIsRuntimeBase(up)) continue;
+            if (this.rustVenueNumParam(up, at, param)) continue;
             return false;
         }
         return true;
@@ -39568,6 +39569,16 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         return declaration?.kind === SyntaxKind.Parameter ? text : `&${text}`;
     }
+
+    /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
+     *  `priceToPrecision` / `costToPrecision` (stringified like `numberToString`: `3.0` prints `3`). */
+    rustVenueNumParam(call: any, arg: any, param: any): boolean {
+        if (!isCallExpression(call) || call.arguments.length !== 2 || call.arguments[1] !== arg || !isIdentifier(arg)) return false;
+        if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return RustTranspiler.RUST_VENUE_NUM_PRECISION.has(String(call.expression.name.text)) && this.rustCalleeIsRuntimeBase(call) && this.rustDeclaredNode(arg) === param;
+    }
+
+    private static readonly RUST_VENUE_NUM_PRECISION = new Set([ 'amountToPrecision', 'priceToPrecision', 'costToPrecision' ]);
 
     /** The text a call leaves in an omitted positional slot. */
     rustPositionalPad(param: any): string {
