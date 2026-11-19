@@ -89266,7 +89266,29 @@ ${iden}}`;
       const index = Number(key.text);
       return Number.isInteger(index) && index >= 0;
     }
-    return this.isRustValueIndexKey(key);
+    return this.isRustValueIndexKey(key) || isBinaryExpression5(this.unwrapParens(key)) && this.rustI64ArithIndexText(key) !== void 0;
+  }
+  /** A typed `i64` sum/difference index (`n - j - 1`): `as usize` wraps a negative out of range, as `get_list_value` does. */
+  rustI64ArithIndexText(key, print = false) {
+    const node = this.unwrapParens(key);
+    if (isNumericLiteral5(node))
+      return Number.isInteger(Number(node.text)) ? String(Number(node.text)) : void 0;
+    if (isIdentifier4(node)) {
+      if (this.rustI64CounterOf(node) !== void 0)
+        return print ? this.rustI64CounterUse(node) ? String(node.text) : void 0 : String(node.text);
+      if (this.rustScalarSolving.size === 0 && this.rustScalarIdentifierKind(node) === "int")
+        return super.printIdentifier(node);
+      return !print && this.isRustValueIndexKey(node) ? String(node.text) : void 0;
+    }
+    if (!isBinaryExpression5(node))
+      return void 0;
+    const op = node.operatorToken.kind;
+    if (op !== SyntaxKind7.PlusToken && op !== SyntaxKind7.MinusToken)
+      return void 0;
+    const l = this.rustI64ArithIndexText(node.left, print), r = this.rustI64ArithIndexText(node.right, print);
+    if (l === void 0 || r === void 0)
+      return void 0;
+    return `(${l} ${op === SyntaxKind7.PlusToken ? "+" : "-"} ${r})`;
   }
   /** Native read of one bearer level; undefined keeps the helper. */
   printReadBearerAccess(kind, receiverText, keyNode) {
@@ -89278,6 +89300,10 @@ ${iden}}`;
     }
     if (isNumericLiteral5(key))
       return `${receiverText}.get(${Number(key.text)}).cloned().unwrap_or(Value::Null)`;
+    if (isBinaryExpression5(this.unwrapParens(key))) {
+      const arith = this.rustI64ArithIndexText(key, true);
+      return arith === void 0 ? void 0 : `${receiverText}.get(${arith} as usize).cloned().unwrap_or(Value::Null)`;
+    }
     const keyText = this.printNode(keyNode, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyText))
       return void 0;

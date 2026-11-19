@@ -5109,6 +5109,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Key a read-only bearer serves natively: a literal string for a map, a
      *  literal (or proven-number `Value`) index for a list. */
     rustReadBearerKeyOk(kind: 'list' | 'map', keyNode: any): boolean;
+    /** A typed `i64` sum/difference index (`n - j - 1`): `as usize` wraps a negative out of range, as `get_list_value` does. */
+    rustI64ArithIndexText(key: any, print?: boolean): string | undefined;
     /** Native read of one bearer level; undefined keeps the helper. */
     printReadBearerAccess(kind: 'list' | 'map', receiverText: string, keyNode: any): string | undefined;
     /** Container kind a printed `Value` expression provably yields on every path. */
