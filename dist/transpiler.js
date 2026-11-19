@@ -29587,6 +29587,9 @@ ${iden}}`;
     if (goType === "[]any") {
       return this.goUnifiedAnySliceParameterType(fn, param);
     }
+    if (goType === "[][]any") {
+      return this.goUnifiedRowSliceParameterType(fn, param);
+    }
     const annotation = goType === "[]string" ? "string[]" : goType === "[][]string" ? "string[][]" : void 0;
     if (annotation === void 0 || param?.type === void 0 || String(param.type.getText()).replace(/\s+/g, "") !== annotation) {
       return void 0;
@@ -29627,6 +29630,32 @@ ${iden}}`;
       throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
     }
     return "[]any";
+  }
+  // a `[][]any` slot types a required `string[][]` row list: every caller hands rows of boxed
+  // strings (literals print `[][]any{[]any{..}}`, the typed wrapper converts its [][]string)
+  goUnifiedRowSliceParameterType(fn, param) {
+    if (param.initializer !== void 0 || param.dotDotDotToken !== void 0 || param.name?.kind !== SyntaxKind5.Identifier || fn.body === void 0 || String(param.type?.getText?.() ?? "").replace(/\s+/g, "") !== "string[][]") {
+      return void 0;
+    }
+    if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, "[][]any")) {
+      throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than [][]any`);
+    }
+    return "[][]any";
+  }
+  // `Array.isArray (rows[K])` on a `[][]any` parameter: GetValue answers the row (IsArray true) when K is in
+  // range and the row is non-nil, and nil (IsArray false) otherwise
+  printRowSliceIsArray(node) {
+    const access = this.goUnwrapParenthesizedNode(node?.arguments?.[0]);
+    const base = access?.expression;
+    const index = access?.argumentExpression;
+    if (access?.kind !== SyntaxKind5.ElementAccessExpression || base?.kind !== SyntaxKind5.Identifier || index?.kind !== SyntaxKind5.NumericLiteral || !/^\d+$/.test(index.text)) {
+      return void 0;
+    }
+    const decl = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve();
+    if (decl?.kind !== SyntaxKind5.Parameter || this.goNativeParameterType(decl) !== "[][]any") {
+      return void 0;
+    }
+    return `(len(${base.text}) > ${index.text} && ${base.text}[${index.text}] != nil)`;
   }
   goSliceParamKeepsGetValue(decl) {
     if (this.goIsUnifiedAnySliceParameterNode(decl)) {
@@ -29936,7 +29965,8 @@ ${iden}}`;
         continue;
       }
       const goType = this.goCallSliceArgumentType(node, name, i);
-      if (goType === void 0 || this.goArrayLiteralSliceType(arg, 0, goType) !== goType) {
+      const rowLiteral = goType === "[][]any" && arg.elements.length > 0 && arg.elements.every((e) => e.kind === SyntaxKind5.ArrayLiteralExpression);
+      if (goType === void 0 || !rowLiteral && this.goArrayLiteralSliceType(arg, 0, goType) !== goType) {
         continue;
       }
       this.goSliceLiteralTypes.set(arg, goType);
@@ -33177,7 +33207,7 @@ ${indent}}`);
     if (this.goTypeOfInitializer(node, printed) === "bool") {
       return printed;
     }
-    if (node?.kind === SyntaxKind5.CallExpression && (printed === "true" || printed === "false" || this.goIsSafeContainerIsArray(node))) {
+    if (node?.kind === SyntaxKind5.CallExpression && (printed === "true" || printed === "false" || this.goIsSafeContainerIsArray(node) || this.printRowSliceIsArray(node) !== void 0)) {
       return printed;
     }
     if (GO_BOOL_FIELDS.has(printed)) {
@@ -35205,7 +35235,7 @@ ${this.getIden(identation)}${returnStatement}`;
       return this.goWithExprDepth(1, () => this.printNode(e, identation)).trim();
     }).join(", ");
     const first = node.elements[0];
-    const arrayOpen = markedType === "[]string" ? "[]string{" : markedType === "[][]string" ? "[][]string{" : first?.kind === SyntaxKind5.CallExpression && (this.getFunctionType(first) || true) ? "[]any{" : this.ARRAY_OPENING_TOKEN;
+    const arrayOpen = markedType === "[]string" || markedType === "[][]any" ? `${markedType}{` : markedType === "[][]string" ? "[][]string{" : first?.kind === SyntaxKind5.CallExpression && (this.getFunctionType(first) || true) ? "[]any{" : this.ARRAY_OPENING_TOKEN;
     return arrayOpen + elements + this.ARRAY_CLOSING_TOKEN;
   }
   printArgsForCallExpression(node, identation) {
@@ -35387,7 +35417,7 @@ ${this.getIden(identation)}${returnStatement}`;
     return void 0;
   }
   printArrayIsArrayCall(node, identation, parsedArg = void 0) {
-    return this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
+    return this.printRowSliceIsArray(node) ?? this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
   }
   printObjectKeysCall(node, identation, parsedArg = void 0) {
     const cacheKeys = this.goWsCacheKeysText(node.arguments?.[0]);
@@ -37602,6 +37632,9 @@ ${ind}}
     keyStrs.forEach((k) => {
       acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
     });
+    if (baseExpr?.kind === SyntaxKind5.Identifier && keys.length === 1 && !containerStr.includes("\n") && !this.isGoElementAccessAssignmentTarget(node) && this.goDeclaredTypeOfIdentifier(baseExpr) === "[][]any" && this.goBoundedLoopListRead(node)) {
+      return `${containerStr}[${keyStrs[0]}]`;
+    }
     if (baseExpr?.kind === SyntaxKind5.Identifier && this.goDeclaredListIdentifier(baseExpr)) {
       const nativeRead = this.goNativeListElementRead(node, containerStr, keys[0], keyStrs[0]);
       if (nativeRead !== void 0) {
