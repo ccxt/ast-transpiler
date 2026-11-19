@@ -18863,5 +18863,36 @@ describe('nested safeDict {}-default local reads the map natively', () => {
         const e = go("    f (fee: any, i: number) {\n        const rk = 'a' + i.toString ();\n        const r = this.safeDict (fee['n'], rk, {});\n        fee['z'] = r['z'];\n        return fee;\n    }\n");
         expect(e).toContain('\tvar rSrc, _ = GetValue(fee, "n").(map[string]any)\n\tvar r map[string]any\n\tr, _ = rSrc[rk].(map[string]any)\n');
         expect(out).not.toContain('Src, _ = ');
+describe('list narrowers built on an array-literal local print []any', () => {
+    const head = 'type Dict = { [key: string]: unknown };\n'
+        + 'class base {}\n'
+        + 'export class ex extends base {\n'
+        + '    narrow (response: Dict | Dict[] | string): Dict[] {\n'
+        + '        let result: Dict[] = [];\n'
+        + '        if (Array.isArray (response)) {\n'
+        + '            result = response;\n'
+        + '        }\n'
+        + '        return result;\n'
+        + '    }\n';
+    test('an Array.isArray-guarded write keeps the never-nil []any return', () => {
+        const out = goTranspile92g8(head
+            + '    g (r: Dict) {\n'
+            + '        const rows = this.narrow (r);\n'
+            + '        return rows.length;\n'
+            + '    }\n'
+            + '}\n');
+        expect(out).toContain(') Narrow(response any) []any {');
+        expect(out).toContain('result = ArrayTyped(response)');
+        expect(out).toContain('var rows []any = this.Narrow(r)');
+    });
+    test('an unguarded write of the param keeps the boxed return', () => {
+        const out = goTranspile92g8(head.replace('        if (Array.isArray (response)) {\n            result = response;\n        }\n', '        result = response as Dict[];\n')
+            + '}\n');
+        expect(out).not.toContain(') Narrow(response any) []any {');
+    });
+    test('a guard on a different name keeps the boxed return', () => {
+        const out = goTranspile92g8(head.replace('if (Array.isArray (response))', 'if (Array.isArray (this))')
+            + '}\n');
+        expect(out).not.toContain(') Narrow(response any) []any {');
     });
 });
