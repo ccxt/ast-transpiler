@@ -6479,9 +6479,16 @@ describe ('csharp declared string index reads', () => {
             expect(out).not.toContain('getValue(id, i)');
         });
 
+        test('an Int64? counter on a string? receiver adds the helper null-key test and its Convert.ToInt32', () => {
+            const out = printedWithKey(loop(''), 'string?', 'Int64?');
+            expect(out).toContain('(id != null && i != null ? id[Convert.ToInt32(i.Value)].ToString () : null)');
+            expect(out).not.toContain('getValue(id, i)');
+        });
+
         test('an object receiver or a non-int key keeps the helper', () => {
             expect(printedWithKey(loop(''), undefined, 'int')).toContain('getValue(id, i)');
-            expect(printedWithKey(loop(''), 'string?', 'Int64?')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), 'string?', 'Int64')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), undefined, 'Int64?')).toContain('getValue(id, i)');
             expect(printedWithKey(loop(''), 'List<object>', 'int')).not.toContain('.ToString ()');
         });
     });
