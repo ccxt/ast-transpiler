@@ -11519,6 +11519,59 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
             return slots.rewrite (printed, holder, node.right, node);
         };
     }
+    // a const holding an exchange-local tuple producer's `[]any`, read only as `t[<literal below the arity>]`:
+    // declared `[]any`; a plain or map/slice slot reads as the bare index (bounds: every own return literal; no pointer to deref)
+    const tupleLocals = new WeakMap<object, any> ();
+    const tupleLocalInfo = function (go: any, declaration: any): any {
+        if ((declaration?.kind !== SK.VariableDeclaration) || (declaration.name?.kind !== SK.Identifier)
+            || (declaration.initializer?.kind !== SK.CallExpression) || (((declaration.parent?.flags ?? 0) & ts.NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        if (tupleLocals.has (declaration)) { return tupleLocals.get (declaration); }
+        tupleLocals.set (declaration, undefined);
+        const info = slots.producerInfo (declaration.initializer);
+        const fn = slots.enclosingFunction (declaration);
+        let ok = (info !== undefined) && (info.pair !== true) && (fn !== undefined);
+        let reads = 0;
+        if (ok) {
+            goTupleSlotWalk (fn.body, (n) => {
+                if (!ok || (n.kind !== SK.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)) { return ok; }
+                if (go.goDeclarationOfIdentifier (n) !== declaration) { return true; }
+                const access = n.parent;
+                const key = access?.argumentExpression;
+                ok = (access?.kind === SK.ElementAccessExpression) && (access.expression === n) && (key?.kind === SK.NumericLiteral)
+                    && /^\d+$/.test (key.text) && (Number (key.text) < info.arity)
+                    && !((access.parent?.kind === SK.BinaryExpression) && (access.parent.left === access));
+                reads += 1;
+                return ok;
+            });
+        }
+        const result = (ok && (reads > 0)) ? info : undefined;
+        tupleLocals.set (declaration, result);
+        return result;
+    };
+    const printTupleDeclaration = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node: any, identation: number) {
+        const printed = printTupleDeclaration.call (this, node, identation);
+        const declaration = node?.declarations?.[0];
+        if ((typeof printed !== 'string') || (node?.declarations?.length !== 1) || (tupleLocalInfo (this, declaration) === undefined)) {
+            return printed;
+        }
+        const name = this.printNode (declaration.name, 0);
+        const m = new RegExp ('^(\\s*var ' + name + ' )any( = this\\.)').exec (printed);
+        return (m === null) ? printed : printed.replace (m[0], m[1] + '[]any' + m[2]);
+    };
+    const printTupleRead = goTranspiler.printElementAccessExpression;
+    goTranspiler.printElementAccessExpression = function (node: any, identation: number) {
+        const base = node?.expression;
+        if ((base?.kind === SK.Identifier) && (node.argumentExpression?.kind === SK.NumericLiteral)) {
+            const info = tupleLocalInfo (this, this.goDeclarationOfIdentifier (base));
+            if ((info !== undefined) && /^(?:plain|typedmap$|typedslice$)/.test (String (info.slots[Number (node.argumentExpression.text)] ?? ''))) {
+                return this.printNode (base, 0) + '[' + node.argumentExpression.text + ']';
+            }
+        }
+        return printTupleRead.call (this, node, identation);
+    };
 }
 
 // ===== exchange-local method parameters print the Go type their call sites pass =====
@@ -29838,7 +29891,10 @@ ${tryBodyBlock}
         // yields the identical value without the helper call
         // an inlined `m[0]` map row (annotatedMapRowSource) prints its source read, which is not a Go map
         const literalRow = (this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind.NumericLiteral);
-        if (!literalRow && ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || (this.goBaseCacheField(baseExpr) === 'Balance'))) {
+        // a safeDict local printed as the typed SafeDictMap read is a Go map too (nil map reads nil like GetValue)
+        const safeDictMapBase = (baseExpr?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(baseExpr) === undefined)
+            && (this.goSafeDictMapLocal(this.goDeclarationOfIdentifier(baseExpr)) === 'map[string]any');
+        if (!literalRow && ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || safeDictMapBase || (this.goBaseCacheField(baseExpr) === 'Balance'))) {
             if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node)
                 && !this.goMarketComparisonElementRead(node)) {
                 return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
