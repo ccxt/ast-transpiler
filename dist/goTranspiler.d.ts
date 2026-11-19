@@ -1151,6 +1151,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsUnifiedSliceParameter(methodName: string, index: number): boolean;
     goUnifiedSliceParameterType(fn: any, param: any): string | undefined;
     goUnifiedAnySliceParameterType(fn: any, param: any): string | undefined;
+    goUnifiedRowSliceParameterType(fn: any, param: any): string | undefined;
+    printRowSliceIsArray(node: any): string | undefined;
     goSliceParamKeepsGetValue(decl: any): boolean;
     goIsUnifiedAnySliceParameterNode(decl: any): boolean;
     goSliceTableRootParameter(fn: any, param: any): any;

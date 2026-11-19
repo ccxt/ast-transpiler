@@ -1829,7 +1829,7 @@ export function ccxtGoWrapUrlsDeclaration (printed) {
         return printed;
     }
     // a whole view index reads the view's typed string leaves (BaseExchange.UrlsApiStrings / UrlsApiSectionStrings)
-    const leaf = /^this\.UrlsApi(Sections)?(\[[^\[\]\n]+\])(\[[^\[\]\n]+\])?$/.exec (match[2]);
+    const leaf = /^this\.UrlsApi(Sections)?(\[[^[\]\n]+\])(\[[^[\]\n]+\])?$/.exec (match[2]);
     if ((leaf !== null) && ((leaf[1] === undefined) === (leaf[3] === undefined))) {
         return match[1] + (leaf[1] ? 'this.UrlsApiSectionStrings' : 'this.UrlsApiStrings') + leaf[2] + (leaf[3] ?? '') + match[3];
     }
