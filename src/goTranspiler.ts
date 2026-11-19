@@ -11727,6 +11727,8 @@ export function goDynamicCallParamsCheck (): string[] {
 export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'safeTrade': [ 0 ], 'safeLedgerEntry': [ 0 ], 'safeLiquidation': [ 0 ], 'safeCurrencyStructure': [ 0 ],
     'mergeBalanceAccount': [ 0 ],
+    // a map receiver every tree call site passes as a map (no site calls it by quoted name)
+    'cleanOrderBook': [ 0 ],
 };
 const GO_BASE_DICT_PARAM_TYPE = 'map[string]any';
 function goIsBaseExchangeFile (fn: any): boolean {
@@ -37758,6 +37760,36 @@ function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
     };
 }
 // ===== list elements: plain pushed values (end) =====
+// ===== list elements: read straight into a deref-at-entry consumer =====
+// A bounded `DerefScalar(xs[i])` handed whole to a callee that derefScalars that argument first
+// (arg 0 of this.safe*, all through SafeValueN; the SafeStringPtr/SafeBoolPtr declaration wrap)
+// reads exactly like `xs[i]`, whatever pointer the element holds.
+const GO_DEREF_AT_ENTRY_SAFE_ARG0 = /^safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp)(?:2)?$/;
+function goElementReadHasDerefConsumer (goTranspiler, node): boolean {
+    let child = node;
+    let parent = node?.parent;
+    while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.AsExpression)) {
+        child = parent;
+        parent = parent.parent;
+    }
+    if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === child)
+        && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
+        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (`${parent.expression.name?.text ?? ''}`);
+    }
+    if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
+        return ccxtGoScalarElementReadType (goTranspiler, child) !== undefined;
+    }
+    return false;
+}
+{
+    const elementRead = GoTranspiler.prototype.goNativeListElementRead;
+    GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: string, keyNode, keyStr: string): string | undefined {
+        const shipped = elementRead.call (this, node, containerStr, keyNode, keyStr);
+        const plain = `${containerStr}[${keyStr}]`;
+        return ((shipped === `DerefScalar(${plain})`) && goElementReadHasDerefConsumer (this, node)) ? plain : shipped;
+    };
+}
+// ===== list elements: deref-at-entry consumer (end) =====
 
 // `const d = this.safeDict (c[k1], k2, {})` with `c[k1]` an `any` and `k2` a string, typed map local: the
 // SafeMapTyped read becomes two map assertions (a non-map container is a nil map whose index answers
@@ -37808,6 +37840,7 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
             + ind + name + ', _ = ' + source + '[' + key + '].(map[string]any)';
     };
 }
+
 // A declared Go `string` operand is never nil: IsEqual(s, nil) always answers false, so the
 // nil test prints its constant answer instead of the helper call.
 {
@@ -37821,33 +37854,3 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
         return inlineEquality.call(this, left, right, leftText, rightText, isEq);
     };
 }
-// ===== list elements: read straight into a deref-at-entry consumer =====
-// A bounded `DerefScalar(xs[i])` handed whole to a callee that derefScalars that argument first
-// (arg 0 of this.safe*, all through SafeValueN; the SafeStringPtr/SafeBoolPtr declaration wrap)
-// reads exactly like `xs[i]`, whatever pointer the element holds.
-const GO_DEREF_AT_ENTRY_SAFE_ARG0 = /^safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp)(?:2)?$/;
-function goElementReadHasDerefConsumer (goTranspiler, node): boolean {
-    let child = node;
-    let parent = node?.parent;
-    while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.AsExpression)) {
-        child = parent;
-        parent = parent.parent;
-    }
-    if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === child)
-        && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
-        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (`${parent.expression.name?.text ?? ''}`);
-    }
-    if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
-        return ccxtGoScalarElementReadType (goTranspiler, child) !== undefined;
-    }
-    return false;
-}
-{
-    const elementRead = GoTranspiler.prototype.goNativeListElementRead;
-    GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: string, keyNode, keyStr: string): string | undefined {
-        const shipped = elementRead.call (this, node, containerStr, keyNode, keyStr);
-        const plain = `${containerStr}[${keyStr}]`;
-        return ((shipped === `DerefScalar(${plain})`) && goElementReadHasDerefConsumer (this, node)) ? plain : shipped;
-    };
-}
-// ===== list elements: deref-at-entry consumer (end) =====

@@ -18894,6 +18894,9 @@ describe('nested safeDict {}-default local reads the map natively', () => {
         const e = go("    f (fee: any, i: number) {\n        const rk = 'a' + i.toString ();\n        const r = this.safeDict (fee['n'], rk, {});\n        fee['z'] = r['z'];\n        return fee;\n    }\n");
         expect(e).toContain('\tvar rSrc, _ = GetValue(fee, "n").(map[string]any)\n\tvar r map[string]any\n\tr, _ = rSrc[rk].(map[string]any)\n');
         expect(out).not.toContain('Src, _ = ');
+    });
+});
+
 describe('list narrowers built on an array-literal local print []any', () => {
     const head = 'type Dict = { [key: string]: unknown };\n'
         + 'class base {}\n'
@@ -18925,6 +18928,9 @@ describe('list narrowers built on an array-literal local print []any', () => {
         const out = goTranspile92g8(head.replace('if (Array.isArray (response))', 'if (Array.isArray (this))')
             + '}\n');
         expect(out).not.toContain(') Narrow(response any) []any {');
+    });
+});
+
 describe('venue pair verdict per importing module', () => {
     const pair = (ret: string) =>
         "    resolve (m: string, params: Dict): [Str, Dict] {\n" +
@@ -18970,6 +18976,9 @@ describe('venue pair verdict per importing module', () => {
     test('a return led by a comment line still prints the pair', () => {
         const out = run('tmp-vp-c', pair("        // trailing\n        return [ 'w', params ];\n") + destructured, kept.replace('resolve', 'other'), 'a.ts');
         expect(out).not.toMatch(/return \[\]any\{/);
+    });
+});
+
 describe('hand-written marketCodes / shortenSlug results print native nil tests', () => {
     const emit = (body: string): string => {
         const inst = new Transpiler({ 'verbose': false });
