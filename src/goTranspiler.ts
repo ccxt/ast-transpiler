@@ -10000,7 +10000,8 @@ function ccxtGoVenuePairCallersDestructure (name, file = '') {
         const texts = [ ...related ].map ((f) => state.files.get (f));
         const any = new RegExp ('[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()|[^\\w.]' + name + ' \\(', 'g');
         const call = new RegExp ('\\.' + name + ' \\(', 'g');
-        const destructured = new RegExp ('\\] = (?:this|super)\\.' + name + ' \\(', 'g');
+        // an arm of a `[ .. ] = c ? this.a (..) : this.b (..)` destructuring is bound too
+        const destructured = new RegExp ('\\] = (?:(?:this|super)\\.' + name + ' \\(|[^;\\n?]+\\? this\\.' + name + ' \\([^;\\n]*\\) : this\\.\\w+ \\(|[^;\\n?]+\\? this\\.\\w+ \\([^;\\n]*\\) : this\\.' + name + ' \\()', 'g');
         let calls = 0;
         let bound = 0;
         let stray = 0;
@@ -10070,8 +10071,88 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
     return m[1] + slot (expr.elements[0], pair.type, pair.first) + ', ' + slot (expr.elements[1], 'map[string]any', 'MapTyped') + m[3];
 }
 
+// `[ a, b ] = c ? this.x (..) : this.y (..)` over two venue pairs of the same slot type binds both arms
+// as a multi-assign in an if/else; `declare` first declares the two locals with the pair's slot types
+function ccxtGoVenuePairTernaryBind (goTranspiler, target, initializer, identation, declare) {
+    let ternary = initializer;
+    while (ternary?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        ternary = ternary.expression;
+    }
+    const elements = target?.elements ?? [];
+    if ((ternary?.kind !== ts.SyntaxKind.ConditionalExpression) || (elements.length !== 2)
+        || !elements.every ((e) => ts.isIdentifier (declare ? e.name : e))) {
+        return undefined;
+    }
+    const pairs = [ ternary.whenTrue, ternary.whenFalse ].map ((arm) => {
+        let call = arm;
+        while (call?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            call = call.expression;
+        }
+        return (ccxtGoTupleResultCall (call) && (call.expression.expression?.kind === ts.SyntaxKind.ThisKeyword)) ? [ call, ccxtGoVenuePairOfCall (call) ] : undefined;
+    });
+    if (pairs.some ((p) => (p === undefined) || (p[1] === undefined)) || (pairs[0][1].type !== pairs[1][1].type)) {
+        return undefined;
+    }
+    const arms = pairs.map ((p) => ccxtGoTupleResultUnwrap (goTranspiler.printNode (p[0], 0)));
+    if (arms.some ((a) => a === undefined)) {
+        return undefined;
+    }
+    const names = elements.map ((e) => (declare ? e.name : e).text);
+    const condition = goTranspiler.goWithExprDepth (1, () => goTranspiler.printCondition (ternary.condition, 0));
+    if (condition.includes ('\n')) {
+        return undefined;
+    }
+    const iden = goTranspiler.getIden (identation);
+    const head = declare
+        ? ((pairs[0][1].type === 'map[string]any') ? iden + 'var ' + names.join (', ') + ' map[string]any\n'
+            : iden + 'var ' + names[0] + ' ' + pairs[0][1].type + '\n' + iden + 'var ' + names[1] + ' map[string]any\n')
+        : '';
+    const lhs = names.join (', ') + ' = ';
+    // an expression statement gets its first line's indentation from the statement printer
+    return head + (declare ? iden : '') + 'if ' + goTranspiler.goStripControlClauseParens (condition) + ' {\n' + iden + '\t' + lhs + arms[0] + '\n'
+        + iden + '} else {\n' + iden + '\t' + lhs + arms[1] + '\n' + iden + '}';
+}
+
+function ccxtGoVenuePairElementType (goTranspiler, node) {
+    const element = (node?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (goTranspiler, node) : undefined;
+    const declaration = element?.parent?.parent;
+    if ((element?.kind !== ts.SyntaxKind.BindingElement) || (declaration?.kind !== ts.SyntaxKind.VariableDeclaration)
+        || ((declaration.parent.flags & ts.NodeFlags.Const) === 0) || (element.parent.elements.length !== 2)) {
+        return undefined;
+    }
+    let init = declaration.initializer;
+    while (init?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        init = init.expression;
+    }
+    const arms = (init?.kind === ts.SyntaxKind.ConditionalExpression) ? [ init.whenTrue, init.whenFalse ] : [ init ];
+    const pairs = arms.map ((a) => {
+        while (a?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            a = a.expression;
+        }
+        return (a?.kind === ts.SyntaxKind.CallExpression) ? ccxtGoVenuePairOfCall (a) : undefined;
+    });
+    if (pairs.some ((p) => p === undefined) || pairs.some ((p) => p.type !== pairs[0].type)) {
+        return undefined;
+    }
+    return (element.parent.elements.indexOf (element) === 0) ? pairs[0].type : 'map[string]any';
+}
+
 function installCcxtGoTupleResults (goTranspiler) {
     CCXT_GO_VENUE_PAIR_STATE.go = goTranspiler;
+    // an element of a `const [ a, b ] = <venue pair call or ternary of two>` holds its slot's Go type
+    const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
+    goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
+        const known = shippedDeclared.call (this, node);
+        return (known !== undefined) ? known : ccxtGoVenuePairElementType (this, node);
+    };
+    // a store into such a map keeps the helper (nil map, pointer value); the build's never-nil slot proof lowers it
+    const shippedStore = goTranspiler.printNativeElementAssignment;
+    goTranspiler.printNativeElementAssignment = function (containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = undefined) {
+        if ((ccxtGoVenuePairElementType (this, containerNode) === 'map[string]any') && (shippedDeclared.call (this, containerNode) === undefined)) {
+            return undefined;
+        }
+        return shippedStore.call (this, containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);
+    };
     const printFunctionType = goTranspiler.printFunctionType;
     goTranspiler.printFunctionType = function (node) {
         const pair = (node?.kind === ts.SyntaxKind.MethodDeclaration) ? ccxtGoVenuePairOf (node) : undefined;
@@ -10114,6 +10195,10 @@ function installCcxtGoTupleResults (goTranspiler) {
         if ((typeof printed === 'string') && (readSlot !== undefined)) {
             return ccxtGoPairSlotConsumer (printed, readSlot, ccxtGoPairHolderSlots (this, ccxtGoPairHolderDeclaration (this, declaration.initializer.expression)).pointer);
         }
+        const armBind = ccxtGoVenuePairTernaryBind (this, declaration?.name, declaration?.initializer, identation, true);
+        if (armBind !== undefined) {
+            return armBind;
+        }
         if ((typeof printed !== 'string') || (declaration?.name?.kind !== ts.SyntaxKind.ArrayBindingPattern)
             || !ccxtGoTupleResultCall (declaration.initializer)) {
             return printed;
@@ -10152,6 +10237,12 @@ function installCcxtGoTupleResults (goTranspiler) {
     };
     const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
     goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+        if ((node?.left?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (node.operatorToken?.kind === ts.SyntaxKind.EqualsToken)) {
+            const armBind = ccxtGoVenuePairTernaryBind (this, node.left, node.right, identation, false);
+            if (armBind !== undefined) {
+                return armBind;
+            }
+        }
         const printed = printCustom.call (this, node, identation);
         if ((typeof printed !== 'string') || (node?.left?.kind !== ts.SyntaxKind.ArrayLiteralExpression)
             || (node.operatorToken?.kind !== ts.SyntaxKind.EqualsToken) || !ccxtGoTupleResultCall (node.right)) {

@@ -19028,6 +19028,19 @@ describe('venue pair verdict per importing module', () => {
         const out = run('tmp-vp-c', pair("        // trailing\n        return [ 'w', params ];\n") + destructured, kept.replace('resolve', 'other'), 'a.ts');
         expect(out).not.toMatch(/return \[\]any\{/);
     });
+    const dictPair = (n: string) => "    " + n + " (params: Dict = {}): [Dict, Dict] {\n        const r: Dict = {};\n        return [ r, params ];\n    }\n";
+    test('a ternary of two dict pairs binds both arms in an if/else', () => {
+        const body = dictPair('p1') + dictPair('p2') + "    f (c: boolean, params: Dict = {}) {\n        const [ a, b ] = c ? this.p1 (params) : this.p2 (params);\n        a['k'] = 1;\n        return b;\n    }\n";
+        const out = run('tmp-vp-d', body, '', 'a.ts');
+        expect(out).toContain('var a, b map[string]any');
+        expect(out).toMatch(/if EvalTruthy\(c\) \{\n\t+a, b = this\.P1\(params\)\n\t+\} else \{\n\t+a, b = this\.P2\(params\)/);
+        expect(out).not.toContain('GetValue(');
+    });
+    test('a ternary with a non-pair arm keeps the holder', () => {
+        const body = dictPair('p1') + "    p3 (params: Dict = {}) { return [ params, params ]; }\n" + "    f (c: boolean, params: Dict = {}) {\n        const [ a, b ] = c ? this.p1 (params) : this.p3 (params);\n        return b;\n    }\n";
+        const out = run('tmp-vp-e', body, '', 'a.ts');
+        expect(out).not.toContain('var a, b map[string]any');
+    });
 });
 
 describe('hand-written marketCodes / shortenSlug results print native nil tests', () => {
