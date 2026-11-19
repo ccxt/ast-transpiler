@@ -19543,7 +19543,7 @@ function ccxtGoVenuePairCallersDestructure(name, file = "") {
     const texts = [...related].map((f) => state.files.get(f));
     const any = new RegExp(`['"]` + name + `['"]|\\.` + name + "\\b(?! \\()|[^\\w.]" + name + " \\(", "g");
     const call = new RegExp("\\." + name + " \\(", "g");
-    const destructured = new RegExp("\\] = (?:this|super)\\." + name + " \\(", "g");
+    const destructured = new RegExp("\\] = (?:(?:this|super)\\." + name + " \\(|[^;\\n?]+\\? this\\." + name + " \\([^;\\n]*\\) : this\\.\\w+ \\(|[^;\\n?]+\\? this\\.\\w+ \\([^;\\n]*\\) : this\\." + name + " \\()", "g");
     let calls = 0;
     let bound = 0;
     let stray = 0;
@@ -19600,8 +19600,75 @@ function ccxtGoVenuePairReturn(goTranspiler, node, printed, pair) {
   };
   return m[1] + slot(expr.elements[0], pair.type, pair.first) + ", " + slot(expr.elements[1], "map[string]any", "MapTyped") + m[3];
 }
+function ccxtGoVenuePairTernaryBind(goTranspiler, target, initializer, identation, declare) {
+  let ternary = initializer;
+  while (ternary?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+    ternary = ternary.expression;
+  }
+  const elements = target?.elements ?? [];
+  if (ternary?.kind !== ts.SyntaxKind.ConditionalExpression || elements.length !== 2 || !elements.every((e) => ts.isIdentifier(declare ? e.name : e))) {
+    return void 0;
+  }
+  const pairs = [ternary.whenTrue, ternary.whenFalse].map((arm) => {
+    let call = arm;
+    while (call?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+      call = call.expression;
+    }
+    return ccxtGoTupleResultCall(call) && call.expression.expression?.kind === ts.SyntaxKind.ThisKeyword ? [call, ccxtGoVenuePairOfCall(call)] : void 0;
+  });
+  if (pairs.some((p) => p === void 0 || p[1] === void 0) || pairs[0][1].type !== pairs[1][1].type) {
+    return void 0;
+  }
+  const arms = pairs.map((p) => ccxtGoTupleResultUnwrap(goTranspiler.printNode(p[0], 0)));
+  if (arms.some((a) => a === void 0)) {
+    return void 0;
+  }
+  const names = elements.map((e) => (declare ? e.name : e).text);
+  const condition = goTranspiler.goWithExprDepth(1, () => goTranspiler.printCondition(ternary.condition, 0));
+  if (condition.includes("\n")) {
+    return void 0;
+  }
+  const iden = goTranspiler.getIden(identation);
+  const head = declare ? pairs[0][1].type === "map[string]any" ? iden + "var " + names.join(", ") + " map[string]any\n" : iden + "var " + names[0] + " " + pairs[0][1].type + "\n" + iden + "var " + names[1] + " map[string]any\n" : "";
+  const lhs = names.join(", ") + " = ";
+  return head + (declare ? iden : "") + "if " + goTranspiler.goStripControlClauseParens(condition) + " {\n" + iden + "	" + lhs + arms[0] + "\n" + iden + "} else {\n" + iden + "	" + lhs + arms[1] + "\n" + iden + "}";
+}
+function ccxtGoVenuePairElementType(goTranspiler, node) {
+  const element = node?.kind === ts.SyntaxKind.Identifier ? ccxtGoParamDeclarationOf(goTranspiler, node) : void 0;
+  const declaration = element?.parent?.parent;
+  if (element?.kind !== ts.SyntaxKind.BindingElement || declaration?.kind !== ts.SyntaxKind.VariableDeclaration || (declaration.parent.flags & ts.NodeFlags.Const) === 0 || element.parent.elements.length !== 2) {
+    return void 0;
+  }
+  let init = declaration.initializer;
+  while (init?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+    init = init.expression;
+  }
+  const arms = init?.kind === ts.SyntaxKind.ConditionalExpression ? [init.whenTrue, init.whenFalse] : [init];
+  const pairs = arms.map((a) => {
+    while (a?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+      a = a.expression;
+    }
+    return a?.kind === ts.SyntaxKind.CallExpression ? ccxtGoVenuePairOfCall(a) : void 0;
+  });
+  if (pairs.some((p) => p === void 0) || pairs.some((p) => p.type !== pairs[0].type)) {
+    return void 0;
+  }
+  return element.parent.elements.indexOf(element) === 0 ? pairs[0].type : "map[string]any";
+}
 function installCcxtGoTupleResults(goTranspiler) {
   CCXT_GO_VENUE_PAIR_STATE.go = goTranspiler;
+  const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
+  goTranspiler.goDeclaredTypeOfIdentifier = function(node) {
+    const known = shippedDeclared.call(this, node);
+    return known !== void 0 ? known : ccxtGoVenuePairElementType(this, node);
+  };
+  const shippedStore = goTranspiler.printNativeElementAssignment;
+  goTranspiler.printNativeElementAssignment = function(containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = void 0) {
+    if (ccxtGoVenuePairElementType(this, containerNode) === "map[string]any" && shippedDeclared.call(this, containerNode) === void 0) {
+      return void 0;
+    }
+    return shippedStore.call(this, containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);
+  };
   const printFunctionType = goTranspiler.printFunctionType;
   goTranspiler.printFunctionType = function(node) {
     const pair = node?.kind === ts.SyntaxKind.MethodDeclaration ? ccxtGoVenuePairOf(node) : void 0;
@@ -19642,6 +19709,10 @@ function installCcxtGoTupleResults(goTranspiler) {
     if (typeof printed === "string" && readSlot !== void 0) {
       return ccxtGoPairSlotConsumer(printed, readSlot, ccxtGoPairHolderSlots(this, ccxtGoPairHolderDeclaration(this, declaration.initializer.expression)).pointer);
     }
+    const armBind = ccxtGoVenuePairTernaryBind(this, declaration?.name, declaration?.initializer, identation, true);
+    if (armBind !== void 0) {
+      return armBind;
+    }
     if (typeof printed !== "string" || declaration?.name?.kind !== ts.SyntaxKind.ArrayBindingPattern || !ccxtGoTupleResultCall(declaration.initializer)) {
       return printed;
     }
@@ -19677,6 +19748,12 @@ function installCcxtGoTupleResults(goTranspiler) {
   };
   const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
   goTranspiler.printCustomBinaryExpressionIfAny = function(node, identation) {
+    if (node?.left?.kind === ts.SyntaxKind.ArrayLiteralExpression && node.operatorToken?.kind === ts.SyntaxKind.EqualsToken) {
+      const armBind = ccxtGoVenuePairTernaryBind(this, node.left, node.right, identation, false);
+      if (armBind !== void 0) {
+        return armBind;
+      }
+    }
     const printed = printCustom.call(this, node, identation);
     if (typeof printed !== "string" || node?.left?.kind !== ts.SyntaxKind.ArrayLiteralExpression || node.operatorToken?.kind !== ts.SyntaxKind.EqualsToken || !ccxtGoTupleResultCall(node.right)) {
       return printed;
