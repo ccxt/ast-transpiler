@@ -44138,11 +44138,11 @@ function installCcxtGoNestedSafeDictRead(goTranspiler) {
     }
     const container = match[3].substring(0, match[3].length - key.length - 2);
     const source = name + "Src";
-    if (!/^(?:ccxt\.)?[\w.]+\[(?:"\w+"|\w+)\]$/.test(container) || container.includes(source) || key.includes(source)) {
+    if (container.includes(source) || key.includes(source)) {
       return printed;
     }
     const ind = match[1];
-    return ind + "var " + name + " map[string]any\n" + ind + "if " + source + ", ok := " + container + ".(map[string]any); ok {\n" + ind + "	" + name + ", _ = " + source + "[" + key + "].(map[string]any)\n" + ind + "}";
+    return ind + "var " + source + ", _ = " + container + ".(map[string]any)\n" + ind + "var " + name + " map[string]any\n" + ind + name + ", _ = " + source + "[" + key + "].(map[string]any)";
   };
 }
 

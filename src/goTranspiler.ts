@@ -37725,8 +37725,8 @@ function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
 // ===== list elements: plain pushed values (end) =====
 
 // `const d = this.safeDict (c[k1], k2, {})` with `c[k1]` an `any` and `k2` a string, typed map local: the
-// SafeMapTyped read becomes two comma-ok map assertions (a non-map container or member answers nil, as
-// SafeValue / SafeMapTyped do; the `{}` default is dropped exactly as for the SafeMapTyped form)
+// SafeMapTyped read becomes two map assertions (a non-map container is a nil map whose index answers
+// nil, a non-map member answers nil, as SafeMapTyped does; the `{}` default is dropped as there)
 function installCcxtGoNestedSafeDictRead (goTranspiler) {
     if (!goInstallOnce (goTranspiler, '__ccxtGoNestedSafeDictReadInstalled', 'printVariableDeclarationList')) {
         return;
@@ -37764,14 +37764,12 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
         }
         const container = match[3].substring (0, match[3].length - key.length - 2);
         const source = name + 'Src';
-        // only a container already printed as a native index (`m["k"]`, `m[k]`), never a helper result
-        if (!/^(?:ccxt\.)?[\w.]+\[(?:"\w+"|\w+)\]$/.test (container) || container.includes (source) || key.includes (source)) {
+        if (container.includes (source) || key.includes (source)) {
             return printed;
         }
         const ind = match[1];
-        return ind + 'var ' + name + ' map[string]any\n'
-            + ind + 'if ' + source + ', ok := ' + container + '.(map[string]any); ok {\n'
-            + ind + '\t' + name + ', _ = ' + source + '[' + key + '].(map[string]any)\n'
-            + ind + '}';
+        return ind + 'var ' + source + ', _ = ' + container + '.(map[string]any)\n'
+            + ind + 'var ' + name + ' map[string]any\n'
+            + ind + name + ', _ = ' + source + '[' + key + '].(map[string]any)';
     };
 }
