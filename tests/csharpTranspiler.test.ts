@@ -8418,3 +8418,40 @@ class x {
         expect(transpiler.transpileCSharp(src('const row: Dict = m[0];', 'return row;')).content).toMatch(/\brow\b/);
     });
 });
+
+describe('Int64 index list reads', () => {
+    const source = "class Exchange {\n" +
+        "    main(channels: string[], other: any) {\n" +
+        "        const missing = this.pick ();\n" +
+        "        const index = missing[0];\n" +
+        "        const a = channels[missing[0]];\n" +
+        "        const b = other[0];\n" +
+        "        return [ index, a, b ];\n" +
+        "    }\n" +
+        "}";
+    const withHooks = (listType: string, paramType: string | undefined, run: () => string) => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previousPrinted = printer.csharpPrintedLocalType;
+        const previousResolver = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpPrintedLocalType = (node: any) => (node?.text === 'missing') ? listType : undefined;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'channels') ? paramType : undefined;
+        try {
+            return run();
+        } finally {
+            printer.csharpPrintedLocalType = previousPrinted;
+            printer.csharpDeclaredLocalTypeResolver = previousResolver;
+        }
+    };
+    test('a literal read of a declared List<Int64> is an Int64? conditional', () => {
+        const output = withHooks('List<Int64>', 'IList<object>', () => transpiler.transpileCSharp(source).content);
+        expect(output).toContain('(missing != null && 0 < missing.Count ? missing[0] : (Int64?)null)');
+    });
+    test('a List<object> receiver keeps the object conditional', () => {
+        const output = withHooks('List<object>', 'IList<object>', () => transpiler.transpileCSharp(source).content);
+        expect(output).not.toContain('(Int64?)null');
+    });
+    test('an untyped receiver keeps the helper', () => {
+        const output = withHooks('List<Int64>', undefined, () => transpiler.transpileCSharp(source).content);
+        expect(output).toContain('getValue(other, 0)');
+    });
+});

@@ -26958,7 +26958,21 @@ export class RustTranspiler extends BaseTranspiler {
         // a message-field read takes the typed reader's `Option` (Null/""/non-container -> None, as `into_opt_*` answered)
         const field = /^(\w+)\.get\(("\w+")\)\.cloned\(\)\.unwrap_or_default\(\)$/.exec(this.rustWsFieldGetText(init, true) ?? '');
         if (field !== null && !RUST_BOOK_META_KEYS.has(field[2].slice(1, -1))) return `${indent}let mut ${varName}: Option<${type}> = self.safe_${kind}_k_o(&${field[1]}, ${field[2]})`;
-        return `${indent}let mut ${varName}: Option<${type}> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
+        const printed = this.printNode(declaration.initializer, 0).trim();
+        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOptDictNativeInit(init, printed) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
+    }
+
+    /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
+     *  as `safe_dict_o` beside `None`, and the 67g typed row read as the row's own map (`None` out of range / non-dict). */
+    rustOptDictNativeInit(init: any, printed: string): string | undefined {
+        const tern = /^\(if (.+) \{ Value::Null \} else \{ self\.safe(?:_d|D)ict\(([^{}]+), &\[\]\) \}\)$/.exec(printed) ?? /^\(if (.+) \{ self\.safe(?:_d|D)ict\(([^{}]+), &\[\]\) \} else \{ Value::Null \}\)$/.exec(printed);
+        if (tern !== null && isConditionalExpression(init) && this.rustOptMapTernaryInit(init)) {
+            const o = `self.safe_dict_o(${tern[2]})`;
+            return printed.includes('{ Value::Null } else') ? `(if ${tern[1]} { None } else { ${o} })` : `(if ${tern[1]} { ${o} } else { None })`;
+        }
+        const row = /^\(match (\w+\.get\([\w ]+\)) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => Value::Null \}\)$/.exec(printed);
+        if (row !== null && isCallExpression(init)) return `(match ${row[1]} { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None })`;
+        return undefined;
     }
 
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */

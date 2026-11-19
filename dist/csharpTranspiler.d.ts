@@ -629,4 +629,5 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpObjectKeyCastable(key: any): boolean;
     csharpIsPlainRead(node: any): boolean;
     csharpDeclaredKeyType(key: any): string | undefined;
+    csharpInt64ListLiteralRead(expression: any, argumentExpression: any): string | undefined;
 }

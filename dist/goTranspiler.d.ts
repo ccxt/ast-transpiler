@@ -640,6 +640,7 @@ export declare function goDynamicCallParamsCheck(): string[];
 export declare const GO_BASE_DICT_PARAMS: {
     [method: string]: number[];
 };
+export declare function goDictParamCallArgs(go: any, node: any, identation: number): string | undefined;
 export declare function installCcxtGoDictParams(goTranspiler: any): any;
 export declare function goDictParamTypesSelfTest(): string[];
 export declare function installCcxtGoGb05ParamTypes(goTranspiler: any): any;
@@ -1498,6 +1499,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
     goMapRangeLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goIsMapRangeFieldReceiver(receiver: any, method: string): boolean;
     goIsRebindFreeMapReceiver(receiver: any): boolean;
     goObjectValuesLocalIsList(declaration: any, scope: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
@@ -1636,6 +1638,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWritesOrRebindsName(n: any, name: string, mutators: string[]): boolean;
     goLoopBoundedSliceRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goLoopBoundedIndexRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goListFieldLoopRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goAwaitedListLocal(base: any): boolean;
     asyncMapRowListCallees: Set<string>;
     asyncTickerMapCallees: Set<string>;
@@ -1677,6 +1680,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAwaitedObjectListRead(node: any, keyNode: any): boolean;
     goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
+    goTryEnclosingMethod(node: any): any;
+    goTryPrintsTypedBool(tryNode: any, method: any): boolean;
     isInsideVoidFunction(node: Node): boolean;
     /**
      * Check if a block or statement contains a return statement or throws an error

@@ -159,6 +159,17 @@ describe('go .length -> len on a slice', () => {
         expect(output).toContain('for i := 0; i < len(this.Symbols); i++');
         expect(output).not.toContain('GetArrayLength(this.Symbols)');
     });
+    test('this.Accounts (a hand-written []any field) prints len and a loop-bounded index', () => {
+        const mk = (body: string) => "class Test {\n    accounts: any[] = []\n    f () {\n" + body + "    }\n}";
+        const output = transpile(mk("        for (let i = 0; i < this.accounts.length; i++) {\n            const a = this.accounts[i]\n        }\n"));
+        expect(output).toContain('for i := 0; i < len(this.Accounts); i++');
+        expect(output).toContain('this.Accounts[i]');
+        expect(output).not.toContain('GetValue(this.Accounts, i)');
+        const written = transpile(mk("        for (let i = 0; i < this.accounts.length; i++) {\n            const a = this.accounts[i]\n            this.accounts = []\n        }\n"));
+        expect(written).toContain('GetValue(this.Accounts, i)');
+        const outside = transpile(mk("        const a = this.accounts[0]\n        return a\n"));
+        expect(outside).toContain('GetValue(this.Accounts, 0)');
+    });
     test('a hand-written map/interface field keeps GetArrayLength', () => {
         const ts =
         "class Test {\n" +

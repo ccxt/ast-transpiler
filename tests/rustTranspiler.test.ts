@@ -16832,11 +16832,17 @@ describe('ral-44g: a ternary whose arms are {} or a base safeDict with a {} defa
     });
     test('ral-45g: an undefined arm beside a nullable safeDict is the optional map (Null stays None)', () => {
         const out = mk("(code === undefined) ? undefined : this.safeDict (networks, code)");
-        expect(out).toMatch(/let mut network: Option<crate::value::Dict> = \(if .*\{ Value::Null \} else \{ self\.safe_?[dD]ict\(.*\) \}\)\.into_opt_dict\(\);/);
+        expect(out).toMatch(/let mut network: Option<crate::value::Dict> = \(if .*\{ None \} else \{ self\.safe_dict_o\(networks, code\) \}\);/);
+        expect(out).not.toContain('into_opt_dict');
+    });
+    test('negative: a safeDict arm with a default keeps the boxed ternary', () => {
+        const out = mk("(code === undefined) ? undefined : this.safeDict (networks, code, { 'a': 1 })");
+        expect(out).not.toContain('safe_dict_o(');
     });
     test('ral-45g: the arms swapped are the same optional map', () => {
         const out = mk("(code !== undefined) ? this.safeDict (networks, code) : undefined");
         expect(out).toContain('let mut network: Option<crate::value::Dict> = ');
+        expect(out).toContain('{ self.safe_dict_o(networks, code) } else { None });');
     });
     test('negative: an undefined arm beside a plain element read keeps Value', () => {
         const out = mk("(code === undefined) ? undefined : networks[code]");
@@ -23110,7 +23116,7 @@ describe('ral-67g: a typed Vec result read through base safeDict (rows, i) borro
     test('a literal index: the local is the typed Vec and the read matches the borrowed row', () => {
         const out = build ('ral67g-lit', "        const order = this.safeDict (result, 0);\n        return this.hold (order);\n");
         expect(out).toContain('let mut result: Vec<crate::types::Order> = (match self.fetch_open_orders(');
-        expect(out).toContain('(match result.get(0) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => Value::Null })');
+        expect(out).toContain('let mut order: Option<crate::value::Dict> = (match result.get(0) { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None });');
         expect(out).not.toContain('IntoRaw::into_raw(self.fetch_open_orders');
     });
     test('a counter index with a default: the default is the non-dict / out-of-range arm', () => {
@@ -23319,7 +23325,7 @@ describe('ral-68g: typed row reads (Market rows, safeValue rows, optional-string
     test('a fetchMarkets result read through length and safeDict (rows, i) is the typed Vec<Market>', () => {
         const out = build ('ral68g-mkt', "        const markets = await this.fetchMarkets (params);\n        const result: Dict = {};\n        for (let i = 0; i < markets.length; i++) {\n            const item = this.safeDict (markets, i);\n            result[this.safeString (item, 'symbol')] = item;\n        }\n        return result;\n", ['fetchMarkets']);
         expect(out).toContain('let mut markets: Vec<crate::types::Market> = (match self.fetch_markets(');
-        expect(out).toContain('(match markets.get(i as usize) { Some(__row) if matches!(__row.raw, Value::Dict(_)) => crate::Value::from(__row), _ => Value::Null })');
+        expect(out).toContain('let mut item: Option<crate::value::Dict> = (match markets.get(i as usize) { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None });');
     });
     test('safeValue (rows, i) on a typed Vec: any element but Null / empty string, else the default', () => {
         const out = build ('ral68g-sv', "        const markets = await this.fetchMarkets ();\n        let last = undefined;\n        for (let i = 0; i < markets.length; i++) {\n            last = this.safeValue (markets, i);\n        }\n        return this.hold (last);\n", ['fetchMarkets']);

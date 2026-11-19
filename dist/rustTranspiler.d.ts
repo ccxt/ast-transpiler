@@ -3960,6 +3960,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
     printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
+     *  as `safe_dict_o` beside `None`, and the 67g typed row read as the row's own map (`None` out of range / non-dict). */
+    rustOptDictNativeInit(init: any, printed: string): string | undefined;
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
     printOptContainerWrite(left: any, right: any, identation?: number): string | undefined;
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */

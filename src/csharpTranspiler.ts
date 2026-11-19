@@ -8170,6 +8170,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (sectionRead !== undefined) {
             return sectionRead;
         }
+        const int64Read = this.csharpInt64ListLiteralRead(expression, argumentExpression);
+        if (int64Read !== undefined) {
+            return int64Read;
+        }
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
@@ -9987,4 +9991,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpLocalTypeOf(key);
     }
 
+
+    // `xs[N]` on a local whose emitted declaration is `List<Int64>`: an `Int64?` conditional carrying
+    // GetValue's null-receiver and past-the-end answers (a negative literal is never printed here)
+    csharpInt64ListLiteralRead(expression, argumentExpression): string | undefined {
+        if (!isIdentifier(expression) || !isNumericLiteral(argumentExpression) || !/^\d{1,9}$/.test(argumentExpression.text as string)
+                || !this.csharpIsPlainRead(expression.parent) || this.csharpPrintedLocalTypeOf(expression) !== 'List<Int64>') {
+            return undefined;
+        }
+        const receiver = this.printNode(expression, 0);
+        const index = argumentExpression.text;
+        return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : (Int64?)null)`;
+    }
 }

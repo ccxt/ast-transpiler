@@ -3906,6 +3906,43 @@ describe('go native element assignment', () => {
         expect(output).not.toContain("limitCopy != nil");
         expect(output).toContain("IsEqual(limitCopy, nil)");
     });
+    test('an Int parameter read by toString binds its pointer twin and compares natively', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    f (limit: Int = undefined, params = {}) {\n" +
+        "        let channel = 'books';\n" +
+        "        let inc = true;\n" +
+        "        if ((limit === 1) || (limit === 50)) {\n" +
+        "            channel += limit.toString ();\n" +
+        "            inc = (limit === 50);\n" +
+        "        }\n" +
+        "        if (limit !== undefined) {\n" +
+        "            if ((limit !== 20) && (limit !== 5)) { throw new Error ('x'); }\n" +
+        "        }\n" +
+        "        return [ channel, inc, 'b' + limit.toString () ];\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).toContain("var limit *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)");
+        expect(output).toContain("if (limit != nil && *limit == 1) || (limit != nil && *limit == 50) {");
+        expect(output).toContain("(limit == nil || *limit != 20) && (limit == nil || *limit != 5)");
+        expect(output).not.toContain("IsEqual(limit");
+        // an unguarded read keeps the deref-aware helper
+        expect(output).toContain("ToString(limit)");
+    });
+    test('an Int parameter read by toString with an argument keeps the box', () => {
+        const input =
+        "type Int = number | undefined;\n" +
+        "class T {\n" +
+        "    f (limit: Int = undefined, params = {}) {\n" +
+        "        const s = limit.toString (16);\n" +
+        "        return (limit === 5) ? s : 'x';\n" +
+        "    }\n" +
+        "}\n"
+        const output = transpiler.transpileGo(input).content;
+        expect(output).not.toContain("GetArgInt64Ptr(");
+    });
     test('a pointer copied into a local later written a Go string keeps the box', () => {
         const input =
         "type Str = string | undefined;\n" +
@@ -6984,6 +7021,40 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(cond).not.toContain('var v any = rows[i]');
     });
 
+    test('a boolean method whose returns sit in try/catch prints a typed bool closure', () => {
+        const dir = path.join(__dirname, 'files', 'tmp-h12g17');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'pro'), { recursive: true });
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'pro', 'ex.ts');
+        const body = (ret: string, extra: string) => "import { Exchange } from '../base/Exchange';\nexport default class Ex extends Exchange {\n    handleErrorMessage (client: any, message: any)" + ret + " {\n"
+            + "        if (message) {\n            try {\n                throw new Error ('x');\n            } catch (e) {\n                client.reject (e);\n                return true;\n            }\n        }\n"
+            + "        return false;\n    }\n    handleMessage (client: any, message: any) {\n        if (this.handleErrorMessage (client, message)) {\n            return;\n        }\n    }\n" + extra + "}\n";
+        try {
+            process.chdir(dir);
+            const run = (ret: string, extra = '') => {
+                fs.writeFileSync(file, body(ret, extra));
+                const t = new Transpiler({ verbose: false, go: {} });
+                installCcxtGoHooks(t.goTranspiler);
+                installCcxtGoLocalTypes(t.goTranspiler);
+                return t.transpileGoByPath(file).content;
+            };
+            const typed = run(': boolean');
+            expect(typed).toContain('HandleErrorMessage(client any, message any) bool');
+            expect(typed).toContain('(ret_ bool)');
+            expect(typed).toContain('if this.HandleErrorMessage(client, message) {');
+            expect(typed).not.toContain('EvalTruthy(this.HandleErrorMessage');
+            // unannotated: the any closure and the helper stay
+            const plain = run('');
+            expect(plain).toContain('(ret_ any)');
+            expect(plain).toContain('EvalTruthy(this.HandleErrorMessage(client, message))');
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     test('a prediction-tier bounded read of a list fed plain pushed values drops DerefScalar', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h6g10-'));
         const cwd = process.cwd();
@@ -8640,6 +8711,11 @@ describe('the base pair twins bind natively at every call site', () => {
         expect(inst.goTranspiler.goTuplePointerSlotCallEntry(call('handleNetworkCodeAndParams'))).toEqual({ 'goType': '*string', 'safe': 'SafeStringPtr' });
         expect(inst.goTranspiler.goTuplePointerSlotCallEntry(call('handleWithdrawTagAndParams'))).toBeUndefined();
     });
+    test('the else arm of an `=== undefined` test proves a tuple pointer-slot store non-nil', () => {
+        const output = run("        const [ tag, rest ] = this.handleParamString (params, 'tag');\n        const request: Dict = {};\n        if (tag === undefined) {\n            request['a'] = 1;\n        } else {\n            request['t'] = tag;\n        }\n        return rest;\n");
+        expect(output).toContain('tag, rest := this.HandleParamString(params, "tag")');
+        expect(output).not.toContain('tagPtr');
+    });
     test('the twin prints the Go pair signature and return', () => {
         const output = run('');
         expect(output).toContain('HandleParamString(params any, paramName any, optionalArgs ...any) (*string, map[string]any)');
@@ -9069,6 +9145,17 @@ describe ('goMapKeysValuesRange', () => {
         test('a second collection reusing the loop variable name keeps the helper', () => {
             const out = go("const g = {}; const ks = Object.keys (g); const objectKey = 1; return [ks, objectKey];");
             expect(out).toContain('ObjectKeys(g)');
+        });
+        test('values of the ws clients field collect by range', () => {
+            const out = go("const cs = Object.values (this.clients); return this.keep (cs);");
+            expect(out).toContain('cs = make([]any, 0, len(this.Clients))');
+            expect(out).toContain('for _, objectValue := range this.Clients {');
+            expect(out).not.toContain('ObjectValues(');
+        });
+        test('keys of the ws clients field and values of another field keep the helper', () => {
+            const out = go("const ks = Object.keys (this.clients); const vs = Object.values (this.markets); return [ks, vs];");
+            expect(out).not.toContain('range this.Clients');
+            expect(out).toContain('ObjectValues(this.Markets)');
         });
         test('a call-expression receiver keeps the helper', () => {
             const out = go("const ks = Object.keys (this.groupBy(params, 'x')); return this.keep (ks);");
@@ -18005,6 +18092,26 @@ describe('orderbook delta cache as a typed list', () => {
             + '}\n');
         expect (out).toContain ('var messages any = orderbook.GetCache()');
     });
+    test('the length of a book cache is len of the []any accessor', () => {
+        const out = print ('class x extends Exchange {\n'
+            + '    handle (symbol: string) {\n'
+            + '        const orderbook = this.orderbooks[symbol];\n'
+            + '        const n = orderbook.cache.length;\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n');
+        expect (out).toContain ('var n int = len(orderbook.GetCache())');
+        expect (out).not.toContain ('GetArrayLength(');
+    });
+    test('the length of an asserted any book cache keeps the helper', () => {
+        const out = print ('class x extends Exchange {\n'
+            + '    handle (o: any) {\n'
+            + '        const n = o.cache.length;\n'
+            + '        return n;\n'
+            + '    }\n'
+            + '}\n');
+        expect (out).toContain ('GetArrayLength(o.(OrderBookInterface).GetCache())');
+    });
 });
 
 describe('*string safeString seeds rebound by a literal concat', () => {
@@ -19232,6 +19339,9 @@ describe ('go dict param sibling-file call sites', () => {
         '    removeKeysFromDict (dict: Dict, removeKeys: string[]) {\n' +
         "        return dict['a'];\n" +
         '    }\n' +
+        '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+        '        return v;\n' +
+        '    }\n' +
         '}\n';
     const venue = (decl: string) =>
         "import { Exchange } from './base/Exchange';\n" +
@@ -19254,12 +19364,20 @@ describe ('go dict param sibling-file call sites', () => {
     afterAll(() => {
         fs.rmSync(path.join(__dirname, 'files', 'tmp-sibling-dict-arg-map'), { recursive: true, force: true });
         fs.rmSync(path.join(__dirname, 'files', 'tmp-sibling-dict-arg-num'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-sibling-dict-arg-sd'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-sibling-dict-arg-sd2'), { recursive: true, force: true });
     });
     test('a sibling argument the checker proves a map types the parameter', () => {
         expect(print('tmp-sibling-dict-arg-map', "const r = { 'a': 1 };")).toContain('RemoveKeysFromDict(dict map[string]any');
     });
     test('a sibling argument of another type keeps the box', () => {
         expect(print('tmp-sibling-dict-arg-num', 'const r: any = 1;')).toContain('RemoveKeysFromDict(dict any');
+    });
+    test('a sibling safeDict-seeded const read only as the argument types the parameter', () => {
+        expect(print('tmp-sibling-dict-arg-sd', "const x: any = {}; const r = this.safeDict (x, 'k');")).toContain('RemoveKeysFromDict(dict map[string]any');
+    });
+    test('a safeDict-seeded const that is also read elsewhere keeps the box', () => {
+        expect(print('tmp-sibling-dict-arg-sd2', "const x: any = {}; const r = this.safeDict (x, 'k'); this.removeKeysFromDict (x, [ r ]);")).toContain('RemoveKeysFromDict(dict any');
     });
 });
 
@@ -19343,5 +19461,133 @@ describe('a pro handler handed a SafeDictMap local keeps its map parameter', () 
     test('negative: an element read keeps the any parameter', () => {
         const out = run('        const subscription = subscriptions[0];\n        this.handleThing (client, message, subscription);\n');
         expect(out).toContain('subscription any) any {');
+    });
+});
+describe ('*string locals written from tuple slots and string literals', () => {
+    const PRELUDE = 'type Dict = { [key: string]: any };\n'
+        + 'type Str = string | undefined;\n'
+        + 'class Base {\n'
+        + '    handleMarketTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [Str, Dict] { return [ undefined, params ]; }\n'
+        + '    handleSubTypeAndParams (m: string, market: any = undefined, params: Dict = {}): [Str, Dict] { return [ undefined, params ]; }\n'
+        + '}\n';
+    const go = (body: string): string => {
+        const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoHooks(t.goTranspiler);
+        return t.transpileGo(PRELUDE + 'class V extends Base {\n' + body + '}\n').content;
+    };
+    test('a slot copy rebound to another slot and to literals compares natively', () => {
+        const out = go('    f (params: Dict = {}): any {\n'
+            + "        const [ marketType, p1 ] = this.handleMarketTypeAndParams ('f', undefined, params);\n"
+            + '        let type: Str = marketType;\n'
+            + "        const [ subType, p2 ] = this.handleSubTypeAndParams ('f', undefined, p1);\n"
+            + "        if (type === 'swap') {\n"
+            + '            type = subType;\n'
+            + '        }\n'
+            + "        if (type === 'linear') {\n"
+            + "            type = 'contract';\n"
+            + '        }\n'
+            + "        return (type === 'contract');\n"
+            + '    }\n');
+        expect(out).toContain('var typeVar *string = marketType');
+        expect(out).not.toContain('IsEqual(typeVar');
+    });
+    test('two literal-written nil locals compare nil-aware', () => {
+        const out = go('    f (a: boolean, b: boolean): any {\n'
+            + '        let x: Str = undefined;\n'
+            + '        let y: Str = undefined;\n'
+            + '        if (a) {\n'
+            + "            x = 'Full';\n"
+            + '        }\n'
+            + '        if (b) {\n'
+            + "            y = 'Partial';\n"
+            + '        }\n'
+            + '        if (x !== y) {\n'
+            + '            return 1;\n'
+            + '        }\n'
+            + "        return (x === 'Full');\n"
+            + '    }\n');
+        expect(out).toContain('var x *string = nil');
+        expect(out).toContain('(x == nil || y == nil || *x != *y)');
+        expect(out).not.toContain('IsEqual(x, y)');
+    });
+    test('a compare against an untyped local keeps the box', () => {
+        const out = go('    f (a: boolean, y: any): any {\n'
+            + '        let x: Str = undefined;\n'
+            + '        if (a) {\n'
+            + "            x = 'Full';\n"
+            + '        }\n'
+            + '        return (x !== y);\n'
+            + '    }\n');
+        expect(out).not.toContain('var x *string = nil');
+    });
+});
+
+describe ('go dict param from a never-nil safeDict argument', () => {
+    const print = (name: string, arg: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parseTransactionWithType (transaction: Dict) {\n' +
+            "        return transaction['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[]) {\n' +
+            '        return this.parseTransactionWithType (' + arg + ');\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict argument reads as SafeDictMap and types the parameter', () => {
+        const out = print('tmp-dict-param-sd', 'this.safeDict (xs, 0, {})');
+        expect(out).toContain('ParseTransactionWithType(transaction map[string]any');
+        expect(out).toContain('this.ParseTransactionWithType(this.SafeDictMap(xs, 0, map[string]any{}))');
+    });
+    test('a safeDict argument without a default keeps the box', () => {
+        const out = print('tmp-dict-param-sd-nil', 'this.safeDict (xs, 0)');
+        expect(out).toContain('ParseTransactionWithType(transaction any');
+        expect(out).not.toContain('SafeDictMap');
+    });
+});
+
+describe('safeDict / safeList results compare against nil through the typed readers', () => {
+    const run = (body: string): string => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safe-reader-nil-'));
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src'), { recursive: true });
+        const file = path.join(dir, 'ts', 'src', 'venue.ts');
+        const src = "class Exchange { options: any = {}; markets: any = {}; safeDict (d: any, k: any, def: any = undefined): any { return def; } safeList (d: any, k: any, def: any = undefined): any { return def; } }\n"
+            + "export default class Venue extends Exchange {\n    f (params: any) {\n" + body + "    }\n}\n";
+        try {
+            process.chdir(dir);
+            fs.writeFileSync(file, src);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('no-default readers on a plain container print a native nil test', () => {
+        const out = run("        if (this.safeDict (this.options, 'a') === undefined) { return 1; }\n"
+            + "        if (this.safeList (params, 'b') !== undefined) { return 2; }\n        return 0;\n");
+        expect(out).toContain('this.SafeDictMap(this.Options, \"a\") == nil');
+        expect(out).toContain('this.SafeListSlice(params, \"b\", nil) != nil');
+        expect(out).not.toContain('IsEqual(');
+    });
+    test('a non-empty default or another field keeps the helper', () => {
+        const out = run("        if (this.safeDict (params, 'a', { 'x': 1 }) === undefined) { return 1; }\n"
+            + "        if (this.safeDict (this.markets, 'b') === undefined) { return 2; }\n        return 0;\n");
+        expect((out.match(/IsEqual\(/g) || []).length).toBe(2);
     });
 });
