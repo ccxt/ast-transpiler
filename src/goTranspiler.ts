@@ -19331,10 +19331,51 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const open = value.indexOf('(');
         const producerCall = new RegExp(setter.value).test(value) && (open > 0) && this.isWholePrintedCall(value, open);
         const typedLocal = (this.goUnwrapParenthesizedNode(valueNode)?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(this.goUnwrapParenthesizedNode(valueNode)) === setter.type);
-        if ((!producerCall && !typedLocal) || (this.goBookDeclaredType(baseExpr) !== cfg.type) || !this.goOrderBookLocalNeverNil(baseExpr)) {
+        if ((!producerCall && !typedLocal) || (this.goBookDeclaredType(baseExpr) !== cfg.type)
+            || (!this.goOrderBookLocalNeverNil(baseExpr) && !this.goOrderBookSideReadFollows(baseExpr))) {
             return undefined;
         }
         return `${containerStr}.${setter.method}(${value})`;
+    }
+
+    // the write sits in the function body and a later body statement reads `book['bids'|'asks']` unconditionally
+    // (a GetBids()/GetAsks() call): a nil book panics there anyway, and nothing in between can leave or rebind the book
+    goOrderBookSideReadFollows(id): boolean {
+        const stmt: any = id.parent?.parent?.parent;
+        const body: any = stmt?.parent;
+        if ((stmt?.kind !== SyntaxKind.ExpressionStatement) || (body?.kind !== SyntaxKind.Block) || (this.goEnclosingFunction(stmt)?.body !== body)) {
+            return false;
+        }
+        const name: string = id.text;
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration;
+        if (decl?.kind !== SyntaxKind.Parameter) {
+            return false;
+        }
+        const isBook = (n: any): boolean => (n?.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
+            && (n.expression.text === name) && this.goIsOrderBookSideAccess(n);
+        const rebinds = this.goDescendantsOf(body).some((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+            && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n) && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment)
+            && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment));
+        if (rebinds) {
+            return false;
+        }
+        const leaves = (n: any): boolean => [ SyntaxKind.ReturnStatement, SyntaxKind.ThrowStatement, SyntaxKind.TryStatement, SyntaxKind.BreakStatement,
+            SyntaxKind.ContinueStatement, SyntaxKind.IfStatement, SyntaxKind.ArrowFunction, SyntaxKind.FunctionExpression ].includes(n.kind);
+        for (let i = body.statements.indexOf(stmt) + 1; i < body.statements.length; i++) {
+            const s: any = body.statements[i];
+            if (this.goDescendantsOf(s).some(leaves)) {
+                return false;
+            }
+            const decls = (s.kind === SyntaxKind.VariableStatement) ? s.declarationList.declarations : [];
+            if (decls.some((d: any) => isBook(d.initializer))) {
+                return true;
+            }
+            const call: any = (s.kind === SyntaxKind.ExpressionStatement) ? s.expression : undefined;
+            if ((call?.kind === SyntaxKind.CallExpression) && call.arguments.some(isBook)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // every value the book local ever holds is a constructor result or a cache entry its presence guard proves
