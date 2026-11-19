@@ -37940,7 +37940,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
-        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType))) return undefined;
+        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType)) && !this.rustVenueOptStrParam(method, param, rustType)) return undefined;
         if (dictBuilder && (rustType !== '&str' || !this.rust93raStrArgsTyped(method, param))) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
@@ -39378,6 +39378,29 @@ export class RustTranspiler extends BaseTranspiler {
         const vec = /^Value::from\(&?(\w+)(?:\.clone\(\))?\)$/.exec(text);
         if (vec !== null && (text.startsWith('Value::from(&') || (decl !== undefined && this.rustVecLocalIsTyped(decl)))) return `&${vec[1]}`;
         return `${/^[\w.]+$/.test(text) ? text : `(${text})`}.as_array().map(Vec::as_slice).unwrap_or_default()`;
+    }
+
+    /** An optional `Str` slot of a sync ws method with no arm whose every caller passes a literal, `undefined`, or a
+     *  typed `Option<String>` local / native string call: `Option<&str>`, callers lend `x.as_deref()` (no box). */
+    rustVenueOptStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean {
+        if (rustType !== 'Option<&str>' || !isIdentifier(param.name) || String(param.type?.getText?.() ?? '') !== 'Str') return false;
+        const calls = this.rustVenueStrCallSites(method);
+        if (calls.length === 0) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        let lent = 0;
+        for (const call of calls) {
+            const arg: any = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            if (arg === undefined) return false;
+            if (arg.kind === SyntaxKind.StringLiteral || arg.kind === SyntaxKind.NoSubstitutionTemplateLiteral || this.literalKindOfNode(arg) === 'null') continue;
+            const local: any = isIdentifier(arg) ? this.rustDeclaredNode(arg) : undefined;
+            const typedLocal = local !== undefined && isVariableDeclaration(local) && local.name !== arg && this.rustScalarIdentifierKind(arg) === 'ostr';
+            const lentParam = local !== undefined && local.kind === SyntaxKind.Parameter && local !== param && this.rustVenueStrParamType(local) === 'Option<&str>';
+            const safeString = isCallExpression(arg) && isPropertyAccessExpression(arg.expression) && arg.expression.expression.kind === SyntaxKind.ThisKeyword
+                && String(arg.expression.name.text) === 'safeString' && arg.arguments.length === 2;
+            if (!typedLocal && !lentParam && !safeString && !(isCallExpression(arg) && this.rustNativeStrCalleeKind(arg) === 'str')) return false;
+            lent++;
+        }
+        return lent > 0;
     }
 
     /** The text a call leaves in an omitted positional slot. */
