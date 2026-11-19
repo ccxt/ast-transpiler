@@ -7815,6 +7815,12 @@ const CCXT_GO_PRODUCER_DECLARATIONS = {
     'this.WrapAsPostAction': 'map',
     'this.BuildClobOrderBody': 'map',
     'this.CreateOrderRequest': 'map',
+    'this.FetchOrdersRequest': 'map',
+    'this.FetchMyTradesRequest': 'map',
+    'this.WithdrawRequest': 'map',
+    'this.FetchWithdrawalsRequest': 'map',
+    'this.FetchOHLCVRequest': 'map',
+    'this.FetchDepositsRequest': 'map',
     'this.ExpandGroupRows': 'list',
     'this.GetOrderChannelAndMessageHash': 'list',
     'this.ParseTradingFee': 'map',
@@ -7962,7 +7968,8 @@ function ccxtGoProducerDeclarationType (goTranspiler, declaration, family) {
     const goType = dictLike ? CCXT_GO_PRODUCER_DICT_TYPE : CCXT_GO_PRODUCER_LIST_TYPE;
     const neverAbsent = dictLike && ((CCXT_GO_PRODUCER_NEVER_ABSENT.indexOf (goName) >= 0)
         || ((goName === 'Omit') && ccxtGoProducerArgIsMap (goTranspiler, initializer.arguments[0]))
-        || ((CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT.indexOf (goName) >= 0) && (declaredText === 'Dict')));
+        || ((CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT.indexOf (goName) >= 0) && (declaredText === 'Dict')
+            && ((goName === 'CreateOrderRequest') || ccxtGoProducerReturnsFreshDict (goTranspiler, callee))));
     const readsTheValue = neverAbsent
         ? (n) => !ccxtGoProducerUseRebinds (n)
         : (dictLike
@@ -7979,7 +7986,41 @@ const CCXT_GO_PRODUCER_NEVER_ABSENT = [ 'ParseOrder', 'ParseTrade', 'ParseTicker
 
 // request builders: every override annotated `Dict` returns extend(...) or a dict literal;
 // tuple/list overrides (dydx, hitbtc, lighter, pacifica, toobit) fail the Dict check below
-const CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT = [ 'CreateOrderRequest' ];
+const CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT = [ 'CreateOrderRequest', 'EditOrderRequest', 'CancelOrderRequest',
+    'FetchOrdersRequest', 'FetchMyTradesRequest', 'WithdrawRequest', 'FetchWithdrawalsRequest', 'FetchOHLCVRequest', 'FetchDepositsRequest' ];
+
+// the resolved builder returns only `this.extend (..)` or a local seeded by a dict literal (pacifica's
+// postActionRequest pass-through prints `any` in Go and is refused)
+function ccxtGoProducerReturnsFreshDict (goTranspiler, callee) {
+    let fn = undefined;
+    try {
+        fn = goTranspiler.getChecker ().getSymbolAtLocation (callee.name)?.valueDeclaration?.resolve ();
+    } catch (e) {
+        return false;
+    }
+    if ((fn?.kind !== ts.SyntaxKind.MethodDeclaration) || (fn.body === undefined)) {
+        return false;
+    }
+    const seeds = new Set<string> ();
+    const returns: any[] = [];
+    const walk = (n) => {
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name?.kind === ts.SyntaxKind.Identifier)
+            && (n.initializer?.kind === ts.SyntaxKind.ObjectLiteralExpression)) {
+            seeds.add (n.name.text);
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            returns.push (n.expression);
+        }
+        const nested = (n !== fn) && ((n.kind === ts.SyntaxKind.ArrowFunction) || (n.kind === ts.SyntaxKind.FunctionExpression));
+        if (!nested) {
+            n.forEachChild (walk);
+        }
+    };
+    walk (fn);
+    return (returns.length > 0) && returns.every ((e) => (e !== undefined) && (((e.kind === ts.SyntaxKind.Identifier) && seeds.has (e.text))
+        || ((e.kind === ts.SyntaxKind.CallExpression) && (e.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+            && (e.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'extend'))));
+}
 
 // Omit rebuilds a map argument into a fresh map (OmitMap/OmitN), even a nil typed one
 function ccxtGoProducerArgIsMap (goTranspiler, arg) {
@@ -38136,5 +38177,40 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
             return isEq ? 'false' : 'true';
         }
         return inlineEquality.call(this, left, right, leftText, rightText, isEq);
+    };
+}
+
+// An async map parameter whose call sites pass maps, some through a `params: Dict = {}` parameter
+// (printed `GetArgMap(.., map[string]any{})`, a non-nil map): those sites agree on `map[string]any` too.
+// Same-file sites only: a sibling-file caller keeps the box.
+function goSitesPassMapOrDictParam (go: any, fn: any, index: number): boolean {
+    if (goHasDynamicCall(fn, fn.name.text) || (typeof go.goGetArgParameterType !== 'function')) {
+        return false;
+    }
+    const sites = go.goSameFileCallsOf(fn, fn.name.text);
+    const tree = go.goTsSrcTree(fn.getSourceFile());
+    const myFile = tree?.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+    if ((sites.length === 0) || (tree === undefined) || (tree.callIndex.get(fn.name.text) ?? []).some((site) => site.file !== myFile)) {
+        return false;
+    }
+    return sites.every((site) => {
+        const arg = site.arguments?.[index];
+        if (go.goPrintedArgType(arg) === 'map[string]any') {
+            return true;
+        }
+        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve() : undefined;
+        return (decl?.kind === SyntaxKind.Parameter) && (go.goGetArgParameterType(decl) === 'map[string]any');
+    });
+}
+{
+    const callSiteCandidates = GoTranspiler.prototype.goCallSiteParameterCandidates;
+    GoTranspiler.prototype.goCallSiteParameterCandidates = function (fn, param, index: number) {
+        const shipped = callSiteCandidates.call(this, fn, param, index);
+        return ((shipped.length === 0) && this.isAsyncFunction(fn) && goSitesPassMapOrDictParam(this, fn, index)) ? [ 'map[string]any' ] : shipped;
+    };
+    const sitesPassType = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string) {
+        return sitesPassType.call(this, fn, index, goType)
+            || ((goType === 'map[string]any') && this.isAsyncFunction(fn) && goSitesPassMapOrDictParam(this, fn, index));
     };
 }
