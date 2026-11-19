@@ -19728,7 +19728,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `this.balance[k] = v` / `this.balance[k1][k2] = v` statements: the map store, the entry store through the entry's map
     goBalanceStoreText(node, baseExpr, keys: any[], valueNode, rhs: string, identation: number): string | undefined {
         if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (keys.length > 2) || rhs.includes('\n')
-            || !this.goBalanceIndexable(baseExpr) || !(this.goBalancePlainValue(valueNode) || this.goIsWholeGetValueText(rhs))) {
+            || !this.goBalanceIndexable(baseExpr)) {
+            return undefined;
+        }
+        const scalarPointer = this.goBalanceScalarPointerValue(valueNode);
+        if (!scalarPointer && !(this.goBalancePlainValue(valueNode) || this.goIsWholeGetValueText(rhs))) {
             return undefined;
         }
         const parsed = keys.map((k) => this.goBalanceKey(k));
@@ -19738,18 +19742,45 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const iden = this.getIden(identation);
         const field = this.printNode(baseExpr, 0);
         const pointers = parsed.filter((k) => k.pointer !== undefined).map((k) => `${k.pointer} != nil`);
+        const depth = (pointers.length > 0 ? 1 : 0) + (keys.length - 1);
+        const ptr = /^\w+$/.test(rhs) ? rhs : 'ptrValue';
+        if (scalarPointer && (ptr !== rhs) && /\bptrValue\b/.test(rhs)) {
+            return undefined;
+        }
+        // a scalar pointer value: the helper's derefScalar stores *v, or nil for a nil pointer
+        const assign = (target: string): string => {
+            if (!scalarPointer) {
+                return `${target} = ${rhs}`;
+            }
+            const ind = iden + '\t'.repeat(depth);
+            return `if ${(ptr === rhs) ? '' : `${ptr} := ${rhs}; `}${ptr} != nil {\n${ind}\t${target} = *${ptr}\n${ind}} else {\n${ind}\t${target} = nil\n${ind}}`;
+        };
         let store: string;
         if (keys.length === 1) {
-            store = `${field}[${parsed[0].index}] = ${rhs}`;
+            store = assign(`${field}[${parsed[0].index}]`);
         } else {
             // the helper writes into an entry that is a (non-nil) map and skips any other entry
             const inner = (pointers.length > 0) ? '\t' : '';
-            store = `if entry, ok := ${field}[${parsed[0].index}].(map[string]any); ok && (entry != nil) {\n${iden}${inner}\tentry[${parsed[1].index}] = ${rhs}\n${iden}${inner}}`;
+            store = `if entry, ok := ${field}[${parsed[0].index}].(map[string]any); ok && (entry != nil) {\n${iden}${inner}\t${assign(`entry[${parsed[1].index}]`)}\n${iden}${inner}}`;
         }
         if (pointers.length === 0) {
             return store;
         }
         return `if ${pointers.join(' && ')} {\n${iden}\t${store}\n${iden}}`;
+    }
+
+    // a Balance value printed as a scalar pointer (*string/*int64/*float64/*bool): a typed local or a pointer accessor
+    goBalanceScalarPointerValue(valueNode): boolean {
+        const expr = this.goUnwrapParenthesizedNode(valueNode);
+        const scalar = (t) => [ '*string', '*int64', '*float64', '*bool' ].includes(t);
+        if (expr?.kind === SyntaxKind.Identifier) {
+            return scalar(this.goDeclaredTypeOfIdentifier(expr) ?? '');
+        }
+        if (expr?.kind === SyntaxKind.CallExpression) {
+            const name = this.goAstCalleeName(expr);
+            return (name !== undefined) && (scalar(GO_HELPER_RETURN_TYPES[name] ?? '') || GO_DEREF_WRAPPED_CALLS.includes(name.replace(/^this\./, '')));
+        }
+        return false;
     }
 
     // the container step `this.Balance[k]` of a nested Balance write whose key is a proven Go string

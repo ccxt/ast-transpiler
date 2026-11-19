@@ -13696,9 +13696,9 @@ describe ('goNativeStoreFields', () => {
             expect (withTable).toContain ('this.Balance["datetime"] = "x"');
             expect (print ("this.balance['datetime'] = 'x';", {})).toContain ('AddElementToObject(this.Balance, "datetime", "x")');
         });
-        test('a pointer value and an unproven any value keep the helper', () => {
-            expect (print ("this.balance['datetime'] = this.safeString (message, 'd');")).toContain ('AddElementToObject(this.Balance, "datetime"');
-            expect (print ("const ts = this.safeString (message, 'd'); this.balance['datetime'] = ts;")).toContain ('AddElementToObject(this.Balance, "datetime"');
+        test('a pointer value stores the nil-checked deref', () => {
+            expect (print ("this.balance['datetime'] = this.safeString (message, 'd');")).toContain ('if ptrValue := this.SafeString(message, "d"); ptrValue != nil {\n\t\tthis.Balance["datetime"] = *ptrValue');
+            expect (print ("const ts = this.safeString (message, 'd'); this.balance['datetime'] = ts;")).toContain ('if ts != nil {\n\t\tthis.Balance["datetime"] = *ts');
         });
         test('an empty-default accessor call is a plain value', () => {
             expect (print ("this.balance['info'] = this.safeList (message, 'data', []);")).toContain ('this.Balance["info"] = this.SafeList(message, "data", []any{})');
@@ -13726,7 +13726,7 @@ describe ('goNativeStoreFields', () => {
         test('an entry store writes through the entry map; a pointer value keeps the helper', () => {
             const entry = print ("const t = this.safeString (message, 't', 'spot'); this.balance[t]['info'] = message;");
             expect (entry).toMatch (/if entry, ok := this\.Balance\[\*?t\]\.\(map\[string\]any\); ok && \(entry != nil\) \{\n\t*entry\["info"\] = message/);
-            expect (print ("this.balance['spot']['datetime'] = this.safeString (message, 'd');")).not.toContain ('entry["datetime"]');
+            expect (print ("this.balance['spot']['datetime'] = this.safeString (message, 'd');")).toContain ('entry["datetime"] = *ptrValue');
         });
         test('delete of a literal key is the map delete', () => {
             expect (print ("delete this.balance['spot'];")).toContain ('delete(this.Balance, "spot")');
