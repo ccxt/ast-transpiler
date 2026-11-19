@@ -21063,6 +21063,7 @@ var TupleSlots = class {
     return changed ? lines.join("\n") : printed;
   }
 };
+var GO_TUPLE_LOCAL_NATIVE_SLOT = /^(?:plain|typedmap$|typedslice$)/;
 function installCcxtGoTupleSlotReads(goTranspiler) {
   if (goTranspiler === void 0 || !goInstallOnce(goTranspiler, "__ccxtGoTupleSlotReadsInstalled", "printVariableDeclarationList")) {
     return;
@@ -21118,7 +21119,7 @@ function installCcxtGoTupleSlotReads(goTranspiler) {
         }
         const access = n.parent;
         const key = access?.argumentExpression;
-        ok = access?.kind === SK.ElementAccessExpression && access.expression === n && key?.kind === SK.NumericLiteral && /^\d+$/.test(key.text) && Number(key.text) < info.arity && !(access.parent?.kind === SK.BinaryExpression && access.parent.left === access);
+        ok = access?.kind === SK.ElementAccessExpression && access.expression === n && key?.kind === SK.NumericLiteral && /^\d+$/.test(key.text) && Number(key.text) < info.arity && !(access.parent?.kind === SK.BinaryExpression && access.parent.left === access) && GO_TUPLE_LOCAL_NATIVE_SLOT.test(String(info.slots[Number(key.text)] ?? ""));
         reads += 1;
         return ok;
       });
@@ -21143,7 +21144,7 @@ function installCcxtGoTupleSlotReads(goTranspiler) {
     const base = node?.expression;
     if (base?.kind === SK.Identifier && node.argumentExpression?.kind === SK.NumericLiteral) {
       const info = tupleLocalInfo(this, this.goDeclarationOfIdentifier(base));
-      if (info !== void 0 && /^(?:plain|typedmap$|typedslice$)/.test(String(info.slots[Number(node.argumentExpression.text)] ?? ""))) {
+      if (info !== void 0 && GO_TUPLE_LOCAL_NATIVE_SLOT.test(String(info.slots[Number(node.argumentExpression.text)] ?? ""))) {
         return this.printNode(base, 0) + "[" + node.argumentExpression.text + "]";
       }
     }
@@ -37637,7 +37638,8 @@ ${ind}}
       return shapedRead;
     }
     const literalRow = this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind5.NumericLiteral;
-    const safeDictMapBase = baseExpr?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(baseExpr) === void 0 && this.goSafeDictMapLocal(this.goDeclarationOfIdentifier(baseExpr)) === "map[string]any";
+    const plainWrite = node.parent?.kind === SyntaxKind5.BinaryExpression && node.parent.operatorToken?.kind === SyntaxKind5.EqualsToken && node.parent.right === node;
+    const safeDictMapBase = !plainWrite && baseExpr?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(baseExpr) === void 0 && this.goSafeDictMapLocal(this.goDeclarationOfIdentifier(baseExpr)) === "map[string]any";
     if (!literalRow && (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" || safeDictMapBase || this.goBaseCacheField(baseExpr) === "Balance")) {
       if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node) && !this.goMarketComparisonElementRead(node)) {
         return this.goElementAccessChain(`${containerStr}[${keyStrs[0]}]`, keyStrs);
