@@ -38723,7 +38723,7 @@ function goElementReadHasDerefConsumer (goTranspiler, node, keyNode?): boolean {
     if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === child)
         && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
         const callee = `${parent.expression.name?.text ?? ''}`;
-        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee) || GO_DEREF_AT_ENTRY_METHOD_ARG0.has (callee);
+        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee) || GO_DEREF_AT_ENTRY_METHOD_ARG0.has (callee) || goArgumentParameterIsDict (goTranspiler, parent, child);
     }
     if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
         return ccxtGoScalarElementReadType (goTranspiler, child) !== undefined;
@@ -38733,6 +38733,64 @@ function goElementReadHasDerefConsumer (goTranspiler, node, keyNode?): boolean {
         return !goTranspiler.isGoElementAccessAssignmentTarget (parent) && goElementAccessIsPlainRead (parent);
     }
     return false;
+}
+// `this.parseX (xs[i], ..)` with the parameter declared `Dict` and `xs` bound once from `this.toArray (..)` /
+// `this.safeList (..)` and never written: the elements are decoded JSON values, never scalar pointers,
+// so DerefScalar is the identity on them (the parser reads its argument through the deref-first helpers)
+function goArgumentParameterIsDict (goTranspiler, call, arg): boolean {
+    const access = arg?.kind === SyntaxKind.ElementAccessExpression ? arg : undefined;
+    const list = access?.expression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || !/^parse[A-Z]\w*$/.test (`${call.expression.name?.text ?? ''}`)) {
+        return false;
+    }
+    const checker: any = goTranspiler.checkerOrUndefined ();
+    let declaration: any;
+    let listDeclaration: any;
+    try {
+        const signature: any = checker?.getResolvedSignature (call)?.declaration;
+        const symbol: any = checker?.getSymbolAtLocation (list)?.valueDeclaration;
+        declaration = signature?.resolve?.() ?? signature;
+        listDeclaration = symbol?.resolve?.() ?? symbol;
+    } catch (e) {
+        return false;
+    }
+    const index = call.arguments.indexOf (arg);
+    const parameter = declaration?.parameters?.[index];
+    if ((index < 0) || (parameter?.type?.kind !== SyntaxKind.TypeReference) || (parameter.type.typeName?.text !== 'Dict') || parameter.dotDotDotToken) {
+        return false;
+    }
+    const init = listDeclaration?.initializer;
+    if ((listDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (init?.kind !== SyntaxKind.CallExpression)
+        || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !/^(toArray|safeList)$/.test (`${init.expression.name?.text ?? ''}`)) {
+        return false;
+    }
+    // bound once: no assignment to the local and no push/element write into it anywhere in its scope
+    const scope = listDeclaration.parent?.parent?.parent;
+    const name = list.text;
+    let written = false;
+    const visit = (n: any) => {
+        if (written || (n === undefined)) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+            let target = n.left;
+            while (target?.kind === SyntaxKind.ElementAccessExpression) {
+                target = target.expression;
+            }
+            if ((target?.kind === SyntaxKind.Identifier) && (target.text === name)) {
+                written = true;
+            }
+        }
+        if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (n.expression.expression?.kind === SyntaxKind.Identifier) && (n.expression.expression.text === name)) {
+            written = true;
+        }
+        n.forEachChild (visit);
+    };
+    visit (scope);
+    return !written;
 }
 // a value read of `e`: not a write target, delete operand, or the base of a further write/call
 function goElementAccessIsPlainRead (e): boolean {
