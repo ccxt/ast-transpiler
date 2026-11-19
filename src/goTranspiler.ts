@@ -12182,6 +12182,14 @@ function goInstallOnce (goTranspiler: any, flag: string, method?: string): boole
     return true;
 }
 
+function goTextDigestHashCall (node: any): boolean {
+    const callee = node?.expression;
+    const digest = node?.arguments?.[2];
+    return (node?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'hash') && (node.arguments.length === 3)
+        && (digest.kind === SyntaxKind.StringLiteral) && ((digest.text === 'hex') || (digest.text === 'base64'));
+}
+
 export function installCcxtGoSignTyping (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goSignTypingInstalled')) { return; }
     const printLiteral = goTranspiler.printArrayLiteralExpression;
@@ -12202,6 +12210,11 @@ export function installCcxtGoSignTyping (goTranspiler: any) {
     goTranspiler.goTypeOfInitializer = function (this: any, node: any, printed: string) {
         if (signApiElement (this, node)) { return 'string'; }
         return initType.call (this, node, printed);
+    };
+    // a text digest `this.hash (x, h, 'hex'|'base64')` is the Go string HashString answers (exchange_crypto.go)
+    const digestType = goTranspiler.goTypeOfInitializer;
+    goTranspiler.goTypeOfInitializer = function (this: any, node: any, printed: string) {
+        return goTextDigestHashCall (node) ? 'string' : digestType.call (this, node, printed);
     };
     const original = goTranspiler.goGetArgParameterType;
     goTranspiler.goGetArgParameterType = function (this: any, decl: any) {

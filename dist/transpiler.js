@@ -21821,6 +21821,11 @@ function goInstallOnce(goTranspiler, flag, method) {
   goTranspiler[flag] = true;
   return true;
 }
+function goTextDigestHashCall(node) {
+  const callee = node?.expression;
+  const digest = node?.arguments?.[2];
+  return node?.kind === SyntaxKind5.CallExpression && callee?.kind === SyntaxKind5.PropertyAccessExpression && callee.expression?.kind === SyntaxKind5.ThisKeyword && callee.name?.text === "hash" && node.arguments.length === 3 && digest.kind === SyntaxKind5.StringLiteral && (digest.text === "hex" || digest.text === "base64");
+}
 function installCcxtGoSignTyping(goTranspiler) {
   if (!goInstallOnce(goTranspiler, "goSignTypingInstalled")) {
     return;
@@ -21845,6 +21850,10 @@ function installCcxtGoSignTyping(goTranspiler) {
       return "string";
     }
     return initType.call(this, node, printed);
+  };
+  const digestType = goTranspiler.goTypeOfInitializer;
+  goTranspiler.goTypeOfInitializer = function(node, printed) {
+    return goTextDigestHashCall(node) ? "string" : digestType.call(this, node, printed);
   };
   const original = goTranspiler.goGetArgParameterType;
   goTranspiler.goGetArgParameterType = function(decl) {
