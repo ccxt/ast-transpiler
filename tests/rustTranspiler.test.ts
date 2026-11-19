@@ -6965,6 +6965,13 @@ describe('generated readers lend their container', () => {
         expect(b).toMatch(/fn safeList\(&self, dictionaryOrList: impl KeyRead, key: Value/);
     });
 
+    test('the impl KeyRead container is lent on to each reader it feeds, not cloned', () => {
+        const b = base();
+        expect(b).toContain('self.safeValue(&dictionaryOrList, key1');
+        expect(b).toContain('self.safeValue(&dictionaryOrList, key2');
+        expect(b).toMatch(/fn safeList2[^}]*/); expect(b.split('fn safeKept')[0]).not.toContain('dictionaryOrList.clone()');
+    });
+
     test('list and dict locals read by those readers hold the shared container and lend it', () => {
         const o = out();
         expect(o).toContain('let mut pair: crate::value::List = ');
