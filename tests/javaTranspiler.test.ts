@@ -8661,6 +8661,10 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
             "        this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});\n" +
             "        this.ohlcvs[symbol][timeframe] = stored;\n" +
             "    }\n" +
+            "    ohlcvWriteAsserted (symbol: string, timeframe: any, stored: any) {\n" +
+            "        this.ohlcvs[symbol as string] = this.safeDict (this.ohlcvs, symbol, {});\n" +
+            "        this.ohlcvs[symbol as string][timeframe as string] = stored;\n" +
+            "    }\n" +
             "    ohlcvWriteNoPut (symbol: string, timeframe: string, stored: any) {\n" +
             "        this.ohlcvs[symbol][timeframe] = stored;\n" +
             "    }\n" +
@@ -8703,8 +8707,9 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
 
     test('a fresh ohlcvs row write is the typed row put; unanchored or rewritten symbols keep the helper', () => {
         expect(out).toContain('this.ohlcvs.get(symbol).put(timeframe, stored);');
-        expect(out.split('this.ohlcvs.get(symbol).put(').length).toBe(2);
-        expect(out.split('Helpers.addElementToObject(').length).toBe(4);
+        expect(out.split('this.ohlcvs.get(symbol).put(').length).toBe(3);
+        expect(out).toContain('this.ohlcvs.get(symbol).put(((String)timeframe), stored);');
+        expect(out.split('Helpers.addElementToObject(').length).toBe(5);
     });
 
     test('client.<owner map>[k] reads natively behind the null guards the helper answers', () => {

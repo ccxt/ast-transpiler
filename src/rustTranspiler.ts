@@ -232,6 +232,8 @@ export interface RustMethodSignature {
 }
 
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
+// keys a map read routes through the shared order-book store (value.rs `get_map_value_k`)
+const RUST_BOOK_META_KEYS = new Set<string>([ 'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache' ]);
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency' ]);
 // a native return a by-name arm boxes back to `Value`
 const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
@@ -4206,6 +4208,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
+        if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
         if (this.rustMarketSlotParam(param)) return 'Option<&crate::types::Market>';
         if (this.rustCurrencySlotParam(param)) return 'Option<&crate::types::Currency>';
         if (this.rustParamPrintsBool(param)) return 'bool';
@@ -10811,8 +10814,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (form === 'test' || form === 'concat' || form === 'okey' || form === 'kin' || form === 'key' || form === 'inbox' || form === 'bkey') return true;
             // int44 (wg x wd): an inArray needle boxes the borrow (`Value` is an `InArrayNeedle`), as wg printed it
             if (form === 'parg' && this.rustInArrayNeedle(n)) return true;
+            // the `marketId` slot of safeMarket / safeSymbol is a Copy `Option<&str>`: the borrow passes as it is
+            if (form === 'targ' && this.rustSafeMarketIdArg(n)) return true;
             // wg: the receiver of a string method reads the borrow (`k.as_deref()` is the same `Option<&str>`)
             if (form === 'native' && this.rustBorrowStrMethodRecv(n)) return true;
+            // an `Option<&str>` per-venue slot takes the borrow as it is (Copy)
+            if (this.rustVenueStrArgSlot(n) && this.rustVenueStrSlot(this.rustCalleeParams(n.parent), Array.from(n.parent.arguments).indexOf(n)) === 'Option<&str>') return true;
             if (form !== 'box' && form !== 'xbox') return false;
             const up: any = n.parent;
             return (isCallExpression(up) && up.expression !== n) || (up.kind === SyntaxKind.PropertyAssignment && up.initializer === n)
@@ -26948,7 +26955,10 @@ export class RustTranspiler extends BaseTranspiler {
             const s = super.transformIdentifier(init, this.ReservedKeywordsReplacements[init.text] ?? init.text);
             if (d !== undefined && d !== init && d.name !== init && !this.rustOwnedLastUse(init, d)) return `${indent}let mut ${varName}: Option<${type}> = ${s}.clone().into_opt_${kind}()`;
         }
-        return `${indent}let mut ${varName}: Option<${type}> = ${this.rustWsFieldGetText(init, true) ?? this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
+        // a message-field read takes the typed reader's `Option` (Null/""/non-container -> None, as `into_opt_*` answered)
+        const field = /^(\w+)\.get\(("\w+")\)\.cloned\(\)\.unwrap_or_default\(\)$/.exec(this.rustWsFieldGetText(init, true) ?? '');
+        if (field !== null && !RUST_BOOK_META_KEYS.has(field[2].slice(1, -1))) return `${indent}let mut ${varName}: Option<${type}> = self.safe_${kind}_k_o(&${field[1]}, ${field[2]})`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${this.printNode(declaration.initializer, 0).trim()}.into_opt_${kind}()`;
     }
 
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
@@ -34302,6 +34312,8 @@ export class RustTranspiler extends BaseTranspiler {
             const decl: any = this.rustDeclaredNode(arg);
             if (decl === undefined || !isVariableDeclaration(decl) || !isIdentifier(decl.name)) return false;
             const init: any = decl.initializer === undefined ? undefined : this.rustSkipWrappers(decl.initializer);
+            // a ws handler slot is also reached by name with a `Value`: lending a `safeDict` local only adds the `.into()` rebinding
+            if (/^handle[A-Z]/.test(name) && init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && String(init.expression.name.text) === 'safeDict') return false;
             // ral-yc: an awaited venue result of this container kind (rustVenueContainerReturnKind) is held typed: lent too
             return init === undefined || isCallExpression(init) || isArrayLiteralExpression(init) || isObjectLiteralExpression(init) || this.literalKindOfNode(init) === 'null'
                 || (init.kind === SyntaxKind.AwaitExpression && isCallExpression(this.rustSkipWrappers(init.expression)) && this.rustVenueContainerReturnKind(this.rustSkipWrappers(init.expression)) !== undefined)
@@ -37846,6 +37858,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustVenueStrParamTypeUncached(param: any): string | undefined {
         const method: any = param.parent;
+        const marketId = this.rustSafeMarketIdParam(param);
+        if (marketId !== undefined) return marketId ? 'Option<&str>' : undefined;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return undefined;
         if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.type === undefined) return undefined;
         const optional = param.initializer !== undefined || param.questionToken !== undefined;
@@ -38017,15 +38031,22 @@ export class RustTranspiler extends BaseTranspiler {
     // override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and every forwarder.
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string> = { 'sign': 'path' };
 
+    // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
+    // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
+    private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS: Record<string, string> = { 'safeCurrencyCode': 'currencyId' };
+
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
 
     /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean {
         const name = String(method.name.text);
-        const pname = RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name];
+        const inherent = RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS[name];
+        const pname = inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name];
         if (pname === undefined || Array.from(method.parameters).indexOf(param) !== 0 || String(param.name.text) !== pname) return false;
-        if (!(this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {})) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
+        if ((inherent !== undefined ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        const spelled = `${pname}:${inherent !== undefined ? 'Str' : 'string'}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
@@ -38044,7 +38065,7 @@ export class RustTranspiler extends BaseTranspiler {
                 for (const f of entries) {
                     for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
                         seen++;
-                        if (m[1].replace(/\s+/g, '') !== `${pname}:string`) agree = false;
+                        if (m[1].replace(/\s+/g, '') !== spelled) agree = false;
                     }
                 }
             }
@@ -38344,7 +38365,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (type === 'Option<&str>' && this.literalKindOfNode(inner) === 'null') return 'None';
         if (this.rustStrRuntimeCall(inner)) return type === '&str' ? `${this.rustStrRuntimeBareText(inner, identation)}.as_str()` : `Some(${this.rustStrRuntimeBareText(inner, identation)}.as_str())`;
         const printed = this.printNode(arg, identation).trim();
-        const recv = /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) ? printed : `(${printed})`;
+        // a `self.m(..)` call needs no parentheses as a method receiver
+        const recv = /^[A-Za-z_][A-Za-z0-9_]*$/.test(printed) || (isCallExpression(inner) && /^self\.\w+\(/.test(printed) && !printed.includes('\n')) ? printed : `(${printed})`;
         return type === '&str' ? `${recv}.as_str().unwrap_or_default()` : `${recv}.as_str()`;
     }
 
@@ -38433,7 +38455,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** An optional per-venue parameter that prints as a typed positional `Option`. */
     rustVenuePositional(param: any): boolean {
-        if (this.rustMarketSlotParam(param) || this.rustPositionalValueParam(param)) return true;
+        if (this.rustMarketSlotParam(param) || this.rustPositionalValueParam(param) || this.rustSafeMarketIdParam(param) === true) return true;
         if (this.rustCurrencySlotParam(param)) return true;
         return param?.kind === SyntaxKind.Parameter && (param.initializer !== undefined || param.questionToken !== undefined) && this.rustVenueStrParamType(param) !== undefined;
     }
@@ -39204,9 +39226,30 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustIsSafeMarketCall(inner) || this.rustIsOptMarketCall(inner) || this.rustIsTypedMarketCall(inner);
     }
 
+    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` and every venue `safeMarket`: a borrowed
+     *  `Option<&str>` (callers lend their string, the body binds the `Value` once); undefined for any other parameter. */
+    rustSafeMarketIdParam(param: any): boolean | undefined {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || !isIdentifier(method.name) || !isIdentifier(param.name)) return undefined;
+        const name = String(method.name.text);
+        if ((name !== 'safeMarket' && name !== 'safeSymbol') || method.parameters[0] !== param || String(param.name.text) !== 'marketId') return undefined;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!/(?:^|\/)ts\/src\/(?:base\/(?:Exchange|\.__ExchangeNoOverloads)|[^/]+)\.ts$/.test(file) || method.body === undefined) return false;
+        return String(param.type?.getText?.() ?? '') === 'Str' && !this.rustLocalIsReassigned(param, 'marketId');
+    }
+
+    /** `n` is the first argument of a call landing in a borrowed `marketId` slot (rustSafeMarketIdParam). */
+    rustSafeMarketIdArg(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== n) return false;
+        const params = this.rustCalleeParams(call);
+        return params !== undefined && params.length > 0 && this.rustSafeMarketIdParam(params[0]) === true;
+    }
+
     /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
     rustPositionalValueParam(param: any): boolean {
         const method: any = param?.parent;
+        if (this.rustSafeMarketIdParam(param) === true) return false;
         if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || !isIdentifier(method.name) || String(method.name.text) !== 'safeMarket') return false;
         if (method.parameters[0] !== param || !isIdentifier(param.name) || String(param.name.text) !== 'marketId' || method.parameters.length < 2) return false;
         return this.rustMarketSlotParam(method.parameters[1]);

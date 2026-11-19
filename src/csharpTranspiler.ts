@@ -101,14 +101,14 @@ const CSHARP_STATIC_RETURN_TYPES: { [name: string]: string } = {
 // `Func<...>` with this many parameters, so `this.<name>(args)` with that arity is a direct
 // delegate invocation. `proxy` is a `string` there — not callable — and stays out.
 const CSHARP_NATIVE_THIS_DELEGATE_ARITY: { [name: string]: number } = {
-    'proxyUrlCallback': 3,
-    'proxy_url_callback': 3,
+    'proxyUrlCallback': 4,
+    'proxy_url_callback': 4,
     'httpProxyCallback': 4,
     'http_proxy_callback': 4,
     'httpsProxyCallback': 4,
     'https_proxy_callback': 4,
-    'socksProxyCallback': 3,
-    'socks_proxy_callback': 3,
+    'socksProxyCallback': 4,
+    'socks_proxy_callback': 4,
 };
 
 // base-class helpers whose C# signature is already concrete
@@ -2559,6 +2559,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined; // every admitted caller already passes a list, null or nothing
         }
         if (wanted.endsWith('Dictionary<string, object>')) {
+            const typed = this.csharpTypedDictionaryArgument(argument);
+            if (typed !== undefined) {
+                return (typed === text) ? undefined : { text: typed, tight: false };
+            }
             if (text.startsWith('((' + wanted + ')') || text.startsWith('(' + wanted + ')') || text.startsWith('new Dictionary<string, object>') || (text === 'null')) {
                 return undefined;
             }
@@ -2588,6 +2592,54 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         }
         return { text: 'ccxt.BaseExchange.' + helper + '(' + text + ')', tight: true };
+    }
+
+    // a dictionary argument whose C# expression is already typed: a declared IDictionary base member, a chain of getter-only entry views
+    // (exceptions['ws']['exact'] -> this.exceptionsWsExact) or a call the build layer types as a dictionary; undefined keeps the conversion
+    csharpTypedDictionaryArgument(argument): string | undefined {
+        const operand = this.csharpUnwrapAssertion(argument);
+        const member = (node): string | undefined => {
+            node = this.csharpUnwrapAssertion(node);
+            if (isPropertyAccessExpression(node) && node.expression.kind === SyntaxKind.ThisKeyword && this.csharpMemberDeclaredIn(node, 'this')) {
+                const name = node.name?.text as string;
+                return /^I?Dictionary<string,\s*object>$/.test(this.csharpDeclaredMember(node, 'this', name)?.type ?? '') ? name : undefined;
+            }
+            if (isElementAccessExpression(node) && isStringLiteralLikeNode(node.argumentExpression)) {
+                const owner = member(node.expression);
+                const view = (owner === undefined) ? undefined : this.csharpDeclaredMember(node, 'this', owner)?.views?.[(node.argumentExpression as any).text];
+                return (view === undefined || view.sections !== undefined) ? undefined : view.view;
+            }
+            // a const bound to `this.safeDict (<member>, 'k', {})` reads the member's 'k' view (null wherever the local holds {})
+            const decl: any = isIdentifier(node) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve() : undefined;
+            const init: any = (decl !== undefined && isVariableDeclaration(decl) && ((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0) ? decl.initializer : undefined;
+            if (init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword
+                && init.expression.name.text === 'safeDict' && init.arguments.length === 3 && isStringLiteralLikeNode(init.arguments[1])
+                && isObjectLiteralExpression(init.arguments[2]) && init.arguments[2].properties.length === 0) {
+                const owner = member(init.arguments[0]);
+                const view = (owner === undefined) ? undefined : this.csharpDeclaredMember(node, 'this', owner)?.views?.[(init.arguments[1] as any).text];
+                return (view === undefined || view.sections !== undefined) ? undefined : view.view;
+            }
+            return undefined;
+        };
+        const name = member(operand);
+        if (name !== undefined) {
+            return `this.${name}`;
+        }
+        if (isIdentifier(operand) && /^I?Dictionary<string,\s*object>$/.test(this.csharpCallSiteDeclaredType(operand, operand.text) ?? '')) {
+            return this.printNode(operand, 0);
+        }
+        if (!isCallExpression(operand)) {
+            return undefined;
+        }
+        // a synchronous method with a body whose declared return is `Dict` prints IDictionary<string, object>
+        const callee: any = operand.expression;
+        const declaration: any = isPropertyAccessExpression(callee) ? this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve() : undefined;
+        if (declaration !== undefined && isMethodDeclaration(declaration) && declaration.body !== undefined && (declaration.type as any)?.typeName?.text === 'Dict'
+            && !(declaration.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword)) {
+            return this.printNode(operand, 0);
+        }
+        const kind = this.csharpExpressionTypeOf(operand);
+        return (kind !== undefined && /^I?Dictionary<string,\s*object>$/.test(kind)) ? this.printNode(operand, 0) : undefined;
     }
 
     // the expression an argument prints as: `(x)` and `x as T` print the operand itself

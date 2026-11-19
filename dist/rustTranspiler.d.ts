@@ -5418,6 +5418,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
+    private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
@@ -5603,6 +5604,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCalledFromWsSibling(method: any): boolean;
     /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
     rustMarketArgLends(arg: any): boolean;
+    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` and every venue `safeMarket`: a borrowed
+     *  `Option<&str>` (callers lend their string, the body binds the `Value` once); undefined for any other parameter. */
+    rustSafeMarketIdParam(param: any): boolean | undefined;
+    /** `n` is the first argument of a call landing in a borrowed `marketId` slot (rustSafeMarketIdParam). */
+    rustSafeMarketIdArg(n: any): boolean;
     /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
     rustPositionalValueParam(param: any): boolean;
     /** The text a call leaves in an omitted positional slot. */

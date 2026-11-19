@@ -184,6 +184,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         text: string;
         tight: boolean;
     } | undefined;
+    csharpTypedDictionaryArgument(argument: any): string | undefined;
     csharpCallSiteOperand(argument: any): any;
     csharpCallSiteIdentityOperand(argument: any, wanted: string, text: string): string;
     csharpCallSiteDeclaredType(argument: any, printedName: string): string | undefined;

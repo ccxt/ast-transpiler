@@ -13,7 +13,7 @@ import { JavaTranspiler } from './javaTranspiler.js';
 import { RustTranspiler, RUST_DECLARED_DICT_LOCALS, rustDispatch } from './rustTranspiler.js';
 import type { RustDeclaredDictLocalEntry } from './rustTranspiler.js';
 import { CppTranspiler } from './cppTranspiler.js';
-import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
+import { installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, installCcxtGoFeeTierLiterals, CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES, goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest } from './goTranspiler.js';
 
 const __dirname_mock = currentPath;
 
@@ -855,7 +855,7 @@ export {
     rustDispatch,
     // ccxt's Go printer hooks
     installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams,
-    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads,
+    installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installNumParams, installRfGo5OwnedTables, installFmGo5G01, installFmGo5OG02, installFmGo5GP08, installFmGo5G04, installCcxtGoTupleSlotReads, installCcxtGoFeeTierLiterals,
     CCXT_GO_HELPER_RETURN_TYPES, CCXT_GO_BOOL_METHOD_NAMES, CCXT_GO_STRING_PTR_METHOD_NAMES,
     goNilJoinTypeSelfTest, goDynamicCallParamsCheck, goDictParamTypesSelfTest, goParseFrameParamTypesSelfTest, goHandleErrorsCodeSelfTest,
 };

@@ -4732,9 +4732,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (inner === undefined || !isElementAccessExpression(inner) || !this.javaIsOhlcvsField(inner.expression)) {
             return undefined;
         }
-        const symbolNode = inner.argumentExpression;
-        const key = this.unwrapPrintTransparentExpression(left.argumentExpression);
-        if (!isIdentifier(symbolNode) || key === undefined || !this.javaStringProvenKey(key)
+        const symbolNode = this.unwrapPrintTransparentExpression(inner.argumentExpression);
+        const key = this.unwrapParenthesized(left.argumentExpression);
+        if (symbolNode === undefined || !isIdentifier(symbolNode) || key === undefined || !this.javaStringProvenKey(key)
             || this.printNode(symbolNode, 0).trim() !== symbolNode.text) {
             return undefined;
         }
@@ -4786,7 +4786,10 @@ export class JavaTranspiler extends BaseTranspiler {
 
     javaOhlcvsFreshAnchor(statement, symbol): boolean {
         const checker: any = this.getChecker();
-        const isSymbol = (n) => isIdentifier(n) && checker.getSymbolAtLocation(n) === symbol;
+        const isSymbol = (n) => {
+            const target = this.unwrapPrintTransparentExpression(n);
+            return target !== undefined && isIdentifier(target) && checker.getSymbolAtLocation(target) === symbol;
+        };
         const emptyLiteral = (n) => n !== undefined && isObjectLiteralExpression(n) && n.properties.length === 0;
         const freshPut = (candidate): boolean => {
             if (candidate === undefined || !isExpressionStatement(candidate)) {

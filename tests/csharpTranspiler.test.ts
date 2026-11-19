@@ -3348,10 +3348,10 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).not.toContain('callDynamically(this, "httpProxyCallback"');
         expect(output).not.toContain('callDynamically(this, "https_proxy_callback"');
     });
-    test('a 3-parameter delegate member takes exactly three arguments', () => {
-        // proxyUrlCallback is `Func<object, object, object, object>` (3 parameters):
-        // the matching call goes native, the 4-argument one the TS corpus writes keeps
-        // the helper (a 4-argument call of a 3-parameter delegate does not compile)
+    test('a 4-parameter delegate member takes exactly four arguments', () => {
+        // proxyUrlCallback is `Func<object, object, object, object, object>` (4 parameters):
+        // the 4-argument call the TS corpus writes goes native, any other arity keeps
+        // the helper (a mismatched delegate call does not compile)
         const input =
         "class Exchange {\n" +
         "    proxyUrlCallback: any;\n" +
@@ -3362,8 +3362,8 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('object three = this.proxyUrlCallback(url, method, headers);');
-        expect(output).toContain('object four = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers, body })');
+        expect(output).toContain('object three = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers })');
+        expect(output).toContain('object four = this.proxyUrlCallback(url, method, headers, body);');
     });
     test('an awaited delegate-member call or a non-delegate name keeps callDynamically', () => {
         // the delegates return object, not a Task, so an awaited call cannot go native;
@@ -7433,6 +7433,44 @@ describe ('csharp declared member types', () => {
             expect(out).toContain('object a = (this.exceptionsWs != null && this.exceptionsWs.ContainsKey("exact") ? this.exceptionsWs["exact"] : null);');
             expect(out).not.toContain('optionsWs');
             expect(out).toContain('getValue((this.options != null && this.options.ContainsKey("ws") ? this.options["ws"] : null), "x")');
+        });
+
+        test('a configured dictionary argument passes typed entry views and dictionary members bare', () => {
+            const os = require('os');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csv-'));
+            const file = path.join(dir, 'ts', 'src', 'venue.ts');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.mkdirSync(path.join(dir, 'cs', 'ccxt', 'base'), { recursive: true });
+            fs.writeFileSync(file, 'class Exchange {\n    exceptions: any;\n    options: any;\n    t (exact, s, m) { }\n    f (s, d) { this.t (this.exceptions["exact"], s, s); this.t (this.exceptions["ws"]["exact"], s, s); this.t (this.exceptions, s, s); this.t (this.options["x"], s, s); this.t (d["exact"], s, s); const w = this.safeDict (this.exceptions, "ws", {}); this.t (w["exact"], s, s); let v = this.safeDict (this.exceptions, "ws", {}); this.t (v["exact"], s, s); }\n    safeDict (d, k, x) { return d; }\n}\n');
+            fs.writeFileSync(path.join(dir, 'cs', 'ccxt', 'base', 'Exchange.Options.cs'), [
+                'public partial class BaseExchange',
+                '{',
+                '    public IDictionary<string, object> exceptions { get; set; } = new dict();',
+                '    public IDictionary<string, object> options { get; set; } = new dict();',
+                '    public IDictionary<string, object> exceptionsWs',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("ws")) ? d["ws"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> exceptionsExact',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("exact")) ? d["exact"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> exceptionsWsExact',
+                '    {',
+                '        get { var d = this.exceptionsWs; return (d != null && d.ContainsKey("exact")) ? d["exact"] as IDictionary<string, object> : null; }',
+                '    }',
+                '}',
+            ].join('\n'));
+            const typed = { ...config, csharp: { ...(config as any).csharp, callSiteArgTypes: { t: { 0: 'IDictionary<string, object>' } } } };
+            const out = new Transpiler(typed as any).transpileCSharpByPath(file).content;
+            expect(out).toContain('this.t(this.exceptionsExact, s, s);');
+            expect(out).toContain('this.t(this.exceptionsWsExact, s, s);');
+            expect(out).toContain('this.t(this.exceptions, s, s);');
+            expect(out).toContain('this.t(((IDictionary<string, object>)(this.options');
+            expect(out).toContain('this.t(((IDictionary<string, object>)getValue(d, "exact")');
+            expect((out.match(/this\.t\(this\.exceptionsWsExact, s, s\);/g) ?? []).length).toBe(2);
+            expect(out).not.toContain('this.t(this.exceptionsWsExact, s, s); let');
+            expect(out).toMatch(/this\.t\(\(\(IDictionary<string, object>\)\(?(getValue\(v|\(v != null)/);
         });
 
         test('a section read with a string-declared key carries the helper null-key test', () => {

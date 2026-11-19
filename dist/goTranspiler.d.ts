@@ -653,7 +653,12 @@ export declare function installFmGo5GP08(goTranspiler: any): void;
 export declare function installFmGo5OG02(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
 export declare function installNumParams(goTranspiler: any): void;
+export declare const GO_BASE_STR_PTR_PARAMS: {
+    [method: string]: number[];
+};
+export declare function installCcxtGoBaseStrPtrParams(goTranspiler: any): any;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
+export declare function installCcxtGoFeeTierLiterals(goTranspiler: any): void;
 export declare function alignGoTrailingComments(content: string): string;
 export declare class GoTranspiler extends BaseTranspiler {
     goScopeDescendants: WeakMap<object, any[]>;
@@ -1190,6 +1195,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
     goPrintedArgType(arg: any): string | undefined;
+    goSafeDictMapArgType(arg: any): string | undefined;
+    goAwaitedStringLocal(decl: any): boolean;
     goIsClientUrl(arg: any): boolean;
     goIsClientParameter(node: any): boolean;
     goBoundIdentifierType(arg: any): string | undefined;
@@ -1632,6 +1639,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAwaitedListLocal(base: any): boolean;
     asyncMapRowListCallees: Set<string>;
     asyncTickerMapCallees: Set<string>;
+    asyncStringCallees: Set<string>;
     goTickerRowCache: Map<any, {
         key: any;
         keyIsPointer: boolean;
