@@ -6184,7 +6184,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const integerPair = (CSHARP_INTEGER_KINDS.indexOf(leftKind) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(rightKind) >= 0);
         if (!integerPair && ((leftKind !== rightKind) || (CSHARP_NUMERIC_KINDS.indexOf(leftKind) < 0))) {
-            return undefined;
+            return this.csharpNativeNullableComparison(node, token, leftKind, rightKind);
         }
         if ((leftKind === 'double') && ((token === '<') || (token === '<='))) {
             return undefined;
@@ -6195,6 +6195,62 @@ export class CSharpTranspiler extends BaseTranspiler {
             return '(' + leftText + ' ' + token + ' ' + rightText + ')'; // a field read: the helper call's own slot
         }
         return leftText + ' ' + token + ' ' + rightText;
+    }
+
+    // an ordered comparison with an Int64? / double? side: isGreaterThan answers true for (x, null) and false for (null, x), so the
+    // lifted operator (false on null) is exact when only the left side is nullable under `>`/`>=` or only the right under `<`/`<=`;
+    // any other shape needs each nullable side to be a null-tested identifier (`.Value`)
+    csharpNativeNullableComparison(node, token: string, leftKind: string, rightKind: string): string | undefined {
+        const base = (k: string) => k.replace('?', '');
+        const leftNullable = leftKind.endsWith('?');
+        const rightNullable = rightKind.endsWith('?');
+        const integer = (CSHARP_INTEGER_KINDS.indexOf(base(leftKind)) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(base(rightKind)) >= 0);
+        const double = (base(leftKind) === 'double') && (base(rightKind) === 'double');
+        if ((!leftNullable && !rightNullable) || (!integer && !double) || (double && ((token === '<') || (token === '<=')))) {
+            return undefined;
+        }
+        if ((this.csharpExpressionTypeOf(node.left) === undefined) || (this.csharpExpressionTypeOf(node.right) === undefined)) {
+            return undefined;
+        }
+        let leftText = this.printNode(node.left, 0).trim();
+        let rightText = this.printNode(node.right, 0).trim();
+        const liftedExact = (leftNullable !== rightNullable) && (leftNullable ? ((token === '>') || (token === '>=')) : ((token === '<') || (token === '<=')));
+        if (!liftedExact) {
+            // a second null test of the binding resets the C# flow state (CS8629): a dominating guard then no longer counts
+            const proven = (side, text: string) => ((this.csharpNullTestCount(node, side) <= 1) || this.csharpSameExpressionNullTest(node, side))
+                ? this.csharpIntegralNonNullText(node, { kind: 'Int64?', node: side }, text) : undefined;
+            leftText = leftNullable ? proven(node.left, leftText) : leftText;
+            rightText = rightNullable ? proven(node.right, rightText) : rightText;
+            if ((leftText === undefined) || (rightText === undefined)) {
+                return undefined;
+            }
+        }
+        return leftText + ' ' + token + ' ' + rightText;
+    }
+
+    // how many `x == null` / `x != null` style tests of the identifier's binding its enclosing function holds
+    csharpNullTestCount(node, identifier): number {
+        const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(identifier);
+        const scope = this.csharpEnclosingFunction(node);
+        if ((symbol === undefined) || (scope === undefined)) {
+            return Number.MAX_SAFE_INTEGER;
+        }
+        let count = 0;
+        const visit = (n: any) => {
+            if (isBinaryExpression(n) && (CSHARP_EQUALITY_TOKENS.indexOf(n.operatorToken.kind) >= 0)
+                && [ [ n.left, n.right ], [ n.right, n.left ] ].some(([ a, b ]) => isIdentifier(a) && this.csharpSameBinding(a, symbol)
+                    && ((b.kind === SyntaxKind.NullKeyword) || (isIdentifier(b) && (b.text === 'undefined'))))) {
+                count += 1;
+            }
+            n.forEachChild?.(visit);
+        };
+        visit(scope);
+        return count;
+    }
+
+    csharpSameExpressionNullTest(node, identifier): boolean {
+        const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(identifier);
+        return (symbol !== undefined) && this.csharpIntegralTestedInExpression(node, symbol);
     }
 
     // the two operand kinds of an ordered comparison; a hand-written numeric field (CSHARP_SCALAR_FIELD_KINDS)
