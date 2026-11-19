@@ -10705,6 +10705,39 @@ export default class V {
         expect(output).not.toContain('java.util.Map<String, String> methods');
         expect(output).not.toContain('switch (method) {');
     });
+
+    test('a file is scanned once even when a default argument of another file prints in between', () => {
+        write('ts/src/r87parent.ts', "import { Dict } from './base/types.js';\n" +
+            'export default class P {\n    fetchThing (params = {}): Dict {\n        return params;\n    }\n}\n');
+        const java: any = transpiler.javaTranspiler;
+        const scopeOf = java.javaHandlerScopeOf;
+        const scanned: string[] = [];
+        const spy = jest.spyOn(java, 'javaHandlerScopeOf').mockImplementation(function (this: any, declaration: any) {
+            scanned.push(path.basename(declaration.getSourceFile().fileName));
+            return scopeOf.call(this, declaration);
+        });
+        const file = write('ts/src/pro/r87once.ts', "import { Dict } from '../base/types.js';\nimport P from '../r87parent.js';\nclass Client { }\n" + `
+export default class V extends P {
+    handleMessage (client: Client, message: Dict) {
+        const first = this.fetchThing ();
+        const methods: Dict = { 'ticker': this.handleTicker };
+        const second = this.fetchThing ();
+        const topic: string = this.safeString (message, 'topic');
+        const method = methods[topic];
+        const third = this.fetchThing ();
+        method.call (this, client, message);
+    }
+    handleTicker (client: Client, message: Dict) {
+    }
+}
+`);
+        const output = transpiler.transpileJavaByPath(file).content;
+        spy.mockRestore();
+        expect(output).toContain('java.util.Map<String, String> methods = new java.util.HashMap<String, String>() {{');
+        expect(output).toContain('switch (method) {');
+        // one table declaration in the venue file: one scope lookup per scan of that file
+        expect(scanned.filter((name) => name === 'r87once.ts')).toEqual([ 'r87once.ts' ]);
+    });
 });
 
 describe('GetValue on a map read keyed by a guarded list read or an asserted string key', () => {
