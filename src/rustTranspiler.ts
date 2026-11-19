@@ -21370,7 +21370,20 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printDeleteExpression(node, identation) {
-        return this.printBearerDelete(node) ?? this.print84dStoreDelete(node) ?? this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+        return this.printBearerDelete(node) ?? this.print84dStoreDelete(node) ?? this.printWsBookMapDelete(node) ?? this.printWsCacheMapDelete(node) ?? this.printClientHandleDelete(node) ?? this.provenDictFieldDelete(node) ?? this.rustOptionsSubDictDelete(node) ?? `remove(&mut ${this.printNode(node.expression.expression, 0)}, &${this.printNode(node.expression.argumentExpression, 0)})`;
+    }
+
+    /** `delete this.options['k'][key]`: remove inside the stored sub-dict itself, not from a cloned read of it. */
+    rustOptionsSubDictDelete(node: DeleteExpression): string | undefined {
+        const target: any = node.expression;
+        if (!isElementAccessExpression(target) || !isElementAccessExpression(target.expression)) return undefined;
+        const outer: any = target.expression;
+        const field: any = outer.expression;
+        const sub: any = this.unwrapParens(outer.argumentExpression);
+        const key: any = this.unwrapParens(target.argumentExpression);
+        if (!isPropertyAccessExpression(field) || field.expression.kind !== SyntaxKind.ThisKeyword || String(field.name.text) !== 'options'
+            || !isStringLiteral(sub) || !(isIdentifier(key) || isStringLiteral(key))) return undefined;
+        return `if let Some(__v) = std::sync::Arc::make_mut(&mut self.options).get_mut(${JSON.stringify(String(sub.text))}) { remove(__v, &${this.printNode(key, 0).trim()}); }`;
     }
 
     printInstanceOfExpression(node, identation) {
