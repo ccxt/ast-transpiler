@@ -18894,5 +18894,50 @@ describe('list narrowers built on an array-literal local print []any', () => {
         const out = goTranspile92g8(head.replace('if (Array.isArray (response))', 'if (Array.isArray (this))')
             + '}\n');
         expect(out).not.toContain(') Narrow(response any) []any {');
+describe('venue pair verdict per importing module', () => {
+    const pair = (ret: string) =>
+        "    resolve (m: string, params: Dict): [Str, Dict] {\n" +
+        "        if (m === 'a') {\n" +
+        "            return [ undefined, params ];\n" +
+        "        }\n" + ret +
+        "    }\n";
+    const venue = (cls: string, body: string) =>
+        "import { Exchange } from './base/Exchange';\n" +
+        "type Str = string | undefined;\n" +
+        "type Dict = { [key: string]: any };\n" +
+        "export class " + cls + " extends Exchange {\n" + body + "}\n";
+    const run = (name: string, aBody: string, bBody: string, file: string) => {
+        const root = path.join(__dirname, 'files', name);
+        const src = path.join(root, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeString (a, b, c?) { return undefined; }\n}\n");
+        fs.writeFileSync(path.join(src, 'a.ts'), venue('a', aBody));
+        fs.writeFileSync(path.join(src, 'b.ts'), venue('b', bBody));
+        const cwd = process.cwd();
+        try {
+            process.chdir(root);
+            const inst = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes((inst as any).goTranspiler);
+            return inst.transpileGoByPath('ts/src/' + file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    const destructured = "    f (params: Dict = {}) {\n        const [ u, p ] = this.resolve ('x', params);\n        return p;\n    }\n";
+    const kept = "    f (params: Dict = {}) {\n        return this.safeString (this.resolve ('x', params), 0);\n    }\n";
+    test('an unrelated venue reading the same-named tuple by index does not box this venue', () => {
+        const out = run('tmp-vp-a', pair("        return [ 'w', params ];\n") + destructured, pair("        return [ 'w', params ];\n") + kept, 'a.ts');
+        expect(out).toContain('Resolve(m string, params any) (*string, map[string]any) {');
+        expect(out).toContain('u, p := this.Resolve("x", params)');
+    });
+    test('the venue whose own callers read by index keeps the []any tuple', () => {
+        const out = run('tmp-vp-b', pair("        return [ 'w', params ];\n") + destructured, pair("        return [ 'w', params ];\n") + kept, 'b.ts');
+        expect(out).toContain('func (this *b) Resolve(m string, params any) any {');
+        expect(out).not.toContain('(*string, map[string]any)');
+    });
+    test('a return led by a comment line still prints the pair', () => {
+        const out = run('tmp-vp-c', pair("        // trailing\n        return [ 'w', params ];\n") + destructured, kept.replace('resolve', 'other'), 'a.ts');
+        expect(out).not.toMatch(/return \[\]any\{/);
     });
 });

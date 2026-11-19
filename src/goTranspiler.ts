@@ -9936,7 +9936,7 @@ function ccxtGoVenuePairOf (method) {
         || CCXT_GO_TUPLE_RESULT_METHODS.includes (method.name?.text)) {
         return undefined;
     }
-    if (!ccxtGoVenuePairCallersDestructure (method.name?.text)) {
+    if (!ccxtGoVenuePairCallersDestructure (method.name?.text, file)) {
         return undefined;
     }
     let pairs = 0;
@@ -9959,43 +9959,58 @@ function ccxtGoVenuePairOf (method) {
     return result;
 }
 
-// every call of the name in ts/src is a `[ .. ] = this.m (..)` / `super.m (..)` destructuring (a kept tuple or an element read
-// would print a TupleSlice box) and no string names it (dynamic dispatch)
-function ccxtGoVenuePairCallersDestructure (name) {
+// every call of the name in the declaring file and the ts/src files importing it (transitively) is a
+// `[ .. ] = this.m (..)` / `super.m (..)` destructuring (a kept tuple or an element read would print a
+// TupleSlice box) and no string names it (dynamic dispatch)
+function ccxtGoVenuePairCallersDestructure (name, file = '') {
     const state: any = CCXT_GO_VENUE_PAIR_STATE;
     if (state.root !== process.cwd ()) {
         state.root = process.cwd ();
-        state.texts = [];
+        state.files = new Map ();
         const walk = (dir) => {
             for (const entry of (fs.existsSync (dir) ? fs.readdirSync (dir, { 'withFileTypes': true }) : [])) {
                 const full = path.join (dir, entry.name);
-                if (entry.isDirectory ()) { walk (full); } else if (entry.name.endsWith ('.ts')) { state.texts.push (fs.readFileSync (full, 'utf8')); }
+                if (entry.isDirectory ()) { walk (full); } else if (entry.name.endsWith ('.ts')) { state.files.set (path.resolve (full), fs.readFileSync (full, 'utf8')); }
             }
         };
         walk (path.join ('ts', 'src'));
         state.verdicts = new Map ();
     }
-    if ((typeof name !== 'string') || (state.texts.length === 0)) {
+    const own = path.resolve (String (file));
+    if ((typeof name !== 'string') || !state.files.has (own)) {
         return false;
     }
-    if (!state.verdicts.has (name)) {
+    const key = name + '\n' + own;
+    if (!state.verdicts.has (key)) {
+        const related = new Set ([ own ]);
+        for (let grown = true; grown;) {
+            grown = false;
+            for (const [ f, text ] of state.files) {
+                const imports = [ ...text.matchAll (/from '(\.[^']+)\.js'/g) ].map ((m) => path.resolve (path.dirname (f), m[1] + '.ts'));
+                if (!related.has (f) && imports.some ((i) => related.has (i))) {
+                    related.add (f);
+                    grown = true;
+                }
+            }
+        }
+        const texts = [ ...related ].map ((f) => state.files.get (f));
         const any = new RegExp ('[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()|[^\\w.]' + name + ' \\(', 'g');
         const call = new RegExp ('\\.' + name + ' \\(', 'g');
         const destructured = new RegExp ('\\] = (?:this|super)\\.' + name + ' \\(', 'g');
         let calls = 0;
         let bound = 0;
         let stray = 0;
-        for (const text of state.texts) {
+        for (const text of texts) {
             calls += (text.match (call) ?? []).length;
             bound += (text.match (destructured) ?? []).length;
             // a quoted name passed as the methodName option key of a handle*AndParams call is not a dispatch
             const keys = (text.match (new RegExp ('\\.handle\\w+ \\([^\\n]*?[\'"]' + name + '[\'"]', 'g')) ?? []).length;
             stray += (text.match (any) ?? []).length - keys;
         }
-        const declarations = state.texts.reduce ((n, t) => n + (t.match (new RegExp ('\\n    ' + name + ' \\(', 'g')) ?? []).length, 0);
-        state.verdicts.set (name, (calls > 0) && (calls === bound) && (stray === declarations));
+        const declarations = texts.reduce ((n, t) => n + (t.match (new RegExp ('\\n    ' + name + ' \\(', 'g')) ?? []).length, 0);
+        state.verdicts.set (key, (calls > 0) && (calls === bound) && (stray === declarations));
     }
-    return state.verdicts.get (name);
+    return state.verdicts.get (key);
 }
 
 // the venue pair a `this.m (..)` / `super.m (..)` call resolves to
@@ -10016,7 +10031,8 @@ function ccxtGoVenuePairOfCall (call) {
 
 // `return [ a, b ]` of a venue pair: each slot bare when the printer already declared it the slot type, else unwrapped
 function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
-    const m = /^(\s*return )(.*?)(\s*)$/s.exec (printed);
+    // leading comment lines printed with the return are kept
+    const m = /^((?:[ \t]*\/\/[^\n]*\n)*\s*return )(.*?)(\s*)$/s.exec (printed);
     const expr = node.expression;
     if ((m === null) || (expr?.kind !== ts.SyntaxKind.ArrayLiteralExpression) || (expr.elements.length !== 2)) {
         return undefined;

@@ -19458,7 +19458,7 @@ function ccxtGoVenuePairOf(method) {
   if (method?.kind !== ts.SyntaxKind.MethodDeclaration || method.body === void 0 || slot0 === void 0 || !/(?:^|[\\/])ts[\\/]src[\\/]/.test(file) || /[\\/](?:base|test|abstract)[\\/]/.test(file) || (method.modifiers ?? []).some((m) => m.kind === ts.SyntaxKind.AsyncKeyword || m.kind === ts.SyntaxKind.StaticKeyword) || CCXT_GO_TUPLE_RESULT_METHODS.includes(method.name?.text)) {
     return void 0;
   }
-  if (!ccxtGoVenuePairCallersDestructure(method.name?.text)) {
+  if (!ccxtGoVenuePairCallersDestructure(method.name?.text, file)) {
     return void 0;
   }
   let pairs = 0;
@@ -19480,44 +19480,58 @@ function ccxtGoVenuePairOf(method) {
   cache.set(method, result);
   return result;
 }
-function ccxtGoVenuePairCallersDestructure(name) {
+function ccxtGoVenuePairCallersDestructure(name, file = "") {
   const state = CCXT_GO_VENUE_PAIR_STATE;
   if (state.root !== process.cwd()) {
     state.root = process.cwd();
-    state.texts = [];
+    state.files = /* @__PURE__ */ new Map();
     const walk = (dir) => {
       for (const entry of fs2.existsSync(dir) ? fs2.readdirSync(dir, { "withFileTypes": true }) : []) {
         const full = path2.join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
         } else if (entry.name.endsWith(".ts")) {
-          state.texts.push(fs2.readFileSync(full, "utf8"));
+          state.files.set(path2.resolve(full), fs2.readFileSync(full, "utf8"));
         }
       }
     };
     walk(path2.join("ts", "src"));
     state.verdicts = /* @__PURE__ */ new Map();
   }
-  if (typeof name !== "string" || state.texts.length === 0) {
+  const own = path2.resolve(String(file));
+  if (typeof name !== "string" || !state.files.has(own)) {
     return false;
   }
-  if (!state.verdicts.has(name)) {
+  const key = name + "\n" + own;
+  if (!state.verdicts.has(key)) {
+    const related = /* @__PURE__ */ new Set([own]);
+    for (let grown = true; grown; ) {
+      grown = false;
+      for (const [f, text] of state.files) {
+        const imports = [...text.matchAll(/from '(\.[^']+)\.js'/g)].map((m) => path2.resolve(path2.dirname(f), m[1] + ".ts"));
+        if (!related.has(f) && imports.some((i) => related.has(i))) {
+          related.add(f);
+          grown = true;
+        }
+      }
+    }
+    const texts = [...related].map((f) => state.files.get(f));
     const any = new RegExp(`['"]` + name + `['"]|\\.` + name + "\\b(?! \\()|[^\\w.]" + name + " \\(", "g");
     const call = new RegExp("\\." + name + " \\(", "g");
     const destructured = new RegExp("\\] = (?:this|super)\\." + name + " \\(", "g");
     let calls = 0;
     let bound = 0;
     let stray = 0;
-    for (const text of state.texts) {
+    for (const text of texts) {
       calls += (text.match(call) ?? []).length;
       bound += (text.match(destructured) ?? []).length;
       const keys = (text.match(new RegExp(`\\.handle\\w+ \\([^\\n]*?['"]` + name + `['"]`, "g")) ?? []).length;
       stray += (text.match(any) ?? []).length - keys;
     }
-    const declarations = state.texts.reduce((n, t) => n + (t.match(new RegExp("\\n    " + name + " \\(", "g")) ?? []).length, 0);
-    state.verdicts.set(name, calls > 0 && calls === bound && stray === declarations);
+    const declarations = texts.reduce((n, t) => n + (t.match(new RegExp("\\n    " + name + " \\(", "g")) ?? []).length, 0);
+    state.verdicts.set(key, calls > 0 && calls === bound && stray === declarations);
   }
-  return state.verdicts.get(name);
+  return state.verdicts.get(key);
 }
 function ccxtGoVenuePairOfCall(call) {
   const go = CCXT_GO_VENUE_PAIR_STATE.go;
@@ -19533,7 +19547,7 @@ function ccxtGoVenuePairOfCall(call) {
   }
 }
 function ccxtGoVenuePairReturn(goTranspiler, node, printed, pair) {
-  const m = /^(\s*return )(.*?)(\s*)$/s.exec(printed);
+  const m = /^((?:[ \t]*\/\/[^\n]*\n)*\s*return )(.*?)(\s*)$/s.exec(printed);
   const expr = node.expression;
   if (m === null || expr?.kind !== ts.SyntaxKind.ArrayLiteralExpression || expr.elements.length !== 2) {
     return void 0;
