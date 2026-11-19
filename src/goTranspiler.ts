@@ -38017,7 +38017,11 @@ function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
 // (arg 0 of this.safe*, all through SafeValueN; the SafeStringPtr/SafeBoolPtr declaration wrap)
 // reads exactly like `xs[i]`, whatever pointer the element holds.
 const GO_DEREF_AT_ENTRY_SAFE_ARG0 = /^safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp)(?:2)?$/;
-function goElementReadHasDerefConsumer (goTranspiler, node): boolean {
+function goElementReadHasDerefConsumer (goTranspiler, node, keyNode?): boolean {
+    if ((keyNode !== undefined) && (node?.argumentExpression !== keyNode)) {
+        // a chained `xs[i][k]` read: the further keys go through GetValue, which derefs its collection
+        return !goTranspiler.isGoElementAccessAssignmentTarget (node) && goElementAccessIsPlainRead (node);
+    }
     let child = node;
     let parent = node?.parent;
     while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || (parent?.kind === SyntaxKind.AsExpression)) {
@@ -38026,19 +38030,47 @@ function goElementReadHasDerefConsumer (goTranspiler, node): boolean {
     }
     if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === child)
         && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
-        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (`${parent.expression.name?.text ?? ''}`);
+        const callee = `${parent.expression.name?.text ?? ''}`;
+        return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee) || (callee === 'inArray');
     }
     if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
         return ccxtGoScalarElementReadType (goTranspiler, child) !== undefined;
     }
+    // `xs[i][k]`: GetValue derefs its collection (arg 0 of this.inArray: InArray derefs elem)
+    if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === child)) {
+        return !goTranspiler.isGoElementAccessAssignmentTarget (parent) && goElementAccessIsPlainRead (parent);
+    }
     return false;
+}
+// a value read of `e`: not a write target, delete operand, or the base of a further write/call
+function goElementAccessIsPlainRead (e): boolean {
+    let child = e;
+    let parent = e.parent;
+    while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        child = parent;
+        parent = parent.parent;
+    }
+    if ((parent?.kind === SyntaxKind.DeleteExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression) || (parent?.kind === SyntaxKind.PostfixUnaryExpression)) {
+        return false;
+    }
+    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === child)
+        && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+        return false;
+    }
+    return !(((parent?.kind === SyntaxKind.ElementAccessExpression) || (parent?.kind === SyntaxKind.PropertyAccessExpression)) && (parent.expression === child));
 }
 {
     const elementRead = GoTranspiler.prototype.goNativeListElementRead;
     GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: string, keyNode, keyStr: string): string | undefined {
         const shipped = elementRead.call (this, node, containerStr, keyNode, keyStr);
         const plain = `${containerStr}[${keyStr}]`;
-        return ((shipped === `DerefScalar(${plain})`) && goElementReadHasDerefConsumer (this, node)) ? plain : shipped;
+        const wrapped = `return DerefScalar(${plain})\n`;
+        if ((shipped === `DerefScalar(${plain})`) && goElementReadHasDerefConsumer (this, node, keyNode)) {
+            return plain;
+        }
+        // the guarded read outside a bounded loop: nil and a nil-pointer element read alike through the consumer
+        return ((shipped !== undefined) && shipped.startsWith ('func() any {\n') && (shipped.split (wrapped).length === 2) && goElementReadHasDerefConsumer (this, node, keyNode))
+            ? shipped.replace (wrapped, `return ${plain}\n`) : shipped;
     };
 }
 // ===== list elements: deref-at-entry consumer (end) =====
