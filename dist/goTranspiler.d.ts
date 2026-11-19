@@ -1014,6 +1014,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInWsBookTree(node: any): boolean;
     goReceiverIsOrderBook(node: any): boolean;
     goOrderBookSetterText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any, valueStr: string): string | undefined;
+    goOrderBookSideReadFollows(id: any): boolean;
     goOrderBookLocalNeverNil(id: any): boolean;
     goWsCacheClassType(type: any): boolean;
     goWsCacheField(node: any): boolean;
@@ -1047,6 +1048,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsWholeGetValueText(rhs: string): boolean;
     goBalanceIndexable(field: any): boolean;
     goBalanceStoreText(node: any, baseExpr: any, keys: any[], valueNode: any, rhs: string, identation: number): string | undefined;
+    goBalanceScalarPointerValue(valueNode: any): boolean;
     goBalanceChainStep(baseExpr: any, containerStr: string, keyNode: any): string | undefined;
     goBalanceDeleteText(node: any): string | undefined;
     goWsCacheEmptyLiteral(node: any): string | undefined;
@@ -1851,4 +1853,8 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goTernaryJoin93StatementGuarded(declaration: any, ident: any): boolean;
+}
+export interface GoTranspiler {
+    goTernaryStatementArms(ternary: any): string | undefined;
+    goTernaryStatementIfElse(target: string, ternary: any, identation: number): string | undefined;
 }

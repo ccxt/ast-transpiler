@@ -69,7 +69,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -1427,11 +1427,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustClientHandleClassType(type: any): boolean;
     /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
      *  when the access is not on the handle or reads a field after the method wrote it. */
-    rustClientHandleAccess(node: any): {
+    rustClientHandleAccess(node: any, live?: boolean): {
         plan: any;
         key: string;
         write: boolean;
     } | undefined;
+    /** `client.<key> = v` anywhere in the method: the field itself is replaced, so key methods keep the old guard. */
+    rustClientHandleWholeWrite(node: Node, key: string): boolean;
     /** ral-90b: `k in client.subscriptions` after a write of that field reads the handle's snapshot when every write of
      *  `client.subscriptions` in the method is a whole statement `client.subscriptions[k] = v` / `delete client.subscriptions[k]`:
      *  both print through the handle (`add_subscription` / `remove_subscription`), which update the snapshot's key set with the
@@ -3145,6 +3147,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustObjectLiteralBlock(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
+    /** `delete this.options['k'][key]`: remove inside the stored sub-dict itself, not from a cloned read of it. */
+    rustOptionsSubDictDelete(node: DeleteExpression): string | undefined;
     printInstanceOfExpression(node: any, identation: any): string;
     printConditionalExpression(node: any, identation: any): string;
     private static readonly BOOL_VALUE_PREFIXES;
@@ -5628,6 +5632,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A required `string[]` parameter of a venue-only method whose body only indexes it, reads its length or hands it
      *  to another such slot: a lent `&[crate::Value]` (callers lend their list, by-name arms decode once, Null -> empty). */
     rustVenueStrListParam(param: any): boolean;
+    private rustVenueDictDecisions;
+    rustVenueDictParam(param: any): boolean;
     rustVenueStrListParamUncached(param: any): boolean;
     /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
     rustVenueStrListSlotOf(call: any, arg: any): boolean;
@@ -5639,6 +5645,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A required `string` slot of a sync ws method with no arm, never reassigned or compared to `undefined`, whose
      *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
     rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
+    rustVenueDictParamUncached(param: any): boolean;
+    /** `.name (` calls in the method's own file and ws sibling (`own` when every other file calling it declares its own
+     *  `name`, -1 when one does not); -1 for a quoted use anywhere in ts/src. */
+    rustVenueDictTextCallCount(method: any, name: string, own: number): number;
+    /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
+    rustVenueDictArgLends(arg: any): boolean;
+    /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
+    printVenueDictArg(node: any, text: string): string | undefined;
+    /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
+     *  `priceToPrecision` / `costToPrecision` (stringified like `numberToString`: `3.0` prints `3`). */
+    rustVenueNumParam(call: any, arg: any, param: any): boolean;
+    private static readonly RUST_VENUE_NUM_PRECISION;
     /** The text a call leaves in an omitted positional slot. */
     rustPositionalPad(param: any): string;
     /** `this.safeMarket (..)` / `super.safeMarket (..)` resolving to a method that returns the typed market. */

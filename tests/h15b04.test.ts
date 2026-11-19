@@ -36,7 +36,7 @@ describe ('go selectNetworkKeyFromNetworks takes a *string networkCode', () => {
         expect (out).toContain ('if networkCode != nil {');
         // the untabled sibling keeps the box
         expect (out).toMatch (/OtherSelect\(currencyCode any, networkCode any/);
-        expect (out).toContain ('!IsEqual(networkCode, nil)');
+        expect (out).toContain ('Add(Add(this.Id+" - ", networkCode), " network")');
         expect (print (false)).not.toMatch (/SelectNetworkKeyFromNetworks\([^)]*networkCode \*string/);
     });
 });

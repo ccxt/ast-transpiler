@@ -428,6 +428,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandIsNumberLiteralUnion(operand: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    csharpNativeNullableComparison(node: any, token: string, leftKind: string, rightKind: string): string | undefined;
+    csharpNullTestCount(node: any, identifier: any): number;
+    csharpSameExpressionNullTest(node: any, identifier: any): boolean;
     csharpComparisonOperandKinds(left: any, right: any): [string | undefined, string | undefined];
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
