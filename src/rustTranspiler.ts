@@ -35818,6 +35818,8 @@ export class RustTranspiler extends BaseTranspiler {
             return undefined;
         }
         const base: any = target.expression;
+        const callLocal = this.rustRestCallLocalDelete(node, base, target.argumentExpression);
+        if (callLocal !== undefined) return callLocal;
         const receiver = this.rustNativeInsertReceiver(base);
         // ws-capable tiers: a local/param may alias a `client.subscriptions` snapshot
         // (live-store route in the helper); admit only fields, literal-built locals and
@@ -35870,6 +35872,58 @@ export class RustTranspiler extends BaseTranspiler {
     /** A key the native `if let` can borrow beside `&mut RECV`: one expression
      *  (no statement), naming neither the receiver nor its owner — the tuple
      *  would borrow `self` twice — and never a bare `self`. */
+    /** `delete x['lit']` (statement) on a REST-tier `const x = this.m (..)` local where `m` is `extend` or a method whose every
+     *  return is `this.extend (..)` or a never-reassigned literal-built const: `x` is a fresh plain map (no ws tag), so the
+     *  helper's Dict/Str arm is the whole answer and the native `shift_remove` runs it. */
+    rustRestCallLocalDelete(node: any, base: any, key: any): string | undefined {
+        if (!isIdentifier(base) || !isStringLiteral(key) || node.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        const path = this.provenDictFieldPath(node);
+        const prediction = /\/ts\/src\/prediction\/[^/]+\.ts$/.test(path);
+        if (!prediction && !/\/ts\/src\/[^/]+\.ts$/.test(path)) return undefined;
+        const decl: any = this.rustSingleLocalDeclaration(base);
+        if (decl === undefined || !isVariableDeclaration(decl) || (decl.parent?.flags & NodeFlags.Const) === 0 || !this.rustFreshMapCall(decl.initializer, 0)) return undefined;
+        // ws-capable prediction files: the merged head must be a literal (extend copies a tagged head's keys)
+        if (prediction && !this.rustPredictionHeadIsLiteral(this.rustStripWrappers(decl.initializer))) return undefined;
+        return `if let Value::Dict(__d) = &mut ${this.printNode(base, 0).trim()} { std::sync::Arc::make_mut(__d).shift_remove(${JSON.stringify(String(key.text))}); }`;
+    }
+
+    /** `this.extend ({..}, ..)`, or `this.m ({..}, ..)` whose single return is `this.extend (<first param>, ..)`. */
+    rustPredictionHeadIsLiteral(call: any): boolean {
+        if (!this.rustPlainDictLiteral(this.rustStripWrappers(call.arguments[0]))) return false;
+        if (String(call.expression.name.text) === 'extend') return true;
+        const target: any = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
+        const first: any = target?.parameters?.[0]?.name;
+        const rets: any[] = [];
+        this.rustWalkScope(target.body, (n) => { if (isReturnStatement(n) && this.rustEnclosingFunction(n) === target) rets.push(this.rustStripWrappers(n.expression)); });
+        const head: any = rets.length === 1 && isCallExpression(rets[0]) ? this.rustStripWrappers(rets[0].arguments[0]) : undefined;
+        return first !== undefined && isIdentifier(first) && head !== undefined && isIdentifier(head) && this.rustSingleLocalDeclaration(head) === target.parameters[0];
+    }
+
+    rustFreshMapCall(init: any, depth: number): boolean {
+        const call: any = this.rustStripWrappers(init);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(call.expression.name.text) === 'extend') return true;
+        if (depth > 0) return false;
+        let target: any;
+        try {
+            target = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
+        } catch (e) {
+            return false;
+        }
+        if (target === undefined || !isMethodDeclaration(target) || target.body === undefined) return false;
+        let fresh = true;
+        let returns = 0;
+        this.rustWalkScope(target.body, (n) => {
+            if (!fresh || !isReturnStatement(n) || this.rustEnclosingFunction(n) !== target) return;
+            returns++;
+            const e: any = this.rustStripWrappers(n.expression);
+            if (this.rustFreshMapCall(e, depth + 1)) return;
+            const d: any = e !== undefined && isIdentifier(e) ? this.rustSingleLocalDeclaration(e) : undefined;
+            fresh = d !== undefined && isVariableDeclaration(d) && (d.parent?.flags & NodeFlags.Const) !== 0 && this.rustPlainDictLiteral(this.rustStripWrappers(d.initializer));
+        });
+        return fresh && returns > 0;
+    }
+
     rustDeleteKeyBorrowable(keyExpr: string, recv: string): boolean {
         if (keyExpr.length === 0 || keyExpr.includes(';') || /\bself\b/.test(keyExpr)) {
             return false;

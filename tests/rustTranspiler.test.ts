@@ -26851,3 +26851,25 @@ describe('plain Value locals lent to KeyRead readers', () => {
         expect (out).toContain ('(kept.clone(), Value::Str("b".into()), &[kept.clone()])');
     });
 });
+
+describe('delete on a fresh-map call local is shift_remove', () => {
+    let rest = '';
+    let pred = '';
+    beforeAll(() => {
+        rest = transpiler.transpileRustByPath('./tests/files/input/hx10r13/ts/src/venue.ts').content;
+        pred = transpiler.transpileRustByPath('./tests/files/input/hx10r13/ts/src/prediction/venue.ts').content;
+    });
+    test('extend / extend-returning / literal-returning producers remove natively', () => {
+        expect(rest).toContain('if let Value::Dict(__d) = &mut r1 { std::sync::Arc::make_mut(__d).shift_remove("category"); }');
+        expect(rest).toContain('if let Value::Dict(__d) = &mut r2 { std::sync::Arc::make_mut(__d).shift_remove("b"); }');
+        expect(rest).toContain('if let Value::Dict(__d) = &mut r3 { std::sync::Arc::make_mut(__d).shift_remove("signer"); }');
+        expect(pred).toContain('if let Value::Dict(__d) = &mut a { std::sync::Arc::make_mut(__d).shift_remove("n"); }');
+        expect(pred).toContain('if let Value::Dict(__d) = &mut c { std::sync::Arc::make_mut(__d).shift_remove("n"); }');
+    });
+    test('negative: a producer returning a param, a let local, or a non-literal ws-tier head keeps remove', () => {
+        expect(rest).toContain('remove(&mut r4, &Value::Str("k".into()));');
+        expect(rest).toContain('remove(&mut r5, &Value::Str("q".into()));');
+        expect(pred).toContain('remove(&mut b, &Value::Str("n".into()));');
+        expect(pred).toContain('remove(&mut e, &Value::Str("n".into()));');
+    });
+});

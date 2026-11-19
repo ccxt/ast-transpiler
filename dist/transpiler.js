@@ -89610,6 +89610,9 @@ ${this.getIden(identation)}}`;
       return void 0;
     }
     const base = target.expression;
+    const callLocal = this.rustRestCallLocalDelete(node, base, target.argumentExpression);
+    if (callLocal !== void 0)
+      return callLocal;
     const receiver = this.rustNativeInsertReceiver(base);
     const restTier = /\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(node));
     const declaredLocal = !receiver?.isField && this.rustDeclaredLocalEntry(base) !== void 0 && !this.rustLocalInitReadsTaggedContainer(base);
@@ -89653,6 +89656,69 @@ ${this.getIden(identation)}}`;
   /** A key the native `if let` can borrow beside `&mut RECV`: one expression
    *  (no statement), naming neither the receiver nor its owner — the tuple
    *  would borrow `self` twice — and never a bare `self`. */
+  /** `delete x['lit']` (statement) on a REST-tier `const x = this.m (..)` local where `m` is `extend` or a method whose every
+   *  return is `this.extend (..)` or a never-reassigned literal-built const: `x` is a fresh plain map (no ws tag), so the
+   *  helper's Dict/Str arm is the whole answer and the native `shift_remove` runs it. */
+  rustRestCallLocalDelete(node, base, key) {
+    if (!isIdentifier4(base) || !isStringLiteral3(key) || node.parent?.kind !== SyntaxKind7.ExpressionStatement)
+      return void 0;
+    const path4 = this.provenDictFieldPath(node);
+    const prediction = /\/ts\/src\/prediction\/[^/]+\.ts$/.test(path4);
+    if (!prediction && !/\/ts\/src\/[^/]+\.ts$/.test(path4))
+      return void 0;
+    const decl = this.rustSingleLocalDeclaration(base);
+    if (decl === void 0 || !isVariableDeclaration3(decl) || (decl.parent?.flags & NodeFlags5.Const) === 0 || !this.rustFreshMapCall(decl.initializer, 0))
+      return void 0;
+    if (prediction && !this.rustPredictionHeadIsLiteral(this.rustStripWrappers(decl.initializer)))
+      return void 0;
+    return `if let Value::Dict(__d) = &mut ${this.printNode(base, 0).trim()} { std::sync::Arc::make_mut(__d).shift_remove(${JSON.stringify(String(key.text))}); }`;
+  }
+  /** `this.extend ({..}, ..)`, or `this.m ({..}, ..)` whose single return is `this.extend (<first param>, ..)`. */
+  rustPredictionHeadIsLiteral(call) {
+    if (!this.rustPlainDictLiteral(this.rustStripWrappers(call.arguments[0])))
+      return false;
+    if (String(call.expression.name.text) === "extend")
+      return true;
+    const target = signatureDeclaration(this.getChecker().getResolvedSignature(call));
+    const first = target?.parameters?.[0]?.name;
+    const rets = [];
+    this.rustWalkScope(target.body, (n) => {
+      if (isReturnStatement4(n) && this.rustEnclosingFunction(n) === target)
+        rets.push(this.rustStripWrappers(n.expression));
+    });
+    const head = rets.length === 1 && isCallExpression7(rets[0]) ? this.rustStripWrappers(rets[0].arguments[0]) : void 0;
+    return first !== void 0 && isIdentifier4(first) && head !== void 0 && isIdentifier4(head) && this.rustSingleLocalDeclaration(head) === target.parameters[0];
+  }
+  rustFreshMapCall(init, depth) {
+    const call = this.rustStripWrappers(init);
+    if (call === void 0 || !isCallExpression7(call) || !isPropertyAccessExpression4(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    if (String(call.expression.name.text) === "extend")
+      return true;
+    if (depth > 0)
+      return false;
+    let target;
+    try {
+      target = signatureDeclaration(this.getChecker().getResolvedSignature(call));
+    } catch (e) {
+      return false;
+    }
+    if (target === void 0 || !isMethodDeclaration5(target) || target.body === void 0)
+      return false;
+    let fresh = true;
+    let returns = 0;
+    this.rustWalkScope(target.body, (n) => {
+      if (!fresh || !isReturnStatement4(n) || this.rustEnclosingFunction(n) !== target)
+        return;
+      returns++;
+      const e = this.rustStripWrappers(n.expression);
+      if (this.rustFreshMapCall(e, depth + 1))
+        return;
+      const d = e !== void 0 && isIdentifier4(e) ? this.rustSingleLocalDeclaration(e) : void 0;
+      fresh = d !== void 0 && isVariableDeclaration3(d) && (d.parent?.flags & NodeFlags5.Const) !== 0 && this.rustPlainDictLiteral(this.rustStripWrappers(d.initializer));
+    });
+    return fresh && returns > 0;
+  }
   rustDeleteKeyBorrowable(keyExpr, recv) {
     if (keyExpr.length === 0 || keyExpr.includes(";") || /\bself\b/.test(keyExpr)) {
       return false;
