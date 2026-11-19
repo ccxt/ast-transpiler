@@ -11997,6 +11997,31 @@ describe ('goGeneralParamRules', () => {
                 '    run (x: any): number {\n        return this.parseRows (x);\n    }\n}\n';
             expect(go(ts)).not.toContain('rows []any');
         });
+        test('a [][]any row slot types the param, the row literal and the first-row shape test', () => {
+            const ts = 'class Exchange {\n' +
+                '    async watchOHLCVForSymbols (symbolsAndTimeframes: string[][], params = {}): Promise<any> {\n' +
+                '        const n = symbolsAndTimeframes.length;\n' +
+                '        if (n === 0 || !Array.isArray (symbolsAndTimeframes[0])) {\n            return 0;\n        }\n' +
+                '        return n;\n    }\n' +
+                '    async run (symbol: string, timeframe: string): Promise<any> {\n' +
+                '        return await this.watchOHLCVForSymbols ([ [ symbol, timeframe ] ], {});\n    }\n}\n';
+            const table = { 'unifiedSliceParams': { 'watchOHLCVForSymbols': { 0: '[][]any' } } };
+            const out = go(ts, table);
+            expect(out).toContain('symbolsAndTimeframes [][]any');
+            expect(out).toContain('!(len(symbolsAndTimeframes) > 0 && symbolsAndTimeframes[0] != nil)');
+            expect(out).not.toContain('IsArray(');
+            expect(out).toContain('[][]any{[]any{symbol, timeframe}}');
+            const plain = go(ts);
+            expect(plain).toContain('IsArray(GetValue(symbolsAndTimeframes, 0))');
+            expect(plain).not.toContain('[][]any');
+        });
+        test('a [][]any row slot needs a string[][] annotation', () => {
+            const ts = 'class Exchange {\n    async watchOHLCVForSymbols (rows: any, params = {}): Promise<any> {\n' +
+                '        return Array.isArray (rows[0]);\n    }\n}\n';
+            const out = go(ts, { 'unifiedSliceParams': { 'watchOHLCVForSymbols': { 0: '[][]any' } } });
+            expect(out).not.toContain('[][]any');
+            expect(out).toContain('IsArray(');
+        });
         test('an element read of the slot keeps GetValue', () => {
             const ts = PRELUDE.replace('return orders.length;', 'return orders[0];');
             const out = go(ts, { 'unifiedSliceParams': { 'createOrders': { 0: '[]any' } } });

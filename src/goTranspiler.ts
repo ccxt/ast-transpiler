@@ -20879,6 +20879,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (goType === '[]any') {
             return this.goUnifiedAnySliceParameterType(fn, param);
         }
+        if (goType === '[][]any') {
+            return this.goUnifiedRowSliceParameterType(fn, param);
+        }
         const annotation = (goType === '[]string') ? 'string[]' : ((goType === '[][]string') ? 'string[][]' : undefined);
         if ((annotation === undefined) || (param?.type === undefined) || (String(param.type.getText()).replace(/\s+/g, '') !== annotation)) {
             return undefined;
@@ -20924,6 +20927,36 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
         }
         return '[]any';
+    }
+
+    // a `[][]any` slot types a required `string[][]` row list: every caller hands rows of boxed
+    // strings (literals print `[][]any{[]any{..}}`, the typed wrapper converts its [][]string)
+    goUnifiedRowSliceParameterType(fn, param): string | undefined {
+        if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier)
+            || (fn.body === undefined) || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'string[][]')) {
+            return undefined;
+        }
+        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[][]any')) {
+            throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than [][]any`);
+        }
+        return '[][]any';
+    }
+
+    // `Array.isArray (rows[K])` on a `[][]any` parameter: GetValue answers the row (IsArray true) when K is in
+    // range and the row is non-nil, and nil (IsArray false) otherwise
+    printRowSliceIsArray(node): string | undefined {
+        const access: any = this.goUnwrapParenthesizedNode(node?.arguments?.[0]);
+        const base: any = access?.expression;
+        const index: any = access?.argumentExpression;
+        if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (base?.kind !== SyntaxKind.Identifier)
+            || (index?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(index.text)) {
+            return undefined;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve();
+        if ((decl?.kind !== SyntaxKind.Parameter) || (this.goNativeParameterType(decl) !== '[][]any')) {
+            return undefined;
+        }
+        return `(len(${base.text}) > ${index.text} && ${base.text}[${index.text}] != nil)`;
     }
 
     goSliceParamKeepsGetValue(decl: any): boolean {
@@ -21255,7 +21288,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             const goType = this.goCallSliceArgumentType(node, name, i);
-            if ((goType === undefined) || (this.goArrayLiteralSliceType(arg, 0, goType) !== goType)) {
+            const rowLiteral = (goType === '[][]any') && (arg.elements.length > 0)
+                && arg.elements.every((e) => e.kind === SyntaxKind.ArrayLiteralExpression);
+            if ((goType === undefined) || (!rowLiteral && (this.goArrayLiteralSliceType(arg, 0, goType) !== goType))) {
                 continue;
             }
             this.goSliceLiteralTypes.set(arg, goType);
@@ -24883,7 +24918,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         // a predicate the printer folds to a constant — IsArray on a proven slice or map —
         // prints a Go bool that the probe above cannot name
-        if ((node?.kind === SyntaxKind.CallExpression) && ((printed === 'true') || (printed === 'false') || this.goIsSafeContainerIsArray(node))) {
+        if ((node?.kind === SyntaxKind.CallExpression) && ((printed === 'true') || (printed === 'false') || this.goIsSafeContainerIsArray(node)
+            || (this.printRowSliceIsArray(node) !== undefined))) {
             return printed;
         }
         if (GO_BOOL_FIELDS.has(printed)) {
@@ -27266,8 +27302,8 @@ ${this.getIden(identation)}${returnStatement}`;
         // a list of calls (promises included) always opens as `[]any{`; getFunctionType is kept for its
         // checker side effect (it caches a signature on the call node)
         const first = node.elements[0];
-        const arrayOpen = (markedType === '[]string')
-            ? '[]string{' : ((markedType === '[][]string')
+        const arrayOpen = ((markedType === '[]string') || (markedType === '[][]any'))
+            ? `${markedType}{` : ((markedType === '[][]string')
                 ? '[][]string{' : (((first?.kind === SyntaxKind.CallExpression) && (this.getFunctionType(first) || true))
                     ? '[]any{' : this.ARRAY_OPENING_TOKEN));
         return arrayOpen + elements + this.ARRAY_CLOSING_TOKEN;
@@ -27482,7 +27518,7 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
-        return this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
+        return this.printRowSliceIsArray(node) ?? this.printNativeIsArray(node, parsedArg) ?? `IsArray(${parsedArg})`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
@@ -30077,6 +30113,12 @@ ${tryBodyBlock}
             acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${k}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
         });
 
+        // a row of a `[][]any` parameter read inside a loop over its own length is the plain index
+        if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n')
+            && !this.isGoElementAccessAssignmentTarget(node) && (this.goDeclaredTypeOfIdentifier(baseExpr) === '[][]any')
+            && this.goBoundedLoopListRead(node)) {
+            return `${containerStr}[${keyStrs[0]}]`;
+        }
         // a local the printer declared []any — either unboxed from a `this.SafeList` accessor or
         // named []any by the declared-type table — is a slice, so an element read with a key it
         // prints as an int is the guarded native index (see goNativeListElementRead)
