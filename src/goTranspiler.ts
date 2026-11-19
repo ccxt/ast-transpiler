@@ -29896,7 +29896,8 @@ ${tryBodyBlock}
         const literalRow = (this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind.NumericLiteral);
         // a safeDict local printed as the typed SafeDictMap read is a Go map too (nil map reads nil like GetValue)
         // (not as the whole value of a plain write: ccxt's nil-compare pass proves a local only from derefed GetValue writes)
-        const plainWrite = (node.parent?.kind === SyntaxKind.BinaryExpression) && (node.parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.parent.right === node);
+        const plainWrite = ((node.parent?.kind === SyntaxKind.BinaryExpression) && (node.parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.parent.right === node))
+            || ((node.parent?.kind === SyntaxKind.VariableDeclaration) && (node.parent.initializer === node));
         const safeDictMapBase = !plainWrite && (baseExpr?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(baseExpr) === undefined)
             && (this.goSafeDictMapLocal(this.goDeclarationOfIdentifier(baseExpr)) === 'map[string]any');
         if (!literalRow && ((this.goIndexableTypeOf(baseExpr, containerStr) === 'map[string]any') || safeDictMapBase || (this.goBaseCacheField(baseExpr) === 'Balance'))) {

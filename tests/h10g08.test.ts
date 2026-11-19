@@ -48,11 +48,12 @@ describe('a safeDict local printed as SafeDictMap indexes natively with a string
         fs.mkdirSync(dir, { 'recursive': true });
         const file = path.join(dir, 'venue.ts');
         fs.writeFileSync(file, 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\nclass Exchange {\n    options: Dict = {};\n    safeDict (a: any, b: any, c: any = undefined): Dict { return a; }\n    safeValue (a: any, b: any, c: any = undefined): any { return a; }\n}\n'
-            + "class venue extends Exchange {\n    run (p: boolean) {\n        let connectId: Str = 'public';\n        if (p) {\n            connectId = 'private';\n        }\n        const urls = this.safeDict (this.options, 'urls', {});\n        let f = this.safeValue (urls, connectId);\n        urls[connectId] = 1;\n        this.options[\'urls\'] = urls;\n        f = urls[connectId];\n        return [ f, urls[connectId] ];\n    }\n}\n");
+            + "class venue extends Exchange {\n    run (p: boolean) {\n        let connectId: Str = 'public';\n        if (p) {\n            connectId = 'private';\n        }\n        const urls = this.safeDict (this.options, 'urls', {});\n        let f = this.safeValue (urls, connectId);\n        urls[connectId] = 1;\n        this.options[\'urls\'] = urls;\n        f = urls[connectId];\n        const g = urls[connectId];\n        return [ f, g, urls[connectId] ];\n    }\n}\n");
         const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
         installCcxtGoHooks(inst.goTranspiler);
         const out = inst.transpileGoByPath(file).content;
-        expect(out).toContain('[]any{f, urls[connectId]}');
+        expect(out).toContain('[]any{f, g, urls[connectId]}');
+        expect(out).toContain('var g any = GetValue(urls, connectId)');
         expect(out).toContain('f = GetValue(urls, connectId)'); // a plain write keeps the derefed producer
     });
 });

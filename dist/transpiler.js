@@ -37638,7 +37638,7 @@ ${ind}}
       return shapedRead;
     }
     const literalRow = this.annotatedMapRowUse(baseExpr)?.argumentExpression?.kind === SyntaxKind5.NumericLiteral;
-    const plainWrite = node.parent?.kind === SyntaxKind5.BinaryExpression && node.parent.operatorToken?.kind === SyntaxKind5.EqualsToken && node.parent.right === node;
+    const plainWrite = node.parent?.kind === SyntaxKind5.BinaryExpression && node.parent.operatorToken?.kind === SyntaxKind5.EqualsToken && node.parent.right === node || node.parent?.kind === SyntaxKind5.VariableDeclaration && node.parent.initializer === node;
     const safeDictMapBase = !plainWrite && baseExpr?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(baseExpr) === void 0 && this.goSafeDictMapLocal(this.goDeclarationOfIdentifier(baseExpr)) === "map[string]any";
     if (!literalRow && (this.goIndexableTypeOf(baseExpr, containerStr) === "map[string]any" || safeDictMapBase || this.goBaseCacheField(baseExpr) === "Balance")) {
       if (this.goKeyIsString(keys[0], keyStrs[0]) && !this.isGoElementAccessAssignmentTarget(node) && !this.goMarketComparisonElementRead(node)) {
