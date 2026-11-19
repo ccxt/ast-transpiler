@@ -39138,3 +39138,26 @@ const goDefaultedDictLocals = new WeakSet<any> ();
         return shippedValue.call (this, declaration, identation);
     };
 }
+
+// ---- map writes of a pointer-free list row ----
+// `const row = rows[i]` read inside its bounded loop from a list the printer proves pointer-free holds no scalar
+// pointer, so the helper's derefScalar(value) is the value itself and the store may be native.
+{
+    const shippedNotPointer = GoTranspiler.prototype.goMapWriteValueIsNotPointer;
+    GoTranspiler.prototype.goMapWriteValueIsNotPointer = function (valueNode): boolean {
+        if (shippedNotPointer.call (this, valueNode)) {
+            return true;
+        }
+        const value: any = this.goUnwrapParenthesizedNode (valueNode);
+        if (value?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const declaration: any = this.goDeclarationOfIdentifier (value);
+        const init: any = this.goUnwrapParenthesizedNode (declaration?.initializer);
+        if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.ElementAccessExpression)
+            || (((declaration.parent?.flags ?? 0) & ts.NodeFlags.Const) === 0)) {
+            return false;
+        }
+        return this.goBoundedLoopListRead (init) && this.goListElementsArePointerFree (init.expression);
+    };
+}
