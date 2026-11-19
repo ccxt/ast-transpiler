@@ -38222,3 +38222,81 @@ function goSitesPassMapOrDictParam (go: any, fn: any, index: number): boolean {
             || ((goType === 'map[string]any') && this.isAsyncFunction(fn) && goSitesPassMapOrDictParam(this, fn, index));
     };
 }
+
+// `x = this.m (..)` where m is a same-class method whose only return is a local it throws on when
+// undefined: the call never answers nil, so a `string` local takes its pointee
+function goNeverNilStringCall (goTranspiler, call) {
+    const callee = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+    const stmts = decl?.body?.statements;
+    if ((decl?.kind !== SyntaxKind.MethodDeclaration) || (stmts === undefined) || (stmts.length < 2)
+        || (decl.type?.kind !== SyntaxKind.TypeReference) || (decl.type.typeName?.text !== 'Str')) {
+        return false;
+    }
+    const last = stmts[stmts.length - 1];
+    const guard = stmts[stmts.length - 2];
+    const name = last?.expression?.text;
+    const test = guard?.expression;
+    const thrown = (guard?.thenStatement?.kind === SyntaxKind.Block) ? guard.thenStatement.statements[0] : guard?.thenStatement;
+    if ((last?.kind !== SyntaxKind.ReturnStatement) || (last.expression?.kind !== SyntaxKind.Identifier)
+        || (guard?.kind !== SyntaxKind.IfStatement) || (guard.elseStatement !== undefined) || (thrown?.kind !== SyntaxKind.ThrowStatement)
+        || (test?.kind !== SyntaxKind.BinaryExpression) || (test.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken)
+        || (test.left?.text !== name) || (test.right?.kind !== SyntaxKind.Identifier) || (test.right.text !== 'undefined')) {
+        return false;
+    }
+    // no other return in the method, and the guarded local is never written after the guard
+    return !goTranspiler.hasNodeWhere(decl.body, (n: any) => ((n.kind === SyntaxKind.ReturnStatement) && (n !== last))
+        || (n.kind === SyntaxKind.FunctionExpression) || (n.kind === SyntaxKind.ArrowFunction));
+}
+function goNeverNilStringWrite (goTranspiler, write) {
+    return (write?.kind === SyntaxKind.BinaryExpression) && (write.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (write.left?.kind === SyntaxKind.Identifier) && goNeverNilStringCall(goTranspiler, write.right);
+}
+{
+    const neverNilSafe = GoTranspiler.prototype.goLocalIsSafeToType;
+    GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName, goType, stringWriteProven = false) {
+        if (neverNilSafe.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+            return true;
+        }
+        if ((goType !== 'string') || (scope === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+            || (declaration.initializer?.kind !== SyntaxKind.StringLiteral)) {
+            return false;
+        }
+        let calls = 0;
+        const unsafe = this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
+                return false;
+            }
+            const parent = n.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)) {
+                if (parent.right?.kind === SyntaxKind.StringLiteral) {
+                    return false;
+                }
+                if (goNeverNilStringWrite(this, parent)) {
+                    calls += 1;
+                    return false;
+                }
+                return true;
+            }
+            const isLitCompare = (parent?.kind === SyntaxKind.BinaryExpression)
+                && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(parent.operatorToken.kind)
+                && (((parent.left === n) && (parent.right?.kind === SyntaxKind.StringLiteral)) || ((parent.right === n) && (parent.left?.kind === SyntaxKind.StringLiteral)));
+            // a map-literal or element store holds the plain string the helper derefed out of the box
+            const isStore = (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                && (parent.left?.kind === SyntaxKind.ElementAccessExpression);
+            return !(isLitCompare || isStore);
+        });
+        return !unsafe && (calls > 0);
+    };
+    const neverNilBinary = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        if (goNeverNilStringWrite(this, node) && (this.goDeclaredTypeOfIdentifier(node.left) === 'string')) {
+            return this.printNode(node.left, 0) + ' = *' + this.printNode(node.right, identation).trim();
+        }
+        return neverNilBinary.call(this, node, identation);
+    };
+}

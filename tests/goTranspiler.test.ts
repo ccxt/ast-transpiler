@@ -19127,3 +19127,45 @@ describe('hand-written marketCodes / shortenSlug results print native nil tests'
         expect(out).toContain('IsEqual(s, nil)');
     });
 });
+
+describe('a string-seeded local written from a method that throws on undefined stays a Go string', () => {
+    const run = (method: string, use: string): string => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'never-nil-string-'));
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src'), { recursive: true });
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        const src = "type Str = string | undefined;\nexport default class Ex {\n    safeString (o, k): Str { return undefined; }\n" + method
+            + "    f (tif: Str, post: boolean) {\n        const request = {};\n        let instruction = 'GTC';\n"
+            + "        if (tif !== undefined) {\n            instruction = this.enc (tif);\n        }\n"
+            + "        if (post && (instruction !== 'RPI')) {\n            instruction = 'POST_ONLY';\n        }\n" + use
+            + "        request['instruction'] = instruction;\n        return request;\n    }\n}\n";
+        try {
+            process.chdir(dir);
+            fs.writeFileSync(file, src);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const throwing = "    enc (t: Str): Str {\n        const m = { 'GTC': 'GTC' };\n        const v = this.safeString (m, t);\n"
+        + "        if (v === undefined) {\n            throw new Error ('no ' + t);\n        }\n        return v;\n    }\n";
+    const lenient = "    enc (t: Str): Str {\n        const m = { 'GTC': 'GTC' };\n        return this.safeString (m, t);\n    }\n";
+    test('the local is typed and its literal compares print native', () => {
+        const out = run(throwing, "        if (instruction === 'RPI') { return {}; }\n");
+        expect(out).toContain('var instruction string = "GTC"');
+        expect(out).toContain('instruction = *this.Enc(tif)');
+        expect(out).not.toContain('IsEqual(instruction');
+    });
+    test('a callee that can answer undefined keeps the box', () => {
+        const out = run(lenient, "        if (instruction === 'RPI') { return {}; }\n");
+        expect(out).toContain('var instruction any = "GTC"');
+        expect(out).not.toContain('instruction = *this.Enc(tif)');
+    });
+    test('a non-literal read keeps the box', () => {
+        const out = run(throwing, "        this.enc (instruction);\n");
+        expect(out).toContain('var instruction any = "GTC"');
+    });
+});
