@@ -12557,7 +12557,14 @@ function ccxtGoWrapUrlsDeclaration(printed) {
     return printed;
   }
   const match = /^([\s\S]*?\bvar [A-Za-z0-9_]+ \*string = )(GetValue\((?:GetValue\()?[^\n]*this\.Urls[^\n]*\)|this\.UrlsApi(?:Sections)?\[[^\n]*\])(\s*)$/.exec(printed);
-  return match === null ? printed : match[1] + "SafeStringPtr(" + match[2] + ")" + match[3];
+  if (match === null) {
+    return printed;
+  }
+  const leaf = /^this\.UrlsApi(Sections)?(\[[^\[\]\n]+\])(\[[^\[\]\n]+\])?$/.exec(match[2]);
+  if (leaf !== null && leaf[1] === void 0 === (leaf[3] === void 0)) {
+    return match[1] + (leaf[1] ? "this.UrlsApiSectionStrings" : "this.UrlsApiStrings") + leaf[2] + (_nullishCoalesce(leaf[3], () => ( ""))) + match[3];
+  }
+  return match[1] + "SafeStringPtr(" + match[2] + ")" + match[3];
 }
 function installCcxtGoDeclarationUnbox(goTranspiler) {
   if (!goInstallOnce(goTranspiler, "__ccxtGoDeclarationUnboxInstalled", "printVariableDeclarationList")) {
