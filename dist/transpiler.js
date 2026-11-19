@@ -44167,7 +44167,10 @@ function goListElementIsPlainValue(goTranspiler, node) {
   };
 }
 var GO_DEREF_AT_ENTRY_SAFE_ARG0 = /^safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp)(?:2)?$/;
-function goElementReadHasDerefConsumer(goTranspiler, node) {
+function goElementReadHasDerefConsumer(goTranspiler, node, keyNode) {
+  if (keyNode !== void 0 && node?.argumentExpression !== keyNode) {
+    return !goTranspiler.isGoElementAccessAssignmentTarget(node) && goElementAccessIsPlainRead(node);
+  }
   let child = node;
   let parent = node?.parent;
   while (parent?.kind === SyntaxKind5.ParenthesizedExpression || parent?.kind === SyntaxKind5.AsExpression) {
@@ -44175,19 +44178,44 @@ function goElementReadHasDerefConsumer(goTranspiler, node) {
     parent = parent.parent;
   }
   if (parent?.kind === SyntaxKind5.CallExpression && parent.arguments[0] === child && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression.expression?.kind === SyntaxKind5.ThisKeyword) {
-    return GO_DEREF_AT_ENTRY_SAFE_ARG0.test(`${parent.expression.name?.text ?? ""}`);
+    const callee = `${parent.expression.name?.text ?? ""}`;
+    return GO_DEREF_AT_ENTRY_SAFE_ARG0.test(callee) || callee === "inArray";
   }
   if (parent?.kind === SyntaxKind5.VariableDeclaration && parent.initializer === child) {
     return ccxtGoScalarElementReadType(goTranspiler, child) !== void 0;
   }
+  if (parent?.kind === SyntaxKind5.ElementAccessExpression && parent.expression === child) {
+    return !goTranspiler.isGoElementAccessAssignmentTarget(parent) && goElementAccessIsPlainRead(parent);
+  }
   return false;
+}
+function goElementAccessIsPlainRead(e) {
+  let child = e;
+  let parent = e.parent;
+  while (parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+    child = parent;
+    parent = parent.parent;
+  }
+  if (parent?.kind === SyntaxKind5.DeleteExpression || parent?.kind === SyntaxKind5.PrefixUnaryExpression || parent?.kind === SyntaxKind5.PostfixUnaryExpression) {
+    return false;
+  }
+  if (parent?.kind === SyntaxKind5.BinaryExpression && parent.left === child && parent.operatorToken.kind >= SyntaxKind5.FirstAssignment && parent.operatorToken.kind <= SyntaxKind5.LastAssignment) {
+    return false;
+  }
+  return !((parent?.kind === SyntaxKind5.ElementAccessExpression || parent?.kind === SyntaxKind5.PropertyAccessExpression) && parent.expression === child);
 }
 {
   const elementRead = GoTranspiler.prototype.goNativeListElementRead;
   GoTranspiler.prototype.goNativeListElementRead = function(node, containerStr, keyNode, keyStr) {
     const shipped = elementRead.call(this, node, containerStr, keyNode, keyStr);
     const plain = `${containerStr}[${keyStr}]`;
-    return shipped === `DerefScalar(${plain})` && goElementReadHasDerefConsumer(this, node) ? plain : shipped;
+    const wrapped = `return DerefScalar(${plain})
+`;
+    if (shipped === `DerefScalar(${plain})` && goElementReadHasDerefConsumer(this, node, keyNode)) {
+      return plain;
+    }
+    return shipped !== void 0 && shipped.startsWith("func() any {\n") && shipped.split(wrapped).length === 2 && goElementReadHasDerefConsumer(this, node, keyNode) ? shipped.replace(wrapped, `return ${plain}
+`) : shipped;
   };
 }
 function installCcxtGoNestedSafeDictRead(goTranspiler) {

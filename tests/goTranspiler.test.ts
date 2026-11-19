@@ -810,7 +810,8 @@ describe('go pointer-typed Safe* body locals', () => {
         // the loop bounds the read the plain index of a SafeList element
         expect(output).toContain("this.SafeValue(data[i], \"id\")");
         expect(output).not.toContain("DerefScalar(data[i])");
-        expect(output).toContain("DerefScalar(data[0])");
+        expect(output).toContain("if 0 >= 0 && 0 < len(data) {");
+        expect(output).not.toContain("DerefScalar(data[0])");
         expect(output).not.toContain("GetArrayLength(data)");
     });
     test('a SafeList local with an empty-array default drops it: SafeListTyped carries no default', () => {
@@ -6849,6 +6850,23 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         expect(transpile(cls("const v = list[i]; a += v;"))).toContain('var v any = DerefScalar(list[i])');
     });
 
+    test('a list element read through GetValue / InArray, or outside a bounded loop into a deref-at-entry consumer, drops DerefScalar', () => {
+        const cls = (body: string) => "class Test {\n    safeString (a, b) { return undefined; }\n    inArray (a, b) { return false; }\n    f (a: any) {\n" +
+            "        const list = [ a ];\n        for (let i = 0; i < list.length; i++) {\n            " + body + "\n        }\n        return a;\n    }\n}\n";
+        const keyed = transpile(cls("a += list[i]['k'];"));
+        expect(keyed).toContain('return list[i]');
+        expect(keyed).not.toContain('DerefScalar(list[i])');
+        const member = transpile(cls("if (this.inArray (list[i], a)) { a += 1; }"));
+        expect(member).toContain('this.InArray(list[i], a)');
+        expect(member).not.toContain('DerefScalar(list[i])');
+        const head = transpile(cls("const v = this.safeString (list[0], 'k'); a += v;"));
+        expect(head).toContain('return list[0]');
+        expect(head).not.toContain('DerefScalar(list[0])');
+        expect(transpile(cls("if (this.inArray (a, list[i])) { a += 1; }"))).toContain('DerefScalar(list[i])');
+        expect(transpile(cls("list[i]['k'] = a;"))).not.toContain('GetValue(list[i]');
+        expect(transpile(cls("const v = list[0]; a += v;"))).toContain('return DerefScalar(list[0])');
+    });
+
     test('a hoisted length bound that reads this list counts', () => {
         const output = transpile(fixture("for (let i = 0; i < n; i++)", "const v = list[i]; a += v;", "const list = this.safeList (a, 'rows', []);\n        const n = list.length;\n        "));
         expect(output).toContain('var v any = list[i]');
@@ -7069,7 +7087,7 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         "    }\n" +
         "}\n";
         const output = transpile(ts);
-        expect(output).toContain('GetValue(func() any { if i >= 0 && i < len(list) { return DerefScalar(list[i]) } return nil }(), "k")');
+        expect(output).toContain('GetValue(func() any { if i >= 0 && i < len(list) { return list[i] } return nil }(), "k")');
     });
 
     test('a key the printer cannot prove an int keeps the helper', () => {
