@@ -1136,6 +1136,10 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.EthEncodeStructuredData': '[]uint8',
     // exchange_market_type.go (hand-written)
     'this.MarketSymbols': '[]string',
+    // absent input answers a nil slice
+    'this.MarketCodes': '[]any',
+    // exchange_prediction.go, retyped `string` on its only return path
+    'this.ShortenSlug': 'string',
     'this.Capitalize': 'string',
     'this.Uuid16': 'string',
     'this.Uuid22': 'string',
@@ -37789,5 +37793,18 @@ function installCcxtGoNestedSafeDictRead (goTranspiler) {
         return ind + 'var ' + source + ', _ = ' + container + '.(map[string]any)\n'
             + ind + 'var ' + name + ' map[string]any\n'
             + ind + name + ', _ = ' + source + '[' + key + '].(map[string]any)';
+    };
+}
+// A declared Go `string` operand is never nil: IsEqual(s, nil) always answers false, so the
+// nil test prints its constant answer instead of the helper call.
+{
+    const inlineEquality = GoTranspiler.prototype.printInlineEquality;
+    const isNil = (node): boolean => (node?.kind === SyntaxKind.UndefinedKeyword) || (node?.kind === SyntaxKind.NullKeyword)
+        || ((node?.kind === SyntaxKind.Identifier) && (node.text === 'undefined'));
+    GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+        if ((isNil(right) && (this.goDeclaredTypeOfIdentifier(left) === 'string')) || (isNil(left) && (this.goDeclaredTypeOfIdentifier(right) === 'string'))) {
+            return isEq ? 'false' : 'true';
+        }
+        return inlineEquality.call(this, left, right, leftText, rightText, isEq);
     };
 }
