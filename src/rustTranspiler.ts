@@ -7520,10 +7520,22 @@ export class RustTranspiler extends BaseTranspiler {
         const target: any = isVariableDeclaration(top.parent) ? top.parent : isBinaryExpression(top.parent) && isIdentifier(top.parent.left) ? this.rustDeclaredNode(top.parent.left) : undefined;
         const moved = top === n && this.rustLocalLastUse(n, declaration) && target !== undefined && isVariableDeclaration(target)
             && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null';
+        // a reader-default string moved at its last use into a nil-declared `Option<String>` local of the same function
+        const nilMoved = !moved && top === n && this.rustReaderDefaultTouched(declaration) && this.rustLocalLastUse(n, declaration) && target !== undefined
+            && isVariableDeclaration(target) && target !== declaration && (target.initializer === undefined || this.literalKindOfNode(target.initializer) === 'null')
+            && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration) && this.rustNilScalarKind(target) === 'ostr' && !this.rustNilTargetReturned(target);
+        if (nilMoved) return { moved: true, solved: false };
         const solved = !moved && top === n && target !== undefined && isVariableDeclaration(target) && target !== declaration
             && target.initializer !== undefined && this.literalKindOfNode(target.initializer) !== 'null'
             && this.rustScalarInitShape(target.initializer) && this.rustEnclosingFunction(target) === this.rustEnclosingFunction(declaration);
         return { moved, solved };
+    }
+
+    /** The nil-declared receiver is handed back by `return` (its printed type then follows the method's return). */
+    rustNilTargetReturned(target: any): boolean {
+        let returned = false;
+        this.rustLocalUsesAll(target, String(target.name.text), false, (n: any) => { if (isReturnStatement(n.parent)) returned = true; return true; });
+        return returned;
     }
 
     /** uc: `const y = c ? x : z` in the local's own function, `y` a scalar-shape candidate: decided with the local. */
