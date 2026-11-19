@@ -8490,6 +8490,33 @@ describe('java typed String slice / split / replaceAll', () => {
     });
 });
 
+describe('java typed String slice: non-negative bounds', () => {
+    // a bound that can never be negative skips the count-from-the-end branch; an own-length end is the length
+    const withLongLocals = (body: string): string => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => (['n', 'm', 'k'].includes(declaration?.name?.text) ? 'Long' : undefined);
+            return transpiler.transpileJava("class T {\n    test(s: string, o: number): any {\n" + body + "\n    }\n}").content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    };
+
+    test('a const local of a length sum and an own-length end print the short clamp', () => {
+        const output = withLongLocals("        const n = s.length + 1;\n        return s.slice(n, s.length);");
+        expect(output).toContain("((String)s).substring((int) Math.min(Math.min(n, ((String)s).length()), ((String)s).length()), (int) ((String)s).length())");
+        expect(output).not.toContain("Helpers.slice");
+    });
+
+    test('a const local of an untyped number keeps the negative branch', () => {
+        const output = withLongLocals("        const m = o - 1;\n        const k = s.length;\n        return s.slice(m, k);");
+        expect(output).toContain("m < 0 ? ((String)s).length() + m : m");
+        expect(output).toContain("Math.min(k, ((String)s).length())");
+        expect(output).not.toContain("k < 0");
+    });
+});
+
 // a local initialised from a sync `this.<m> (...)` call of a generated venue method whose own
 // declaration prints a native Map/List takes that type in the printer (javaDeclaredLocalType), with no
 // build-side resolver wrapper: the consumer's tables know nothing about this file or its first generation
