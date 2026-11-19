@@ -37940,7 +37940,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
-        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType)) && !this.rustVenueOptStrParam(method, param, rustType)) return undefined;
+        if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType)) && !this.rustVenueOptStrParam(method, param, rustType) && !this.rustVenueStrParam(method, param, rustType)) return undefined;
         if (dictBuilder && (rustType !== '&str' || !this.rust93raStrArgsTyped(method, param))) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
@@ -39401,6 +39401,36 @@ export class RustTranspiler extends BaseTranspiler {
             lent++;
         }
         return lent > 0;
+    }
+
+    /** A required `string` slot of a sync ws method with no arm, never reassigned or compared to `undefined`, whose
+     *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
+    rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean {
+        if (rustType !== '&str' || param.type?.kind !== SyntaxKind.StringKeyword || !isIdentifier(param.name)) return false;
+        const name = String(param.name.text);
+        if (this.rustLocalIsReassigned(param, name)) return false;
+        const symbol = this.getChecker().getSymbolAtLocation(param.name);
+        let undef = false;
+        const visit = (n: Node) => {
+            if (undef) return;
+            if (isBinaryExpression(n) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.EqualsEqualsToken, SyntaxKind.ExclamationEqualsToken ].includes(n.operatorToken.kind)
+                && [ n.left, n.right ].some((x: Node) => isIdentifier(this.unwrapParens(x)) && this.getChecker().getSymbolAtLocation(this.unwrapParens(x)) === symbol)
+                && [ n.left, n.right ].some((x: Node) => [ 'null', 'undefined' ].includes(this.literalKindOfNode(this.unwrapParens(x)) ?? '') || (isIdentifier(x) && String(x.text) === 'undefined'))) { undef = true; return; }
+            n.forEachChild(visit);
+        };
+        if (method.body !== undefined) method.body.forEachChild(visit);
+        if (undef) return false;
+        const calls = this.rustVenueStrCallSites(method);
+        if (calls.length === 0) return false;
+        const at = Array.from(method.parameters).indexOf(param);
+        for (const call of calls) {
+            const arg: Node | undefined = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            if (arg === undefined) return false;
+            if (arg.kind === SyntaxKind.StringLiteral || arg.kind === SyntaxKind.NoSubstitutionTemplateLiteral) continue;
+            // or the caller's own unbound `&str` parameter lent as it is (ral-64x proof)
+            if (!isIdentifier(arg) || !this.rust64xLentStrParamArg(arg, method, at)) return false;
+        }
+        return true;
     }
 
     /** The text a call leaves in an omitted positional slot. */
