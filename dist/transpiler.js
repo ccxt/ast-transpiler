@@ -43429,7 +43429,7 @@ var JavaTranspiler = class extends BaseTranspiler {
     this.javaHandlerTables = /* @__PURE__ */ new Map();
     this.javaHandlerCalls = /* @__PURE__ */ new Map();
     this.javaHandlerReads = /* @__PURE__ */ new Set();
-    this.javaHandlerScannedFile = void 0;
+    this.javaHandlerScannedFiles = /* @__PURE__ */ new WeakSet();
     this.javaCheckedBoxLocalTypeCache = /* @__PURE__ */ new WeakMap();
     this.javaLongLimitLiteralLocalCache = /* @__PURE__ */ new WeakMap();
     this.javaHandBackVisiting = /* @__PURE__ */ new Set();
@@ -51198,14 +51198,15 @@ var JavaTranspiler = class extends BaseTranspiler {
     const other = comparison.left === use ? comparison.right : comparison.left;
     return other !== void 0 && other.kind === SyntaxKind6.Identifier && other.text === "undefined";
   }
-  // one walk per file: record the tables whose every read is that idiom, keyed by the literal
-  // node and by the local that holds the safeValue result
+  // one walk per source file, however often printing hops to another file's nodes in between:
+  // record the tables whose every read is that idiom, keyed by the literal node and by the local
+  // that holds the safeValue result
   javaScanHandlerTables(node) {
     const file = node.getSourceFile();
-    if (file === void 0 || this.javaHandlerScannedFile === file) {
+    if (file === void 0 || this.javaHandlerScannedFiles.has(file)) {
       return;
     }
-    this.javaHandlerScannedFile = file;
+    this.javaHandlerScannedFiles.add(file);
     if (this.checkerOrUndefined() === void 0) {
       return;
     }
