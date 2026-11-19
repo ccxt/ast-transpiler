@@ -827,7 +827,7 @@ export class JavaTranspiler extends BaseTranspiler {
     javaHandlerTables: Map<any, any> = new Map();
     javaHandlerCalls: Map<any, any> = new Map();
     javaHandlerReads: Set<string> = new Set();
-    javaHandlerScannedFile: any = undefined;
+    javaHandlerScannedFiles: WeakSet<object> = new WeakSet();
     javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
     javaLongLimitLiteralLocalCache: WeakMap<Node, boolean> = new WeakMap();
     javaHandBackVisiting = new Set<any>();
@@ -9896,14 +9896,15 @@ export class JavaTranspiler extends BaseTranspiler {
         return other !== undefined && other.kind === SyntaxKind.Identifier && other.text === 'undefined';
     }
 
-    // one walk per file: record the tables whose every read is that idiom, keyed by the literal
-    // node and by the local that holds the safeValue result
+    // one walk per source file, however often printing hops to another file's nodes in between:
+    // record the tables whose every read is that idiom, keyed by the literal node and by the local
+    // that holds the safeValue result
     javaScanHandlerTables(node) {
         const file = node.getSourceFile();
-        if (file === undefined || this.javaHandlerScannedFile === file) {
+        if (file === undefined || this.javaHandlerScannedFiles.has(file)) {
             return;
         }
-        this.javaHandlerScannedFile = file;
+        this.javaHandlerScannedFiles.add(file);
         if (this.checkerOrUndefined() === undefined) {
             return;
         }

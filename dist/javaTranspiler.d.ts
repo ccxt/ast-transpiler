@@ -25,7 +25,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaHandlerTables: Map<any, any>;
     javaHandlerCalls: Map<any, any>;
     javaHandlerReads: Set<string>;
-    javaHandlerScannedFile: any;
+    javaHandlerScannedFiles: WeakSet<object>;
     javaCheckedBoxLocalTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED>;
     javaLongLimitLiteralLocalCache: WeakMap<Node, boolean>;
     javaHandBackVisiting: Set<any>;
