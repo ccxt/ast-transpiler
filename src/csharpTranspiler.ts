@@ -8280,11 +8280,17 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declared = this.csharpStringReceiverType(expression);
-        if ((declared !== 'string' && declared !== 'string?') || this.csharpDeclaredKeyType(argumentExpression) !== 'int') {
+        const keyType = this.csharpDeclaredKeyType(argumentExpression);
+        if ((declared !== 'string' && declared !== 'string?') || (keyType !== 'int' && keyType !== 'Int64?')) {
             return undefined;
         }
         const receiver = this.printNode(expression, 0);
-        return `(${receiver} != null ? ${receiver}[${this.printNode(argumentExpression, 0)}].ToString () : null)`;
+        const key = this.printNode(argumentExpression, 0);
+        if (keyType === 'Int64?') {
+            // the helper's null-key test and its Convert.ToInt32 (which throws past int range)
+            return `(${receiver} != null && ${key} != null ? ${receiver}[Convert.ToInt32(${key}.Value)].ToString () : null)`;
+        }
+        return `(${receiver} != null ? ${receiver}[${key}].ToString () : null)`;
     }
 
     // The C# collection type a local read was DECLARED with: printed by this printer, or recorded by
