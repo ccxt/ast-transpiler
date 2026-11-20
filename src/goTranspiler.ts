@@ -11085,14 +11085,14 @@ function ccxtGoVenuePairOf (method) {
     const type = method?.type;
     const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
     const slot0 = (type?.kind === ts.SyntaxKind.TupleType) && (type.elements.length === 2) && (ref (type.elements[1]) === 'Dict')
-        ? CCXT_GO_VENUE_PAIR_SLOT_0[ref (type.elements[0])] : ccxtGoVenueTripleOf (type);
+        ? (CCXT_GO_VENUE_PAIR_SLOT_0[ref (type.elements[0])] ?? h26g39VenueStringSlot0 (method)) : ccxtGoVenueTripleOf (type);
     if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.body === undefined) || (slot0 === undefined)
         || !/(?:^|[\\/])ts[\\/]src[\\/]/.test (file) || /[\\/](?:base|test|abstract)[\\/]/.test (file)
         || (method.modifiers ?? []).some ((m) => (m.kind === ts.SyntaxKind.AsyncKeyword) || (m.kind === ts.SyntaxKind.StaticKeyword))
         || CCXT_GO_TUPLE_RESULT_METHODS.includes (method.name?.text)) {
         return undefined;
     }
-    if (!ccxtGoVenuePairCallersDestructure (method.name?.text, file, (slot0?.slots === 3) || (slot0?.type === 'int64'))) {
+    if (!ccxtGoVenuePairCallersDestructure (method.name?.text, file, (slot0?.slots === 3) || (slot0?.type === 'int64') || (slot0?.holders === true))) {
         return undefined;
     }
     let pairs = 0;
@@ -46297,3 +46297,43 @@ function goH26g38ProducerLocal (goTranspiler: GoTranspiler, list): boolean {
     };
 }
 // ===== h26-G38 (end) =====
+
+// ===== h26-G39: venue `[ string, Dict ]` pairs whose every returned slot 0 is a non-nil Go string =====
+// slot 0 of each `return [ a, b ]` must have the checker type `string` (no undefined/null member), so the
+// Go result is a plain string and no nil answer is lost
+function h26g39VenueStringSlot0 (method) {
+    const type = method?.type;
+    const go = CCXT_GO_VENUE_PAIR_STATE.go;
+    if ((type?.kind !== ts.SyntaxKind.TupleType) || (type.elements[0]?.kind !== ts.SyntaxKind.StringKeyword) || (method?.body === undefined) || (go === undefined)) {
+        return undefined;
+    }
+    let ok = true;
+    let returns = 0;
+    const visit = (n) => {
+        if (!ok || ts.isFunctionLike (n) || (n.kind === ts.SyntaxKind.ClassDeclaration) || (n.kind === ts.SyntaxKind.ClassExpression)) {
+            return;
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            returns += 1;
+            ok = (n.expression?.kind === ts.SyntaxKind.ArrayLiteralExpression) && h26g39IsPlainString (go, n.expression.elements[0]);
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    method.body.forEachChild (visit);
+    return (ok && (returns > 0)) ? { 'type': 'string', 'first': 'Raw', 'holders': true } : undefined;
+}
+
+// an identifier whose checker type is exactly `string` and whose Go declared type is `string`
+function h26g39IsPlainString (go, e) {
+    if (e?.kind !== ts.SyntaxKind.Identifier) {
+        return false;
+    }
+    try {
+        const t = go.getChecker ().getTypeAtLocation (e);
+        return (t !== undefined) && ((t.flags & TypeFlags.String) !== 0) && (go.goDeclaredTypeOfIdentifier?.(e) === 'string');
+    } catch (err) {
+        return false;
+    }
+}
+// ===== h26-G39 (end) =====
