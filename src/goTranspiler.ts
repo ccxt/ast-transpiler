@@ -41497,10 +41497,70 @@ function goGuardedTypedArgMayBeProven (goTranspiler, read): boolean {
     const symbols = (declaration?.kind === SyntaxKind.VariableDeclaration) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
         && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'marketSymbols');
     const scope = goTranspiler.goEnclosingFunction(list);
+    if (goGuardedTypedArgOutOfRange(goTranspiler, read)) {
+        return false; // no in-range proof can exist: the guard stays, hoisted
+    }
     return (symbols ? ((init.arguments.length >= 3) || (goTranspiler.goNameWriteSites(scope, list.text, declaration).length > 0)
         || goGuardedListReadElementWritten(scope, list.text)) : goGuardedListReadMayBeProven(goTranspiler, read))
-        || goTranspiler.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length') && (n.pos < read.pos)
-            && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === list.text));
+        || goGuardedTypedArgLengthTested(goTranspiler, read, scope);
+}
+// the read is in the then-branch of `if (n === L)` (n the list's length or a name bound to it) with literal index >= L
+function goGuardedTypedArgOutOfRange (goTranspiler, read): boolean {
+    const list = read.expression;
+    const index = (read.argumentExpression?.kind === SyntaxKind.NumericLiteral) ? Number(read.argumentExpression.text) : NaN;
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    if (Number.isNaN(index) || (declaration?.kind !== SyntaxKind.Parameter)) {
+        return false;
+    }
+    const names = goGuardedTypedArgLengthNames(goTranspiler.goEnclosingFunction(list), list.text);
+    for (let node = read; node?.parent !== undefined; node = node.parent) {
+        const parent: any = node.parent;
+        const test: any = (parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement === node) ? goTranspiler.goUnwrapParenthesizedNode(parent.expression) : undefined;
+        if ((test?.kind === SyntaxKind.BinaryExpression) && (test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken)
+            && (test.right?.kind === SyntaxKind.NumericLiteral) && (index >= Number(test.right.text))
+            && (test.left?.kind === SyntaxKind.Identifier) && names.has(test.left.text)) {
+            return true;
+        }
+    }
+    return false;
+}
+// names declared or assigned from `list.length` in the scope
+function goGuardedTypedArgLengthNames (scope, list: string): Set<string> {
+    const names = new Set<string>();
+    const isLength = (n) => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length')
+        && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === list);
+    const walk = (n) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && isLength(n.initializer)) {
+            names.add(n.name.text);
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken) && (n.left?.kind === SyntaxKind.Identifier) && isLength(n.right)) {
+            names.add(n.left.text);
+        }
+        n.forEachChild(walk);
+    };
+    scope?.forEachChild(walk);
+    return names;
+}
+// a length read defers only when it (or a name bound to it) is tested around the read or by an earlier sibling `if`
+function goGuardedTypedArgLengthTested (goTranspiler, read, scope): boolean {
+    const list = read.expression.text;
+    const names = goGuardedTypedArgLengthNames(scope, list);
+    const tests = (n) => (n !== undefined) && goTranspiler.hasNodeWhere(n, (m) => ((m.kind === SyntaxKind.Identifier) && names.has(m.text))
+        || ((m.kind === SyntaxKind.PropertyAccessExpression) && (m.name?.text === 'length') && (m.expression?.kind === SyntaxKind.Identifier) && (m.expression.text === list)));
+    for (let node = read; (node !== undefined) && (node !== scope); node = node.parent) {
+        const parent: any = node.parent;
+        if (((parent?.kind === SyntaxKind.IfStatement) || (parent?.kind === SyntaxKind.WhileStatement)) && tests(parent.expression)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.ForStatement) && tests(parent.condition)) {
+            return true;
+        }
+        const before = (parent?.kind === SyntaxKind.Block) ? parent.statements.slice(0, parent.statements.indexOf(node)) : [];
+        if (before.some((sibling) => (sibling.kind === SyntaxKind.IfStatement) && tests(sibling.expression))) {
+            return true;
+        }
+    }
+    return false;
 }
 const GO_GUARDED_TYPED_ARG_GET = /^(?:ccxt\.)?GetValue\(([A-Za-z_]\w*), (\w+)\)$/;
 // a local's declared Go type, or an optional parameter's GetArg twin type (`symbols: Strings = undefined` binds []string)
