@@ -1143,7 +1143,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange_prediction.go: retyped by transpilePredictionBaseMethods (no venue overrides)
     'this.Outcome': 'map[string]any',
     'this.SafeOutcome': 'map[string]any',
-    'this.ParseSearchQueries': '[]any',
+    // parseSearchQueries (: string[]) answers StringSliceFromList of its list on every path
+    'this.ParseSearchQueries': '[]string',
     ...Object.fromEntries ([ 'ParseLastPrices', 'RemoveKeysFromDict', 'ParseTickersForRolling', 'ParseBidsAsksCustom', 'ParseSxbetTickersByHash' ].flatMap ((n) => [ [ 'this.' + n, 'map[string]any' ], [ 'this.DerivedExchange.' + n, 'map[string]any' ] ])),
     ...Object.fromEntries ([ [ 'ParseLeverageTiers', 'map[string]any' ], [ 'ParseLeverages', 'map[string]any' ], [ 'ParseMarginModes', 'map[string]any' ], [ 'ParseMarketLeverageTiers', '[]any' ], [ 'ParseEmulatedLeverageTiers', '[]any' ] ].flatMap (([ n, t ]) => [ [ 'this.' + n, t ], [ 'this.DerivedExchange.' + n, t ] ])),
     // exchange.go / exchange_string.go
@@ -40778,5 +40779,52 @@ function installGoGuardedWrappedRead (goTranspiler) {
         }
         const iden = this.getIden(identation);
         return `${iden}var ${head[1]} ${head[2]} = nil\n${goGuardedListReadIf(this, `${head[1]} = ${head[3]}(${m[2]}[${m[1]}])`, m.slice(1), identation)}`;
+    };
+}
+
+// a parseSearchQueries (`string[]`) result local that cannot stay []string (a non-string push) keeps the
+// []any list it printed before: ArrayTyped of the []string holds the same elements, never an `any` box
+function goSearchQueriesListLocal (goTranspiler: GoTranspiler, declaration): boolean {
+    const init = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.CallExpression) || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (init.expression.name?.text !== 'parseSearchQueries')) {
+        return false;
+    }
+    // the length, an element read, a push, a nil test or a whole-value call argument: what the []any answered
+    return goTranspiler.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => {
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            return (parent.name?.text === 'length') || ((parent.name?.text === 'push') && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent));
+        }
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
+            return !goTranspiler.isGoElementAccessAssignmentTarget(parent);
+        }
+        return goTranspiler.goIsNilComparisonOperand(n, parent) || ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n));
+    }) !== undefined;
+}
+// callees whose typed public wrapper takes the []any list: their argument local stays []any
+const GO_SEARCH_QUERIES_LIST_CALLEES = [ 'fetchRawTopicsByQueries' ];
+function goSearchQueriesFeedsListCallee (goTranspiler: GoTranspiler, declaration): boolean {
+    const name = declaration.name.text;
+    return goTranspiler.hasNodeWhere(goTranspiler.goEnclosingFunction(declaration), (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+        && (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression !== n) && (n.parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && GO_SEARCH_QUERIES_LIST_CALLEES.includes(String(n.parent.expression.name?.text ?? '')));
+}
+{
+    const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        const shipped = getGoLocalType.call(this, declaration, parsedValue);
+        const boxed = (shipped === 'any') || ((shipped === GO_STRING_LIST_LOCAL_TYPE) && goSearchQueriesListLocal(this, declaration) && goSearchQueriesFeedsListCallee(this, declaration));
+        return (boxed && goSearchQueriesListLocal(this, declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+    };
+    const unboxValue = GoTranspiler.prototype.goSafeListUnboxValue;
+    GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
+        const shipped = unboxValue.call(this, declaration, identation);
+        if ((shipped !== undefined) || !goSearchQueriesListLocal(this, declaration)) {
+            return shipped;
+        }
+        const printed = this.printNode(declaration.initializer, identation).trimStart();
+        return printed.startsWith('this.ParseSearchQueries(') ? 'ArrayTyped(' + printed + ')' : undefined;
     };
 }
