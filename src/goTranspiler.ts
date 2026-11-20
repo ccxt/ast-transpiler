@@ -1961,13 +1961,69 @@ function ccxtGoGuardedAddChainAssignment (goTranspiler, node, printed) {
         + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
 }
 
+// `x = Add(.., this.safeString (..), ..)` into an `any` local whose other leaves are Go strings or derefable
+// pointers with no call among them: bind the ONE `*string` call result first, then the same nil test
+function ccxtGoGuardedAddChainCallAssignment (goTranspiler, node, printed) {
+    const expression = node?.expression;
+    const match = (typeof printed === 'string') ? /^(\s*)([A-Za-z0-9_]+) = ((?:ccxt\.)?Add\([\s\S]*?)(\s*)$/.exec (printed) : null;
+    if ((match === null) || (expression?.kind !== ts.SyntaxKind.BinaryExpression) || (expression.operatorToken?.kind !== ts.SyntaxKind.EqualsToken)
+        || (expression.left?.kind !== ts.SyntaxKind.Identifier) || (match[2] !== goTranspiler.printNode (expression.left, 0))
+        || match[3].includes ('\n') || (ccxtGoWholeAddCallEnd (match[3].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const targetType = goTranspiler.goDeclaredTypeOfIdentifier?.(expression.left);
+    const piece = match[2] + 'Piece';
+    if (((targetType !== undefined) && (targetType !== 'any')) || (ccxtGoWriteSiteLocalGoType (goTranspiler, expression.left) ?? 'any') !== 'any'
+        || ccxtGoScopeNamesIdentifier (goTranspiler.goEnclosingFunction?.(expression), piece)
+        || ccxtGoScopeNilTestsIdentifier (goTranspiler.goEnclosingFunction?.(expression), match[2])) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (expression.right, []);
+    const calls = leaves.filter ((leaf) => leaf?.kind === ts.SyntaxKind.CallExpression);
+    const call = calls[0];
+    if ((leaves.length < 2) || (calls.length !== 1) || (goTranspiler.goTypeOfInitializer (call, goTranspiler.printNode (call, 0)) !== '*string')) {
+        return printed;
+    }
+    const derefable = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string')
+        && goTranspiler.goConcatDerefableStringOperand (leaf);
+    if (!leaves.every ((leaf) => (leaf === call) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return printed;
+    }
+    const texts = leaves.map ((leaf) => ((leaf === call) ? ('*' + piece) : ((derefable (leaf) ? '*' : '') + goTranspiler.printNode (leaf, 0))));
+    const callText = goTranspiler.printNode (call, 0);
+    if (texts.concat (callText).some ((text) => text.includes ('\n'))) {
+        return printed;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const name = match[2];
+    return lead + indent + 'if ' + piece + ' := ' + callText + '; ' + piece + ' != nil {\n' + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n'
+        + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
+}
+
+// a nil test on the target elsewhere may already print natively from its write shapes: leave those chains
+function ccxtGoScopeNilTestsIdentifier (scope, name) {
+    let found = (scope === undefined);
+    const nil = (n) => (n?.kind === ts.SyntaxKind.NullKeyword) || ((n?.kind === ts.SyntaxKind.Identifier) && (n.text === 'undefined'));
+    const visit = (n) => {
+        found = found || ((n.kind === ts.SyntaxKind.BinaryExpression) && [ ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken,
+            ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken ].includes (n.operatorToken?.kind)
+            && [ [ n.left, n.right ], [ n.right, n.left ] ].some (([ a, b ]) => (a?.kind === ts.SyntaxKind.Identifier) && (a.text === name) && nil (b)));
+        if (!found) {
+            n.forEachChild (visit);
+        }
+    };
+    scope?.forEachChild (visit);
+    return found;
+}
+
 function installCcxtGoGuardedAddChainAssignment (goTranspiler) {
     if (!goInstallOnce (goTranspiler, '__ccxtGoGuardedAddChainAssignmentInstalled', 'printExpressionStatement')) {
         return;
     }
     const upstream = goTranspiler.printExpressionStatement;
     goTranspiler.printExpressionStatement = function (node, identation) {
-        return ccxtGoGuardedAddChainAssignment (this, node, upstream.call (this, node, identation));
+        return ccxtGoGuardedAddChainCallAssignment (this, node, ccxtGoGuardedAddChainAssignment (this, node, upstream.call (this, node, identation)));
     };
 }
 
