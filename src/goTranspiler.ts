@@ -17105,7 +17105,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goInsideNonNilBlock(node, name)) {
             return true;
         }
-        if (nilTest) {
+        if (nilTest || ((rebinds.size > 0) && this.goAfterNilGuardFill(node, rebinds))) {
             return true; // `x == nil` answers the same for a nil map and for the nil box
         }
         if ((parent.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node)) {
@@ -17158,6 +17158,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                     && !this.hasNodeWhere(again.call, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
                         && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)))) {
                     rebinds.add(write); // every write is again a never-nil safeDict: one map type
+                } else if (noDefault && this.goNilGuardFill(write, name, found.family, ws)) {
+                    rebinds.add(write);
                 }
             }
         }
@@ -17171,6 +17173,46 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goMapLocalRebindWrites = new Map<any, Set<any>>();
+
+    // `if (x === undefined) { x = {} }` (or a never-nil safeDict of the same family): the write fills the absent map
+    goNilGuardFill(write, name: string, family: string, ws: boolean): boolean {
+        const statement: any = write.parent;
+        const block: any = statement?.parent;
+        const guard: any = (block?.kind === SyntaxKind.Block) ? block.parent : block;
+        if ((statement?.kind !== SyntaxKind.ExpressionStatement) || (guard?.kind !== SyntaxKind.IfStatement) || (guard.elseStatement !== undefined)
+            || ((block.kind === SyntaxKind.Block) && (block.statements.length !== 1)) || (guard.thenStatement !== block)) {
+            return false;
+        }
+        const test: any = this.goUnwrapParenthesizedNode(guard.expression);
+        const isNil = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+        if ((test?.kind !== SyntaxKind.BinaryExpression) || !((test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken) || (test.operatorToken.kind === SyntaxKind.EqualsEqualsToken))
+            || !(((test.left.kind === SyntaxKind.Identifier) && (test.left.text === name) && isNil(test.right)) || ((test.right.kind === SyntaxKind.Identifier) && (test.right.text === name) && isNil(test.left)))) {
+            return false;
+        }
+        const value: any = this.goUnwrapParenthesizedNode(write.right);
+        if ((value?.kind === SyntaxKind.ObjectLiteralExpression) && (value.properties.length === 0)) {
+            return true;
+        }
+        const again = this.goSafeDictCallArgs(value);
+        return (again !== undefined) && (again.family === family) && (again.fallback !== undefined) && this.goNeverNilDict(again.call, ws)
+            && !this.hasNodeWhere(again.call, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name));
+    }
+
+    // the use is a later statement of the block holding a nil-guard fill: the map is never nil there
+    goAfterNilGuardFill(use, rebinds: Set<any>): boolean {
+        for (const write of rebinds) {
+            const guard: any = (write.parent?.parent?.kind === SyntaxKind.Block) ? write.parent.parent.parent : write.parent?.parent;
+            const statements: any[] | undefined = guard?.parent?.statements;
+            if ((guard?.kind !== SyntaxKind.IfStatement) || (statements === undefined)) {
+                continue;
+            }
+            const at = statements.indexOf(guard);
+            if (statements.slice(at + 1).some((st: any) => (use.pos >= st.pos) && (use.end <= st.end))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     // the typed twin of the declaration's initializer: `this.SafeDictMap(c, k[, d])`
     goSafeDictMapValue(declaration, identation: number): string | undefined {
@@ -17192,6 +17234,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         const found: any = this.goSafeDictCallArgs(node.right);
+        if (found === undefined) {
+            return undefined; // a `{}` fill prints as the map literal
+        }
         return `${this.printNode(node.left, 0)} = this.${found.family}Map(${this.printArgsForCallExpression(found.call, identation)})`;
     }
 
