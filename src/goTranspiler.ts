@@ -45203,3 +45203,63 @@ GoTranspiler.prototype.goBaseLocalHasNullableKey = function (declaration): boole
             || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword) && (n.parent.right === n) && nullable(n.parent.left))));
 };
 // ===== h26-H26-G16 (end) =====
+// ===== h26-G20 =====
+// `const x = c ? a : b` whose two arms are each a Go map (a map-typed local or param, a native map field
+// `this.<field>`) joins as map[string]any; a nil test of x keeps the box (a nil map arm is a non-nil `any`)
+const h26g20UpstreamArmType = GoTranspiler.prototype.goTernaryJoinArmType;
+GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
+    const known = h26g20UpstreamArmType.call(this, node);
+    return (known !== undefined) ? known : h26g20MapArmType(this, node);
+};
+function h26g20MapArmType (goTranspiler, node): string | undefined {
+    const arm: any = goTranspiler.goUnwrapParenthesizedNode(node);
+    const ternary: any = arm?.parent;
+    let current = arm;
+    while (current?.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        current = current.parent;
+    }
+    const owner: any = (current?.parent?.kind === SyntaxKind.ConditionalExpression) ? goTernaryJoinOwner(current.parent) : undefined;
+    if ((owner === undefined) || (ternary === undefined)) {
+        return undefined;
+    }
+    const mapArm = (n): boolean => {
+        const u: any = goTranspiler.goUnwrapParenthesizedNode(n);
+        if (u?.kind === SyntaxKind.Identifier) {
+            return (u === arm) ? h26g20MapLocal(goTranspiler, u) : (h26g20UpstreamArmType.call(goTranspiler, u) === GO_SAFE_DICT_LOCAL_TYPE) || h26g20MapLocal(goTranspiler, u);
+        }
+        return (u?.kind === SyntaxKind.PropertyAccessExpression) && (ccxtGoIndexableThisField(goTranspiler, u) === GO_SAFE_DICT_LOCAL_TYPE);
+    };
+    const join: any = goTranspiler.goUnwrapParenthesizedNode(owner.initializer);
+    if (!mapArm(join.whenTrue) || !mapArm(join.whenFalse) || !mapArm(arm) || h26g20NilTested(goTranspiler, owner)) {
+        return undefined;
+    }
+    return GO_SAFE_DICT_LOCAL_TYPE;
+}
+// a local or parameter the declaration printer types map[string]any (its own write scan already ran)
+function h26g20MapLocal (goTranspiler, node): boolean {
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    return ((decl?.kind === SyntaxKind.VariableDeclaration) || (decl?.kind === SyntaxKind.Parameter))
+        && ((decl.initializer === undefined) || (goTernaryJoinOwner(decl.initializer) !== decl)) && goLocalDeclaredGoMap(goTranspiler, decl, node);
+}
+// every read is an element read, `k in x` or `Object.keys (x)`: a nil map answers those like the untyped nil;
+// a nil test, a write or a hand-off into another `any` slot keeps the box
+function h26g20NilTested (goTranspiler, declaration): boolean {
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    const name = declaration.name.text;
+    const readOk = (n: any): boolean => {
+        const p: any = n.parent;
+        if ((p?.kind === SyntaxKind.ElementAccessExpression) && (p.expression === n)) {
+            const q: any = p.parent;
+            return !(((q?.kind === SyntaxKind.BinaryExpression) && (q.left === p) && (q.operatorToken.kind >= SyntaxKind.FirstAssignment) && (q.operatorToken.kind <= SyntaxKind.LastAssignment))
+                || (q?.kind === SyntaxKind.DeleteExpression) || (q?.kind === SyntaxKind.PrefixUnaryExpression) || (q?.kind === SyntaxKind.PostfixUnaryExpression));
+        }
+        if ((p?.kind === SyntaxKind.BinaryExpression) && (p.right === n) && (p.operatorToken.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        const callee: any = p?.expression;
+        return (p?.kind === SyntaxKind.CallExpression) && (p.arguments.length === 1) && (p.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && (callee.expression?.getText?.() === 'Object') && (callee.name.text === 'keys');
+    };
+    return (scope === undefined) || goTranspiler.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && !readOk(n));
+}
+// ===== h26-G20 (end) =====
