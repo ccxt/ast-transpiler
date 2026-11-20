@@ -7836,6 +7836,83 @@ function ccxtGoValueUseVetoed (n, parent) {
 function installCcxtGoStringConcatJoin (goTranspiler) {
     goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === 'string')
         && ccxtGoStringConcatJoinIsSafe (go, scope, declaration, varName));
+    goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === '*string')
+        && ccxtGoNarrowedSelfConcatJoinIsSafe (go, scope, declaration, varName));
+    // while that verdict is open, a grown write of the local converts like any Go string write
+    const shippedConversion = goTranspiler.goPointerWriteConversion;
+    goTranspiler.goPointerWriteConversion = function (right, goType) {
+        const shipped = shippedConversion.call (this, right, goType);
+        const write = right?.parent;
+        if ((shipped !== undefined) || (goType !== '*string') || (write?.kind !== ts.SyntaxKind.BinaryExpression) || (write.right !== right)
+            || !ts.isIdentifier (write.left)) {
+            return shipped;
+        }
+        const declaration = this.checkerOrUndefined ()?.getSymbolAtLocation (write.left)?.valueDeclaration?.resolve ();
+        return (this.__ccxtGoNarrowedSelfConcatProven?.has (declaration) && ccxtGoNarrowedSelfConcatWriteOk (this, declaration, right)) ? 'wrap' : undefined;
+    };
+}
+
+// `x = <+ chain>` reading x: x leaves only where the checker narrows x to a non-nil string, every
+// other leaf a Go string, so the chain prints a native concat
+function ccxtGoNarrowedSelfConcatWriteOk (goTranspiler, declaration, right) {
+    const varName = declaration.name.text;
+    const checker = goTranspiler.checkerOrUndefined ();
+    const leafOk = (n) => {
+        while (n?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+            n = n.expression;
+        }
+        if ((n?.kind === ts.SyntaxKind.BinaryExpression) && (n.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+            return leafOk (n.left) && leafOk (n.right);
+        }
+        if (ts.isIdentifier (n) && (n.text === varName) && goTranspiler.goIdentifierRefersToDeclaration (n, declaration)) {
+            const type = checker?.getTypeAtLocation (n);
+            return (type !== undefined) && ((type.flags & ts.TypeFlags.StringLike) !== 0) && ((type.flags & ts.TypeFlags.Union) === 0);
+        }
+        if (scopeMentionsIdentifier (n, varName)) {
+            return false;
+        }
+        return goTranspiler.goStringConcatOperandType (n, goTranspiler.printNode (n, 0)) === 'string';
+    };
+    return (right?.kind === ts.SyntaxKind.BinaryExpression) && (right.operatorToken.kind === ts.SyntaxKind.PlusToken) && leafOk (right);
+}
+
+// a `*string` local whose only non-pointer writes are `x = <+ chain>` reading x where the checker
+// narrows x to a non-nil string: that x prints `*x`, every other leaf must already be a Go string,
+// so the chain is a Go string the write stores by address. Other writes keep the shipped verdict.
+function ccxtGoNarrowedSelfConcatJoinIsSafe (goTranspiler, scope, declaration, varName) {
+    if ((scope === undefined) || (declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || !ts.isIdentifier (declaration.name)
+        || (goTranspiler.goTypeOfInitializer (declaration.initializer, goTranspiler.printNode (declaration.initializer, 0)) !== '*string')) {
+        return false;
+    }
+    const isSelf = (n) => ts.isIdentifier (n) && (n.text === varName) && goTranspiler.goIdentifierRefersToDeclaration (n, declaration);
+    let grown = 0;
+    let other = false;
+    goTranspiler.hasNodeWhere (scope, (n) => {
+        if (!isSelf (n) || (n.parent?.kind !== ts.SyntaxKind.BinaryExpression) || (n.parent.left !== n)
+            || (n.parent.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || !scopeMentionsIdentifier (n.parent.right, varName)) {
+            return false;
+        }
+        if (ccxtGoNarrowedSelfConcatWriteOk (goTranspiler, declaration, n.parent.right)) {
+            grown += 1;
+            return false;
+        }
+        other = true;
+        return true;
+    });
+    if (other || (grown === 0)) {
+        return false;
+    }
+    // the remaining writes and every read take the shipped `*string` verdict with the grown writes proven
+    const proven = goTranspiler.__ccxtGoNarrowedSelfConcatProven ??= new Set ();
+    if (proven.has (declaration)) {
+        return false;
+    }
+    proven.add (declaration);
+    try {
+        return goTranspiler.goLocalIsSafeToType (scope, declaration, varName, '*string');
+    } finally {
+        proven.delete (declaration);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -18939,13 +19016,21 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
                 const right: any = parent.right;
                 safe = (parent.operatorToken.kind === SyntaxKind.EqualsToken)
-                    && ((right?.kind === SyntaxKind.StringLiteral) || this.goLiteralDefaultStringCall(right, name));
+                    && ((right?.kind === SyntaxKind.StringLiteral) || this.goLiteralDefaultStringCall(right, name)
+                        || this.goLiteralDefaultStringConcatWrite(right, name));
                 return;
             }
             safe = this.goLiteralDefaultStringLocalReadIsSafe(n);
         };
         scope.forEachChild(visit);
         return safe;
+    }
+
+    // a `+` chain not reading the local whose printed Go type is a plain string: it never stores nil
+    goLiteralDefaultStringConcatWrite(right, name: string): boolean {
+        return (right?.kind === SyntaxKind.BinaryExpression) && (right.operatorToken?.kind === SyntaxKind.PlusToken)
+            && !this.hasNodeWhere(right, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name))
+            && (this.goTypeOfInitializer(right, this.printNode(right, 0)) === 'string');
     }
 
     // a read the printer answers with the same Go value whether the local is `*string` or `string`
