@@ -12766,7 +12766,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(inner) && this.isEqualityOp(inner.operatorToken.kind)) {
                 const l: any = this.unwrapParens(inner.left);
                 const r: any = this.unwrapParens(inner.right);
-                const lit = (n: any) => this.literalKindOfNode(n) === 'string' || this.literalKindOfNode(n) === 'null';
+                const lit = (n: any) => this.literalKindOfNode(n) === 'string' || this.literalKindOfNode(n) === 'null' || this.rustH26r13IntLitLeaf(n);
                 // ral-66s2: `x === true` / `x !== false` over such a local (bitget parseCurrency `active`): the same native compare text
                 const boolLit = (n: any) => this.literalKindOfNode(n) === 'boolean';
                 return (leaf(l) && (lit(r) || boolLit(r))) || ((lit(l) || boolLit(l)) && leaf(r));
@@ -12775,6 +12775,12 @@ export class RustTranspiler extends BaseTranspiler {
         };
         if (isPrefixUnaryExpression(node)) return node.operator === SyntaxKind.ExclamationToken && leaf(node.operand);
         return isBinaryExpression(node) && this.isLogicalOp(node.operatorToken.kind) && leaf(node);
+    }
+
+    // ===== h26-H26-R13
+    /** A non-negative integer literal compared with a local: rustBoolNativeText still has to print the compare natively. */
+    rustH26r13IntLitLeaf(n: any): boolean {
+        return this.rustScalarIntLiteral(n) !== undefined && isNumericLiteral(n);
     }
 
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
