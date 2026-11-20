@@ -19700,6 +19700,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goNilInitStrDeclaredReadOk(n): boolean {
         const { current, parent } = goReadClimb(n);
+        if (this.goNilInitStrLiteralTernaryArmRead(current, parent)) {
+            return true;
+        }
         if (this.goNilInitStrBalanceKeyRead(n, parent, current)) {
             return true;
         }
@@ -19720,6 +19723,22 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
+    }
+
+    // an arm of `const y: Str = c ? 'lit' : x` (or mirrored): ccxtGoStrPtrTernaryDeclaration prints y as an `any`
+    // box taking 'lit', *x, or an untyped nil for a nil x, which is what the box read before
+    goNilInitStrLiteralTernaryArmRead(current, parent): boolean {
+        const decl: any = parent?.parent;
+        if ((parent?.kind !== SyntaxKind.ConditionalExpression) || (parent.condition === current)
+            || (decl?.kind !== SyntaxKind.VariableDeclaration) || (this.goUnwrapParenthesizedNode(decl.initializer) !== parent)
+            || (decl.name?.kind !== SyntaxKind.Identifier) || (current.kind !== SyntaxKind.Identifier)
+            || this.hasNodeWhere(parent.condition, (c: any) => (c.kind === SyntaxKind.Identifier) && (c.text === current.text))) {
+            return false;
+        }
+        const annotation: any = decl.type;
+        const other: any = this.goUnwrapParenthesizedNode((parent.whenTrue === current) ? parent.whenFalse : parent.whenTrue);
+        return ((annotation === undefined) || ((annotation.kind === SyntaxKind.TypeReference) && (annotation.typeName?.text === 'Str')))
+            && (other?.kind === SyntaxKind.StringLiteral);
     }
 
     // a nil-guarded Balance key (`this.balance[x]` prints `[*x]`), the key of `this.safeDict (this.balance, x)`
