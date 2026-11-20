@@ -2499,6 +2499,7 @@ function ccxtGoSafeCollectionLocalType (goTranspiler, declaration, families, res
         if ((refersToDeclaration !== undefined) && !refersToDeclaration.call (goTranspiler, n, declaration)) {
             return false; // another declaration of the same name in a nested scope
         }
+        if (h26g03ListRebind (goTranspiler, n, found.family)) { return false; }
         if (ccxtGoSafeCollectionUseReads (goTranspiler, n, found.family, defaulted)) {
             return false;
         }
@@ -44724,3 +44725,35 @@ function h26g02RetryPending(goTranspiler, declaration): void {
     };
 }
 // ===== h26-g02 (end) =====
+
+// ===== h26-G03 =====
+// hand-written base list producers whose Go signature already returns []any
+const H26G03_LIST_PRODUCERS = [ 'arrayConcat', 'arraySlice', 'filterBy' ];
+
+// `x = y` / `x = this.arrayConcat (..)` on a safeList-seeded list local, where the right side's printed Go
+// value is already a []any: the `any` box held that very []any (nil or not), so the typed local holds the same
+function h26g03ListRebind (goTranspiler, node, family) {
+    const parent = node.parent;
+    if ((family !== 'list') || (parent?.kind !== ts.SyntaxKind.BinaryExpression) || (parent.left !== node)
+        || (parent.operatorToken?.kind !== ts.SyntaxKind.EqualsToken) || (parent.parent?.kind !== ts.SyntaxKind.ExpressionStatement)) {
+        return false;
+    }
+    const right = parent.right;
+    if (right?.kind === ts.SyntaxKind.Identifier) {
+        return (right.text !== node.text) && (goTranspiler.goDeclaredTypeOfIdentifier (right) === '[]any');
+    }
+    const callee = (right?.kind === ts.SyntaxKind.CallExpression) ? right.expression : undefined;
+    return (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword)
+        && H26G03_LIST_PRODUCERS.includes (callee.name?.text) && h26g03BaseMethod (goTranspiler, callee);
+}
+
+// the callee resolves to the base `Exchange` class's own declaration (a venue override could return anything)
+function h26g03BaseMethod (goTranspiler, callee) {
+    try {
+        const method = goTranspiler.getChecker ().getSymbolAtLocation (callee.name)?.valueDeclaration?.resolve ();
+        return (method?.kind === ts.SyntaxKind.MethodDeclaration) && (method.parent?.name?.text === 'Exchange');
+    } catch (e) {
+        return false;
+    }
+}
+// ===== h26-G03 (end) =====
