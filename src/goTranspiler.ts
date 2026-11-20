@@ -40559,6 +40559,7 @@ const goDefaultedDictLocals = new WeakSet<any> ();
 export interface GoTranspiler {
     goTernaryStatementArms(ternary): string | undefined;
     goTernaryStatementIfElse(target: string, ternary, identation: number): string | undefined;
+    goTernaryStatementNilSeededBox(decl, declared: string | undefined, armType: string | undefined): boolean;
 }
 
 GoTranspiler.prototype.goTernaryStatementArms = function (ternary) {
@@ -40587,6 +40588,14 @@ GoTranspiler.prototype.goTernaryStatementIfElse = function (target: string, tern
     return `${iden}if ${this.goStripControlClauseParens(condition)} {\n${iden}\t${target} = ${whenTrue}\n${iden}} else {\n${iden}\t${target} = ${whenFalse}\n${iden}}`;
 };
 
+// a nil-seeded untyped local (`let t: Str = undefined`, printed `var t any = nil`) takes string arms into its box as the
+// literal did; the if/else leaves only plain string writes, which the box-vs-literal compare proof can read
+GoTranspiler.prototype.goTernaryStatementNilSeededBox = function (decl, declared: string | undefined, armType: string | undefined): boolean {
+    const annotation: any = decl.type;
+    const untyped = (annotation === undefined) || ((annotation.kind === SyntaxKind.TypeReference) && (annotation.typeName?.text === 'Str'));
+    return (declared === undefined) && (armType === 'string') && untyped && this.goNilInitInitializer(decl.initializer);
+};
+
 const h15x1UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
 GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     const write: any = node?.expression;
@@ -40601,7 +40610,7 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     if ((armType !== undefined) && (left.kind === SyntaxKind.Identifier)) {
         const declared = this.goDeclaredTypeOfIdentifier(left);
         const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
-        target = ((decl?.kind === SyntaxKind.VariableDeclaration) && ((declared === 'any')
+        target = ((decl?.kind === SyntaxKind.VariableDeclaration) && ((declared === 'any') || this.goTernaryStatementNilSeededBox(decl, declared, armType)
             || ((declared === armType) && (this.goTernaryJoinArmType(ternary.whenTrue) === this.goTernaryJoinArmType(ternary.whenFalse)))))
             ? this.printNode(left, 0).trim() : undefined;
     } else if ((armType !== undefined) && (left.kind === SyntaxKind.ElementAccessExpression) && (left.expression?.kind === SyntaxKind.Identifier)
