@@ -1863,8 +1863,61 @@ function installCcxtGoDeclarationUnbox (goTranspiler) {
     goTranspiler.printVariableDeclarationList = function (node, identation) {
         const printed = upstream.call (this, node, identation);
         const unboxed = CCXT_GO_UNBOX_DECLARATIONS.reduce ((text, [ pattern, goType ]) => ccxtGoUnboxDeclaration (text, pattern, goType), printed);
-        return ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (unboxed));
+        return ccxtGoGuardedAddChainDeclaration (this, node, ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (unboxed)));
     };
+}
+
+// `var h *string = SafeStringPtr(Add("lit", sym))` whose leaves are Go strings plus ONE unguarded `*string`
+// identifier: Add answers nil exactly when that pointer is nil, so print the nil seed and one nil test
+function ccxtGoAddChainLeaves (node, out) {
+    if (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        return ccxtGoAddChainLeaves (node.expression, out);
+    }
+    if ((node?.kind === ts.SyntaxKind.BinaryExpression) && (node.operatorToken?.kind === ts.SyntaxKind.PlusToken)) {
+        ccxtGoAddChainLeaves (node.left, out);
+        return ccxtGoAddChainLeaves (node.right, out);
+    }
+    out.push (node);
+    return out;
+}
+
+function ccxtGoScopeNamesIdentifier (scope, name) {
+    let found = (scope === undefined);
+    const visit = (n) => {
+        found = found || ((n.kind === ts.SyntaxKind.Identifier) && (n.text === name));
+        if (!found) {
+            n.forEachChild (visit);
+        }
+    };
+    scope?.forEachChild (visit);
+    return found;
+}
+
+function ccxtGoGuardedAddChainDeclaration (goTranspiler, node, printed) {
+    const declarations = node?.declarations ?? [];
+    const declaration = declarations[0];
+    const match = (typeof printed === 'string') ? /^(\s*)var ([A-Za-z0-9_]+) \*string = SafeStringPtr\(Add\(/.exec (printed) : null;
+    if ((match === null) || (declarations.length !== 1) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
+        || (match[2] !== goTranspiler.printNode (declaration.name, 0)) || printed.trim ().includes ('\n')
+        || ccxtGoScopeNamesIdentifier (goTranspiler.goEnclosingFunction?.(declaration), declaration.name.text + 'Value')) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (declaration.initializer, []);
+    const pointers = leaves.filter ((leaf) => (leaf?.kind === ts.SyntaxKind.Identifier)
+        && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string') && !goStringOperand (goTranspiler, leaf)
+        && !goTranspiler.goConcatDerefableStringOperand (leaf));
+    if ((leaves.length < 2) || (pointers.length !== 1) || !leaves.every ((leaf) => (leaf === pointers[0]) || goStringOperand (goTranspiler, leaf))) {
+        return printed;
+    }
+    const texts = leaves.map ((leaf) => ((leaf === pointers[0]) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    if (texts.some ((text) => text.includes ('\n'))) {
+        return printed;
+    }
+    const [ indent, name ] = [ match[1].replace (/^\n+/, ''), match[2] ];
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const pointer = goTranspiler.printNode (pointers[0], 0);
+    return lead + indent + 'var ' + name + ' *string = nil\n' + indent + 'if ' + pointer + ' != nil {\n'
+        + indent + '\t' + name + 'Value := ' + texts.join (' + ') + '\n' + indent + '\t' + name + ' = &' + name + 'Value\n' + indent + '}';
 }
 
 // Types `this.safeDict` / `this.safeList` / `this.safeDict2` / `this.safeList2` locals the printer's
