@@ -15801,7 +15801,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const struct = this.printStruct(node, identation);
         const newMethod = this.printNewStructMethod(node);
 
-        const methods = node.members.filter(member => member.kind === SyntaxKind.MethodDeclaration);
+        const methods = node.members.filter(member => (member.kind === SyntaxKind.MethodDeclaration) && !this.isOverloadSignature(member));
         const classMethods = this.joinTopLevelDecls(methods.map(method => this.printMethodDeclaration(method, identation)));
         return struct + "\n" + newMethod  + "\n" + classMethods;
     }
@@ -32847,13 +32847,13 @@ export interface GoTranspiler {
     goGuardedTupleSlot0(node): boolean;
     goNonNilStringOverloadSlot(node): boolean;
 }
-// handleOptionStringAndParams(2) with a string-literal default resolves to the `[string, Dict]` overload:
+// handleOptionStringAndParams(2) / handleMarginModeAndParams with a string-literal default resolve to the `[string, Dict]` overload:
 // the Go base returns that default or a present string option (another type panics), never nil
 GoTranspiler.prototype.goNonNilStringOverloadSlot = function (node) {
     const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
     const call: any = decl?.parent?.parent?.initializer;
     const name = call?.expression?.name?.text;
-    const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4 }[name];
+    const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4, 'handleMarginModeAndParams': 2 }[name];
     const literal = call?.arguments?.[at]?.kind === SyntaxKind.StringLiteral;
     return literal && this.goGuardedTupleSlot0(node) && this.goCheckerTypeHasFlags(node, TypeFlags.StringLike);
 };

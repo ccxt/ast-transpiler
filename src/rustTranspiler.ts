@@ -15329,7 +15329,7 @@ export class RustTranspiler extends BaseTranspiler {
 
         // First pass: collect method signatures for optional param handling. A class's own
         // fixed-arity method drops a same-named signature left by an earlier file.
-        const methods = node.members.filter(m => m.kind === SyntaxKind.MethodDeclaration);
+        const methods = node.members.filter(m => (m.kind === SyntaxKind.MethodDeclaration) && !this.isOverloadSignature(m));
         methods.forEach((method: any) => {
             const printed = this.rustPrintedParams(method);
             const requiredCount = printed.filter(p => (!p.initializer && !p.questionToken) || this.rustVenuePositional(p)).length;

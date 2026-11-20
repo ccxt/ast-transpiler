@@ -1003,8 +1003,13 @@ class BaseTranspiler {
         return parsedExpression + "(" + parsedArgs + ")";
     }
 
+    // a bodyless method is a ts overload signature: no runtime code, the implementation below prints
+    isOverloadSignature(member): boolean {
+        return (member.kind === SyntaxKind.MethodDeclaration) && (member.body === undefined);
+    }
+
     printClassBody(node, identation) {
-        return node.members.map((m, index) => {
+        return node.members.filter((m) => !this.isOverloadSignature(m)).map((m, index) => {
             const parsedNode = this.printNode(m, identation+1);
             return (m.kind === SyntaxKind.PropertyDeclaration || index === 0) ? parsedNode : "\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode;
         }).join("\n");
@@ -1481,7 +1486,7 @@ class BaseTranspiler {
     getMethodTypes(file): IMethodType[] {
         const result: IMethodType[] = [];
         for (const node of (file.statements ?? []).filter((s) => isClassDeclaration(s))) {
-            for (const m of node.members.filter((member) => isMethodDeclaration(member))) {
+            for (const m of node.members.filter((member) => isMethodDeclaration(member) && !this.isOverloadSignature(member))) {
                 const isAsync = this.isAsyncFunction(m);
                 const name = m.name.getText();
                 const returnType = this.getReturnTypeFromMethod(m);
