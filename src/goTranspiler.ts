@@ -1155,6 +1155,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.MarketSymbols': '[]string',
     // base findMessageHashes (no override) returns its `string[]` futures-key list, never nil
     'this.FindMessageHashes': '[]string',
+    // exchange_market_type.go (hand-written): nil exactly for absent input, else the resolved ids
+    'this.MarketIds': '[]string',
     // absent input answers a nil slice
     'this.MarketCodes': '[]any',
     // exchange_prediction.go, retyped `string` on its only return path
@@ -8236,7 +8238,6 @@ function installCcxtGoScalarElementReads (goTranspiler) {
 // Producer declarations: `var x T = <generated producer>(...)`
 //
 const CCXT_GO_PRODUCER_DECLARATIONS = {
-    'this.MarketIds': 'list',
     'this.ParseOrders': 'list',
     'this.OutcomesByMarketId': 'list',
     'this.ParseSearchQueries': 'list',
