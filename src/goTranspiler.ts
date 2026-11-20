@@ -11523,8 +11523,8 @@ function goStringPtrParamProven (go, param) {
         if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) {
             return false;
         }
-        if (isUndefined (arg) || goStringPtrAssumedArg (go, arg)) {
-            continue;
+        if (isUndefined (arg) || goStringPtrAssumedArg (go, arg) || (arg.kind === ts.SyntaxKind.StringLiteral)) {
+            continue; // a literal is boxed SafeStringPtr("..") at the call (installStringPtrParams), never nil
         }
         const t = go.goPrintedArgType (arg);
         if ((t !== '*string') && !((t === 'string') && (goStringAddressArg (go, arg, arg.text ?? '') !== undefined))) {
@@ -27314,7 +27314,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 // twins, which deref a pointer and fold a nil one: both read it as absent
                 if (verdict === 'unknown') {
                     return ((nilable && (goType === 'map[string]any')) || pointer)
-                        && (this.goGetArgPositionIsDefaulted(callee, argIndex) || ((goType === '*string') && goStringPtrFlowsIntoProvenParam(this, param, callee, argIndex)));
+                        && (this.goGetArgPositionIsDefaulted(callee, argIndex) || ((goType === '*string') && goStringPtrFlowsIntoProvenParam(this, param, callee, argIndex))
+                            || goNumPtrFlowsIntoProvenParam(this, param, goType, callee, argIndex));
                 }
                 if (nilable && !pointer && this.goGetArgPassesIntoContainerDefault(callee, argIndex)) {
                     return false;
@@ -38559,6 +38560,101 @@ GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, inde
     }
     return '*string';
 };
+
+// An async exchange-local `Int` / `Num` parameter prints `*int64` / `*float64` when every same-file call site
+// passes that pointer or `undefined` and no other file or quoted name reaches the method: nil tests go native.
+const goRequiredParameterNativeTypeAsyncNumPtr = GoTranspiler.prototype.goRequiredParameterNativeType;
+GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, index: number) {
+    const answer = goRequiredParameterNativeTypeAsyncNumPtr.call(this, fn, param, index);
+    const pointer = { 'Int': '*int64', 'Num': '*float64' }[param.type?.getText() ?? ''];
+    if ((answer !== undefined) || (pointer === undefined) || !this.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)
+        || (param.initializer !== undefined) || goHasDynamicCall(fn, fn.name.text)) {
+        return answer;
+    }
+    const sites = this.goSameFileCallsOf(fn, fn.name.text);
+    let pointers = 0;
+    for (const site of sites) {
+        const arg = site.arguments?.[index];
+        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (site.runner !== undefined)) {
+            return answer;
+        }
+        if ((arg.kind === SyntaxKind.Identifier) && (arg.text === 'undefined')) {
+            continue;
+        }
+        if (goNumPtrAssumedArg(this, arg, pointer)) {
+            pointers++;
+            continue;
+        }
+        if (this.goPrintedArgType(arg) !== pointer) {
+            return answer;
+        }
+        pointers++;
+    }
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    if ((pointers === 0) || (tree === undefined)) {
+        return answer;
+    }
+    const myClass = this.goEnclosingClassName(fn);
+    const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+    if ((tree.callIndex.get(fn.name.text) ?? []).some((site) => (site.file !== myFile) && this.goTsSrcFileDerivesFrom(tree, site.file, myClass))
+        || !goStringPtrParamOnlyDirectCalls(this, tree, fn.name.text, myClass)
+        || goNumPtrParamIsWritten(fn.body, param.name.text) || !this.goLocalIsSafeToType(fn.body, param, param.name.text, pointer)) {
+        return answer;
+    }
+    return pointer;
+};
+
+// the parameter is the caller's pointer only while the body never assigns it
+function goNumPtrParamIsWritten (body, name: string): boolean {
+    let written = false;
+    const visit = (n: any) => {
+        if (written) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name)
+            && (n.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+            written = true;
+        } else if (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression))
+            && (n.operand?.kind === SyntaxKind.Identifier) && (n.operand.text === name)
+            && ((n.operator === SyntaxKind.PlusPlusToken) || (n.operator === SyntaxKind.MinusMinusToken))) {
+            written = true;
+        }
+        n.forEachChild?.(visit);
+    };
+    if (body !== undefined) {
+        visit(body);
+    }
+    return written;
+}
+
+// a nil-defaulted `Int`/`Num` caller parameter handed straight to such an async parameter: its GetArg
+// binding and the callee proof depend on each other, so the callee is proven with the caller assumed bound
+// to the pointer (the assumption only answers while that binding is itself being decided)
+const GO_NUM_PTR_ASSUMED = new Map<any, string> ();
+function goNumPtrAssumedArg (go, arg, pointer: string): boolean {
+    if ((arg?.kind !== SyntaxKind.Identifier) || (GO_NUM_PTR_ASSUMED.size === 0)) {
+        return false;
+    }
+    const decl = go.goGetArgCalleeDeclaration (arg);
+    return (decl !== undefined) && (GO_NUM_PTR_ASSUMED.get (decl) === pointer);
+}
+function goNumPtrFlowsIntoProvenParam (go, param, goType: string, callee, argIndex: number): boolean {
+    const decl: any = go.goGetArgCalleeDeclaration (callee);
+    const target: any = (decl?.kind === SyntaxKind.MethodDeclaration) ? decl.parameters?.[argIndex] : undefined;
+    if ((target === undefined) || (param?.kind !== SyntaxKind.Parameter) || ((goType !== '*int64') && (goType !== '*float64'))
+        || (GO_NUM_PTR_ASSUMED.has (param) && (GO_NUM_PTR_ASSUMED.get (param) !== goType))) {
+        return false;
+    }
+    const outer = GO_NUM_PTR_ASSUMED.has (param);
+    GO_NUM_PTR_ASSUMED.set (param, goType);
+    try {
+        return go.goRequiredParameterNativeType (decl, target, argIndex) === goType;
+    } finally {
+        if (!outer) {
+            GO_NUM_PTR_ASSUMED.delete (param);
+        }
+    }
+}
 
 // ===== ral-93g7 (begin): ternary joins over int / int64 operands =====
 // R1: an ordered comparison of a ternary int64 local with a Go `int` operand (or of an `int` local with an
