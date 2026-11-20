@@ -18638,6 +18638,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let result;
         try {
             result = this.goNilInitLocalTypeScan(declaration) ?? this.goTuplePointerSlotNilInitType(declaration) ?? this.goNilInitStringLocalType(declaration) ?? this.goNilInitListLocalType(declaration)
+                ?? this.goNilInitStrDeclaredLocalType(declaration)
                 ?? this.goNilInitInterfaceLocalType(declaration, GO_WS_CACHE_TYPE)
                 ?? ((this.goOrderBook === undefined) ? undefined : this.goNilInitInterfaceLocalType(declaration, this.goOrderBook.type));
         } finally {
@@ -18729,6 +18730,101 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return undefined;
         }
         return candidate;
+    }
+
+    // `let x: Str = undefined` whose every write is nil, a Go `*string` or a statement-level Go string (kept in a typed
+    // local, the pointer takes its address) prints `*string`; reads are nil tests, narrowed concat operands and
+    // `any`-taking accessors that deref (derefScalar / GetArgStringPtr), so nil answers as the box did.
+    goNilInitStrDeclaredLocalType(declaration): string | undefined {
+        const declared = declaration.type;
+        if ((declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.kind !== SyntaxKind.Identifier) || (declared.typeName.text !== 'Str')) {
+            return undefined;
+        }
+        const name = declaration.name.text;
+        const scope = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return undefined;
+        }
+        const writes: any[] = [];
+        let rejected = false;
+        const visit = (n) => {
+            if (rejected) {
+                return;
+            }
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                n.forEachChild(visit);
+                return;
+            }
+            const parent = n.parent;
+            if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
+                return;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
+                if ((parent.operatorToken?.kind !== SyntaxKind.EqualsToken) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+                    rejected = true;
+                    return;
+                }
+                writes.push(parent);
+                visit(parent.right);
+                return;
+            }
+            if (!this.goNilInitStrDeclaredReadOk(n)) {
+                rejected = true;
+            }
+        };
+        scope.forEachChild(visit);
+        if (rejected || (writes.length === 0)) {
+            return undefined;
+        }
+        for (const write of writes) {
+            const right = this.goUnwrapParenthesizedNode(write.right);
+            if (this.goPointerWriteConversion(right, '*string') === 'nil') {
+                continue;
+            }
+            // literal / ternary writes are the value-join passes' `string` locals
+            if ((right?.kind === SyntaxKind.StringLiteral) || (right?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+                || (right?.kind === SyntaxKind.ConditionalExpression)) {
+                return undefined;
+            }
+            const goType = this.goTypeOfInitializer(right, this.printNode(right, 0));
+            if (goType === '*string') {
+                continue;
+            }
+            // a Go string needs its own typed local; without one the store would box it in SafeStringPtr
+            if ((goType !== 'string') || (this.goStringPointerStoreLocalName(write) === undefined)) {
+                return undefined;
+            }
+        }
+        if (this.goTypeNameIsShadowed(scope, '*string') || !this.goLocalIsSafeToType(scope, declaration, name, '*string')) {
+            return undefined;
+        }
+        return '*string';
+    }
+
+    goNilInitStrDeclaredReadOk(n): boolean {
+        const { current, parent } = goReadClimb(n);
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.PlusToken)) {
+            // the checker narrowed it to `string` here, so the concat derefs a non-nil pointer
+            const type: any = this.checkerOrUndefined()?.getTypeAtLocation(n);
+            return (type !== undefined) && ((type.flags & TypeFlags.String) !== 0);
+        }
+        if ((parent?.kind === SyntaxKind.CallExpression) && goNilInitIsAnyArgument(parent, current)) {
+            const callee = parent.expression;
+            const method = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
+            // only consumers proven to deref the argument; other accessors may see the typed nil as a value
+            return (method === 'getLimit') || ((method === 'filterBySymbolSinceLimit') && (callee.expression?.kind === SyntaxKind.ThisKeyword));
+        }
+        // a typed nil stored into a map slot is not an absent value: keep the box
+        if ((parent?.kind === SyntaxKind.PropertyAssignment) || (parent?.kind === SyntaxKind.ShorthandPropertyAssignment)
+            || ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken))) {
+            return false;
+        }
+        return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
+    }
+
+    // the typed-local name goStringPointerStore would use for this statement-level write
+    goStringPointerStoreLocalName(node): string | undefined {
+        return this.goStringCallLocalName(node.right) ?? this.goStringValueLocalName(node);
     }
 
     // a nil-initialised local whose every write prints a Go `[]any` is `var x []any = nil`; a read that compares
