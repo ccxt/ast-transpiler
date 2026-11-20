@@ -1269,6 +1269,9 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange.go: seconds as int64; a missing/malformed timeframe panics NotSupported like TS
     'this.ParseTimeframe': 'int64',
     'exchange.ParseTimeframe': 'int64',
+    // exchange_prediction.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
+    'this.SlugToMarketSymbol': 'string',
+    'this.SlugToOutcomeSymbol': 'string',
 };
 
 // ---------------------------------------------------------------------------
@@ -2110,6 +2113,68 @@ function ccxtGoGuardedAddChainCallPointersText (goTranspiler, leaves, match, pie
     const test = bound.concat (names).map ((n) => n + ' != nil').join (' && ');
     return lead + indent + 'if ' + bound.join (', ') + ' := ' + callTexts.join (', ') + '; ' + test + ' {\n' + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n'
         + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
+}
+
+// `return a + '.' + b` in a safeCurrencyCode / safeSymbol venue override (the build boxes each return
+// into its `*string` signature): bind the `*string` call leaves, return the native concat under Add's nil test
+function ccxtGoGuardedAddChainReturn (goTranspiler, node, printed) {
+    const match = (typeof printed === 'string') ? /^(\s*)return ((?:ccxt\.)?Add\([^\n]*?)(\s*)$/.exec (printed) : null;
+    const method = strPtrFamilyEnclosingMethod (node);
+    const name = String (method?.name?.text ?? '');
+    if ((match === null) || (node?.expression === undefined) || ((name !== 'safeCurrencyCode') && (name !== 'safeSymbol'))
+        || (method.parent?.kind !== ts.SyntaxKind.ClassDeclaration) || (method.parent?.heritageClauses === undefined)
+        || (ccxtGoWholeAddCallEnd (match[2].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const pieces = [ 'retPiece', 'retPiece2' ];
+    if (pieces.some ((piece) => ccxtGoScopeNamesIdentifier (method, piece))) {
+        return printed;
+    }
+    return ccxtGoGuardedAddChainReturnText (goTranspiler, ccxtGoAddChainLeaves (node.expression, []), match, pieces) ?? printed;
+}
+
+function ccxtGoGuardedAddChainReturnText (goTranspiler, leaves, match, pieces) {
+    const isPointer = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string');
+    const derefable = (leaf) => isPointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const calls = leaves.filter ((leaf) => (leaf?.kind === ts.SyntaxKind.CallExpression) && !goStringOperand (goTranspiler, leaf));
+    const pointers = leaves.filter ((leaf) => isPointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    const names = [ ...new Set (pointers.map ((leaf) => goTranspiler.printNode (leaf, 0))) ];
+    if ((leaves.length < 2) || (calls.length > 2) || ((calls.length + names.length) < 1)
+        || calls.some ((call) => !ccxtGoSuperAccessorCall (call) && (goTranspiler.goTypeOfInitializer (call, goTranspiler.printNode (call, 0)) !== '*string'))
+        || pointers.some ((leaf) => goTranspiler.goHasEnclosingNilGuard (leaf) || goTranspiler.goHasExitingNilGuard (leaf))
+        || !leaves.every ((leaf) => calls.includes (leaf) || pointers.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return undefined;
+    }
+    const bound = calls.map ((call, i) => pieces[i]);
+    const texts = leaves.map ((leaf) => (calls.includes (leaf) ? ('*' + bound[calls.indexOf (leaf)])
+        : (((pointers.includes (leaf) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0))));
+    const callTexts = calls.map ((call) => goTranspiler.printNode (call, 0));
+    if (texts.concat (callTexts).some ((text) => text.includes ('\n'))) {
+        return undefined;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const test = bound.concat (names).map ((n) => n + ' != nil').join (' && ');
+    const head = (bound.length > 0) ? (bound.join (', ') + ' := ' + callTexts.join (', ') + '; ') : '';
+    return lead + indent + 'if ' + head + test + ' {\n' + indent + '\treturn ' + texts.join (' + ') + '\n'
+        + indent + '}\n' + indent + 'return nil' + match[3];
+}
+
+// `super.safeCurrencyCode|safeSymbol (..)`: the base copies are coerced to `*string` (coerceTypedStringAccessors)
+function ccxtGoSuperAccessorCall (call) {
+    const callee = call?.expression;
+    return (callee?.kind === ts.SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === ts.SyntaxKind.SuperKeyword)
+        && [ 'safeCurrencyCode', 'safeSymbol' ].includes (String (callee.name?.text ?? ''));
+}
+
+function installCcxtGoGuardedAddChainReturn (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoGuardedAddChainReturnInstalled', 'printReturnStatement')) {
+        return;
+    }
+    const upstream = goTranspiler.printReturnStatement;
+    goTranspiler.printReturnStatement = function (node, identation) {
+        return ccxtGoGuardedAddChainReturn (this, node, upstream.call (this, node, identation));
+    };
 }
 
 function installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler) {
@@ -7427,6 +7492,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoDeclarationUnbox (goTranspiler);
     installCcxtGoGuardedAddChainAssignment (goTranspiler);
     installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler);
+    installCcxtGoGuardedAddChainReturn (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
