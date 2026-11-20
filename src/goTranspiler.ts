@@ -10069,7 +10069,8 @@ function ccxtGoJoinedParamsLocal (goTranspiler, node) {
 // A sync venue method annotated `[ Str, Dict ]` / `[ Dict, Dict ]` whose every own return is a two-element literal joins the
 // tuple-result family: it prints `(*string|map[string]any, map[string]any)`, destructuring callers bind `a, b := call`.
 const CCXT_GO_VENUE_PAIR_STATE = { 'go': undefined, 'methods': new WeakMap () };
-const CCXT_GO_VENUE_PAIR_SLOT_0 = { 'Str': { 'type': '*string', 'first': 'SafeStringPtr' }, 'Dict': { 'type': 'map[string]any', 'first': 'MapTyped' } };
+const CCXT_GO_VENUE_PAIR_SLOT_0 = { 'Str': { 'type': '*string', 'first': 'SafeStringPtr' }, 'Dict': { 'type': 'map[string]any', 'first': 'MapTyped' },
+    'int': { 'type': 'int64', 'first': 'Int64Value' } };
 
 function ccxtGoVenuePairOf (method) {
     const cache = CCXT_GO_VENUE_PAIR_STATE.methods;
@@ -10088,7 +10089,7 @@ function ccxtGoVenuePairOf (method) {
         || CCXT_GO_TUPLE_RESULT_METHODS.includes (method.name?.text)) {
         return undefined;
     }
-    if (!ccxtGoVenuePairCallersDestructure (method.name?.text, file, (slot0?.slots === 3))) {
+    if (!ccxtGoVenuePairCallersDestructure (method.name?.text, file, (slot0?.slots === 3) || (slot0?.type === 'int64'))) {
         return undefined;
     }
     let pairs = 0;
@@ -10099,7 +10100,8 @@ function ccxtGoVenuePairOf (method) {
         }
         if (n.kind === ts.SyntaxKind.ReturnStatement) {
             const e = n.expression;
-            ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === type.elements.length) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement);
+            ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === type.elements.length) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement)
+                && ((slot0.type !== 'int64') || (ccxtGoVenueIntSlot (e.elements[0]) !== undefined));
             pairs += 1;
             return;
         }
@@ -10109,6 +10111,24 @@ function ccxtGoVenuePairOf (method) {
     const result = (ok && (pairs > 0)) ? slot0 : undefined;
     cache.set (method, result);
     return result;
+}
+
+// an `int` slot 0 is provably a non-nil integer: `this.parseToInt (..)` (int64), an integer literal, or a never-rebound
+// const local initialised with one (printed `int`, so it converts); the printed slot text, undefined otherwise
+function ccxtGoVenueIntSlot (e, printed = undefined) {
+    const lit = (n) => (n?.kind === ts.SyntaxKind.NumericLiteral) && /^\d+$/.test (n.text);
+    if (lit (e) || ((e?.kind === ts.SyntaxKind.CallExpression) && (e.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (e.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'parseToInt') && (e.arguments.length === 1))) {
+        return printed ?? '';
+    }
+    let decl;
+    try {
+        decl = (e?.kind === ts.SyntaxKind.Identifier) ? CCXT_GO_VENUE_PAIR_STATE.go?.getChecker ()?.getSymbolAtLocation (e)?.valueDeclaration?.resolve () : undefined;
+    } catch (err) {
+        decl = undefined;
+    }
+    const isConst = (decl?.kind === ts.SyntaxKind.VariableDeclaration) && ((decl.parent?.flags & ts.NodeFlags.Const) !== 0);
+    return (isConst && lit (decl.initializer)) ? ((printed === undefined) ? '' : 'int64(' + printed + ')') : undefined;
 }
 
 // every call of the name in the declaring file and the ts/src files importing it (transitively) is a
@@ -10243,7 +10263,8 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
     }
     const slot = (e, type, wrap) => ccxtGoVenueSlotText (goTranspiler, e, type, wrap);
     const last = expr.elements.length - 1;
-    return m[1] + expr.elements.map ((e, i) => ((i < last) ? slot (e, pair.type, pair.first) : slot (e, 'map[string]any', 'MapTyped'))).join (', ') + m[3];
+    const first = (e) => ((pair.type === 'int64') ? ccxtGoVenueIntSlot (e, goTranspiler.printNode (e, 0).trim ()) : slot (e, pair.type, pair.first));
+    return m[1] + expr.elements.map ((e, i) => ((i < last) ? first (e) : slot (e, 'map[string]any', 'MapTyped'))).join (', ') + m[3];
 }
 
 // one returned slot of a venue tuple: bare when already printed with the slot type, else unwrapped
