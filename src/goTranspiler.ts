@@ -46415,3 +46415,153 @@ function h26g41NonNilDictReceive (goTranspiler, awaitNode, text) {
     return { goType: 'map[string]any', wrap: (recv) => 'MapTyped(PanicOnError(' + recv.trim () + '))' };
 }
 // ===== h26-H26-G41 (end) =====
+
+// ===== h26-H26-G45 (begin): unified request-row parameters typed as map rows =====
+// A slice-table slot of `[]map[string]any` types a required `CancellationRequest[]` / `OrderRequest[]` parameter whose
+// every use is `.length` or a loop-bounded element read (`xs[i]`, `this.safeDict (xs, i)`): the row is the map itself.
+const GO_REQUEST_ROW_LIST_TYPE = '[]map[string]any';
+const GO_REQUEST_ROW_ANNOTATIONS = [ 'CancellationRequest[]', 'OrderRequest[]' ];
+export interface GoTranspiler {
+    goRequestRowParameterType(fn, param): string | undefined;
+    goRequestRowParamOf(node): any;
+    goRequestRowRead(node): string | undefined;
+}
+// the parameter a request-row identifier names, when its slot prints `[]map[string]any`
+GoTranspiler.prototype.goRequestRowParamOf = function (node) {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    const fn: any = decl?.parent;
+    if ((decl?.kind !== SyntaxKind.Parameter) || (fn?.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, fn.name.text) ? this.unifiedSliceParams[fn.name.text] : undefined;
+    return (entry?.[fn.parameters.indexOf(decl)] === GO_REQUEST_ROW_LIST_TYPE) ? decl : undefined;
+};
+// `xs[i]` / `this.safeDict (xs, i)` inside `for (let i = 0; i < xs.length; i++)` that writes neither: the element map
+GoTranspiler.prototype.goRequestRowRead = function (node): string | undefined {
+    let list: any;
+    let key: any;
+    if ((node?.kind === SyntaxKind.ElementAccessExpression) && !this.isGoElementAccessAssignmentTarget(node)) {
+        list = node.expression;
+        key = node.argumentExpression;
+    } else if ((node?.kind === SyntaxKind.CallExpression) && (node.arguments?.length === 2) && (node.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (node.expression.expression?.kind === SyntaxKind.ThisKeyword) && (node.expression.name?.text === 'safeDict')) {
+        list = node.arguments[0];
+        key = node.arguments[1];
+    }
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (this.goRequestRowParamOf(list) === undefined)) {
+        return undefined;
+    }
+    return this.goLoopBoundedIndexRead(node, list, key, list.text, key.text);
+};
+GoTranspiler.prototype.goRequestRowParameterType = function (fn, param): string | undefined {
+    if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || !GO_REQUEST_ROW_ANNOTATIONS.includes(String(param.type?.getText?.() ?? '').replace(/\s+/g, ''))) {
+        return undefined;
+    }
+    const name = param.name.text;
+    const unsafe = this.hasNodeWhere(fn.body, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            return parent.name?.text !== 'length';
+        }
+        const read = ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) ? parent
+            : (((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === n)) ? parent : undefined);
+        const key: any = (read?.kind === SyntaxKind.ElementAccessExpression) ? read.argumentExpression : read?.arguments?.[1];
+        return (read === undefined) || (read.kind === SyntaxKind.CallExpression && ((read.arguments.length !== 2) || (read.expression?.name?.text !== 'safeDict')))
+            || (read.kind === SyntaxKind.ElementAccessExpression && this.isGoElementAccessAssignmentTarget(read))
+            || (key?.kind !== SyntaxKind.Identifier) || (this.goLoopBoundedIndexRead(read, n, key, name, key.text) === undefined);
+    });
+    if (unsafe) {
+        throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${name} is read as something other than a bounded map row`);
+    }
+    return GO_REQUEST_ROW_LIST_TYPE;
+};
+const goUnifiedSliceParameterTypeG45 = GoTranspiler.prototype.goUnifiedSliceParameterType;
+GoTranspiler.prototype.goUnifiedSliceParameterType = function (fn, param): string | undefined {
+    const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, fn.name.text) ? this.unifiedSliceParams[fn.name.text] : undefined;
+    if (entry?.[fn.parameters.indexOf(param)] === GO_REQUEST_ROW_LIST_TYPE) {
+        return this.goRequestRowParameterType(fn, param);
+    }
+    return goUnifiedSliceParameterTypeG45.call(this, fn, param);
+};
+const printCallExpressionG45 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    return this.goRequestRowRead(node) ?? printCallExpressionG45.call(this, node, identation);
+};
+const printElementAccessExpressionG45 = GoTranspiler.prototype.printElementAccessExpression;
+GoTranspiler.prototype.printElementAccessExpression = function (node, identation) {
+    return this.goRequestRowRead(node) ?? printElementAccessExpressionG45.call(this, node, identation);
+};
+// the element local `const e = <request-row read>` is that map; a caller's `const xs: CancellationRequest[] = []` filled
+// only by `xs.push (mapLocal)` and handed only to a tabled slot is the same `[]map[string]any`
+function goRequestRowCallerList (go, declaration): boolean {
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || !GO_REQUEST_ROW_ANNOTATIONS.includes(String(declaration.type?.getText?.() ?? '').replace(/\s+/g, ''))
+        || (init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length !== 0)) {
+        return false;
+    }
+    const scope = go.goEnclosingFunction(declaration);
+    const name = declaration.name.text;
+    let handed = 0;
+    const unsafe = (scope === undefined) || go.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name) || !go.goIdentifierRefersToDeclaration(n, declaration)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name?.text === 'push') && go.goIsNativeAppendShape(n, parent.parent)) {
+            const value: any = parent.parent.arguments[0];
+            return !((value?.kind === SyntaxKind.Identifier) && (go.goDeclaredTypeOfIdentifier(value) === 'map[string]any'));
+        }
+        const callee: any = (parent?.kind === SyntaxKind.CallExpression) ? parent.expression : undefined;
+        const index = (callee !== undefined) ? parent.arguments.indexOf(n) : -1;
+        if ((index >= 0) && (callee.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && (go.unifiedSliceParams?.[callee.name?.text]?.[index] === GO_REQUEST_ROW_LIST_TYPE)) {
+            handed += 1;
+            return false;
+        }
+        return true;
+    });
+    return !unsafe && (handed > 0);
+}
+const getGoLocalTypeG45 = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    if ((declaration?.initializer !== undefined) && (declaration.type === undefined) && (this.goRequestRowRead(declaration.initializer) !== undefined)) {
+        return 'map[string]any';
+    }
+    if (goRequestRowCallerList(this, declaration)) {
+        return GO_REQUEST_ROW_LIST_TYPE;
+    }
+    return getGoLocalTypeG45.call(this, declaration, parsedValue);
+};
+const printVariableDeclarationListG45 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const name = (declaration?.name?.kind === SyntaxKind.Identifier) ? this.printNode(declaration.name, 0) : undefined;
+    if ((name !== undefined) && (declaration.type === undefined) && (declaration.initializer !== undefined)) {
+        const read = this.goRequestRowRead(declaration.initializer);
+        if (read !== undefined) {
+            return `${this.getIden(identation)}var ${name} map[string]any = ${read}`;
+        }
+    }
+    if ((name !== undefined) && goRequestRowCallerList(this, declaration)) {
+        return `${this.getIden(identation)}var ${name} ${GO_REQUEST_ROW_LIST_TYPE} = ${GO_REQUEST_ROW_LIST_TYPE}{}`;
+    }
+    return printVariableDeclarationListG45.call(this, node, identation);
+};
+const goNativeAppendReceiverG45 = GoTranspiler.prototype.goNativeAppendReceiver;
+GoTranspiler.prototype.goNativeAppendReceiver = function (pushNode): string | undefined {
+    const receiver: any = pushNode?.expression?.expression;
+    const decl: any = (receiver?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(receiver)?.valueDeclaration?.resolve?.() : undefined;
+    if ((decl !== undefined) && this.goIsNativeAppendShape(receiver, pushNode) && goRequestRowCallerList(this, decl)) {
+        return this.printNode(receiver, 0);
+    }
+    return goNativeAppendReceiverG45.call(this, pushNode);
+};
+// ===== h26-H26-G45 (end) =====
