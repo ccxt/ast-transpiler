@@ -6342,6 +6342,8 @@ export class RustTranspiler extends BaseTranspiler {
         feeToPrecision: [ 'Str|string', 'ostr' ], currencyToPrecision: [ 'Str|string', 'ostr' ],
         // a map or undefined on every path (`-> Option<Dict>`); a `Value` slot boxes it once, never a scalar local
         safeDictN: [ 'Dictionary<any> | undefined', 'odict' ],
+        // a venue parser declared `NullableDict`: its parsed order map, or undefined on the early returns
+        parseWsOrderUpdate: [ 'NullableDict', 'odict' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -26251,11 +26253,20 @@ export class RustTranspiler extends BaseTranspiler {
     /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
      *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
     rustCacheRowOdictRewrite(rhs: any, init: any): boolean {
-        if (!isCallExpression(rhs) || rhs.arguments.length !== 2 || this.rustBaseTypedReturnKindAll(rhs) !== 'odict') return false;
+        if (!isCallExpression(rhs) || this.rustBaseTypedReturnKindAll(rhs) !== 'odict') return false;
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text))) return false;
         const head: any = this.rustSkipWrappers(init.arguments[0]);
+        if (this.rustCacheRowVenueOdictRewrite(rhs, head)) return true;
+        if (rhs.arguments.length !== 2) return false;
         const bucket: any = this.rustSkipWrappers(rhs.arguments[0]);
         return isIdentifier(head) && isIdentifier(bucket) && this.rustCacheBucketRow(head) && this.rustDeclarationOfIdentifier(head) === this.rustDeclarationOfIdentifier(bucket);
+    }
+
+    /** `row = this.m (..)` of a same-venue method typed `-> Option<Dict>` (NullableDict table row): the row's own optional
+     *  form takes the result as is (None where the method answered undefined, the Null the boxed write held). */
+    rustCacheRowVenueOdictRewrite(rhs: any, head: any): boolean {
+        if (!isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword || !this.rustCacheBucketRow(head)) return false;
+        return RustTranspiler.RUST_BASE_TYPED_METHODS[String(rhs.expression.name.text)]?.[0] === 'NullableDict';
     }
 
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
