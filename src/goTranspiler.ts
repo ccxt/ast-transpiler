@@ -33229,6 +33229,8 @@ export interface GoTranspiler {
     goTernaryJoinArmType(node): string | undefined;
     goTernaryJoinConditionDefines(condition, name: string, outcome: boolean): boolean;
     goTernaryJoinDeclaration(statement, declaration, identation: number): string | undefined;
+    goTernaryJoinNilMapParts(declaration, other: string): { goType: string, derefTrue: boolean, derefFalse: boolean } | undefined;
+    goTernaryJoinNilMapReadOk(n): boolean;
 }
 
 // the declaration a ternary initializer belongs to, or undefined when the ternary sits anywhere else
@@ -33362,7 +33364,7 @@ GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
     // an absent arm stays with the closure pointer-join family (installCcxtGoClosurePointerJoin), whose
     // read scan proves the typed nil pointer transparent at every use
     if ((whenTrue === 'nil') || (whenFalse === 'nil')) {
-        return undefined;
+        return this.goTernaryJoinNilMapParts(declaration, (whenTrue === 'nil') ? whenFalse : whenTrue);
     }
     // an untyped constant takes the other arm's numeric type
     // (an integer constant never joins float64: the literal boxed an int there, not a float)
@@ -33393,6 +33395,40 @@ GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
         return { goType: falseValue, derefTrue: false, derefFalse: true };
     }
     return undefined;
+};
+
+// `const x: NullableDict = c ? m : undefined` with m a Go map prints map[string]any: a nil map reads like
+// the untyped nil in a nil test and in sign()'s returned headers (FetchAsync, request book, IsEqual);
+// any other read or write keeps the box
+GoTranspiler.prototype.goTernaryJoinNilMapParts = function (declaration, other: string) {
+    const declared = declaration?.type;
+    if ((other !== GO_SAFE_DICT_LOCAL_TYPE) || (declared?.kind !== SyntaxKind.TypeReference)
+        || (declared.typeName?.kind !== SyntaxKind.Identifier) || ([ 'NullableDict', 'Dict' ].indexOf(declared.typeName.text) < 0)) {
+        return undefined;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    const name = declaration.name.text;
+    if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+        && (n !== declaration.name) && !this.goTernaryJoinNilMapReadOk(n))) {
+        return undefined;
+    }
+    return { goType: GO_SAFE_DICT_LOCAL_TYPE, derefTrue: false, derefFalse: false };
+};
+
+GoTranspiler.prototype.goTernaryJoinNilMapReadOk = function (n): boolean {
+    const { current, parent } = goReadClimb(n);
+    if ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === current)) {
+        // only sign()'s returned request: fetch2 hands its headers to FetchAsync and the request book
+        const literal: any = parent.parent;
+        const method: any = this.goEnclosingFunction(n);
+        return (literal?.kind === SyntaxKind.ObjectLiteralExpression) && (literal.parent?.kind === SyntaxKind.ReturnStatement)
+            && (method?.kind === SyntaxKind.MethodDeclaration) && (method.name?.getText() === 'sign');
+    }
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0)) {
+        return false;
+    }
+    const peer: any = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
+    return (peer?.kind === SyntaxKind.NullKeyword) || ((peer?.kind === SyntaxKind.Identifier) && (peer.text === 'undefined'));
 };
 
 const goTernaryJoinUpstreamTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
