@@ -15392,6 +15392,9 @@ const GO_NUMBER_TO_STRING_BASE_CLASSES = [ 'Exchange', 'BaseExchange' ];
 // Go type table above does not name (their printed Go signature is not in it).
 const GO_DEREF_WRAPPED_CALLS = [ 'NumberToString', 'Parse8601', 'Iso8601' ];
 
+// base accessors returning *string / *int64 / *float64 / *bool (exchange_safe.go), stored guarded into a plain field
+const GO_SCALAR_ACCESSOR_STORE_CALLEES = [ 'this.SafeString', 'this.SafeInteger', 'this.SafeNumber', 'this.SafeBool' ];
+
 // A printed call the printer cannot type *and* whose Go signature returns `any`
 // can be compared with nil / a string / a bool literal without the helper: the
 // box holds a scalar or nil, never a typed pointer.
@@ -22576,6 +22579,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 : rhs);
             const native = ((keyStrs.length === 1)
                 ? (this.goPlainFieldScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
+                    ?? this.goPlainFieldScalarAccessorStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goNonNilMapLocalPointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
@@ -26897,6 +26901,36 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const ptr = this.printNode(value, 0).trim();
         const iden = this.getIden(identation);
         return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
+    // `this.options[k] = this.safeString (..)` (Safe String/Integer/Number/Bool, typed pointer returns): the accessor is
+    // bound once in the `if` header and the field stores *p or an untyped nil, what DerefScalar(p) stores
+    goPlainFieldScalarAccessorStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        if ((containerNode?.kind !== SyntaxKind.PropertyAccessExpression) || (value?.kind !== SyntaxKind.CallExpression)
+            || !this.goIsPlainValuedMapField(containerNode) || !this.goIsStringKeyExpression(keyNode)
+            || !GO_SCALAR_ACCESSOR_STORE_CALLEES.includes(this.goAstCalleeName(value) ?? '')
+            || !this.goScalarAccessorIsBaseMethod(value)) {
+            return undefined;
+        }
+        const call = this.printNode(value, 0).trim();
+        let ptr = 'accessed';
+        while ((call + containerStr + keyStr).includes(ptr)) {
+            ptr += 'Value';
+        }
+        const iden = this.getIden(identation);
+        return `if ${ptr} := ${call}; ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
+    // the call resolves to the base declaration (base/Exchange.ts or the functions/type.ts it binds; a venue override may return another Go type)
+    goScalarAccessorIsBaseMethod(call): boolean {
+        let fileName: any;
+        try {
+            fileName = this.checkerOrUndefined()?.getResolvedSignature(call)?.declaration?.resolve?.()?.getSourceFile?.()?.fileName;
+        } catch (e) {
+            return false;
+        }
+        return (typeof fileName === 'string') && (/(^|[\\/])base[\\/](Exchange|functions[\\/]type)\.ts$/).test(fileName);
     }
 
     goIsBaseMapReaderCall(call): boolean {
