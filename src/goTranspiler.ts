@@ -42255,7 +42255,7 @@ function goAwaitedRowListLocalUncached(goTranspiler: GoTranspiler, declaration):
             return false;
         }
         const parent: any = n.parent;
-        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) || goRowListPassThroughUse(goTranspiler, n)) {
             return false;
         }
         if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
@@ -42278,6 +42278,62 @@ function goAwaitedRowListLocalUncached(goTranspiler: GoTranspiler, declaration):
         return true; // a nil test, an argument, a return or a store would observe the typed nil
     });
     return !unsafe && (awaited > 0) && (measured > 0);
+}
+// a row-list local also passes through `x = this.M (x, ..)` (M a sync method of the same class declared
+// `(Dict[], ..): Dict[]` that only measures and element-reads that parameter), `x = this.arrayConcat (x, y)`
+// and `x = this.arraySlice (x, ..)` (both return a slice on every path), and `x = l` for a `Dict[]` local seeded `[]`.
+function goRowListPassThroughUse(goTranspiler: GoTranspiler, n): boolean {
+    let call: any = n.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments[0] !== n)) {
+        call = undefined;
+    }
+    const assign: any = call?.parent ?? n.parent;
+    if ((assign?.kind !== SyntaxKind.BinaryExpression) || (assign.operatorToken?.kind !== SyntaxKind.EqualsToken)
+        || (assign.parent?.kind !== SyntaxKind.ExpressionStatement) || (assign.left?.kind !== SyntaxKind.Identifier) || (assign.left.text !== n.text)) {
+        return false;
+    }
+    if (call === undefined) {
+        return (assign.left === n) && goRowListPassThroughValue(goTranspiler, assign.right, n.text);
+    }
+    return (assign.right === call) && goRowListPassThroughValue(goTranspiler, call, n.text);
+}
+function goRowListPassThroughValue(goTranspiler: GoTranspiler, value, name: string): boolean {
+    if (value?.kind === SyntaxKind.Identifier) {
+        const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve();
+        const init: any = goTranspiler.goUnwrapParenthesizedNode(decl?.initializer);
+        return (decl?.kind === SyntaxKind.VariableDeclaration) && (String(decl.type?.getText() ?? '') === 'Dict[]')
+            && (init?.kind === SyntaxKind.ArrayLiteralExpression) && (init.elements.length === 0) && (goTranspiler.goEnclosingFunction(decl) === goTranspiler.goEnclosingFunction(value));
+    }
+    const callee: any = (value?.kind === SyntaxKind.CallExpression) ? value.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (value.arguments[0]?.kind !== SyntaxKind.Identifier) || (value.arguments[0].text !== name)
+        || value.arguments.slice(1).some((a: any) => (a.kind === SyntaxKind.Identifier) && (a.text === name))) {
+        return false;
+    }
+    const method = String(callee.name?.text ?? '');
+    if ((method === 'arrayConcat') || (method === 'arraySlice')) {
+        return true;
+    }
+    const cls: any = goTranspiler.goEnclosingClass(goTranspiler.goEnclosingFunction(value));
+    const decls: any[] = (cls?.members ?? []).filter((m: any) => (m.kind === SyntaxKind.MethodDeclaration) && (m.name?.text === method));
+    const decl: any = decls[0];
+    const param: any = decl?.parameters?.[0];
+    const isAsync = (decl?.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword);
+    if ((decls.length !== 1) || (decl.body === undefined) || isAsync || (String(decl.type?.getText() ?? '') !== 'Dict[]')
+        || (String(param?.type?.getText() ?? '') !== 'Dict[]') || (param.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const pname = param.name.text;
+    return !goTranspiler.hasNodeWhere(decl.body, (u: any) => {
+        if ((u.kind !== SyntaxKind.Identifier) || (u.text !== pname)) {
+            return false;
+        }
+        const p: any = u.parent;
+        if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === u) && (p.name?.text === 'length')) {
+            return false;
+        }
+        return !((p?.kind === SyntaxKind.ElementAccessExpression) && (p.expression === u) && !goTranspiler.isGoElementAccessAssignmentTarget(p));
+    });
 }
 
 // `this.market (l[k])` / `this.getUrlByMarketType (l[k], ..)` over a declared `string[]` list l: both take the symbol as
