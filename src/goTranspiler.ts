@@ -20258,6 +20258,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || ((right.kind === SyntaxKind.Identifier) && (right.text === 'undefined'))) {
             return 'direct'; // `= nil` is the absent value a nil map/slice holds
         }
+        if (this.goH26g56StringListLiteralWrite(right, goType)) {
+            return 'direct';
+        }
         const printed = this.printNode(right, 0);
         if (printed.startsWith('<-this.callInternal(')) {
             return undefined;
@@ -46991,3 +46994,25 @@ GoTranspiler.prototype.h26g55IsGuardedSlice = function (node) {
     return (receiver?.kind === SyntaxKind.Identifier) && (goType !== undefined) && (this.h26g55GuardedSlice(node, receiver.text, goType) !== undefined);
 };
 // ===== h26-G55 (end) =====
+
+// ===== h26-G56 =====
+export interface GoTranspiler {
+    goH26g56StringListLiteralWrite(right, goType: string): boolean;
+}
+// `xs = []` / `xs = ['a', s]` into a `[]string` local: the literal opens as `[]string{…}` when every element is a Go string
+GoTranspiler.prototype.goH26g56StringListLiteralWrite = function (right, goType: string): boolean {
+    return (goType === GO_STRING_LIST_LOCAL_TYPE) && (right?.kind === SyntaxKind.ArrayLiteralExpression)
+        && this.goStringListLiteralIsProven(right);
+};
+// the accepted literal write prints as the `[]string{…}` the local is declared with
+const printArrayLiteralExpressionH26g56 = GoTranspiler.prototype.printArrayLiteralExpression;
+GoTranspiler.prototype.printArrayLiteralExpression = function (node, identation = 0) {
+    const store: any = node?.parent;
+    if ((store?.kind === SyntaxKind.BinaryExpression) && (store.right === node) && (store.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (store.left?.kind === SyntaxKind.Identifier) && this.goH26g56StringListLiteralWrite(node, GO_STRING_LIST_LOCAL_TYPE)
+        && (this.goDeclaredTypeOfIdentifier(store.left) === GO_STRING_LIST_LOCAL_TYPE)) {
+        this.goSliceLiteralTypes.set(node, GO_STRING_LIST_LOCAL_TYPE);
+    }
+    return printArrayLiteralExpressionH26g56.call(this, node, identation);
+};
+// ===== h26-G56 (end) =====
