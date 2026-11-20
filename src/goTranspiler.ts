@@ -4290,7 +4290,7 @@ const CCXT_GO_NIL_JOIN_READ_RULE = {
         [ts.SyntaxKind.BinaryExpression]: goReadIsNilTestOrStored,
         [ts.SyntaxKind.PrefixUnaryExpression]: goReadIsNot,
         [ts.SyntaxKind.IfStatement]: goReadIsTest,
-        [ts.SyntaxKind.ConditionalExpression]: goReadIsTest,
+        [ts.SyntaxKind.ConditionalExpression]: (parent, child, goTranspiler) => goReadIsTest (parent, child) || ccxtGoNilJoinNilMapTernaryArm (goTranspiler, parent, child),
         [ts.SyntaxKind.ElementAccessExpression]: ccxtGoNilJoinMemberRead,
         [ts.SyntaxKind.PropertyAccessExpression]: ccxtGoNilJoinMemberRead,
         [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
@@ -4321,6 +4321,24 @@ function ccxtGoNilJoinCopyType (goTranspiler, declaration) {
         cache.set (declaration, ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, true));
     }
     return cache.get (declaration);
+}
+
+// an arm of `const h: NullableDict = c ? x : undefined` that goTernaryJoinNilMapParts types: h holds x or nil,
+// and h's own reads (nil tests, sign()'s returned headers) answer a typed nil map as the box
+function ccxtGoNilJoinNilMapTernaryArm (goTranspiler, parent, child) {
+    const owner = parent.parent;
+    const other = (parent.whenTrue === child) ? parent.whenFalse : ((parent.whenFalse === child) ? parent.whenTrue : undefined);
+    if ((owner?.kind !== ts.SyntaxKind.VariableDeclaration) || (owner.initializer !== parent) || (owner.name?.kind !== ts.SyntaxKind.Identifier)
+        || (other === undefined) || !isNilLiteralExpression (goTranspiler.goUnwrapParenthesizedNode (other))) {
+        return false;
+    }
+    return goTranspiler.goTernaryJoinNilMapParts (owner, GO_SAFE_DICT_LOCAL_TYPE) !== undefined;
+}
+
+// a nil-seeded local the container join types as a map is a map arm of that same ternary
+function ccxtGoNilJoinTernaryArmType (goTranspiler, node) {
+    const arm = goTranspiler.goUnwrapParenthesizedNode (node);
+    return ((arm?.kind === ts.SyntaxKind.Identifier) && (ccxtGoNilJoinDeclarationType (goTranspiler, arm) === GO_SAFE_DICT_LOCAL_TYPE)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
 }
 
 // `const c = x` whose every use stores c into an object literal slot: the slot holds the same typed value
@@ -33536,6 +33554,7 @@ export interface GoTranspiler {
     goTernaryJoinDeclaration(statement, declaration, identation: number): string | undefined;
     goTernaryJoinNilMapParts(declaration, other: string): { goType: string, derefTrue: boolean, derefFalse: boolean } | undefined;
     goTernaryJoinNilMapReadOk(n): boolean;
+    goTernaryJoinNilMapInferred(declaration): boolean;
 }
 
 // the declaration a ternary initializer belongs to, or undefined when the ternary sits anywhere else
@@ -33707,8 +33726,8 @@ GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
 // any other read or write keeps the box
 GoTranspiler.prototype.goTernaryJoinNilMapParts = function (declaration, other: string) {
     const declared = declaration?.type;
-    if ((other !== GO_SAFE_DICT_LOCAL_TYPE) || (declared?.kind !== SyntaxKind.TypeReference)
-        || (declared.typeName?.kind !== SyntaxKind.Identifier) || ([ 'NullableDict', 'Dict' ].indexOf(declared.typeName.text) < 0)) {
+    if ((other !== GO_SAFE_DICT_LOCAL_TYPE) || (((declared?.kind !== SyntaxKind.TypeReference)
+        || (declared.typeName?.kind !== SyntaxKind.Identifier) || ([ 'NullableDict', 'Dict' ].indexOf(declared.typeName.text) < 0)) && !this.goTernaryJoinNilMapInferred(declaration))) {
         return undefined;
     }
     const scope = this.goEnclosingFunction(declaration);
@@ -33718,6 +33737,12 @@ GoTranspiler.prototype.goTernaryJoinNilMapParts = function (declaration, other: 
         return undefined;
     }
     return { goType: GO_SAFE_DICT_LOCAL_TYPE, derefTrue: false, derefFalse: false };
+};
+
+// an unannotated `const` whose map arm is a Dict-declared local: TS infers `Dict | undefined`, the NullableDict case
+GoTranspiler.prototype.goTernaryJoinNilMapInferred = function (declaration): boolean {
+    const list: any = declaration?.parent;
+    return (declaration?.type === undefined) && (list?.kind === SyntaxKind.VariableDeclarationList) && ((list.flags & ts.NodeFlags.Const) !== 0);
 };
 
 GoTranspiler.prototype.goTernaryJoinNilMapReadOk = function (n): boolean {
@@ -33794,7 +33819,7 @@ GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
     }
     const arm: any = this.goUnwrapParenthesizedNode(node);
     const omitPeer = (arm?.kind === SyntaxKind.Identifier) && [ arm.parent?.whenTrue, arm.parent?.whenFalse ].some((n) => goTernaryJoinIsOmitOfMap(this, n));
-    return (goTernaryJoinIsOmitOfMap(this, node) || (omitPeer && ral84g6OmitArgIsMap(this, arm))) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
+    return (goTernaryJoinIsOmitOfMap(this, node) || (omitPeer && ral84g6OmitArgIsMap(this, arm))) ? GO_SAFE_DICT_LOCAL_TYPE : ccxtGoNilJoinTernaryArmType(this, node);
 };
 // such a joined map local may be rebound only by `x = this.omit (x, ..)` of itself (a fresh map again)
 const goTernaryJoinOmitUpstreamSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
@@ -35608,6 +35633,8 @@ interface GoTernaryJoinR87Parts { goType: string, derefTrue: boolean, derefFalse
 
 export interface GoTranspiler {
     goTernaryJoinR87HasNativeRead(declaration, kind: string): boolean;
+    goTernaryJoinStrPtrArgReads(declaration): boolean;
+    goTernaryJoinStrPtrArgSlot(call, index: number): boolean;
 }
 
 GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, kind: string): boolean {
@@ -37481,6 +37508,64 @@ GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, ki
     return !foreign && (nativeTests > 0) && (readerArgs > 0);
 };
 // ===== ral-90g7 (end) =====
+
+// a `*string` symbol join may also reach a callee that reads its slot nil-safely: `<cache>.getLimit (s, ..)`
+// (derefScalar / ignored), `this.filterBySymbolSinceLimit (xs, s, ..)` and an optional `Str` first parameter
+// of a transpiled venue method (both GetArgStringPtr), so a nil pointer reads like the nil box there
+const goTernaryJoinPtrArgNativeRead = GoTranspiler.prototype.goTernaryJoinR87HasNativeRead;
+GoTranspiler.prototype.goTernaryJoinR87HasNativeRead = function (declaration, kind: string): boolean {
+    return goTernaryJoinPtrArgNativeRead.call(this, declaration, kind) || ((kind === 'string') && this.goTernaryJoinStrPtrArgReads(declaration));
+};
+
+GoTranspiler.prototype.goTernaryJoinStrPtrArgReads = function (declaration): boolean {
+    const scope = this.goEnclosingFunction(declaration);
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    if ((scope === undefined) || (checker === undefined) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const isNil = (e) => (e?.kind === SyntaxKind.NullKeyword) || ((e?.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
+    let args = 0;
+    const foreign = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && this.goTernaryJoinStrPtrArgSlot(parent, parent.arguments.indexOf(n))) {
+            args += 1;
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) >= 0)) {
+            return !isNil(this.goUnwrapParenthesizedNode((parent.left === n) ? parent.right : parent.left));
+        }
+        return (parent?.kind !== SyntaxKind.BinaryExpression) || (parent.operatorToken.kind !== SyntaxKind.PlusToken);
+    });
+    return !foreign && (args > 0);
+};
+
+GoTranspiler.prototype.goTernaryJoinStrPtrArgSlot = function (call, index: number): boolean {
+    const callee = call.expression;
+    const method = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
+    if ((method === 'getLimit') && (index === 0) && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return true;
+    }
+    if (callee?.expression?.kind !== SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    if ((method === 'filterBySymbolSinceLimit') && (index === 1)) {
+        return true;
+    }
+    let target;
+    try {
+        target = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+        return false;
+    }
+    const param = target?.parameters?.[index];
+    const fileName = target?.getSourceFile?.()?.fileName ?? '/base/';
+    return (method === 'getUrlByMarketType') && (index === 0) && !/[\\/]base[\\/]/.test(fileName) && (param?.initializer !== undefined)
+        && isNilLiteralExpression(param.initializer) && (param.type?.getText?.() === 'Str');
+};
 
 // ===== ral-90g8 R1 (begin): `(x as Dict)[k]` reads of a map-producer local =====
 // A parseMarket-style local whose callee already prints `map[string]any` (keepsMap) was refused at

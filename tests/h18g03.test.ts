@@ -60,6 +60,6 @@ describe ('go ternary declaration with a nil arm beside a map arm', () => {
     });
     test ('an undeclared local keeps the box', () => {
         const out = print (variant ('const requestHeaders: NullableDict =', 'const requestHeaders ='));
-        expect (out).toContain ('var requestHeaders any = func() any {');
+        expect (out).toContain ('var requestHeaders map[string]any\n');
     });
 });
