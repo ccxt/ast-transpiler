@@ -13786,6 +13786,7 @@ function blockPlan (go: any, block: any) {
 
 export function installFmGo5OG02 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goOwnedGetsInstalled')) { return; }
+    installGoGuardedWrappedRead (goTranspiler); // the build installs this group last
 
     const printBlock = goTranspiler.printBlock;
     goTranspiler.printBlock = function (this: any, node: any, identation: number, chainBlock = false) {
@@ -40454,3 +40455,35 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | un
     }
 };
 // ===== h17-g08 (end) =====
+
+// `var x *string = SafeStringPtr(<guarded read>)` and its MapTyped twin: both wraps answer nil for nil and deref a
+// scalar box, so the guard prints as statements with the wrap on the read
+// (`var x T = nil` then `if k >= 0 && k < len(l) { x = W(l[k]) }`): same nil answer, no closure, no `any` local.
+const GO_GUARDED_WRAPPED_HEAD = /^[ \t]*var (\w+) (\*string|map\[string\]any) = ((?:ccxt\.)?(?:SafeStringPtr|MapTyped))\(/;
+function installGoGuardedWrappedRead (goTranspiler) {
+    if (!goInstallOnce(goTranspiler, '__goGuardedWrappedReadInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const declarationList = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const printed = declarationList.call(this, node, identation);
+        const declaration = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        let read: any = declaration?.initializer;
+        while (read?.kind === SyntaxKind.ParenthesizedExpression) {
+            read = read.expression;
+        }
+        const head = (typeof printed === 'string') ? GO_GUARDED_WRAPPED_HEAD.exec(printed) : null;
+        if ((head === null) || (node.parent?.kind !== SyntaxKind.VariableStatement) || !printed.endsWith(')') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (head[1] !== declaration.name.text)
+            || ((head[2] === '*string') !== head[3].endsWith('SafeStringPtr'))
+            || (read?.kind !== SyntaxKind.ElementAccessExpression) || (read.expression?.kind !== SyntaxKind.Identifier)
+            || !this.goDeclaredListIdentifier(read.expression)) {
+            return printed;
+        }
+        const m = GO_GUARDED_LIST_READ.exec(printed.substring(head[0].length, printed.length - 1).trim());
+        if ((m === null) || (m[2] !== read.expression.text) || (m[1] === head[1]) || (m[2] === head[1]) || goGuardedListReadMayBeProven(this, read)) {
+            return printed;
+        }
+        const iden = this.getIden(identation);
+        return `${iden}var ${head[1]} ${head[2]} = nil\n${goGuardedListReadIf(this, `${head[1]} = ${head[3]}(${m[2]}[${m[1]}])`, m.slice(1), identation)}`;
+    };
+}
