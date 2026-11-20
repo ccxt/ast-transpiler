@@ -29,12 +29,14 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.Currency': string;
     'this.SafeCurrency': string;
     'this.SafeMarket': string;
+    'this.Symbol': string;
     'this.Outcome': string;
     'this.SafeOutcome': string;
     'this.ParseSearchQueries': string;
     'this.StringToCharsArray': string;
     'this.EthEncodeStructuredData': string;
     'this.MarketSymbols': string;
+    'this.FindMessageHashes': string;
     'this.MarketCodes': string;
     'this.ShortenSlug': string;
     'this.Capitalize': string;
@@ -799,6 +801,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
+    goConstDefaultedSafeIntegerLocal(ident: any): boolean;
     goCheckerTypeIsNumberUnion(node: any): boolean;
     goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
@@ -882,6 +885,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictMapLocal(declaration: any): string | undefined;
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
+    goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
+    goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
     goMapLocalKeyIsString(key: any, printed: string): boolean;
@@ -960,10 +965,14 @@ export declare class GoTranspiler extends BaseTranspiler {
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
+    goOptionStringSlotLocalOf(declaration: any): boolean;
+    goOptionStringSlotLocalCache: WeakMap<object, boolean>;
+    goOptionStringSlotLocal(declaration: any, scope: any, name: string): boolean;
     goLiteralDefaultStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
     goLiteralDefaultStringLocalCache: WeakMap<object, boolean>;
     goLiteralDefaultStringCall(node: any, name: string | undefined): boolean;
     goLiteralDefaultStringLocalUsesAreSafe(scope: any, declaration: any, name: string): boolean;
+    goLiteralDefaultStringConcatWrite(right: any, name: string): boolean;
     goLiteralDefaultStringLocalReadIsSafe(node: any): boolean;
     goLiteralDefaultStringCallArgument(call: any, argument: any): boolean;
     goLiteralDefaultStringWrite(left: any, right: any): boolean;
@@ -1171,6 +1180,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSliceTableDeclarationsMatch(fn: any, annotation: string): boolean;
     goSliceTableCallSitesPass(fn: any, methodName: string, index: number, goType: string): boolean;
     goTextSliceArgumentMatches(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
+    goTextTableSliceParameterMatches(text: string, file: string, tree: any, at?: number): boolean;
     goTextStringElementMatches(element: string, file: string, tree: any, at?: number): boolean;
     goTextEnclosingMethod(text: string, at?: number): {
         name: string;
@@ -1727,6 +1737,9 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goConcatDerefableStringOperand(node: any): boolean;
+}
+export interface GoTranspiler {
+    goGuardedStringTupleSlot(node: any): boolean;
 }
 export interface GoTranspiler {
     goCurrencyRowLocal(node: any): boolean;
