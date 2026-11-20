@@ -4731,7 +4731,7 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
     if ((goType === undefined) || ral90g5OwnsWrite (node)) {
         return undefined;
     }
-    if ((goType === '*string') && (strPtrFamilyLiteralTemp (goTranspiler, node) !== undefined)) {
+    if ((goType === '*string') && ((strPtrFamilyLiteralTemp (goTranspiler, node) !== undefined) || (h18g12SplitHeadList (goTranspiler, node.right) !== undefined))) {
         return goTranspiler.goPointerWriteText (node, identation); // a fresh-local address, no box
     }
     const nilJoin = ccxtGoNilJoinDeclarationType (goTranspiler, node.left) === goType;
@@ -36899,6 +36899,63 @@ GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
     return `${temp} := ${stored}\n${this.getIden(identation)}${name} = &${temp}`;
 };
 // ===== ral-90g5 R1 (end) =====
+// ===== h18-g12: `x = parts[0]` into a *string reader local, `parts` a const split of a narrowed string on a
+// non-empty literal: strings.Split then has at least one element, so index 0 is a non-nil Go string, kept in
+// a fresh local whose address the write stores (the box held that same string).
+function h18g12SplitHeadList (goTranspiler, right): string | undefined {
+    const read = ral90g5UnwrapNode(right);
+    if ((read?.kind !== SyntaxKind.ElementAccessExpression) || (read.expression?.kind !== SyntaxKind.Identifier)
+        || (read.argumentExpression?.kind !== SyntaxKind.NumericLiteral) || (read.argumentExpression.text !== '0')) {
+        return undefined;
+    }
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(read.expression)?.valueDeclaration?.resolve?.();
+    const init: any = ral90g5UnwrapNode(declaration?.initializer);
+    const sep = init?.arguments?.[0];
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0) || (init?.kind !== SyntaxKind.CallExpression)
+        || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression.name?.text !== 'split') || (init.arguments.length !== 1)
+        || ((sep?.kind !== SyntaxKind.StringLiteral) && (sep?.kind !== SyntaxKind.NoSubstitutionTemplateLiteral)) || (sep.text.length === 0)
+        || (goTranspiler.goDeclaredTypeOfIdentifier(read.expression) !== GO_STRING_LIST_LOCAL_TYPE)) {
+        return undefined;
+    }
+    // the receiver is narrowed to a non-nil string at the split (a nil receiver would give an empty slice) and
+    // is not the written local itself (its own type would be in question)
+    const receiver = ral90g5UnwrapNode(init.expression.expression);
+    const target = right.parent?.left;
+    if ((receiver?.kind === SyntaxKind.Identifier) && (target?.kind === SyntaxKind.Identifier) && (receiver.text === target.text)) {
+        return undefined;
+    }
+    const receiverType: any = goTranspiler.checkerOrUndefined()?.getTypeAtLocation(init.expression.expression);
+    if ((receiverType === undefined) || ((receiverType.flags & TypeFlags.String) === 0)) {
+        return undefined;
+    }
+    return goTranspiler.printNode(read.expression, 0);
+}
+const goPointerWriteConversionBaseH18g12 = GoTranspiler.prototype.goPointerWriteConversion;
+GoTranspiler.prototype.goPointerWriteConversion = function (right, goType: string) {
+    const shipped = goPointerWriteConversionBaseH18g12.call(this, right, goType);
+    const write = right?.parent;
+    if ((shipped !== undefined) || (goType !== '*string') || (write?.kind !== SyntaxKind.BinaryExpression) || (write.right !== right)
+        || (write.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return shipped;
+    }
+    // admitted only when the write can name its temp (the emission below needs it)
+    if ((write.left?.kind !== SyntaxKind.Identifier) || (h18g12SplitHeadList(this, right) === undefined)) {
+        return undefined;
+    }
+    return (this.goNumberedLocalName(right, this.printNode(write.left, 0) + 'Str') !== undefined) ? 'wrap' : undefined;
+};
+const goPointerWriteTextBaseH18g12 = GoTranspiler.prototype.goPointerWriteText;
+GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
+    const left = node?.left;
+    const list = ((left?.kind === SyntaxKind.Identifier) && (node.parent?.kind === SyntaxKind.ExpressionStatement)) ? h18g12SplitHeadList(this, node.right) : undefined;
+    if ((list === undefined) || (this.goDeclaredTypeOfIdentifier(left) !== '*string')) {
+        return goPointerWriteTextBaseH18g12.call(this, node, identation);
+    }
+    const name = this.printNode(left, 0);
+    const temp = this.goNumberedLocalName(node.right, name + 'Str');
+    return (temp === undefined) ? undefined : `${temp} := ${list}[0]\n${this.getIden(identation)}${name} = &${temp}`;
+};
+// ===== h18-g12 (end) =====
 
 // ===== ral-90g7 (begin): closure initialisers from ternaries, round 90 =====
 // R1: an absent arm next to a two-argument `this.safeDict (container, key)` arm
