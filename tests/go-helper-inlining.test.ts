@@ -357,7 +357,7 @@ describe('go `key in obj` -> map membership', () => {
         "        const has = !(k in m)\n" +
         "        return has\n");
         const output = transpile(ts);
-        expect(output).toContain('var has bool = !(func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}())');
+        expect(output).toContain('\tvar has1 bool\n\tif k != nil {\n\t\t_, has1 = m[*k]\n\t}\n\tvar has bool = !has1\n');
         expect(output).not.toContain('InOp(');
     });
     test('a *string key operand of || keeps its parentheses', () => {
@@ -369,7 +369,7 @@ describe('go `key in obj` -> map membership', () => {
         "            return 1\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('if (func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}()) || (func() bool {\n\t\tif other == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*other]\n\t\treturn ok\n\t}()) {');
+        expect(output).toContain('\tvar has1 bool\n\tif k != nil {\n\t\t_, has1 = m[*k]\n\t}\n\tvar has2 bool\n\tif other != nil {\n\t\t_, has2 = m[*other]\n\t}\n\tif has1 || has2 {\n');
         expect(output).not.toContain('InOp(');
     });
     test('a *int64 key keeps InOp', () => {

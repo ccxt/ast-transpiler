@@ -34767,7 +34767,7 @@ GoTranspiler.prototype.goInHoistPrint = function (node, identation, hoisted: any
         }
     }
     const iden = this.getIden (identation);
-    const lines = hoisted.map ((h) => `${iden}_, ${h.name} := ${h.dictText}[${h.keyText}]\n`).join ('');
+    const lines = hoisted.map ((h) => this.goInHoistBindLines (h, iden)).join ('');
     const lead = this.printLeadingComments (node, identation);
     return printed.startsWith (lead) ? lead + lines + printed.substring (lead.length) : undefined;
 };
@@ -34859,6 +34859,51 @@ GoTranspiler.prototype.goWsFrameInOpHasInitClause = function (inNode, param) {
     const reads: any[] = [];
     return this.goInHoistTerms (child, reads) && (this.goInHoistName (inNode) !== undefined)
         && ((head.kind !== SyntaxKind.IfStatement) || (reads.length >= 2));
+};
+
+// ---- `k in m` with a `*string` key on a declared map[string]any ---------------------------
+// InOp answers false for a nil key; the hoisted read keeps that: `var hasN bool` stays false
+// unless the key is non-nil, then it is the comma-ok read of `*k`. Keys with a nil test in the
+// statement keep the guarded-nested rules; boxed receivers or keys keep the helper.
+export interface GoTranspiler {
+    goInHoistPointerKeyRead(inNode, statement): any;
+    goInHoistBindLines(h, iden: string): string;
+}
+
+GoTranspiler.prototype.goInHoistPointerKeyRead = function (inNode, statement): any {
+    const key: any = this.goUnwrapParenthesizedNode (inNode?.left);
+    const dict: any = this.goUnwrapParenthesizedNode (inNode?.right);
+    if ((key?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier (key) !== '*string')
+        || this.goLocalIsRebound (this.goEnclosingFunction (key), key) || (statement === undefined)) {
+        return undefined;
+    }
+    // an `if` that tests the key itself is left to the guarded-nested rules
+    const nilTested = (statement.kind === SyntaxKind.IfStatement) && this.hasNodeWhere (statement, (n: any) => this.goNilComparisonOf (n, key, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken)
+        || this.goNilComparisonOf (n, key, SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken));
+    const plain = (dict?.kind === SyntaxKind.Identifier) || ((dict?.kind === SyntaxKind.PropertyAccessExpression) && (dict.expression?.kind === SyntaxKind.ThisKeyword));
+    const ownInit = (statement.kind === SyntaxKind.VariableStatement) && (this.goUnwrapParenthesizedNode (statement.declarationList?.declarations?.[0]?.initializer) === inNode);
+    if (nilTested || ownInit || !plain || (this.goWsCacheHasText (dict, key) !== undefined)) {
+        return undefined; // a ws cache prints its own non-nil entry test
+    }
+    const dictText = this.printNode (dict, 0);
+    const keyText = this.printNode (key, 0);
+    const mapType = ((dict.kind === SyntaxKind.Identifier) ? this.goPrintedTypeOfExpression (dict, dictText) : undefined) ?? this.goInOpDictMapType (dict, dictText);
+    if ((mapType !== 'map[string]any') || !/^[A-Za-z_][\w.]*$/.test (dictText) || !/^[A-Za-z_]\w*$/.test (keyText)) {
+        return undefined;
+    }
+    return { inNode, dictText, 'keyText': '*' + keyText, 'nilGuard': keyText };
+};
+
+GoTranspiler.prototype.goInHoistBindLines = function (h, iden: string): string {
+    if (h.nilGuard === undefined) {
+        return `${iden}_, ${h.name} := ${h.dictText}[${h.keyText}]\n`;
+    }
+    return `${iden}var ${h.name} bool\n${iden}if ${h.nilGuard} != nil {\n${iden}\t_, ${h.name} = ${h.dictText}[${h.keyText}]\n${iden}}\n`;
+};
+
+const goInHoistReadBeforePointerKey = GoTranspiler.prototype.goInHoistRead;
+GoTranspiler.prototype.goInHoistRead = function (inNode, statement): any {
+    return goInHoistReadBeforePointerKey.call (this, inNode, statement) ?? this.goInHoistPointerKeyRead (inNode, statement);
 };
 
 // ===== ral-77g2: reader-result locals =====
