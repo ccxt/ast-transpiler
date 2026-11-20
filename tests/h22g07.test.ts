@@ -41,8 +41,13 @@ describe('go map read with a guard-proven *string key', () => {
         const out = print ("const balance = this.safeDict (this.balance, accountType, {});\nlet code = this.safeCurrencyCode (this.safeString (message, 'a'));\nif (code !== undefined) {\n    code = this.safeString (message, 'b');\n    const previousValue = this.safeValue (balance[code], 'free');\n    message['x'] = previousValue;\n}");
         expect (out).not.toContain ('balance[*code], "free")');
     });
-    test('a method receiver (`m[k].push`) keeps the guarded read', () => {
+    test('a push receiver (`m[k].push`) on a proven key reads natively', () => {
         const out = print ("const groups: Dict = {};\nconst rows = this.safeValue (message, 'r');\nfor (let i = 0; i < rows.length; i++) {\nconst code = this.safeString (rows[i], 'a');\nif (code !== undefined) {\n    if (!(code in groups)) { groups[code] = []; }\n    groups[code].push (message);\n}\n}");
+        expect (out).toMatch (/:= groups\[\*code\]\n/);
+        expect (out).not.toContain ('if code == nil');
+    });
+    test('a push receiver on an unproven key keeps the guarded read', () => {
+        const out = print ("const groups: Dict = {};\nconst code = this.safeString (message, 'a');\ngroups[code].push (message);");
         expect (out).not.toMatch (/:= groups\[\*code\]\n/);
     });
     test('a guard in an `||` does not prove the key', () => {

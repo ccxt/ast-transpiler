@@ -31905,7 +31905,7 @@ ${tryBodyBlock}
 
     // a `*string` key an enclosing guard proves non-nil (never rebound): GetValue's nil-key branch
     // is dead, so the plain index of `*k` gives the same answer (missing key reads the `any` nil).
-    // A method receiver (`m[k].push (x)`) or a synthetic node keeps the guarded form the write-back pass expects.
+    // Another method receiver or a synthetic node keeps the guarded form.
     goProvenPointerKeyMapIndex(keyNode, containerStr: string, keyStr: string): string | undefined {
         if (!/^[A-Za-z_]\w*$/.test(keyStr.trim())) {
             return undefined;
@@ -31918,6 +31918,12 @@ ${tryBodyBlock}
             return undefined;
         }
         return `${containerStr}[*${keyStr.trim()}]`;
+    }
+
+    // `m[k].push (v)`: the ccxt write-back pass stores the appended copy back into `m[*k]`
+    goIsPushReceiver(node): boolean {
+        const access = node.parent;
+        return (access?.name?.text === 'push') && (access.parent?.kind === SyntaxKind.CallExpression) && (access.parent.expression === access);
     }
 
     // true for `this.<field>` — the one property-access shape whose Go type the
@@ -33203,7 +33209,7 @@ ${tryBodyBlock}
             // receiver cannot carry the guard's own indentation, so it keeps the helper.
             if ((keys[0]?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(keys[0]) === '*string') && !containerStr.includes('\n')
                 && !this.isGoElementAccessAssignmentTarget(node)) {
-                const provenKey = ((node.parent === undefined) || (node.parent.kind === SyntaxKind.PropertyAccessExpression)) ? undefined
+                const provenKey = ((node.parent === undefined) || ((node.parent.kind === SyntaxKind.PropertyAccessExpression) && !this.goIsPushReceiver(node))) ? undefined
                     : this.goProvenPointerKeyMapIndex(keys[0], containerStr, keyStrs[0]);
                 if (provenKey !== undefined) {
                     return this.goElementAccessChain(provenKey, keyStrs);
