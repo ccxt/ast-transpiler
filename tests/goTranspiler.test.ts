@@ -3902,9 +3902,9 @@ describe('go native element assignment', () => {
         expect(output).toContain("var limit *int64 = GetArgInt64Ptr(optionalArgs, 1, nil)");
         expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 2, nil)");
         expect(output).toContain("var symbol *string = GetArgStringPtr(optionalArgs, 0, nil)");
-        // the copy boxes the pointer: its nil test must go through the deref-aware helper
-        expect(output).not.toContain("limitCopy != nil");
-        expect(output).toContain("IsEqual(limitCopy, nil)");
+        // the copy joins the pointer as *int64: its nil test is the native pointer test
+        expect(output).toContain("var limitCopy *int64 = since");
+        expect(output).toContain("if limitCopy != nil {");
     });
     test('an Int parameter read by toString binds its pointer twin and compares natively', () => {
         const input =

@@ -28069,6 +28069,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 use = use.parent;
             }
             const target = (pointer || nilable) ? this.goGetArgCopyTarget(use, body) : undefined;
+            if ((target === undefined) && (goType === '*int64') && h18g01CopyJoinsAsInt64Ptr(this, use, param)) {
+                return true;
+            }
             if (target !== undefined) {
                 if ((!pointer && guarded) || seen.has(target)) {
                     return true;
@@ -41491,3 +41494,167 @@ function installGoGuardedTypedArgHoist (goTranspiler) {
         return goGuardedTypedArgHoist(this, node, expressionStatement.call(this, node, identation), identation);
     };
 }
+
+// ===== h18-g01 (begin): nil-seeded Int locals joined as *int64 =====
+// `let x: Int = undefined` whose every write is nil, a Go *int64 (a no-default safeInteger reader, a *int64-bound
+// parameter) or an int64 value (stored through `xValue := v; x = &xValue`, so never nil) prints `var x *int64 = nil`.
+// Reads keep the box's answers: nil tests, comparisons and +/- (the helpers deref), deref-aware accessor
+// arguments, element stores, and by-name dispatch arguments (`this[m] (..)`: GetArg / GetArgInt64Ptr fold a nil pointer).
+const h18g01Verdicts = new WeakMap<object, boolean>();
+const h18g01Visiting = new Set<object>();
+function h18g01IsDynamicDispatchArgument(parent, current): boolean {
+    return (parent?.kind === SyntaxKind.CallExpression) && (parent.expression?.kind === SyntaxKind.ElementAccessExpression)
+        && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword) && parent.arguments.some((a) => a === current);
+}
+function h18g01WriteIsInt64Ptr(goTranspiler, right, assumed): boolean {
+    const value = ral90g5UnwrapNode(right);
+    if (value?.kind === SyntaxKind.Identifier) {
+        const target: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve();
+        if (target?.kind === SyntaxKind.Parameter) {
+            // a parameter whose binding is being decided answers as the candidate under test
+            return (target === assumed) || (goTranspiler.goGetArgTypeComputing?.has(target) === true) || (goTranspiler.goGetArgParameterType(target) === '*int64');
+        }
+        return false;
+    }
+    if (!ral90g5ReaderCall(value) || !['safeInteger', 'safeInteger2'].includes(value.expression.name.text)) {
+        return false;
+    }
+    return goTranspiler.goTypeOfInitializer(value, goTranspiler.printNode(value, 0)) === '*int64';
+}
+function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writesOut: any[] | undefined = undefined): boolean {
+    const declared = declaration?.type;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.text !== 'Int')
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations?.length !== 1)) {
+        return false;
+    }
+    // the seed is nil or a *int64 parameter copy (`let startTime: Int = since`)
+    if (!goTranspiler.goNilInitInitializer(declaration.initializer) && ((ral90g5UnwrapNode(declaration.initializer)?.kind !== SyntaxKind.Identifier)
+        || !h18g01WriteIsInt64Ptr(goTranspiler, declaration.initializer, assumed))) {
+        return false;
+    }
+    const key = (assumed === undefined) ? declaration : assumed;
+    if ((assumed === undefined) && h18g01Verdicts.has(declaration)) {
+        return h18g01Verdicts.get(declaration) as boolean;
+    }
+    if (h18g01Visiting.has(key)) {
+        return false;
+    }
+    const checker = goTranspiler.checkerOrUndefined();
+    const scope = goTranspiler.goOutermostFunction(declaration);
+    if ((checker === undefined) || (scope === undefined) || goTranspiler.goTypeNameIsShadowed(scope, '*int64')) {
+        return false;
+    }
+    h18g01Visiting.add(key);
+    const name = declaration.name.text;
+    const tempSpelled = new RegExp('^' + name + 'Value\\d*$');
+    const valueWrites: any[] = [];
+    let nilTests = 0;
+    let unsafe = false;
+    try {
+        goTranspiler.hasNodeWhere(scope, (n) => {
+            if (unsafe || (n.kind !== SyntaxKind.Identifier)) {
+                return false;
+            }
+            if (tempSpelled.test(n.text)) {
+                unsafe = true;
+                return false;
+            }
+            if ((n.text !== name) || (n === declaration.name)) {
+                return false;
+            }
+            const p0 = n.parent;
+            if (((p0?.kind === SyntaxKind.PropertyAccessExpression) && (p0.name === n)) || ((p0?.kind === SyntaxKind.PropertyAssignment) && (p0.name === n))) {
+                return false;
+            }
+            if (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration) {
+                unsafe = true;
+                return false;
+            }
+            const { current, parent } = goReadClimb(n);
+            const op = parent?.operatorToken?.kind;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (op === SyntaxKind.EqualsToken) && (parent.left === current)) {
+                if ((current !== n) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+                    unsafe = true;
+                } else if (!ral90g5IsNil(parent.right) && !h18g01WriteIsInt64Ptr(goTranspiler, parent.right, assumed)) {
+                    if (ral90g5WriteValueKind(goTranspiler, parent.right, 'int64') === undefined) {
+                        unsafe = true;
+                    } else {
+                        valueWrites.push(parent);
+                    }
+                }
+                return false;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (COMPARISON_TOKENS.indexOf(op) >= 0)
+                && ral90g5IsNil((parent.left === current) ? parent.right : parent.left)) {
+                nilTests++;
+                return false;
+            }
+            const arithmetic = (parent?.kind === SyntaxKind.BinaryExpression) && ((op === SyntaxKind.MinusToken) || (op === SyntaxKind.PlusToken)
+                || (op === SyntaxKind.SlashToken) || (op === SyntaxKind.AsteriskToken))
+                && [parent.left, parent.right].every((side) => (side === current) || (ral90g5UnwrapNode(side)?.kind === SyntaxKind.NumericLiteral));
+            // `this.sum (x, ..)` adds through Add, which derefs a pointer and answers nil for a nil one as for the box
+            const summed = (parent?.kind === SyntaxKind.CallExpression) && parent.arguments.some((a) => a === current)
+                && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)
+                && (parent.expression.name?.text === 'sum');
+            if (!arithmetic && !summed && !h18g01IsDynamicDispatchArgument(parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
+                unsafe = true;
+            }
+            return false;
+        });
+    } finally {
+        h18g01Visiting.delete(key);
+    }
+    const ok = !unsafe && ((nilTests > 0) || !goTranspiler.goNilInitInitializer(declaration.initializer));
+    if (ok && (writesOut !== undefined)) {
+        writesOut.push(...valueWrites);
+    }
+    return ok;
+}
+// the verdict for printing: also registers the int64 value writes with the ral-90g5 fresh-temp writer
+function h18g01NilJoinVerdict(goTranspiler, declaration): boolean {
+    if (h18g01Verdicts.has(declaration)) {
+        return h18g01Verdicts.get(declaration) as boolean;
+    }
+    const writes: any[] = [];
+    const ok = h18g01NilJoinInt64(goTranspiler, declaration, undefined, writes);
+    if ((h18g01Visiting.size === 0) && ((goTranspiler.goGetArgTypeComputing?.size ?? 0) === 0)) {
+        h18g01Verdicts.set(declaration, ok);
+        if (ok) {
+            const printedName = goTranspiler.printNode(declaration.name, 0);
+            ral90g5Verdicts.set(declaration, '*int64');
+            writes.sort((x, y) => x.pos - y.pos).forEach((w, i) => ral90g5WriteTemps.set(w, printedName + 'Value' + ((i === 0) ? '' : String(i + 1))));
+        }
+    }
+    return ok;
+}
+// `x = since` from a *int64 GetArg candidate into a local that joins as *int64 once that parameter is bound so
+function h18g01CopyJoinsAsInt64Ptr(goTranspiler, use, param): boolean {
+    const parent: any = use.parent;
+    if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === use)) {
+        return h18g01NilJoinInt64(goTranspiler, parent, param);
+    }
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.right !== use) || (parent.operatorToken?.kind !== SyntaxKind.EqualsToken)
+        || (parent.left?.kind !== SyntaxKind.Identifier) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return false;
+    }
+    const target: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(parent.left)?.valueDeclaration?.resolve();
+    return h18g01NilJoinInt64(goTranspiler, target, param);
+}
+const goNilInitLocalTypeBaseH18g01 = GoTranspiler.prototype.goNilInitLocalType;
+GoTranspiler.prototype.goNilInitLocalType = function (declaration): string | undefined {
+    const shipped = goNilInitLocalTypeBaseH18g01.call(this, declaration);
+    if (shipped !== undefined) {
+        return shipped;
+    }
+    return h18g01NilJoinVerdict(this, declaration) ? '*int64' : undefined;
+};
+// a `let x: Int = since` copy of a *int64 parameter reaches the typing through the safe-to-type check
+const goLocalIsSafeToTypeBaseH18g01 = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goLocalIsSafeToTypeBaseH18g01.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    return (goType === '*int64') && !this.goNilInitInitializer(declaration?.initializer) && h18g01NilJoinVerdict(this, declaration);
+};
+// ===== h18-g01 (end) =====
