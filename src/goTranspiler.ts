@@ -16999,7 +16999,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // string at that use, a local whose every write is a defaulted SafeString-family
     // call, or such a call inline
     goDerefableStringOperand(node): boolean {
-        if (this.goNilProvenStringDeref(node) || this.goNumberToStringOfProvenNumber(node)) {
+        if (this.goNilProvenStringDeref(node) || this.goNumberToStringOfProvenNumber(node) || this.goIso8601OfCurrentTime(node)) {
             return true;
         }
         if (this.goAssertedStringDeref(node)) {
@@ -17033,6 +17033,34 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const goType = this.goOperandStaticType(arg, this.printNode(arg, 0)) ?? '';
         return (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(goType) >= 0)
             || ((arg.kind === SyntaxKind.Identifier) && this.goNarrowedNumberPointerArg(arg, this.goDeclaredTypeOfIdentifier(arg)));
+    }
+
+    // `this.iso8601 (this.milliseconds ())`, directly or through const locals: the base Milliseconds is the int64 clock,
+    // inside Iso8601's 0..8.64e15 range, so the *string is never nil (a venue override of either method does not qualify)
+    goIso8601OfCurrentTime(node): boolean {
+        const call: any = this.goConstLocalInitializer(node);
+        return this.goBaseThisCall(call, 'iso8601', 1) && this.goBaseThisCall(this.goConstLocalInitializer(call.arguments[0]), 'milliseconds', 0);
+    }
+
+    goBaseThisCall(node, name: string, arity: number): boolean {
+        const callee: any = node?.expression;
+        if ((node?.kind !== SyntaxKind.CallExpression) || (node.arguments?.length !== arity) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== name)) {
+            return false;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
+        return (decl?.parent?.kind === SyntaxKind.ClassDeclaration) && GO_NUMBER_TO_STRING_BASE_CLASSES.includes(decl.parent.name?.text);
+    }
+
+    // the initializer of a `const` local the identifier resolves to (else the node itself)
+    goConstLocalInitializer(node): any {
+        if (node?.kind !== SyntaxKind.Identifier) {
+            return node;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const isConst = (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.parent?.kind === SyntaxKind.VariableDeclarationList)
+            && ((decl.parent.flags & ts.NodeFlags.Const) !== 0);
+        return isConst ? decl.initializer : undefined;
     }
 
     // a `*int64` / `*float64` identifier whose declared type admits undefined but which the checker narrowed to
@@ -20246,6 +20274,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return (type !== undefined) && ((type.flags & TypeFlags.String) !== 0);
         }
         if ((parent?.kind === SyntaxKind.CallExpression) && goNilInitIsAnyArgument(parent, current)) {
+            if (this.goNarrowedStringToBaseParseToNumeric(n, parent)) {
+                return true;
+            }
             const callee = parent.expression;
             const method = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
             // only consumers proven to deref the argument; other accessors may see the typed nil as a value
@@ -20257,6 +20288,16 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
+    }
+
+    // `this.parseToNumeric (x)` where the checker narrowed x to `string`: the pointer is non-nil there, and
+    // the base ParseToNumeric derefs its argument through NumberToString, so it reads the same value as the box
+    goNarrowedStringToBaseParseToNumeric(n, call): boolean {
+        if ((call.arguments?.[0] !== n) || !this.goBaseThisCall(call, 'parseToNumeric', 1)) {
+            return false;
+        }
+        const type: any = this.checkerOrUndefined()?.getTypeAtLocation(n);
+        return (type !== undefined) && ((type.flags & TypeFlags.String) !== 0);
     }
 
     // an arm of `const y: Str = c ? 'lit' : x` (or mirrored): ccxtGoStrPtrTernaryDeclaration prints y as an `any`
