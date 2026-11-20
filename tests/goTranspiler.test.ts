@@ -4016,7 +4016,7 @@ describe('go native element assignment', () => {
         delete go.goTypeOfInitializer;
         go.CCXT_GO_GETARG_SAFE_CONSUMERS = saved;
         expect(output).toContain("var since *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)");
-        expect(output).toContain("var s any = since");
+        expect(output).toContain("var s *int64 = since");
     });
     test('a pointer copied into a local handed to an unknown callee keeps the box', () => {
         const input =

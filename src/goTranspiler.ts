@@ -41571,7 +41571,7 @@ function h18g01WriteIsInt64Ptr(goTranspiler, right, assumed): boolean {
 function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writesOut: any[] | undefined = undefined): boolean {
     const declared = declaration?.type;
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-        || (declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.text !== 'Int')
+        || (((declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.text !== 'Int')) && !h19g01UnannotatedIntCopy(goTranspiler, declaration))
         || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations?.length !== 1)) {
         return false;
     }
@@ -41644,7 +41644,7 @@ function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writ
             const summed = (parent?.kind === SyntaxKind.CallExpression) && parent.arguments.some((a) => a === current)
                 && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)
                 && (parent.expression.name?.text === 'sum');
-            if (!arithmetic && !summed && !h18g01IsDynamicDispatchArgument(parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
+            if (!arithmetic && !summed && !h18g01IsDynamicDispatchArgument(parent, current) && !h19g01OptionalIntArgument(goTranspiler, parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
                 unsafe = true;
             }
             return false;
@@ -41705,3 +41705,30 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
     return (goType === '*int64') && !this.goNilInitInitializer(declaration?.initializer) && h18g01NilJoinVerdict(this, declaration);
 };
 // ===== h18-g01 (end) =====
+// ===== h19-g01 (begin): more *int64 joins for venue since copies =====
+// `let x = since` with no annotation, where `since` is a parameter declared `Int`: same seed as `let x: Int = since`
+function h19g01UnannotatedIntCopy(goTranspiler, declaration): boolean {
+    const value = declaration.initializer;
+    if ((declaration.type !== undefined) || (value?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const target: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve();
+    return (target?.kind === SyntaxKind.Parameter) && (target.type?.kind === SyntaxKind.TypeReference) && (target.type.typeName?.text === 'Int');
+}
+// `this.m (.., x, ..)` where m's parameter at that slot is a defaulted `Int`: Go hands it through optionalArgs, and
+// both GetArg (derefScalar) and GetArgInt64Ptr fold a nil *int64 to the default and read a non-nil one as its value
+function h19g01OptionalIntArgument(goTranspiler, parent, current): boolean {
+    if ((parent?.kind !== SyntaxKind.CallExpression) || (parent.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (parent.expression.expression?.kind !== SyntaxKind.ThisKeyword) || parent.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+        return false;
+    }
+    const index = parent.arguments.indexOf(current);
+    const method: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(parent.expression.name)?.valueDeclaration?.resolve();
+    const param: any = (index >= 0) ? method?.parameters?.[index] : undefined;
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (param === undefined) || (param.initializer === undefined)
+        || !ral90g5IsNil(param.initializer) || (param.type?.kind !== SyntaxKind.TypeReference) || (param.type.typeName?.text !== 'Int')) {
+        return false;
+    }
+    return true;
+}
+// ===== h19-g01 (end) =====
