@@ -1077,7 +1077,7 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // omitZero / currencyToPrecision / networkCodeToId / handleTimeInForce answer a string or
 // undefined on every path; the hand-written Go twins and interface lines are *string too
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
-    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'OmitZero' ];
+    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -1138,6 +1138,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.EthEncodeStructuredData': '[]uint8',
     // exchange_market_type.go (hand-written)
     'this.MarketSymbols': '[]string',
+    // base findMessageHashes (no override) returns its `string[]` futures-key list, never nil
+    'this.FindMessageHashes': '[]string',
     // absent input answers a nil slice
     'this.MarketCodes': '[]any',
     // exchange_prediction.go, retyped `string` on its only return path
@@ -8021,7 +8023,6 @@ function installCcxtGoScalarElementReads (goTranspiler) {
 // Producer declarations: `var x T = <generated producer>(...)`
 //
 const CCXT_GO_PRODUCER_DECLARATIONS = {
-    'this.FindMessageHashes': 'list',
     'this.MarketIds': 'list',
     'this.ParseOrders': 'list',
     'this.OutcomesByMarketId': 'list',
@@ -37111,6 +37112,31 @@ function strPtrFamilyEnclosingMethod(node) {
 }
 GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
     return (strPtrFamilyVerdict(this, node) !== undefined) ? '*string' : undefined;
+};
+// base findMessageHashes (`string[]`, no override) returns its `[]string` result local on every path
+function goFindMessageHashesBase(node): boolean {
+    return (node?.kind === SyntaxKind.MethodDeclaration) && (node.name?.text === 'findMessageHashes') && (node.body !== undefined)
+        && /[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? ''))
+        && (String(node.type?.getText() ?? '').replace(/\s+/g, '') === 'string[]');
+}
+const goStrPtrFamilyReturnTypeFmh = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+    if (goFindMessageHashesBase(node)) {
+        const returns = collectReturnStatements(node.body);
+        const proven = (returns.length > 0) && returns.every((r) => (r.expression?.kind === SyntaxKind.Identifier)
+            && (this.goDeclaredTypeOfIdentifier(r.expression) === '[]string'));
+        return proven ? '[]string' : undefined;
+    }
+    return goStrPtrFamilyReturnTypeFmh.call(this, node);
+};
+// its `return result` hands the []string local to that signature unchanged
+const goStringListUseReadsAsFmh = GoTranspiler.prototype.goStringListUseReadsAs;
+GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
+    const parent = node?.parent;
+    if ((parent?.kind === SyntaxKind.ReturnStatement) && (parent.expression === node) && goFindMessageHashesBase(strPtrFamilyEnclosingMethod(parent))) {
+        return true;
+    }
+    return goStringListUseReadsAsFmh.call(this, node);
 };
 const strPtrFamilyReturnStatement = GoTranspiler.prototype.printReturnStatement;
 GoTranspiler.prototype.printReturnStatement = function (node, identation) {
