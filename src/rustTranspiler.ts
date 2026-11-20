@@ -6344,6 +6344,8 @@ export class RustTranspiler extends BaseTranspiler {
         safeDictN: [ 'Dictionary<any> | undefined', 'odict' ],
         // a venue parser declared `NullableDict`: its parsed order map, or undefined on the early returns
         parseWsOrderUpdate: [ 'NullableDict', 'odict' ],
+        // a pro lookup declared `NullableDict`: the matching subscription map, else undefined
+        findSubscription: [ 'NullableDict', 'odict' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
