@@ -31081,7 +31081,7 @@ ${this.getIden(identation)}${returnStatement}`;
         if (declared !== 'map[string]any') {
             return false;
         }
-        return !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name);
+        return !this.h26g52SymbolIsRebound(this.goEnclosingFunction(declaration), declaration);
     }
 
     // `const xs = Object.values(m)` keeps the helper's []any in an `any` box today. Naming that
@@ -46786,3 +46786,35 @@ GoTranspiler.prototype.h26g51SlotAliasWriteBack = function (pushNode, identation
     return `\n${this.getIden(identation)}${slot} = ${this.printNode(receiver, 0)}`;
 };
 // ===== h26-G51 (end) =====
+
+// ===== h26-g52 =====
+export interface GoTranspiler {
+    h26g52SymbolIsRebound(scope, declaration): boolean;
+}
+// a rebind of the receiver's own symbol: a same-named local in a sibling block is another variable and does not count
+GoTranspiler.prototype.h26g52SymbolIsRebound = function (scope, declaration) {
+    if (scope === undefined) {
+        return true;
+    }
+    const name = declaration.name.text;
+    let rebound = false;
+    const visit = (n: any): void => {
+        if (rebound) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && (this.goRebindingTargetOf(n) !== undefined)) {
+            let target: any;
+            try {
+                target = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve();
+            } catch (e) {
+                target = undefined;
+            }
+            rebound = (target === undefined) || (target === declaration);
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    visit(scope);
+    return rebound;
+};
+// ===== h26-g52 (end) =====
