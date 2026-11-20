@@ -1418,6 +1418,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBaseThisCallName(call: any): string | undefined;
     goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
     goSafeDictLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goNonNilMapLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goScalarPointerStoreValue(value: any): boolean;
+    goNonNilMapLocalAtWrite(containerNode: any): boolean;
+    goScalarStoreIndex(keyNode: any, keyStr: string): string | undefined;
     goPlainFieldScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goPlainFieldScalarAccessorStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goScalarAccessorIsBaseMethod(call: any): boolean;
@@ -1729,6 +1733,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goUrlsViewRead(node: any, baseExpr: any, keys: any, keyStrs: string[]): string | undefined;
     goIsUrlsWrite(statement: any): boolean;
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
+    goBoundedListRowWriteContainer(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): boolean;
     goKeyIsString(node: any, printed: string): any;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
     goProvenPointerKeyMapIndex(keyNode: any, containerStr: string, keyStr: string): string | undefined;
@@ -1875,6 +1880,10 @@ export interface GoTranspiler {
     goInHoistPrint(node: any, identation: any, hoisted: any[], print: () => string): string | undefined;
 }
 export interface GoTranspiler {
+    goInHoistPointerKeyRead(inNode: any, statement: any): any;
+    goInHoistBindLines(h: any, iden: string): string;
+}
+export interface GoTranspiler {
     goSafeDictMapPredictionAsWs: boolean;
 }
 export interface GoTranspiler {
@@ -2012,4 +2021,13 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goH22g04NonNilStringDefault(node: any): boolean;
+}
+export declare function installH25g05UrlsViews(goTranspiler: any): void;
+export interface GoTranspiler {
+    h25g12CacheLength(expression: any, printedText: string, lengthNode: any): string | undefined;
+    h25g12GuardedCacheLocal(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h25g17NonNilOptionSlotArg(arg: any): boolean;
+    h25g17NonNilDefaultLocal(node: any): boolean;
 }
