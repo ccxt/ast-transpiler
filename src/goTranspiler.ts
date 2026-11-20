@@ -14284,6 +14284,15 @@ function clientIsInterfaceFrame (node: any) {
     return /(^|[\\/])ts[\\/]src[\\/](pro|prediction)[\\/]/.test (fileName);
 }
 
+// `const x = R.subscriptions[k]` in a pro / prediction source: SubscriptionGet answers exactly what GetValue on the
+// snapshot does (a non-string or nil key and a missing entry give nil, the entry is derefScalar'ed), and ccxt's
+// nil-compare pass proves a local written from SubscriptionGet pointer-free, so an `any` local (and only one that stays `any`) reads the owner.
+function goSubscriptionOwnerReadLocal (go: any, node: any, read: string): string | undefined {
+    const declaration = node.parent;
+    return (clientIsInterfaceFrame (node) && (declaration.type === undefined) && (declaration.name?.kind === SK.Identifier)
+        && (go.getGoLocalType (declaration, read) === 'any')) ? read : undefined;
+}
+
 export function installFmGo5G01 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goPointerDefaultsInstalled')) { return; }
     const owner = (go: any, access: any) => {
@@ -14320,7 +14329,7 @@ export function installFmGo5G01 (goTranspiler: any) {
                 && (declaration.parent?.parent?.kind === SK.FirstStatement)) {
                 const base = printElement.call (this, node, ...rest);
                 if (this.getGoLocalType (declaration, base) === 'any') {
-                    return base;
+                    return goSubscriptionOwnerReadLocal (this, node, owner (this, table) + '.SubscriptionGet(' + this.printNode (keys[0], 0) + ')') ?? base;
                 }
             }
         }
