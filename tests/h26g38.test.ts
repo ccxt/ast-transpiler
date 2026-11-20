@@ -30,7 +30,9 @@ describe('go list elements of filterBy / sortBy results read without DerefScalar
     const FILTER = "const matches = this.filterBy (positions, 'symbol', symbol);\nconst n = matches.length;\nif (n > 0) {\n    return matches[0];\n}\nreturn undefined;";
     test('an element of a filterBy result reads bare inside the guard (fails on the base printer)', () => {
         const out = print ('handle (positions: any, symbol: string)', FILTER);
-        expect (out).toMatch (/if 0 >= 0 && 0 < len\(matches\) \{\n\s*return matches\[0\]\n/);
+        // the h26-G24 length-guard proof takes the `n > 0` test as the bounds check, so no second guard prints
+        expect (out).toMatch (/if n > 0 \{\n\s*return matches\[0\]\n/);
+        expect (out).not.toContain ('func() any');
         expect (out).not.toContain ('DerefScalar(matches[0])');
     });
     test('a sortBy of a list of parsed structures reads bare in the loop (fails on the base printer)', () => {
