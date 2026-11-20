@@ -40105,3 +40105,17 @@ function goGuardedListReadIf (goTranspiler, body: string, parts: string[], ident
         return (parts === undefined) ? shipped : `${goGuardedListReadIf(this, `return ${parts[2]}`, parts, identation)}\n${head}nil`;
     };
 }
+// a `string[]` local handed whole as the container of a `this.safeString*` / `this.safeValue` read: the
+// reader takes `any`, so the []string reaches it as the very value the box held
+const GO_STRING_LIST_READER_CALLEES = [ 'this.SafeString', 'this.SafeString2', 'this.SafeValue', 'this.SafeStringLower', 'this.SafeStringUpper' ];
+const goStringListUseReadsAsReader = GoTranspiler.prototype.goStringListUseReadsAs;
+GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
+    const parent: any = node?.parent;
+    if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === node) && (parent.expression !== node)) {
+        const callee = this.goPrintedCallee(this.printNode(parent, 0));
+        if (GO_STRING_LIST_READER_CALLEES.indexOf(callee) >= 0) {
+            return true;
+        }
+    }
+    return goStringListUseReadsAsReader.call(this, node);
+};
