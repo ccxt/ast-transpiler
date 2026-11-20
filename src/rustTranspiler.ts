@@ -24803,6 +24803,7 @@ export class RustTranspiler extends BaseTranspiler {
             // pb: a literal-key write on a REST `safeDict*` result: copy-on-write insert (`if let Some` on the optional form, which
             // skips a missing map exactly as `add_element_to_object` skipped the `Null`)
             if (!extendReuse && this.rustSafeDictKeyWriteOk(n, init)) return keyWriteUses.push(n) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
+            if (!extendReuse && this.rustCacheRowCastWriteHead(n, init) !== undefined) return keyWriteUses.push(this.rustCacheRowCastWriteHead(n, init)) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
             // ral-40g: a literal-key write on a REST `Dict[]` row (`rows[i]`): copy-on-write insert on the optional form (`if let Some`
             // skips a non-map row exactly as `add_element_to_object` skipped a Null / Str / Int / List receiver)
             if (!extendReuse && this.rustElementKeyWriteOk(n, init)) return keyWriteUses.push(n) > 0 && ++elementKeyWrites > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
@@ -26253,6 +26254,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
      *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
     rustCacheRowOdictRewrite(rhs: any, init: any): boolean {
+        if (this.rustCacheRowBuiltRewrite(rhs, init)) return true;
         if (!isCallExpression(rhs) || this.rustBaseTypedReturnKindAll(rhs) !== 'odict') return false;
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text))) return false;
         const head: any = this.rustSkipWrappers(init.arguments[0]);
@@ -26267,6 +26269,32 @@ export class RustTranspiler extends BaseTranspiler {
     rustCacheRowVenueOdictRewrite(rhs: any, head: any): boolean {
         if (!isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword || !this.rustCacheBucketRow(head)) return false;
         return RustTranspiler.RUST_BASE_TYPED_METHODS[String(rhs.expression.name.text)]?.[0] === 'NullableDict';
+    }
+
+    /** `row = this.safePosition ({ .. })` (a plain literal) on a cache-bucket row: the base builder answers `Dict` on every path
+     *  (build `rustTypedParsePositionFamilies`), so the optional row takes `Some(map)`, the Dict the boxed write held. */
+    rustCacheRowBuiltRewrite(rhs: any, init: any): boolean {
+        if (!isCallExpression(rhs) || !isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(rhs.expression.name.text) !== 'safePosition' || rhs.arguments.length !== 1) return false;
+        const arg: any = this.rustSkipWrappers(rhs.arguments[0]);
+        if (!isObjectLiteralExpression(arg) || !this.rustSameKindRewrite(arg, 'dict')) return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text))) return false;
+        return this.rustCacheRowBuiltRewriteDecl(rhs) && this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]));
+    }
+
+    /** The callee resolves to the base tier's `safePosition` (no venue override). */
+    rustCacheRowBuiltRewriteDecl(rhs: any): boolean {
+        const d: any = this.rustScalarCallee(rhs);
+        return d !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName));
+    }
+
+    /** `(row as Dict)['k'] = v` on a cache-bucket row: the cast only retypes the TS side, so the write is the row's own
+     *  literal-key write; answers the parenthesised head the key-write rules take, else undefined. */
+    rustCacheRowCastWriteHead(n: any, init: any): any {
+        const cast: any = n.parent;
+        const head: any = cast?.parent;
+        if (!isAsExpression(cast) || cast.expression !== n || String(cast.type?.getText?.() ?? '') !== 'Dict' || !isParenthesizedExpression(head)) return undefined;
+        return this.rustSafeDictKeyWriteOk(head, init) ? head : undefined;
     }
 
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
@@ -26917,7 +26945,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-84a: the argument of `book.cache.push (x)` on a typed book local (the book's `cache_push(v: Value)`)
         if (this.rust84aBookCachePushArg(n)) return true;
         // `c.append (x)` on a local ws cache: the runtime `append` takes a `Value`, so `None` boxes to the reader's Null
-        if (this.rustLocalCacheAppendArg(n)) return true;
+        if (this.rustLocalCacheAppendArg(n) || isAsExpression(up) && up.expression === n && this.rustLocalCacheAppendArg(up)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
@@ -27422,6 +27450,7 @@ export class RustTranspiler extends BaseTranspiler {
             const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
             return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
         }
+        if (local.kind === 'dict' && this.rustCacheRowBuiltRewriteDecl(rhs) && isCallExpression(rhs) && String((rhs.expression as any).name?.text) === 'safePosition') return `${name} = Some(${this.printNode(right, 0).trim()}.into_dict())`;
         return `${name} = ${(local.kind === 'list' ? this.rustOptListLiteralSome(right) : this.rustOdictCallText(right)) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
     }
 
@@ -34532,9 +34561,10 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
     printUntilHeadKeyWrite(left: any, right: any, valueText: string): string | undefined {
-        const recv: any = isElementAccessExpression(left) ? left.expression : undefined;
+        const head: any = isElementAccessExpression(left) ? left.expression : undefined;
+        const recv: any = this.rustSkipWrappers(head);
         if (recv === undefined || !isIdentifier(recv)) return undefined;
-        const key = this.rustUntilHeadKeyWrite(recv);
+        const key = this.rustUntilHeadKeyWrite(head);
         const declaration: any = this.rustDeclaredNode(recv);
         if (key === undefined || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration))) return undefined;
         const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
