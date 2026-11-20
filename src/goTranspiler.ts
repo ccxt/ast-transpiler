@@ -20882,7 +20882,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((field === undefined) || this.goWritePrintsPointerBox(valueNode)) {
             return false;
         }
-        if (this.goStoreValueIsPlain(valueNode, field)) {
+        if (this.goStoreValueIsPlain(valueNode, field) || this.goBalanceSafeValueRead(valueNode)) {
             return true;
         }
         // an identifier or call the checker types as a non-array object (Dict, Account) holds a map box
@@ -20895,6 +20895,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const parts = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes() : [type];
         const present = parts.filter((t) => (t.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
         return (present.length > 0) && present.every((t) => ((t.flags & TypeFlags.Object) !== 0) && !checker.isArrayType(t) && !checker.isTupleType(t));
+    }
+
+    // `this.safeValue (x, k)`: Go SafeValue/SafeValue2/SafeValueN return derefScalar of the element or default,
+    // so the helper's own (idempotent) derefScalar stores the identical value
+    goBalanceSafeValueRead(valueNode): boolean {
+        const name = this.goThisCallName(this.goUnwrapParenthesizedNode(valueNode));
+        return (name === 'safeValue') || (name === 'safeValue2') || (name === 'safeValueN');
     }
 
     // the base Balance map can be indexed: every write of the field in the file leaves a map
