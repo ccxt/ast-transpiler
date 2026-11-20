@@ -42500,3 +42500,21 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | un
     return h20g05PrintedStrPtrConst(this, node);
 };
 // ===== h20-g05 (end) =====
+
+// ===== h20-g01 (begin): non-nil *int64 plus / minus a nested int64 arithmetic operand =====
+export interface GoTranspiler {
+    goH20g01PointerNestedArithmetic(node, leftText: string, rightText: string): { goType: string, text: string } | undefined;
+}
+// `since + (d * n) * 1000` under a nil guard: the nested side already prints a native int64, so the sum is `*since + (..)`
+GoTranspiler.prototype.goH20g01PointerNestedArithmetic = function (node, leftText: string, rightText: string) {
+    const op = { [SyntaxKind.PlusToken]: ' + ', [SyntaxKind.MinusToken]: ' - ' }[node?.operatorToken?.kind];
+    const text = (op === undefined) ? undefined : this.goNonNilPointerOperationText(node, leftText, rightText, op, this.goInt64ProductOperand);
+    return (text === undefined) ? undefined : { 'goType': 'int64', text };
+};
+const goNativeArithmeticH20g01 = GoTranspiler.prototype.goNativeArithmetic;
+GoTranspiler.prototype.goNativeArithmetic = function (node, leftText = undefined, rightText = undefined) {
+    leftText = leftText ?? this.printNode(node.left, 0);
+    rightText = rightText ?? this.printNode(node.right, 0);
+    return goNativeArithmeticH20g01.call(this, node, leftText, rightText) ?? this.goH20g01PointerNestedArithmetic(node, leftText, rightText);
+};
+// ===== h20-g01 (end) =====
