@@ -43028,3 +43028,111 @@ function installGoGuardedRowSplit (goTranspiler) {
     }
 }
 // ===== guarded first-row split (end) =====
+
+// ===== h22-g02: `[]`-defaulted safeList local read through one const alias =====
+// `const data = this.safeList (m, k, [])` whose only use is `const alias = data`, and an alias used only as
+// `alias.length` and `alias[i]` inside `for (let i = 0; i < alias.length; i++)`: SafeListTypedDefault never
+// answers nil (non-list member -> the empty default), so length and bounded reads answer as the box did.
+const h22g02Verdicts = new WeakMap<object, object | null>();
+function h22g02EmptyDefaultedSafeList (initializer): boolean {
+    const callee = (initializer?.kind === SyntaxKind.CallExpression) ? initializer.expression : undefined;
+    const fallback = initializer?.arguments?.[2];
+    return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && (callee.name?.text === 'safeList') && (initializer.arguments.length === 3)
+        && !initializer.arguments.some ((a) => a.kind === SyntaxKind.SpreadElement)
+        && (fallback?.kind === SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0);
+}
+function h22g02ConstSingle (declaration): boolean {
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && ((declaration.parent?.flags & NodeFlags.Const) !== 0) && (declaration.parent.declarations.length === 1)
+        && (declaration.parent.parent?.kind === SyntaxKind.FirstStatement);
+}
+// the uses of `declaration` inside its function (undefined when a same-named binding shadows it)
+function h22g02Uses (goTranspiler: GoTranspiler, declaration): any[] | undefined {
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const name = declaration.name.text;
+    const uses = [];
+    let shadowed = false;
+    goTranspiler.hasNodeWhere (scope?.body, (n) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter || n.kind === SyntaxKind.BindingElement)
+            && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            shadowed = true;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+            && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))) {
+            if (goTranspiler.goDeclarationOfIdentifier (n) !== declaration) {
+                shadowed = true;
+            }
+            uses.push (n);
+        }
+        return false;
+    });
+    return ((scope === undefined) || shadowed) ? undefined : uses;
+}
+// the alias declaration paired with `declaration` (the source or the alias itself), or undefined
+function h22g02AliasOf (goTranspiler: GoTranspiler, declaration): any {
+    if (!h22g02ConstSingle (declaration)) {
+        return undefined;
+    }
+    let source = declaration;
+    if (declaration.initializer?.kind === SyntaxKind.Identifier) {
+        source = goTranspiler.goDeclarationOfIdentifier (declaration.initializer);
+        if (!h22g02ConstSingle (source)) {
+            return undefined;
+        }
+    }
+    if (h22g02Verdicts.has (source)) {
+        return h22g02Verdicts.get (source) ?? undefined;
+    }
+    h22g02Verdicts.set (source, null);
+    if (!h22g02EmptyDefaultedSafeList (source.initializer)) {
+        return undefined;
+    }
+    const sourceUses = h22g02Uses (goTranspiler, source);
+    const alias = goTranspiler.goDeclarationOfIdentifier (sourceUses?.[0]?.parent?.name);
+    if ((sourceUses?.length !== 1) || (sourceUses[0].parent?.kind !== SyntaxKind.VariableDeclaration) || (sourceUses[0].parent.initializer !== sourceUses[0])
+        || (alias !== sourceUses[0].parent) || !h22g02ConstSingle (alias)
+        || (goTranspiler.goEnclosingFunction (alias) !== goTranspiler.goEnclosingFunction (source))) {
+        return undefined;
+    }
+    const aliasUses = h22g02Uses (goTranspiler, alias);
+    let lengths = 0;
+    const ok = (aliasUses !== undefined) && (aliasUses.length > 0) && aliasUses.every ((n) => {
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) {
+            lengths++;
+            return true;
+        }
+        return (parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)
+            && !goTranspiler.isGoElementAccessAssignmentTarget (parent) && go92g2LoopIndexOver (goTranspiler, parent.argumentExpression, alias, parent);
+    });
+    if (!ok || (lengths === 0)) {
+        return undefined;
+    }
+    h22g02Verdicts.set (source, alias);
+    return alias;
+}
+{
+    const listType = GoTranspiler.prototype.goSafeListLocalUnbox;
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        return (h22g02AliasOf (this, declaration) !== undefined) ? GO_SAFE_LIST_LOCAL_TYPE : listType.call (this, declaration);
+    };
+    const listValue = GoTranspiler.prototype.goSafeListUnboxValue;
+    GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
+        if (h22g02AliasOf (this, declaration) !== undefined) {
+            if (declaration.initializer.kind === SyntaxKind.Identifier) {
+                return this.printNode (declaration.initializer, 0).trim ();
+            }
+            const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, i === 0 ? identation : 0).trim ());
+            return 'SafeListTypedDefault(' + args.join (', ') + ')';
+        }
+        return listValue.call (this, declaration, identation);
+    };
+    // the rows are the decoded message's own list members: no element is a Go scalar pointer
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return ((list?.kind === SyntaxKind.Identifier) && (h22g02AliasOf (this, this.goDeclarationOfIdentifier (list)) !== undefined))
+            || pointerFree.call (this, list, depth);
+    };
+}
+// ===== h22-g02 (end) =====
