@@ -22,6 +22,12 @@ export declare class JavaTranspiler extends BaseTranspiler {
     }>;
     asyncExecutor: string;
     asyncSupplier: string;
+    asyncCoreSplit: string;
+    javaAsyncCores: Map<any, {
+        name: string;
+        coreBody: string;
+        wrapperBody: string;
+    }>;
     javaHandlerTables: Map<any, any>;
     javaHandlerCalls: Map<any, any>;
     javaHandlerReads: Set<string>;
@@ -162,6 +168,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaAsyncSignatureParameter(param: any, isAsyncMethod: any, printedParam: any): any;
     printMethodParameters(node: any): any;
     printMethodDeclaration(node: any, identation: any): string;
+    javaStashAsyncCore(node: any, identation: any, supplier: string, executorArg: string, coreBody: string, blockClose: string): void;
+    javaAsyncCoreSplit(node: any, identation: any, signature: string, funcBody: string): string;
     printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
     javaBooleanParameterBox(node: any): string | undefined;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;

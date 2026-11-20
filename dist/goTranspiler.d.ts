@@ -128,6 +128,8 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.HandleMarketTypeAndParams': string;
     'this.ParseTimeframe': string;
     'exchange.ParseTimeframe': string;
+    'this.SlugToMarketSymbol': string;
+    'this.SlugToOutcomeSymbol': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -787,6 +789,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAssertedStringDeref(node: any): boolean;
     goDerefableStringOperand(node: any): boolean;
     goNumberToStringOfProvenNumber(node: any): boolean;
+    goNarrowedNumberPointerArg(arg: any, goType: string | undefined): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {
         goType: string;
@@ -835,7 +838,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStringListAppendsAString(pushNode: any): boolean;
     goStringValueNodeIsProven(node: any): boolean;
     goStringMethodCallIsProven(node: any): boolean;
+    goStringConcatIsProven(node: any): boolean;
+    goStringListArgMixesSlot(n: any): boolean;
+    goStringListHasConcatPush(n: any): boolean;
+    goStringListArgIsProven(arg: any): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string, stringWriteProven?: boolean): boolean;
+    goSelfIntStepWriteKeepsType(node: any, varName: string, goType: string): boolean;
     goSelfConcatWriteIsString(node: any, varName: string): boolean;
     goSelfConcatIsString(node: any, varName: string): boolean;
     goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
@@ -1230,6 +1238,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeParameterTypeOf(param: any): string | undefined;
     goSliceParameterType(fn: any, param: any, index: number): string | undefined;
     goSliceParamsKeepingGetValue: Set<any>;
+    goAnnotatedStringSliceSlot(fn: any, index: number, goType: string): boolean;
+    goResolvedStringSliceSlot(node: any, index: number): boolean;
     goAnnotatedSliceParameterType(param: any): string | undefined;
     goBodyReadsElement(body: any, name: string): boolean;
     goIsUnifiedStringParameter(methodName: string, index: number): boolean;
@@ -1704,6 +1714,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
     goKeyIsString(node: any, printed: string): any;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
+    goProvenPointerKeyMapIndex(keyNode: any, containerStr: string, keyStr: string): string | undefined;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     goIntIndexExpression(node: any): boolean;
@@ -1980,4 +1991,7 @@ export interface GoTranspiler {
     goH21g03BodyAppendWrite(node: any): any;
     goH21g03BodyTextName(node: any): string;
     goH21g03NativeBodyAppend(append: any): boolean;
+}
+export interface GoTranspiler {
+    goH22g04NonNilStringDefault(node: any): boolean;
 }

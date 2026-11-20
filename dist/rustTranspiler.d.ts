@@ -302,6 +302,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  helper. A `[ x, params ] = this.handle…(…)` tuple re-assigns the
      *  hand-written handler's own dict arguments. */
     rustInsertReceiverBuildsPlainDict(declaration: VariableDeclaration): boolean;
+    /** `const row = this.safeDict (this.<plain field>, k, {})`, never rebound: the row of a field the base never
+     *  tags, or the fresh plain literal, so a book-meta key needs no `__book_id` guard. */
+    rustPlainFieldRowLocal(declaration: VariableDeclaration): boolean;
     /** An object literal with no runtime tag key — the transpiler built it, so
      *  it is a fresh plain `Value::Map` on every path. */
     rustPlainDictLiteral(node: Node | undefined): boolean;
@@ -371,6 +374,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
      *  `get_value` cloned, `Null` where it answered `Null`. */
     printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined;
+    /** A map row `xs[i]` (i64 counter) of a typed `List` local reads through the base `safe_dict_t`, the form `safeDict (xs, i)`
+     *  prints: the element's map, or the empty map for a missing / non-map element, as `.into_dict()` of the slice read answered. */
+    rustDictRowReaderText(declaration: any, read: string): string | undefined;
     /** ral-58e: `const e = xs[k]` where `xs` is a typed `Vec<Value>` local of the same function (rustVecLocalDeclarationOf)
      *  that no earlier container arm claims (read bearer, opt list, lent list, param shadow), so its element read is the
      *  slice read `xs.get(K).cloned().unwrap_or(Value::Null)`. When `xs` is only read and every use of `e` is the receiver of
