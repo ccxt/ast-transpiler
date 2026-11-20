@@ -20326,7 +20326,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const read = this.goOrderBookCacheRead(rhs);
             return (read !== undefined) && this.goOrderBookEntryPresent(rhs, read);
         };
-        if (!present(decl.initializer)) {
+        if (!present(decl.initializer) && !this.goOrderBookNilGuardedRead(id, decl)) {
             return false;
         }
         const name: string = decl.name.text;
@@ -20334,6 +20334,39 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && this.goIdentifierRefersToDeclaration(n, decl) && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
             && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment)
             && !((n.parent.operatorToken.kind === SyntaxKind.EqualsToken) && present(n.parent.right)));
+    }
+
+    // `const book = <cache read>` followed, before the use `id`, by an earlier sibling `if (book === undefined [|| ...]) { ...; exit }`
+    // with no else, or a `safeValue (cache, key, <ctor>)` read whose default is a fresh book; rebinds are checked by the caller
+    goOrderBookNilGuardedRead(id, decl): boolean {
+        const init: any = decl.initializer;
+        if ((init?.kind === SyntaxKind.CallExpression) && (init.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (init.expression.expression?.kind === SyntaxKind.ThisKeyword) && this.goOrderBook.cacheReaders.includes(init.expression.name?.text)
+            && (init.arguments?.length === 3) && this.goIsOrderBookProducer(init.arguments[2]) && this.goNodeIsOrderBookCache(init.arguments[0])) {
+            return true;
+        }
+        if (this.goOrderBookCacheRead(init) === undefined) {
+            return false;
+        }
+        const name: string = decl.name.text;
+        const nilTest = (c: any): boolean => {
+            while (c?.kind === SyntaxKind.ParenthesizedExpression) {
+                c = c.expression;
+            }
+            if ((c?.kind === SyntaxKind.BinaryExpression) && (c.operatorToken?.kind === SyntaxKind.BarBarToken)) {
+                return nilTest(c.left) || nilTest(c.right);
+            }
+            return (c?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken ].includes(c.operatorToken?.kind)
+                && (c.left?.kind === SyntaxKind.Identifier) && (c.left.text === name) && this.goIdentifierRefersToDeclaration(c.left, decl)
+                && ((c.right?.kind === SyntaxKind.NullKeyword) || ((c.right?.kind === SyntaxKind.Identifier) && (c.right.text === 'undefined')));
+        };
+        return this.goEnclosingBlocksProve(id, [ SyntaxKind.Block, SyntaxKind.CaseClause, SyntaxKind.DefaultClause ], (st) => {
+            if ((st.kind !== SyntaxKind.IfStatement) || (st.elseStatement !== undefined) || (st.pos < decl.end) || !nilTest(st.expression)) {
+                return false;
+            }
+            const body = this.goBlockStatements(st.thenStatement);
+            return this.goStatementExits(body[body.length - 1]);
+        }, () => false);
     }
 
     // ---- ws list caches (WsArrayCache) -------------------------------------------------
@@ -21798,8 +21831,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
     }
 
+    goNodeIsOrderBookCache(obj): boolean {
+        try {
+            return this.goIsOrderBookType(this.getChecker().getTypeAtLocation(obj)?.getStringIndexType?.());
+        } catch (e) {
+            return false;
+        }
+    }
+
     goSameExpressionText(a, b): boolean {
-        return (a !== undefined) && (b !== undefined) && (a.getText().replace(/\s+/g, '') === b.getText().replace(/\s+/g, ''));
+        return (a !== undefined) && (b !== undefined) && (this.goOrderBookKeyText(a) === this.goOrderBookKeyText(b));
+    }
+
+    // `(symbol as string)` names the same key as `symbol`: a type assertion changes no value
+    goOrderBookKeyText(node): string {
+        while ((node?.kind === SyntaxKind.ParenthesizedExpression) || (node?.kind === SyntaxKind.AsExpression)) {
+            node = node.expression;
+        }
+        return node.getText().replace(/\s+/g, '');
     }
 
     // `<key> in <obj>` possibly under `&&`
@@ -21827,8 +21876,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const cached = absent ? this.goOrderBookCacheRead(cond.left) : undefined;
             return (cached !== undefined) && this.goSameExpressionText(cached.obj, read.obj) && this.goSameExpressionText(cached.key, read.key);
         }
-        return (cond?.kind === SyntaxKind.PrefixUnaryExpression) && (cond.operator === SyntaxKind.ExclamationToken)
-            && this.goConditionHasPresence(cond.operand, read);
+        return ((cond?.kind === SyntaxKind.PrefixUnaryExpression) && (cond.operator === SyntaxKind.ExclamationToken)
+            && this.goConditionHasPresence(cond.operand, read)) || this.goConditionHasNegatedPresenceArm(cond, read);
+    }
+
+    // `!(key in obj) || other`: the then-branch runs whenever the entry is absent, the else-branch only when it is present
+    goConditionHasNegatedPresenceArm(cond, read: { obj: any, key: any }): boolean {
+        return (cond?.kind === SyntaxKind.BinaryExpression) && (cond.operatorToken?.kind === SyntaxKind.BarBarToken)
+            && (this.goConditionIsNegatedPresence(cond.left, read) || this.goConditionIsNegatedPresence(cond.right, read));
     }
 
     goBlockStatements(node): any[] {
@@ -22058,6 +22113,23 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         return `${this.printNode(node.expression, 0)}.${this.goOrderBook.sides[node.argumentExpression.text]}()`;
+    }
+
+    // `book['timestamp'] === undefined` on a book proven non-nil reads the exposed field; the comparison keeps its
+    // IsEqual helper, which derefs a typed nil pointer to nil, so the answer is GetValue's
+    goOrderBookFieldNilTestRead(node): string | undefined {
+        const cfg = this.goOrderBook;
+        const key: any = node.argumentExpression;
+        const parent: any = node.parent;
+        const other: any = (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === node) ? parent.right : undefined;
+        if ((cfg?.clears === undefined) || (node.expression?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral)
+            || !Object.prototype.hasOwnProperty.call(cfg.clears.fields, key.text) || this.isGoElementAccessAssignmentTarget(node)
+            || ![ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(parent?.operatorToken?.kind)
+            || (other?.kind !== SyntaxKind.Identifier) || (other.text !== 'undefined')
+            || (this.goBookDeclaredType(node.expression) !== cfg.type) || !this.goOrderBookLocalNeverNil(node.expression)) {
+            return undefined;
+        }
+        return `${this.printNode(node.expression, 0)}.${cfg.clears.accessor}().${cfg.clears.fields[key.text]}`;
     }
 
     // A book-class parameter prints the book interface when (1) the method is the base's or overrides it (the hand-written
@@ -31689,7 +31761,7 @@ ${tryBodyBlock}
     }
 
     printElementAccessExpression(node, identation) {
-        const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node)]);
+        const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node)]);
         if (cacheText !== undefined) {
             return cacheText;
         }
