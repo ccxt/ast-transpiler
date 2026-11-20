@@ -529,6 +529,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    csharpDeclaredLocalDictType(node: any): string | undefined;
+    csharpDeclaredDictToArray(node: any): string | undefined;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
     csharpDeclaredDictReceiverType(node: any): string | undefined;

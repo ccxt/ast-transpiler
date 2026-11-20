@@ -115,6 +115,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaConvertToCoreType(type: string, printed: string, node: any): string;
     javaStringListLiteral(node: any): string | undefined;
     javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
+    javaSpawnAsyncDirectCall(node: any, identation: any): string | undefined;
     javaReferencedDeclaration(reference: any): import("typescript/unstable/ast").DeclarationBase;
     javaArgumentNativeTypes(node: any, parameters: any, offset: number): (string | undefined)[];
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
@@ -588,5 +589,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printJavaWsReceiverCall(node: any, identation: any): string | undefined;
     javaCounterPlan(statements: any, _identation: number): Map<any, any> | undefined;
     javaPrintBodyStatements(statements: any, identation: number): string[];
+    printParseToIntDoubleProduct(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    javaProductFeedsBaseParseToInt(node: any): boolean;
 }
 export {};

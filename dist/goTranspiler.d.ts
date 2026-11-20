@@ -130,6 +130,8 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'exchange.ParseTimeframe': string;
     'this.SlugToMarketSymbol': string;
     'this.SlugToOutcomeSymbol': string;
+    'this.RlpEncodeList': string;
+    'this.IntToRlpHex': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -1834,6 +1836,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBaseFieldKind(node: any): string | undefined;
     goWideningOperandKind(node: any, text: string): [string, boolean] | undefined;
     printWideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    goNonNilMapLocalDictValuePointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
+    goTsValueIsDictOrList(valueNode: any): boolean;
+    goContainsAwait(node: any): boolean;
 }
 export interface GoTranspiler {
     goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
@@ -2033,3 +2038,103 @@ export interface GoTranspiler {
     h25g17NonNilOptionSlotArg(arg: any): boolean;
     h25g17NonNilDefaultLocal(node: any): boolean;
 }
+export interface GoTranspiler {
+    h26g06BaseMapFieldArg(arg: any): boolean;
+}
+export interface GoTranspiler {
+    h26g14MapFieldLocalType(declaration: any): string | undefined;
+    h26g14FieldNonNilBefore(declaration: any, fieldName: string): boolean;
+}
+export interface GoTranspiler {
+    goBaseExchangeAsWs: boolean;
+}
+export interface GoTranspiler {
+    goBaseLocalHasNullableKey(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h26g21AliasDefines(node: any, name: string, outcome: boolean): boolean;
+    h26g21IsWritten(scope: any, declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h26g24GuardedLiteralRead(node: any, writeContainer?: boolean): boolean;
+    h26g24GuardProves(condition: any, list: any, index: number, boundNames: Set<string>, thenSide: boolean): boolean;
+}
+export interface GoTranspiler {
+    goH26g25JsonListUseIsReadOnly(node: any, name: string): boolean;
+}
+export interface GoTranspiler {
+    h26g27RowAccumulatorType(declaration: any): string | undefined;
+    h26g27RowAccumulatorOf(node: any): any;
+    h26g27RowAccumulatorPush(node: any, parsedArg: string | undefined): string | undefined;
+    h26g27RowWrite(node: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h26g28OrderBookFieldWrite(baseExpr: any, containerStr: string, keyNode: any, valueNode: any, valueStr: string): string | undefined;
+    h26g28SetterValue(setter: {
+        method: string;
+        value: string;
+        type: string;
+    }, valueNode: any, valueStr: string): string | undefined;
+    h26g28BookDerefBefore(id: any): boolean;
+}
+export interface GoTranspiler {
+    h26g29NilSliceIndexRead(callee: any, argIndex: number): boolean;
+}
+export interface GoTranspiler {
+    h26g31NonPointerMethodSource(expr: any): boolean;
+    h26g31NonPointerReturn(expr: any): boolean;
+}
+export interface GoTranspiler {
+    h26g32LiteralDefaultStringSlot(decl: any): string | undefined;
+    h26g32SlotIsString(list: any): boolean;
+    h26g32StringSlotOperand(node: any): boolean;
+}
+export interface GoTranspiler {
+    h26g33NonNilMarketTypeSlotArg(arg: any): boolean;
+    h26g33AbsentOrUndefined(node: any): boolean;
+}
+export interface GoTranspiler {
+    h26g37NonNilSafeStringWrite(node: any, varName: string): boolean;
+    h26g37NonNilSeed(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    goRequestRowParameterType(fn: any, param: any): string | undefined;
+    goRequestRowParamOf(node: any): any;
+    goRequestRowRead(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    h26g48SubscriptionSafeKey(node: any): Node | undefined;
+    h26g48BaseClientFutures(node: any): boolean;
+}
+export interface GoTranspiler {
+    h26g49ClientsReadDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    h26g49ClientLocalUsesAreSafe(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h26g51PushStoreBackList(declaration: any): boolean;
+    h26g51PushStoreBackValue(declaration: any, identation: number): string;
+    h26g51SlotAliasWriteBack(pushNode: any, identation: number): string;
+    h26g51StoreBackOf(node: any): boolean;
+}
+export interface GoTranspiler {
+    h26g52SymbolIsRebound(scope: any, declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h26g53ConstComparisonLocal(arg: any, checker: any): boolean;
+    h26g53ComparisonExpression(expr: any): boolean;
+}
+export interface GoTranspiler {
+    h26g55GuardedSlice(node: any, receiverText: string, goType: string): string | undefined;
+    h26g55GuardConjuncts(node: any): any[];
+    h26g55LiteralInt(node: any): number | undefined;
+    h26g55IsLengthOf(node: any, name: string): boolean;
+    h26g55IsLengthLocalOf(node: any, name: string): boolean;
+    h26g55IsGuardedSlice(node: any): boolean;
+}
+export interface GoTranspiler {
+    goH26g56StringListLiteralWrite(right: any, goType: string): boolean;
+}
+export interface GoTranspiler {
+    h26g57ForCounterSeed(declaration: any): string | undefined;
+}
+export declare function goIsOwnTsSourceName(name: string): boolean;
