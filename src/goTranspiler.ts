@@ -27614,7 +27614,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             } catch (e) {
                 decl = undefined;
             }
-            return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : undefined;
+            return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : this.goInOpDeclaredMapLocal(dictNode);
         }
         const text = this.goUnwrapPrintedParens(dictText ?? '');
         const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
@@ -27630,6 +27630,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return (this.GO_NATIVE_MAP_ACCESSORS.indexOf(accessor[1]) >= 0) ? 'map[string]any' : undefined;
         }
         return undefined;
+    }
+
+    // a safeDict local the printer declares `map[string]any` (SafeDictMap / map unbox): InOp only asks membership,
+    // and the comma-ok read of a nil map answers false like the helper
+    goInOpDeclaredMapLocal(dictNode): string | undefined {
+        const declaration: any = this.goDeclarationOfIdentifier(dictNode);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
+            return undefined;
+        }
+        return ((this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE) || (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE))
+            ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
     }
 
     // `ok` unless the statement already names it: the init clause would shadow that name
