@@ -21714,11 +21714,11 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
-        return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
-        return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
+        return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
@@ -40726,6 +40726,29 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
+    // ===== h26-R11: `Object.keys/values (x)` where const `x` holds an untagged declared-dict base field (or `{}`)
+    /** The map's own iterators in insertion order, the order `object_keys` keeps; such a field never carries the
+     *  ws tags the helper filters, and a non-map (`None` / Null) lists nothing, as the helper answered. */
+    h26r11FieldAliasEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const text = parsedArg?.trim();
+        if (arg === undefined || text === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== undefined
+            || RustTranspiler.RUST_BASE_TIER_FILE.test(this.provenDictFieldPath(node))) return undefined; // base: borrowed-key rules own it
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        const list: any = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList
+            || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h26r11UntaggedMapSource(declaration.initializer)) return undefined;
+        const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
+        return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+
+    /** `this.f` (declared plain-dict, untagged), `{}`, or a ternary whose arms are each one of those. */
+    h26r11UntaggedMapSource(node: any): boolean {
+        const n: any = this.rustSkipWrappers(node);
+        if (n === undefined) return false;
+        if (isConditionalExpression(n)) return this.h26r11UntaggedMapSource(n.whenTrue) && this.h26r11UntaggedMapSource(n.whenFalse);
+        if (isObjectLiteralExpression(n)) return n.properties.length === 0;
+        return this.untaggedDictField(n);
+    }
+
 }
-
-
