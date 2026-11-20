@@ -3902,6 +3902,7 @@ function ccxtGoAnnotatedReturnTypes (goTranspiler, node) {
     if ((key === 'Str') || (key === 'Dict') || (key === 'ExchangeOptions') || (key === 'Market') || (key === 'List') || (key === 'Bool')) {
         return CCXT_GO_ANNOTATED_RETURN_NATIVE[key];
     }
+    if (h26g10NullableDictParseReturn (node, key)) { return [ 'map[string]any' ]; }
     if ((key === 'Num') && ccxtGo92NumParseMethod (node)) {
         return ccxtGoNumReturnsAreParseNumber (node) ? [ '*float64' ] : undefined; // a parse* `Num`: *float64 or nil
     }
@@ -44958,3 +44959,73 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     return this.printNodeCommentsIfAny (node, identation, iden + 'retStrVal := ' + value + '\n' + iden + 'return &retStrVal');
 };
 // ===== h26-H26-G09 (end) =====
+
+// ===== h26-H26-G10
+// a parse* method annotated `NullableDict` returns a map or undefined: the Go map or nil, exactly the
+// shape the parse* `Dict` mapping already proves path by path (ccxtGoProveReturnPaths)
+// only when every ts/src call binds a local the ts declares `NullableDict` (never an `any` box that would hold a typed nil)
+function h26g10NullableDictParseReturn (node, key) {
+    const name = node.name?.text;
+    if ((key !== 'NullableDict') || (node.type?.getText () !== 'NullableDict') || !CCXT_GO_PARSE_METHOD.test (name ?? '')) {
+        return false;
+    }
+    const fileName = node.getSourceFile?. ()?.fileName;
+    const graph = (typeof fileName === 'string') ? ccxtGoTsSrcImportGraph (fileName) : undefined;
+    if (graph === undefined) {
+        return false;
+    }
+    const callRe = new RegExp ('\\b' + name + '\\b');
+    let calls = 0;
+    let ok = true;
+    for (const [ file, text ] of graph.texts) {
+        if (!ok || !callRe.test (text)) {
+            continue;
+        }
+        const visit = (n) => {
+            if (ok && (n.kind === ts.SyntaxKind.Identifier) && (n.text === name) && !((n.parent?.kind === ts.SyntaxKind.MethodDeclaration) && (n.parent.name === n))) {
+                calls += 1;
+                ok = h26g10CallBindsNullableDictLocal (n);
+            }
+            n.forEachChild (visit);
+        };
+        visit (ts.createSourceFile (file, text, ts.ScriptTarget.Latest, true));
+    }
+    return ok && (calls > 0);
+}
+
+// `x = this.f (..)` / `const x: NullableDict = this.f (..)` where every declaration of x in the method is `NullableDict`
+function h26g10CallBindsNullableDictLocal (id) {
+    const access = id.parent;
+    const call = access?.parent;
+    if ((access?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (access.name !== id) || (access.expression.kind !== ts.SyntaxKind.ThisKeyword)
+        || (call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression !== access)) {
+        return false;
+    }
+    const holder = call.parent;
+    let local;
+    if ((holder?.kind === ts.SyntaxKind.VariableDeclaration) && (holder.initializer === call) && (holder.name.kind === ts.SyntaxKind.Identifier)) {
+        local = holder.name.text;
+    } else if ((holder?.kind === ts.SyntaxKind.BinaryExpression) && (holder.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+        && (holder.right === call) && (holder.left.kind === ts.SyntaxKind.Identifier) && (holder.parent?.kind === ts.SyntaxKind.ExpressionStatement)) {
+        local = holder.left.text;
+    } else {
+        return false;
+    }
+    let method = holder.parent;
+    while ((method !== undefined) && (method.kind !== ts.SyntaxKind.MethodDeclaration)) {
+        method = method.parent;
+    }
+    if (method === undefined) {
+        return false;
+    }
+    const decls = [];
+    const find = (n) => {
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name.kind === ts.SyntaxKind.Identifier) && (n.name.text === local)) {
+            decls.push (n);
+        }
+        n.forEachChild (find);
+    };
+    find (method);
+    return (decls.length === 1) && (decls[0].type?.getText () === 'NullableDict');
+}
+// ===== end h26-H26-G10
