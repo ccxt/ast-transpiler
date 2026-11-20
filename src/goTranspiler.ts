@@ -17997,8 +17997,20 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const fallback = this.goUnwrapParenthesizedNode(found.fallback);
-        const literal = ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0)) || this.goNeverNilDict(fallback, ws);
+        const literal = ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0)) || this.goNeverNilDict(fallback, ws)
+            || this.goNeverNilDictLocalDefault(fallback, ws);
         return literal && this.goPlainMapContainer(found.call.arguments[0], ws, false);
+    }
+
+    // a default that is a const local initialised by a never-nil safeDict read: the call answers a map either way
+    goNeverNilDictLocalDefault(fallback, ws: boolean): boolean {
+        const declaration: any = (fallback?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(fallback) : undefined;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || ((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const found = this.goSafeDictCallArgs(declaration.initializer);
+        return (found !== undefined) && (found.call !== fallback) && this.goNeverNilDict(found.call, ws);
     }
 
     goSourceTreeKind(node): 'rest' | 'ws' | 'skip' {
