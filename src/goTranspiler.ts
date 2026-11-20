@@ -35293,6 +35293,7 @@ GoTranspiler.prototype.goTernaryJoinConditionDefines = function (condition, name
     if (node?.kind === SyntaxKind.PrefixUnaryExpression && node.operator === SyntaxKind.ExclamationToken) {
         return this.goTernaryJoinConditionDefines(node.operand, name, !outcome);
     }
+    if (node?.kind === SyntaxKind.Identifier) { return this.h26g21AliasDefines(node, name, outcome); }
     if (node?.kind !== SyntaxKind.BinaryExpression) {
         return false;
     }
@@ -45263,3 +45264,40 @@ function h26g20NilTested (goTranspiler, declaration): boolean {
     return (scope === undefined) || goTranspiler.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && !readOk(n));
 }
 // ===== h26-G20 (end) =====
+// ===== h26-H26-G21: a ternary condition that is a const boolean alias of a nil test =====
+// `const hasLimit = (limit !== undefined); const x = hasLimit ? limit : 0`: the alias proves `limit` defined
+// on that branch only when neither the alias nor `limit` is ever written after the alias is bound.
+export interface GoTranspiler {
+    h26g21AliasDefines(node, name: string, outcome: boolean): boolean;
+    h26g21IsWritten(scope, declaration): boolean;
+}
+
+GoTranspiler.prototype.h26g21AliasDefines = function (node, name: string, outcome: boolean): boolean {
+    const alias: any = this.goDeclarationOfIdentifier(node);
+    const init: any = this.goUnwrapParenthesizedNode(alias?.initializer);
+    if ((alias?.name?.kind !== SyntaxKind.Identifier) || (((alias.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.BinaryExpression) || (init.left?.kind !== SyntaxKind.Identifier) || (init.left.text !== name)) {
+        return false;
+    }
+    const target: any = this.getChecker().getSymbolAtLocation(init.left)?.valueDeclaration;
+    const scope = this.goEnclosingFunction(alias);
+    if ((target === undefined) || (scope === undefined) || (this.goEnclosingFunction(node) !== scope)
+        || ((target.kind !== SyntaxKind.Parameter) && (target.kind !== SyntaxKind.VariableDeclaration)) || this.h26g21IsWritten(scope, target)) {
+        return false;
+    }
+    return this.goTernaryJoinConditionDefines(init, name, outcome);
+};
+
+// any assignment, compound assignment or ++/-- of the declared binding inside the function
+GoTranspiler.prototype.h26g21IsWritten = function (scope, declaration): boolean {
+    const checker = this.getChecker();
+    const isTarget = (n: any) => {
+        const u: any = this.goUnwrapParenthesizedNode(n);
+        return (u?.kind === SyntaxKind.Identifier) && (checker.getSymbolAtLocation(u)?.valueDeclaration === declaration);
+    };
+    return this.hasNodeWhere(scope, (n: any) => ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind >= SyntaxKind.FirstAssignment)
+        && (n.operatorToken.kind <= SyntaxKind.LastAssignment) && isTarget(n.left))
+        || (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression))
+            && ((n.operator === SyntaxKind.PlusPlusToken) || (n.operator === SyntaxKind.MinusMinusToken)) && isTarget(n.operand)));
+};
+// ===== h26-H26-G21 (end) =====
