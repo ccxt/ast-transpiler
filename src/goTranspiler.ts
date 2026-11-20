@@ -25349,7 +25349,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 }
                 decl = declMatch;
             }
-            if ((decl === undefined) || !declaredFrom.test(decl[1].trim())) {
+            if ((decl === undefined) || !(declaredFrom.test(decl[1].trim()) || (!isMap && goH26g07SiblingSliceProducer(decl[1])))) {
                 return false;
             }
             const tail = siblingText.substring(decl.index + decl[0].length, at);
@@ -44889,3 +44889,25 @@ export interface GoTranspiler {
     h26g06BaseMapFieldArg(arg): boolean;
 }
 // ===== h26-g06 (end) =====
+
+// ===== h26-G07 =====
+// base list producers whose generated BaseExchange signature (and so every override) returns `[]any` on every path
+const GO_H26G07_SLICE_PRODUCERS = [ 'filterBySinceLimit', 'filterBySymbolSinceLimit', 'filterBySymbolsSinceLimit', 'filterByCurrencySinceLimit',
+    'parseTrades', 'parseOrders', 'parseTransfers', 'parseTransactions', 'parseOHLCVs', 'arrayConcat' ];
+// a sibling-file local bound once from one of them prints `var x []any`, so it hands a `[]any` slot that slice
+function goH26g07SiblingSliceProducer(initText: string): boolean {
+    const text = String(initText ?? '').trim();
+    const match = /^this\s*\.\s*([A-Za-z_$][\w$]*)\s*\(/.exec(text);
+    if ((match === null) || !GO_H26G07_SLICE_PRODUCERS.includes(match[1])) {
+        return false;
+    }
+    let depth = 0;
+    for (let i = match[0].length - 1; i < text.length; i++) {
+        depth += (text[i] === '(') ? 1 : ((text[i] === ')') ? -1 : 0);
+        if (depth === 0) {
+            return i === text.length - 1; // the call is the whole initializer
+        }
+    }
+    return false;
+}
+// ===== h26-G07 (end) =====
