@@ -15291,7 +15291,7 @@ describe('ral-zg: a Dict[] row next to a differently sourced same-named sibling 
     const body = (sibling: string, use: string) => "    run (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'data', []);\n        const result = [];\n        if (rows.length > 0) {\n            " + sibling + "\n            result.push (this.safeString (row, 'id'));\n        }\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            " + use + "\n        }\n        return result;\n    }";
     test('read only by a safe* reader: the plain shared map (a Null row reads Null at every string key, as into_dict leaves)', () => {
         const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeString (row, 'id'));"));
-        expect(out).toMatch(/let mut row: crate::value::Dict = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\);/);
+        expect(out).toContain('let mut row: crate::value::Dict = self.safe_dict_t(&rows, Value::Int(i));');
     });
     test('handed on whole into a map literal: Option<Dict>, boxed back to exactly Null or the map', () => {
         const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeOrder ({ 'info': row, 'id': this.safeString (row, 'id') }));"));

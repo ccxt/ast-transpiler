@@ -2603,7 +2603,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? this.rustDictRowReaderText(declaration, read) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -2646,6 +2646,22 @@ export class RustTranspiler extends BaseTranspiler {
         if (owner === undefined || owner.name === init.expression || !this.rust57eSideLevelLocal(owner)) return undefined;
         const key: any = this.rustSkipWrappers(init.argumentExpression);
         return `${indent}let ${varName}: &Value = ${super.printIdentifier(init.expression)}.get(${Number(key.text)}).unwrap_or(&Value::Null)`;
+    }
+
+    /** A map row `xs[i]` (i64 counter) of a typed `List` local reads through the base `safe_dict_t`, the form `safeDict (xs, i)`
+     *  prints: the element's map, or the empty map for a missing / non-map element, as `.into_dict()` of the slice read answered. */
+    rustDictRowReaderText(declaration: any, read: string): string | undefined {
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || this.rustTestTierSource(declaration)) return undefined;
+        const key: any = this.rustSkipWrappers(init.argumentExpression);
+        if (!isIdentifier(key) || !this.rustI64CounterUse(key) || !this.rustDictElementSource(init) || this.rustUrlsMapEntry(init)) return undefined;
+        // only a list local the source declares `Dict[]` (a raw response row list)
+        const owner: any = this.rustDeclaredNode(init.expression);
+        if (owner === undefined || !isVariableDeclaration(owner) || owner.type === undefined || owner.type.getText() !== 'Dict[]') return undefined;
+        const recv = super.printIdentifier(init.expression);
+        const k = String(key.text);
+        if (read !== `${recv}.get(${k} as usize).cloned().unwrap_or(Value::Null)` && read !== `crate::value::KeyRead::read(&&${recv}, &Value::Int(${k}))`) return undefined;
+        return `self.safe_dict_t(&${recv}, Value::Int(${k}))`;
     }
 
     /** ral-58e: `const e = xs[k]` where `xs` is a typed `Vec<Value>` local of the same function (rustVecLocalDeclarationOf)
@@ -24588,6 +24604,8 @@ export class RustTranspiler extends BaseTranspiler {
         // A `let` declared empty is filled later by container writes only (the optional form).
         const nilDeclared = allSlot === undefined && (init === undefined || this.literalKindOfNode(init) === 'null') && (list.flags & NodeFlags.Const) === 0
             && list.parent?.kind === SyntaxKind.VariableStatement;
+        // a row read (`rows[i]`) the source itself declares `any` stays the boxed element: no map typing from the list
+        if (allSlot === undefined && declaration.type?.kind === SyntaxKind.AnyKeyword && isElementAccessExpression(this.rustSkipWrappers(declaration.initializer))) return undefined;
         let from: 'dict' | 'list' | 'api' | undefined = allSlot !== undefined ? 'list' : init !== undefined && isCallExpression(init) ? (this.rustEcdsaCall(init) ? 'dict' : this.rustBorrowedSourceKind(init) ?? this.rustBuiltReturnSourceKind(init) ?? this.rustVenueContainerReturnKind(init)?.kind ?? this.rustPromiseAllListKind(init)) : (this.rustDictElementSource(init) ? 'dict' : (this.rustListElementSource(init) ? 'list' : undefined));
         const endpoint = from === 'api';
         if (endpoint) from = this.rustDeclaredEndpointKind(init) ?? 'api';
@@ -25007,6 +25025,9 @@ export class RustTranspiler extends BaseTranspiler {
         // a nullable source lent whole keeps Null apart from an empty container: the optional form
         // ral-zg: a sibling-admitted map row handed on whole keeps Null apart from the empty map (the optional form)
         const zgRow = this.rustZgSiblingRows.has(declaration) && boxedElementUses.length > 0;
+        // a map row (`rows[i]` of a typed `Dict[]`) with helper key writes and whole hand-offs takes the same optional form
+        // with or without a sibling: `None` skips each write as the helper skipped a Null row, and boxes back to exactly Null
+        const aeoRow = !zgRow && aeoWriteUses.length > 0 && boxedElementUses.length > 0 && !nilDeclared && writes === 0 && this.rustDictElementSource(init) && !this.rustUrlsMapEntry(init);
         // ral-48a: a never-null `safeDict (o, k, {})` local rewritten only with its own kind (`extend` answers `Value::Map` on
         // every path) never holds Null: its writes keep the plain form
         // ral-58a: an omit of a proven map rewritten only by same-kind writes (self-omit / self-extend) is never null; the
@@ -25014,7 +25035,7 @@ export class RustTranspiler extends BaseTranspiler {
         const omitInitRewrites = writes > 0 && writes === sameKindWrites && from === 'dict' && init !== undefined && !this.rustContainerInitNeverNull(init, 'map') && this.rustOmitOfDict(init);
         if ((selfOmitWrites > 0 || omitInitRewrites) && this.rustHandedDictLocal(declaration)) return undefined;
         const neverNullRewrites = writes > 0 && writes === sameKindWrites && from === 'dict' && init !== undefined && (this.rustContainerInitNeverNull(init, 'map') || omitInitRewrites);
-        const optional = nilDeclared || nullTests > 0 || (writes > 0 && !neverNullRewrites) || lentNullable > 0 || optionalBoxes > 0 || zgRow || elementKeyWrites > 0 || optMapInit;
+        const optional = nilDeclared || nullTests > 0 || (writes > 0 && !neverNullRewrites) || lentNullable > 0 || optionalBoxes > 0 || zgRow || aeoRow || elementKeyWrites > 0 || optMapInit;
         // ral-90rd R2: the native join reads a never-null list only
         if (joinUses.length > 0 && (optional || from !== 'list')) return undefined;
         if (jwtLends > 0 && optional) return undefined;
@@ -25066,7 +25087,7 @@ export class RustTranspiler extends BaseTranspiler {
             // Null: `into_opt_dict` keeps both apart, as the declared-endpoint nil locals do (ral-ua)
             const declaredDictConst = !nilDeclared && writes === 0 && from === 'dict' && endpoint && (declaration.parent.flags & NodeFlags.Const) !== 0
                 && init !== undefined && isCallExpression(init) && this.rustDeclaredEndpointKind(init) === 'dict';
-            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optMapInit && !this.rustOptContainerSourceOk(init, from) && !declaredDictConst)) return undefined;
+            if (from === 'api' || (nilDeclared && writes === 0) || (!nilDeclared && !((zgRow || aeoRow || elementKeyWrites > 0) && this.rustDictElementSource(init)) && !optMapInit && !this.rustOptContainerSourceOk(init, from) && !declaredDictConst)) return undefined;
             this.rustOptContainerLocals.add(declaration);
         }
         for (const t of constTests) this.rustNeverNullTests.set(t, declaration);
@@ -27462,6 +27483,9 @@ export class RustTranspiler extends BaseTranspiler {
             const o = `self.safe_dict_o(${tern[2]})`;
             return printed.includes('{ Value::Null } else') ? `(if ${tern[1]} { None } else { ${o} })` : `(if ${tern[1]} { ${o} } else { None })`;
         }
+        // a map row `xs[i]` of a typed list: the base `safe_dict_o` reader (the element's map, `None` out of range / non-map)
+        const listRow = /^crate::value::KeyRead::read\(&&(\w+), &Value::Int\((\w+)\)\)$/.exec(printed);
+        if (listRow !== null && isElementAccessExpression(init) && this.rustDictElementSource(init)) return `self.safe_dict_o(&${listRow[1]}, Value::Int(${listRow[2]}))`;
         const row = /^\(match (\w+\.get\([\w ]+\)) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => Value::Null \}\)$/.exec(printed);
         if (row !== null && isCallExpression(init)) return `(match ${row[1]} { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None })`;
         return undefined;
