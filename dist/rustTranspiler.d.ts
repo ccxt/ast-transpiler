@@ -870,8 +870,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBaseTypedBare;
     /** The native kind a method declaration returns under the table, else undefined. */
     rustMethodTypedReturnKind(node: any): string | undefined;
-    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
     rustBaseTypedReturnKind(expr: any): string | undefined;
+    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    rustBaseTypedReturnKindAll(expr: any): string | undefined;
     /** pg: a call of a precision formatter of the typed-return table (`-> Option<String>`); its locals carry the venue copy veto. */
     rustPrecisionCall(expr: any): boolean;
     /** pg: the local is written from a precision formatter, or returned by one of the typed precision methods. */
@@ -901,6 +903,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseTypedText(kind: string, expr: any): string | undefined;
     /** Call hook: a `Value` position takes the native result boxed once. */
     printRustBaseTypedReturnCall(node: any): string | undefined;
+    /** The bare `Option<Dict>` call text of an `odict` table call (safeDictN), else undefined. */
+    rustOdictCallText(expr: any): string | undefined;
+    /** A Dict local from an `odict` call: the empty map for `None`, as `.into_dict()` answered for Null. */
+    rustOdictDefaultText(expr: any): string | undefined;
+    /** `return x` of an `-> Option<Dict>` method: the map a `Value` holds is moved out, anything else is `None`. */
+    rustOdictReturnText(exp: any): string;
     /** `return x` in a typed method: the native value, converting a `Value` once. */
     printRustBaseTypedReturn(fn: any, exp: any): string | undefined;
     /** `format!(..)` of a whole `Value::Str(format!(..).into())` print (balanced, nothing after), else undefined. */
@@ -1302,6 +1310,12 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** r04b: `n` is the key argument of `this.safeDict (this.balance, n, d)`; the declared `Dict` field read takes the lent key
+     *  (`None` keys as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceSafeDictKey(n: Node): boolean;
+    /** r04b: `n` is the key of a statement `row[n] = v` on a const local read by `this.safeDict (this.balance, k, d)`: the
+     *  native insert takes the key text (`None` as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceRowInsertKey(n: Node): boolean;
     /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
     rust70fCastBase(n: Node): Identifier | undefined;
     /** ral-70f: `access` is (through parentheses) the target of an assignment or update, or a `delete` operand. */
@@ -1465,6 +1479,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printClientHandleKeyedRead(node: any): string | undefined;
     /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
     printClientHandleKeys(init: any): string | undefined;
+    /** `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)`:
+     *  the alias is the live field, so its key list is the handle's key list and the alias itself is never printed. */
+    rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined;
+    rustClientHandleKeysAliasPrintsKeys(declaration: any): boolean;
     /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
     printClientHandleDelete(node: any): string | undefined;
     /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
@@ -2861,6 +2879,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  inline takes the literal key form only. Marker-route key names and keys
      *  whose text needs escaping are excluded. */
     private rustShadowKeyIsReadable;
+    /** A safe-read key that is a parameter of the reading function declared string (`string` / `Str`): a `Value::Str`
+     *  or `Value::Null` in the port, read as `K.as_str()` (a Null key answers the default, as the helper does). */
+    private rustShadowSafeReadKeyParam;
     private rustShadowKeyIsLiteral;
     /** Keys whose text is safe to inline into a rust string literal. */
     private rustShadowKeyLiteral;
@@ -3838,6 +3859,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A row read by key out of a ws cache bucket (`const b = this.safeDict (c.hashmap, sym, {})`, `b` a const never written):
      *  the runtime tags only the bucket (`__cache_backref`), never its rows, so a row write is the helper's plain insert. */
     rustCacheBucketRow(head: any): boolean;
+    /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
+     *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
+    rustCacheRowOdictRewrite(rhs: any, init: any): boolean;
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
      *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
     rustCacheRowDynamicWrite(n: any, init: any): boolean;
