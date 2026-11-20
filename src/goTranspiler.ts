@@ -1272,6 +1272,9 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange_prediction.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
     'this.SlugToMarketSymbol': 'string',
     'this.SlugToOutcomeSymbol': 'string',
+    // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
+    'this.RlpEncodeList': 'string',
+    'this.IntToRlpHex': 'string',
 };
 
 // ---------------------------------------------------------------------------
