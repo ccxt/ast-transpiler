@@ -14053,7 +14053,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** 'map' for a typed map receiver, 'value' for a proven-dict `Value` receiver, else undefined. */
     rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined {
-        if (this.isTestSource(receiver) || (this.isWriteBackBindRead(read) && !this.rustOwnedWriteBackPushBind(read))) return undefined;
+        if (this.isTestSource(receiver) || (this.isWriteBackBindRead(read) && !this.rustOwnedWriteBackPushBind(read) && !this.rustH26r12RebindOnlyBind(read))) return undefined;
         if (this.rustDictBearerDeclaration(receiver) !== undefined || this.rustMapParamDeclaration(receiver) !== undefined) return 'map';
         if (this.rustReadBearerKind(receiver) !== undefined || this.rustParamShadowOf(receiver) !== undefined || this.rustLentListUse(receiver)
             || this.printOptListElement(receiver, read.argumentExpression) !== undefined) return undefined;
@@ -23731,7 +23731,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.isNativeWriteTargetBase(root)) return false;
         // ccxt's write-back pass matches `get_value` text to write a mutated bind back.
         // ral-xf: it also matches a literal map's native dynamic read (`m.get(k.as_str()..)`) and writes back by insert.
-        if (this.isWriteBackBindRead(access) && !this.rustLiteralWriteBackBindOk(access)) return false;
+        if (this.isWriteBackBindRead(access) && !this.rustLiteralWriteBackBindOk(access) && !this.rustH26r12RebindOnlyBind(access)) return false;
         return this.rustDictBearerKeyOk(access.argumentExpression) || this.rustBearerTypedStrReadKey(access) !== undefined;
     }
 
@@ -40740,6 +40740,39 @@ export class RustTranspiler extends BaseTranspiler {
             || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h26r11UntaggedMapSource(declaration.initializer)) return undefined;
         const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
         return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+
+    // ===== h26-H26-R12
+    /** `const v = m[k]` whose next statement only rebinds `v` (no keyed write or push through it): no write-back is due. */
+    rustH26r12RebindOnlyBind(read: Node): boolean {
+        const declaration: any = read?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer !== read || !isIdentifier(declaration.name)) return false;
+        let statement: any = declaration;
+        while (statement !== undefined && !isStatement(statement)) statement = statement.parent;
+        const siblings: any[] = statement?.parent?.statements ?? [];
+        const at = siblings.indexOf(statement);
+        return at >= 0 && at + 1 < siblings.length && !this.rustH26r12MutatesThrough(siblings[at + 1], String(declaration.name.text));
+    }
+    /** The statement after a bind `v = m[k]` writes through the bound copy (`v[f] = x`, `v.push (x)`): only then must the
+     *  copy go back into `m`. Rebinding the whole local (`v = x`, `v += x`) leaves `m[k]` untouched in TS too. */
+    rustH26r12MutatesThrough(node: Node, name: string): boolean {
+        let mutated = false;
+        const visit = (n: Node) => {
+            if (mutated) return;
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier(this.rustSkipWrappers(n.left))) {
+                visit(n.right);
+                return;
+            }
+            if ((isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && this.rootPlaceText(n.left) === name) ||
+                (isCallExpression(n) && isPropertyAccessExpression(n.expression) &&
+                n.expression.name.text === 'push' && this.rootPlaceText(n.expression.expression) === name)) {
+                mutated = true;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        node.forEachChild(visit);
+        return mutated;
     }
 
     /** `this.f` (declared plain-dict, untagged), `{}`, or a ternary whose arms are each one of those. */
