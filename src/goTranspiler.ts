@@ -21765,6 +21765,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goNonNilMapLocalPointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
+                    ?? this.goSafeDictLocalScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
                     ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs)
@@ -26022,6 +26023,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `${containerStr}[*${keyStr}] = ${valueStr}`;
         }
         return this.goNilGuardedKeyWrite(containerStr, keyStr, valueStr, identation);
+    }
+
+    // `m["k"] = p` on a `safeDict (.., {})` local (SafeDictMap with a literal default: never nil) never
+    // rebound, `p` a scalar-pointer local: the helper's derefScalar stores *p, or nil for a nil p
+    goSafeDictLocalScalarPointerStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        if ((containerNode?.kind !== SyntaxKind.Identifier) || (value?.kind !== SyntaxKind.Identifier)
+            || !this.goIsStringKeyExpression(keyNode) || !this.goBalanceScalarPointerValue(value)) {
+            return undefined;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode)?.valueDeclaration?.resolve();
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeDictCallArgs(decl.initializer)?.fallback === undefined)
+            || (this.goSafeDictMapLocal(decl) !== GO_SAFE_DICT_LOCAL_TYPE) || this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name)) {
+            return undefined;
+        }
+        const ptr = this.printNode(value, 0).trim();
+        const iden = this.getIden(identation);
+        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
     }
 
     goIsBaseMapReaderCall(call): boolean {
