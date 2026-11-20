@@ -14140,6 +14140,7 @@ function blockPlan (go: any, block: any) {
 export function installFmGo5OG02 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goOwnedGetsInstalled')) { return; }
     installGoGuardedWrappedRead (goTranspiler); // the build installs this group last
+    installGoGuardedTypedArgHoist (goTranspiler);
 
     const printBlock = goTranspiler.printBlock;
     goTranspiler.printBlock = function (this: any, node: any, identation: number, chainBlock = false) {
@@ -41338,4 +41339,84 @@ function goAwaitedRowListLocalUncached(goTranspiler: GoTranspiler, declaration):
         return true; // a nil test, an argument, a return or a store would observe the typed nil
     });
     return !unsafe && (awaited > 0) && (measured > 0);
+}
+
+// `this.market (l[k])` / `this.getUrlByMarketType (l[k], ..)` over a declared `string[]` list l: both take the symbol as
+// `any` and deref a *string box first, so the guarded read hoists into a typed `*string` local (nil when out of range,
+// else &l[k]) in front of the statement: same nil answer, no closure, no `any` local. Later arguments are pure.
+const GO_GUARDED_TYPED_ARG_CALLEES = [ 'market', 'getUrlByMarketType' ];
+function goGuardedTypedArgRead (goTranspiler, statement): any {
+    let value: any = (statement?.kind === SyntaxKind.VariableStatement)
+        ? ((statement.declarationList?.declarations?.length === 1) ? statement.declarationList.declarations[0].initializer : undefined)
+        : (((statement?.kind === SyntaxKind.ExpressionStatement) && (statement.expression?.kind === SyntaxKind.BinaryExpression)
+            && (statement.expression.operatorToken.kind === SyntaxKind.EqualsToken) && (statement.expression.left?.kind === SyntaxKind.Identifier)) ? statement.expression.right : undefined);
+    while ((value?.kind === SyntaxKind.ParenthesizedExpression) || (value?.kind === SyntaxKind.AwaitExpression)) {
+        value = value.expression;
+    }
+    const callee = (value?.kind === SyntaxKind.CallExpression) ? value.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !GO_GUARDED_TYPED_ARG_CALLEES.includes(callee.name?.text) || ((callee.name.text === 'market') && (value.arguments.length !== 1))) {
+        return undefined;
+    }
+    const pure = (n) => [ SyntaxKind.Identifier, SyntaxKind.StringLiteral, SyntaxKind.NumericLiteral, SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword ].includes(n?.kind);
+    const read: any = value.arguments[0];
+    return ((read?.kind === SyntaxKind.ElementAccessExpression) && (read.expression?.kind === SyntaxKind.Identifier)
+        && pure(read.argumentExpression) && value.arguments.slice(1).every(pure)
+        && (goGuardedTypedArgListType(goTranspiler, read.expression) === GO_STRING_LIST_LOCAL_TYPE)
+        && !goGuardedListReadElementWritten(goTranspiler.goEnclosingFunction(read), read.expression.text)
+        && !goGuardedTypedArgMayBeProven(goTranspiler, read)) ? read : undefined;
+}
+// a `this.marketSymbols (..)` list (a call the shared deferral always leaves alone) is proven non-empty by the ccxt
+// build only with a literal `false` third argument; any `.length` read of the list before the read is left to that build
+function goGuardedTypedArgMayBeProven (goTranspiler, read): boolean {
+    const list = read.expression;
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    const init: any = declaration?.initializer;
+    const callee: any = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+    const symbols = (declaration?.kind === SyntaxKind.VariableDeclaration) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'marketSymbols');
+    const scope = goTranspiler.goEnclosingFunction(list);
+    return (symbols ? ((init.arguments.length >= 3) || (goTranspiler.goNameWriteSites(scope, list.text, declaration).length > 0)
+        || goGuardedListReadElementWritten(scope, list.text)) : goGuardedListReadMayBeProven(goTranspiler, read))
+        || goTranspiler.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length') && (n.pos < read.pos)
+            && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === list.text));
+}
+const GO_GUARDED_TYPED_ARG_GET = /^(?:ccxt\.)?GetValue\(([A-Za-z_]\w*), (\w+)\)$/;
+// a local's declared Go type, or an optional parameter's GetArg twin type (`symbols: Strings = undefined` binds []string)
+function goGuardedTypedArgListType (goTranspiler, list): string | undefined {
+    const declared = goTranspiler.goResolvedLocalGoType(list);
+    if (declared !== undefined) {
+        return declared;
+    }
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    return ((declaration?.kind === SyntaxKind.Parameter) && (goTranspiler.goNameWriteSites(goTranspiler.goEnclosingFunction(list), list.text, declaration).length === 0))
+        ? goTranspiler.goGetArgParameterType(declaration) : undefined;
+}
+function goGuardedTypedArgHoist (goTranspiler, statement, printed: string, identation: number): string {
+    const read = (typeof printed === 'string') ? goGuardedTypedArgRead(goTranspiler, statement) : undefined;
+    const closure = (read === undefined) ? '' : goTranspiler.printNode(read, identation);
+    const at = (closure === '') ? -1 : printed.indexOf(closure);
+    // the printer leaves `GetValue(l, k)` (the ccxt build turns it into the guard closure) or the closure itself
+    const get = (at < 0) ? null : GO_GUARDED_TYPED_ARG_GET.exec(closure.trim());
+    const m = (get !== null) ? [ get[0], get[2], get[1] ] : ((at < 0) ? null : GO_GUARDED_LIST_READ.exec(closure.trim()));
+    if ((m === null) || (m[2] !== read.expression.text) || (m[3] !== undefined) || (printed.indexOf(closure, at + 1) >= 0)) {
+        return printed;
+    }
+    const name = `${m[2]}Elem${goTranspiler.getLineBasedSuffix(read)}`;
+    const line = printed.lastIndexOf('\n', at) + 1;
+    const hoist = `${goTranspiler.getIden(identation)}var ${name} *string = nil\n${goGuardedListReadIf(goTranspiler, `${name} = &${m[2]}[${m[1]}]`, m.slice(1), identation)}\n`;
+    return printed.substring(0, line) + hoist + printed.substring(line, at) + name + printed.substring(at + closure.length);
+}
+function installGoGuardedTypedArgHoist (goTranspiler) {
+    if (!goInstallOnce(goTranspiler, '__goGuardedTypedArgHoistInstalled', 'printVariableStatement')) {
+        return;
+    }
+    const variableStatement = goTranspiler.printVariableStatement;
+    goTranspiler.printVariableStatement = function (node, identation) {
+        return goGuardedTypedArgHoist(this, node, variableStatement.call(this, node, identation), identation);
+    };
+    const expressionStatement = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return goGuardedTypedArgHoist(this, node, expressionStatement.call(this, node, identation), identation);
+    };
 }
