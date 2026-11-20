@@ -21362,7 +21362,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return stm;
         }
 
-        return this.getIden(identation) + this.printNode(declaration.name) + " := " + parsedValue.trim();
+        return this.getIden(identation) + this.printNode(declaration.name) + " := " + (this.h26g57ForCounterSeed(declaration) ?? parsedValue.trim());
     }
 
     // gofmt (go/printer exprList) column-aligns consecutive single-line `key: value` entries of a composite
@@ -47016,3 +47016,19 @@ GoTranspiler.prototype.printArrayLiteralExpression = function (node, identation 
     return printArrayLiteralExpressionH26g56.call(this, node, identation);
 };
 // ===== h26-G56 (end) =====
+// ===== h26-G57 =====
+// a for-loop counter seeded by a bare local whose declared Go type is int64 starts as a native `int(..)`
+// (the int64 case of ParseInt is the identity); any other seed keeps the helper form
+export interface GoTranspiler {
+    h26g57ForCounterSeed(declaration): string | undefined;
+}
+GoTranspiler.prototype.h26g57ForCounterSeed = function (declaration) {
+    const list = declaration?.parent;
+    const init = declaration?.initializer;
+    if ((list?.kind !== SyntaxKind.VariableDeclarationList) || (list.parent?.kind !== SyntaxKind.ForStatement) || (list.parent.initializer !== list)
+        || (list.declarations.length !== 1) || (init?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    return (this.goDeclaredTypeOfIdentifier (init) === 'int64') ? `int(${this.printNode (init, 0)})` : undefined;
+};
+// ===== h26-G57 (end) =====
