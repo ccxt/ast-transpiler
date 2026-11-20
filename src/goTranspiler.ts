@@ -24869,6 +24869,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // dominating nil guard, or a Safe* accessor handed a literal default. A cast (`x as string`,
     // `x!`) is not a proof of the absent state, so it reads through to the value underneath.
     goNilProvenStringPtrArg(arg): boolean {
+        if (this.goNonNilStringOverloadArg(arg)) {
+            return true;
+        }
         if (this.goPrintedArgType(arg) !== '*string') {
             return false;
         }
@@ -24880,6 +24883,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return this.goSafeStringLiteralDefaultCall(node);
         }
         return false;
+    }
+
+    // slot 0 of `const [ x, p ] = this.handleOptionStringAndParams (.., '<literal>')`: the Go base returns
+    // the literal or a present string option (another type panics), so the *string is never nil
+    goNonNilStringOverloadArg(arg): boolean {
+        return (arg?.kind === SyntaxKind.Identifier) && this.goNonNilStringOverloadSlot(arg);
     }
 
     // `this.safeString<FamilyN?>(dict, key, '<literal>')`: the accessor answers a pointer to the
