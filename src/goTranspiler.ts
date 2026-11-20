@@ -20931,7 +20931,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (goType === undefined) {
             return this.goSafeDictLocalUnbox(declaration) ?? this.goSafeListLocalUnbox(declaration) ?? this.goMarketLocalUnbox(declaration)
                 ?? this.goOrderBookLocalUnbox(declaration) ?? this.goOrderBookSideLocalType(declaration)
-                ?? this.goFieldStringLocalType(declaration) ?? this.goNilInitLocalType(declaration) ?? 'any';
+                ?? this.goFieldStringLocalType(declaration) ?? this.goNilInitLocalType(declaration) ?? this.h26g14MapFieldLocalType(declaration) ?? 'any';
         }
         // the scan matches AST identifiers, so it needs the source name, not the
         // printed one (`type` is renamed to `typeVar` on the way out)
@@ -27982,6 +27982,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         'Urls': 'map[string]any',
         'HttpExceptions': 'map[string]any',
         'Headers': 'map[string]any',  // the default request headers, `Dictionary<string>` in the TS base
+        'NetworkAliases': 'map[string]any',  // only written as a map literal (exchange_options.go)
     };
 
     // the market/currency tables are plain `map[string]any` fields of BaseExchange (go/v4/exchange.go),
@@ -28011,7 +28012,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const field = /^this\.([A-Za-z_]\w*)$/.exec(text);
         if ((field !== null) && (dictNode?.kind === SyntaxKind.PropertyAccessExpression) && (dictNode.expression?.kind === SyntaxKind.ThisKeyword)) {
             const name = field[1];
-            if (this.GO_NATIVE_MAP_ACCESSORS.indexOf(name) >= 0) {
+            if ((this.GO_NATIVE_MAP_ACCESSORS.indexOf(name) >= 0) || this.goCacheField(dictNode)) {
                 return 'map[string]any';
             }
             return Object.prototype.hasOwnProperty.call(this.GO_NATIVE_MAP_FIELDS, name) ? this.GO_NATIVE_MAP_FIELDS[name] : undefined;
@@ -45096,3 +45097,48 @@ function ccxtGoDerefDeclarationPointersOk (goTranspiler, declaration, guarded) {
     return guarded.every ((leaf) => (leaf.text !== declaration.name.text) && /^[A-Za-z_][A-Za-z0-9_]*$/.test (goTranspiler.printNode (leaf, 0)));
 }
 // ===== end h26-H26-G13
+
+// ===== h26-G14 =====
+export interface GoTranspiler {
+    h26g14MapFieldLocalType(declaration): string | undefined;
+    h26g14FieldNonNilBefore(declaration, fieldName: string): boolean;
+}
+// the Go map fields a `const x = this.<f>` local may take as its declared type: `features` / `networkAliases`
+// (BaseExchange, `map[string]any` in go/v4/exchange.go) and the PredictionExchange caches (goCacheField)
+const H26G14_BASE_MAP_FIELDS = [ 'Features', 'NetworkAliases' ];
+// `const x = this.<map field>`: x holds the field's own map. Every use must read it as a map (index, `in`, ObjectKeys,
+// Safe* receiver); handing it to an `any` slot is allowed only when an early `this.<f> === undefined` return proves
+// the map non-nil there, so no typed nil map reaches a nil test through the box
+GoTranspiler.prototype.h26g14MapFieldLocalType = function (declaration) {
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression?.kind !== SyntaxKind.ThisKeyword) || (typeof init.name?.text !== 'string')) {
+        return undefined;
+    }
+    const goName = this.transformPropertyAccessExpressionName(init.name.text, init.name);
+    if (!H26G14_BASE_MAP_FIELDS.includes(goName) && !this.goCacheField(init)) {
+        return undefined;
+    }
+    const nonNil = this.h26g14FieldNonNilBefore(declaration, init.name.text);
+    return this.goDeclaredLocalTypeIfSafe(declaration, 'map[string]any', (n) => this.goSafeDictUseReadsTheMap(n)
+        || (nonNil && (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression !== n)));
+};
+// a statement before the declaration, in the same block, is `if (this.<f> === undefined) { return; }`
+GoTranspiler.prototype.h26g14FieldNonNilBefore = function (declaration, fieldName) {
+    const statement: any = declaration.parent?.parent;
+    const block: any = statement?.parent;
+    if ((statement?.kind !== SyntaxKind.VariableStatement) || (block?.kind !== SyntaxKind.Block)) {
+        return false;
+    }
+    const at = block.statements.indexOf(statement);
+    return block.statements.slice(0, at).some((st: any) => {
+        const test: any = (st.kind === SyntaxKind.IfStatement) && (st.elseStatement === undefined) ? this.goUnwrapParenthesizedNode(st.expression) : undefined;
+        const body: any = (st.thenStatement?.kind === SyntaxKind.Block) ? st.thenStatement.statements : [ st.thenStatement ];
+        const left: any = test?.left;
+        return (test?.kind === SyntaxKind.BinaryExpression) && (test.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken)
+            && (left?.kind === SyntaxKind.PropertyAccessExpression) && (left.expression?.kind === SyntaxKind.ThisKeyword)
+            && (left.name?.text === fieldName) && (test.right?.kind === SyntaxKind.Identifier) && (test.right.text === 'undefined')
+            && (body.length === 1) && (body[0]?.kind === SyntaxKind.ReturnStatement);
+    });
+};
+// ===== h26-G14 (end) =====
