@@ -18080,6 +18080,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         if (this.goLiteralDefaultSafeBoolWrite(parent.right, goType)) {
                             return false;
                         }
+                        if ((goType === 'string') && this.h26g37NonNilSeed(declaration) && this.h26g37NonNilSafeStringWrite(parent.right, varName)) {
+                            return false;
+                        }
                         // the nil-init string scan already proved every write prints a Go string
                         if (stringWriteProven && (goType === 'string')) {
                             return false;
@@ -18215,7 +18218,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((goType === 'string') && this.goLiteralDefaultStringWrite(left, right)) {
             return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
         }
-        if (this.goLiteralDefaultSafeBoolWrite(right, goType)) {
+        if (this.goLiteralDefaultSafeBoolWrite(right, goType) || ((goType === 'string') && this.h26g37NonNilSafeStringWrite(right, left.text))) {
             return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
         }
         if ((goType === undefined) || (this.goPointerWriteConversion(right, goType) !== 'wrap')) {
@@ -46189,3 +46192,34 @@ GoTranspiler.prototype.h26g33AbsentOrUndefined = function (node) {
     return (node === undefined) || ((node.kind === SyntaxKind.Identifier) && (node.text === 'undefined'));
 };
 // ===== h26-G33 (end) =====
+
+// ===== h26-g37 =====
+export interface GoTranspiler {
+    h26g37NonNilSafeStringWrite(node, varName: string): boolean;
+    h26g37NonNilSeed(declaration): boolean;
+}
+// the local's own seed is a value, not nil: a nil-seeded local keeps the pointer (its reads may see nil)
+GoTranspiler.prototype.h26g37NonNilSeed = function (declaration): boolean {
+    const seed: any = declaration?.initializer;
+    return (seed !== undefined) && (seed.kind !== SyntaxKind.NullKeyword) && (seed.kind !== SyntaxKind.UndefinedKeyword)
+        && !((seed.kind === SyntaxKind.Identifier) && (seed.text === 'undefined'));
+};
+// `x = this.safeString{,Lower,Upper}{,2} (.., <literal> | x)` into a Go `string` local: the hand-written method returns
+// the address of the found string or of ToString(default), and a literal or the string local itself is never nil
+GoTranspiler.prototype.h26g37NonNilSafeStringWrite = function (node, varName: string): boolean {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    const callee: any = (node?.kind === SyntaxKind.CallExpression) ? node.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !this.goIsBaseExchangeMethod(callee.name)) {
+        return false;
+    }
+    if (this.goDefaultedSafeStringCall(node)) {
+        return true;
+    }
+    const arity = GO_DEFAULTED_SAFE_STRING_ARITY[callee.name?.text];
+    const last: any = node.arguments?.[arity - 1];
+    return (arity !== undefined) && (node.arguments.length === arity) && (last?.kind === SyntaxKind.Identifier) && (last.text === varName);
+};
+// ===== h26-g37 (end) =====
