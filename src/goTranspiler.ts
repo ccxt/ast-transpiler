@@ -29130,6 +29130,38 @@ ${this.getIden(identation)}${returnStatement}`;
         return { start, hasEnd, end };
     }
 
+    // `s.slice(i)` / `s.slice(i, i + 1)` on a `string` local, where i counts `for (let i = 0; i < s.length; i++)`
+    // (or a length local of s) and neither is written in the loop: 0 <= i < len(s), so the subscript cannot panic
+    goSliceLoopCounterArgs(node): string | undefined {
+        const args = node?.arguments ?? [];
+        const receiver = this.goUnwrapParenthesizedNode(node?.expression?.expression);
+        const counter = args[0];
+        if ((receiver?.kind !== SyntaxKind.Identifier) || (counter?.kind !== SyntaxKind.Identifier) || (args.length > 2)) {
+            return undefined;
+        }
+        if (this.goPrintedTypeOfExpression(receiver, '') !== 'string') {
+            return undefined;
+        }
+        const end = this.goUnwrapParenthesizedNode(args[1]);
+        if ((end !== undefined) && !((end.kind === SyntaxKind.BinaryExpression) && (end.operatorToken.kind === SyntaxKind.PlusToken)
+            && (end.left?.kind === SyntaxKind.Identifier) && (end.left.text === counter.text)
+            && (end.right?.kind === SyntaxKind.NumericLiteral) && (end.right.text === '1'))) {
+            return undefined;
+        }
+        if (this.goLoopBoundedIndexRead(node, receiver, counter, receiver.text, counter.text) === undefined) {
+            return undefined;
+        }
+        return counter.text;
+    }
+
+    goSliceLoopCounterText(node, receiverText: string, goType: string): string | undefined {
+        const counter = this.goSliceLoopCounterArgs(node);
+        if ((counter === undefined) || (goType !== 'string') || !/^\w+$/.test(receiverText)) {
+            return undefined;
+        }
+        return (node.arguments.length === 1) ? `${receiverText}[${counter}:]` : `${receiverText}[${counter}:${counter}+1]`;
+    }
+
     // true when this `.slice(a, b)` call prints native Go slicing of a string value
     goIsNativeSliceCall(node): boolean {
         if (node?.kind !== SyntaxKind.CallExpression) {
@@ -29142,7 +29174,7 @@ ${this.getIden(identation)}${returnStatement}`;
         if (this.goSliceReceiverType(node) === undefined) {
             return false;
         }
-        return this.goSliceLiteralBounds(node) !== undefined;
+        return (this.goSliceLiteralBounds(node) !== undefined) || (this.goSliceLoopCounterArgs(node) !== undefined);
     }
 
     // `x.slice(a, b)` -> `x[a:b]` when the receiver is a local the printer declares
@@ -29158,7 +29190,7 @@ ${this.getIden(identation)}${returnStatement}`;
         }
         const bounds = this.goSliceLiteralBounds(node);
         if (bounds === undefined) {
-            return undefined;
+            return this.goSliceLoopCounterText(node, receiverText, goType);
         }
         const { start, hasEnd, end } = bounds;
         if (goType === 'string') {
