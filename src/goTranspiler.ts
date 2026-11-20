@@ -4405,6 +4405,38 @@ function nilJoinOccurrenceKind (node) {
 // cannot model keep the flag they had on entry
 const CCXT_GO_NIL_JOIN_CACHE = new WeakMap ();
 
+// `[.., x] = this.f (..)` on a `let x: NullableDict = undefined` local whose tuple slot is declared Dict (R2's proof)
+function goNilJoinDictSlotWriteType (goTranspiler, declaration, expression, name) {
+    const left = expression?.left;
+    if ((expression?.kind !== ts.SyntaxKind.BinaryExpression) || (expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
+        || (left?.kind !== ts.SyntaxKind.ArrayLiteralExpression)) {
+        return undefined;
+    }
+    const index = left.elements.findIndex ((e) => (e.kind === ts.SyntaxKind.Identifier) && (e.text === name));
+    return ((index >= 0) && goNilDeclaredDictSlotRebind (goTranspiler, declaration, expression.right, index)) ? 'map[string]any' : undefined;
+}
+
+// the slot is declared Dict on a `this.f (..)` tuple and the nil-declared local is never element-written (the
+// generic native store skips the helper's value deref); the join walk proves every other write and read
+function goNilDeclaredDictSlotRebind (goTranspiler, declaration, right, index) {
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
+        || !isNilDeclaredInitializer (declaration.initializer)) {
+        return false;
+    }
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const name = declaration.name.text;
+    // a bag handed on inside a list literal (a returned tuple) keeps its box
+    const vetoed = (n) => (n.kind === ts.SyntaxKind.Identifier) && (n.text === name) && (ccxtGoNilJoinIsElementWrite (n)
+        || ((n.parent?.kind === ts.SyntaxKind.ArrayLiteralExpression) && !((n.parent.parent?.kind === ts.SyntaxKind.BinaryExpression) && (n.parent.parent.left === n.parent))));
+    if ((scope === undefined) || goTranspiler.hasNodeWhere (scope, vetoed)) {
+        return false;
+    }
+    const expr = (right?.kind === ts.SyntaxKind.AwaitExpression) ? right.expression : right;
+    const callee = expr?.expression;
+    return (expr?.kind === ts.SyntaxKind.CallExpression) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword) && goTranspiler.goTupleElementIsDict (expr, index);
+}
+
 // cached: the declaration printer and the write-site value half ask the same question
 function ccxtGoNilDeclaredContainerJoinType (goTranspiler, declaration) {
     if (CCXT_GO_NIL_JOIN_CACHE.has (declaration)) {
@@ -4741,6 +4773,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
             return (NIL_JOIN_TYPES.indexOf (goType) >= 0) ? goType
                 : NIL_JOIN_TYPES.find ((t) => ccxtGoWriteSiteConversion (goTranspiler, t, right, true) !== undefined);
         },
+        slotWriteType: (expression) => goNilJoinDictSlotWriteType (goTranspiler, declaration, expression, name),
         // a Safe* accessor may answer absent: the local is not proven present after it
         writeProvesPresent: (right) => {
             // a safeDict with a never-nil `{}` default answers a map on every path
@@ -17452,7 +17485,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 && parent.parent.left === parent
                 && parent.parent.operatorToken.kind === SyntaxKind.EqualsToken
                 && !((goType === 'map[string]any') && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))
-                && !((goType === 'map[string]any') && this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
+                && !((goType === 'map[string]any') && (this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)) || goNilDeclaredDictSlotRebind(this, declaration, parent.parent.right, parent.elements.indexOf(n))))) {
                     return true;
                 }
                 if (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n) {
@@ -42569,6 +42602,9 @@ GoTranspiler.prototype.goDictLocalBindsDictElement = function (leftElement, righ
         return false;
     }
     const declaration: any = this.goDeclarationOfIdentifier (leftElement);
+    if (isNilDeclaredInitializer (declaration?.initializer) && goNilDeclaredDictSlotRebind (this, declaration, right, index)) {
+        return ccxtGoNilJoinDeclarationType (this, leftElement) === 'map[string]any';
+    }
     if ((declaration?.initializer === undefined) || !this.goDictLocalTupleRebindIsDict (declaration, right, index)) {
         return false;
     }
@@ -42581,7 +42617,8 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
     if ((goType !== GO_SAFE_DICT_LOCAL_TYPE) || (scope === undefined) || (this.h20g04SelfOmitDeclaration !== undefined)
         || !this.hasNodeWhere (scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === varName) && (n.parent?.kind === SyntaxKind.ArrayLiteralExpression)
             && (ccxtGoParamDeclarationOf (this, n) === declaration)
-            && this.goDictLocalTupleRebindIsDict (declaration, n.parent.parent?.right, n.parent.elements.indexOf (n)))) {
+            && (this.goDictLocalTupleRebindIsDict (declaration, n.parent.parent?.right, n.parent.elements.indexOf (n))
+                || goNilDeclaredDictSlotRebind (this, declaration, n.parent.parent?.right, n.parent.elements.indexOf (n))))) {
         return h20g04ShippedLocalIsSafeToType.call (this, scope, declaration, varName, goType, stringWriteProven);
     }
     this.h20g04SelfOmitDeclaration = declaration;
