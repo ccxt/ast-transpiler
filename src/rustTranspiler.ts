@@ -2536,6 +2536,8 @@ export class RustTranspiler extends BaseTranspiler {
         const typedMarket = this.printTypedMarketLocal(declaration, indent, varName);
         if (typedMarket !== undefined) return typedMarket;
         // A read-only container bearer carries the container itself.
+        const aliasKeys = node.declarations.length === 1 && this.rustClientHandleKeysAlias(this.unwrapParens(this.unwrapParens(declaration.initializer)?.arguments?.[0])) !== undefined ? this.printClientHandleKeys(declaration.initializer) : undefined;
+        if (aliasKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${aliasKeys}`;
         const readBearer = node.declarations.length === 1 ? this.rustReadBearerKindOfDeclaration(declaration) : false;
         if (readBearer === 'list') {
             const handleKeys = this.printClientHandleKeys(declaration.initializer); if (handleKeys !== undefined) return `${indent}let mut ${varName}: Vec<Value> = ${handleKeys}`;
@@ -9779,9 +9781,43 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = this.unwrapParens(init);
         if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
             || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return undefined;
-        const access = this.rustClientHandleAccess(call.arguments[0], true);
+        const alias: any = this.rustClientHandleKeysAlias(this.unwrapParens(call.arguments[0]));
+        const access = this.rustClientHandleAccess(alias === undefined ? call.arguments[0] : this.unwrapParens(alias.initializer), true);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
         return name === undefined ? undefined : `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
+    }
+
+    /** `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)`:
+     *  the alias is the live field, so its key list is the handle's key list and the alias itself is never printed. */
+    rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined {
+        const declaration: any = node !== undefined && isIdentifier(node) ? this.rustDeclarationOfIdentifier(node) : undefined;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.type !== undefined) return undefined;
+        const list: any = declaration.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || !(list.flags & NodeFlags.Const) || list.declarations.length !== 1 || list.parent?.kind !== SyntaxKind.VariableStatement) return undefined;
+        const init: any = this.unwrapParens(declaration.initializer);
+        if (init === undefined || !isPropertyAccessExpression(init) || !isIdentifier(init.expression) || init.expression.text !== 'client' || String(init.name.text) !== 'subscriptions') return undefined;
+        let uses = 0;
+        const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            let up: any = n;
+            while (isParenthesizedExpression(up.parent)) up = up.parent;
+            const call: any = up.parent;
+            uses++;
+            return isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === up && isPropertyAccessExpression(call.expression)
+                && call.expression.getText().replace(/\s+/g, '') === 'Object.keys';
+        });
+        return ok && uses > 0 ? declaration : undefined;
+    }
+
+    rustClientHandleKeysAliasPrintsKeys(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || this.rustClientHandleKeysAlias(declaration.name) !== declaration) return false;
+        let all = true;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => {
+            let up: any = n;
+            while (isParenthesizedExpression(up.parent)) up = up.parent;
+            if (this.printClientHandleKeys(up.parent) === undefined) all = false;
+            return true;
+        });
+        return all;
     }
 
     /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
@@ -39683,6 +39719,9 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(arg);
         const decl: any = isIdentifier(inner) ? this.rustDeclarationOfIdentifier(inner) : undefined;
         if (decl !== undefined && isParameterDeclaration(decl) && (this.rustVenueStrListParam(decl) || this.rustParamShadowOf(inner) !== undefined)) return RustTranspiler.rustLentMark(String(inner.text));
+        // the handle's key list bound from a keys-only `client.subscriptions` alias is a held `Vec<Value>`: lent as it is
+        if (decl !== undefined && isVariableDeclaration(decl) && this.rustClientHandleKeysAlias(this.unwrapParens(this.unwrapParens(decl.initializer)?.arguments?.[0])) !== undefined
+            && this.printClientHandleKeys(decl.initializer) !== undefined && !this.rustLocalReassigned(decl)) return `&${String(inner.text)}`;
         const text = this.printNode(arg, 0).trim();
         const arr = /^Value::Arr\((\w+)(?:\.clone\(\))?\)$/.exec(text);
         if (arr !== null) return `&${arr[1]}`;
@@ -40209,7 +40248,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     // an annotated map row prints its `m[k]` source at its one read (annotatedMapRowSource): no declaration
     printVariableStatement(node, identation) {
-        return (this.annotatedMapRowSource(node?.declarationList?.declarations?.[0]) !== undefined) ? '' : super.printVariableStatement(node, identation);
+        const first: any = node?.declarationList?.declarations?.[0];
+        if (this.annotatedMapRowSource(first) !== undefined) return '';
+        // a keys-only alias of `client.subscriptions` prints nothing when every use printed the handle's key list
+        if (first !== undefined && this.rustClientHandleKeysAliasPrintsKeys(first)) return '';
+        return super.printVariableStatement(node, identation);
     }
 
 }
