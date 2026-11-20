@@ -10934,6 +10934,9 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
     if (((value.kind === 'typed') && (value.type !== slot0)) || ((value.kind !== 'typed') && (slot0 === undefined))) {
         return undefined;
     }
+    if ((value.kind === 'typed') && value.isNew && goTranspiler.h26g32SlotIsString (node)) {
+        value = { 'kind': 'iife', 'name': value.name, 'isNew': true };
+    }
     const first = head[1];
     const ind = /^\s*/.exec (lines[1])[0];
     let lhs0 = value.name;
@@ -10956,7 +10959,9 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
         lead = ind;
     }
     out.push (lead + lhs0 + ', ' + lhs1 + (short ? ' := ' : ' = ') + bound + note);
-    if (value.kind === 'iife') {
+    if ((value.kind === 'iife') && goTranspiler.h26g32SlotIsString (node)) {
+        out.push (ind + value.name + ' := *' + temp);
+    } else if (value.kind === 'iife') {
         out.push (ind + value.name + ' := func() any {', ind + '\tif ' + temp + ' != nil {', ind + '\t\treturn *' + temp, ind + '\t}',
             ind + '\treturn nil', ind + '}()');
     } else if (value.kind === 'reset') {
@@ -17294,7 +17299,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // text for a proven string, or the deref goNativeBinaryText adds for a derefable
     // `*string` leaf. undefined keeps the helper call.
     goStringConcatOperandType(node, printedText: string): string | undefined {
-        if (this.goConcatDerefableStringOperand(node)) {
+        if (this.goConcatDerefableStringOperand(node) || this.h26g32StringSlotOperand(node)) {
             return 'string';
         }
         return (this.goOperandStaticType(node, printedText) === 'string') ? 'string' : undefined;
@@ -25403,7 +25408,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return this.goNativeParameterType(decl);
         }
         if (decl.kind === SyntaxKind.BindingElement) {
-            return this.goTupleSlotPointerType(decl)
+            return this.h26g32LiteralDefaultStringSlot(decl) ?? this.goTupleSlotPointerType(decl)
                 ?? (this.goTuplePointerSlotProbing ? undefined : this.goTuplePointerSlotOfBinding(decl));
         }
         if (decl.kind !== SyntaxKind.VariableDeclaration || decl.name?.kind !== SyntaxKind.Identifier) {
@@ -46060,3 +46065,47 @@ GoTranspiler.prototype.h26g31NonPointerReturn = function (expr) {
         && ((init?.kind === SyntaxKind.ObjectLiteralExpression) || (init?.kind === SyntaxKind.ArrayLiteralExpression));
 };
 // ===== h26-G31 (end) =====
+
+// ===== h26-G32 =====
+export interface GoTranspiler {
+    h26g32LiteralDefaultStringSlot(decl): string | undefined;
+    h26g32SlotIsString(list): boolean;
+    h26g32StringSlotOperand(node): boolean;
+}
+const H26G32_LITERAL_DEFAULT_AT: { [name: string]: number } = { 'handleParamString': 2, 'handleParamString2': 3 };
+// slot 0 of `const [ x, p ] = this.handleParamString[2] (.., '<literal>')`: the Go twin hands SafeString[2] a non-nil
+// default, which returns the present string or that default for every input, so the slot is a Go `string`
+GoTranspiler.prototype.h26g32LiteralDefaultStringSlot = function (decl) {
+    const pattern: any = decl?.parent;
+    const holder: any = pattern?.parent;
+    const call: any = holder?.initializer;
+    const at = H26G32_LITERAL_DEFAULT_AT[call?.expression?.name?.text];
+    if ((at === undefined) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements[0] !== decl)
+        || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.initializer !== undefined) || (decl.dotDotDotToken !== undefined)
+        || (holder?.kind !== SyntaxKind.VariableDeclaration) || (((holder.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+        || (call.expression?.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments?.length !== at + 1)
+        || (call.arguments[at].kind !== SyntaxKind.StringLiteral) || !this.goCheckerTypeHasFlags(decl.name, TypeFlags.StringLike)) {
+        return undefined;
+    }
+    // a binding the pointer-slot rule already types keeps its `*string` reads
+    if (this.goTuplePointerSlotProbing || (this.goTuplePointerSlotOfBinding(decl) !== undefined)) {
+        return undefined;
+    }
+    try {
+        const signature: any = this.getChecker().getResolvedSignature(call)?.declaration?.resolve?.();
+        return (signature?.parent?.name?.text === 'BaseExchange') ? 'string' : undefined;
+    } catch (e) {
+        return undefined;
+    }
+};
+// the pair bind of such a declaration list: slot 0 is read as `x := *xPtr` (never nil, see above)
+GoTranspiler.prototype.h26g32SlotIsString = function (list) {
+    const element: any = list?.declarations?.[0]?.name?.elements?.[0];
+    return (list?.declarations?.length === 1) && (this.h26g32LiteralDefaultStringSlot(element) === 'string');
+};
+// a read of such a slot is a Go string operand (concat leaves)
+GoTranspiler.prototype.h26g32StringSlotOperand = function (node) {
+    const decl: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+    return (decl?.kind === SyntaxKind.BindingElement) && (this.h26g32LiteralDefaultStringSlot(decl) === 'string');
+};
+// ===== h26-G32 (end) =====
