@@ -22436,7 +22436,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 ? this.goWithExprDepth(this.goExprDepth, () => this.printNode(right, identation)).trimStart()
                 : rhs);
             const native = ((keyStrs.length === 1)
-                ? (this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
+                ? (this.goPlainFieldScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
+                    ?? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goNonNilMapLocalPointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goSafeDictLocalScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
@@ -26729,6 +26730,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode)?.valueDeclaration?.resolve();
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeDictCallArgs(decl.initializer)?.fallback === undefined)
             || (this.goSafeDictMapLocal(decl) !== GO_SAFE_DICT_LOCAL_TYPE) || this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name)) {
+            return undefined;
+        }
+        const ptr = this.printNode(value, 0).trim();
+        const iden = this.getIden(identation);
+        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
+    // `this.options[k] = p` with `p` a local declared *string/*int64/*float64/*bool: the plain-valued field stores
+    // what DerefScalar(p) stores, *p or an untyped nil for a nil p
+    goPlainFieldScalarPointerStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        if ((containerNode?.kind !== SyntaxKind.PropertyAccessExpression) || (value?.kind !== SyntaxKind.Identifier)
+            || !this.goIsPlainValuedMapField(containerNode) || !this.goIsStringKeyExpression(keyNode)
+            || ![ '*string', '*int64', '*float64', '*bool' ].includes(this.goDeclaredTypeOfIdentifier(value) ?? '')) {
             return undefined;
         }
         const ptr = this.printNode(value, 0).trim();
