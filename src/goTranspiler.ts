@@ -18530,6 +18530,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the container of a typed safeDict read holds decoded data: this.options / balance (/ fees with a default)
     // are Dict fields, any other `this` member is not; a ws container must not be a cache or client object
     goPlainMapContainer(container, ws: boolean, noDefault: boolean): boolean {
+        if (this.goTupleDictSlotContainer(container)) {
+            return true;
+        }
         if (this.goNodeContainsThis(container)) {
             const fields = noDefault ? [ 'options', 'balance' ] : [ 'options', 'balance', 'fees' ];
             if ((container.kind !== SyntaxKind.PropertyAccessExpression) || (container.expression?.kind !== SyntaxKind.ThisKeyword)
@@ -18557,7 +18560,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const fallback = this.goUnwrapParenthesizedNode(found.fallback);
         const literal = ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0)) || this.goNeverNilDict(fallback, ws)
-            || this.goNeverNilDictLocalDefault(fallback, ws);
+            || this.goNeverNilDictLocalDefault(fallback, ws) || this.goGetArgMapParameterIsMapLocal(fallback);
         return literal && this.goPlainMapContainer(found.call.arguments[0], ws, false);
     }
 
@@ -18570,6 +18573,26 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const found = this.goSafeDictCallArgs(declaration.initializer);
         return (found !== undefined) && (found.call !== fallback) && this.goNeverNilDict(found.call, ws);
+    }
+
+    // `this.m (..)` declared to return a tuple whose slot at the literal index read here is `Dict`
+    // (e.g. handlePublicAddress: [Str, Dict]): the slot holds a decoded map, never a ws struct
+    goTupleDictSlotContainer(container): boolean {
+        const read: any = container?.parent;
+        if ((container?.kind !== SyntaxKind.CallExpression) || (container.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (container.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (read?.kind !== SyntaxKind.CallExpression)
+            || (read.arguments[0] !== container) || (read.arguments[1]?.kind !== SyntaxKind.NumericLiteral)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        let slot: any;
+        try {
+            const type = checker?.getTypeAtLocation(container);
+            slot = ((type !== undefined) && checker.isTupleType(type)) ? checker.getTypeArguments(type)?.[Number(read.arguments[1].text)] : undefined;
+        } catch (e) {
+            return false;
+        }
+        return (slot !== undefined) && (checker.typeToString(slot) === 'Dict');
     }
 
     goSourceTreeKind(node): 'rest' | 'ws' | 'skip' {
