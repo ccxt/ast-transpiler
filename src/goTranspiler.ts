@@ -17254,6 +17254,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!ws || (this.goNodeContainsThis(container) && (container.kind === SyntaxKind.PropertyAccessExpression))) {
             return true; // a REST receiver, or an admitted Dict field of `this`
         }
+        if (this.goClientSubscriptionsContainer(container)) {
+            return true;
+        }
         if ((container.kind === SyntaxKind.PropertyAccessExpression) && (container.name?.text === 'hashmap') && (container.expression?.kind === SyntaxKind.Identifier)) {
             return true; // the ArrayCache hashmap is a map of maps
         }
@@ -17393,7 +17396,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goInsideNonNilBlock(node, name)) {
             return true;
         }
-        if (nilTest || ((rebinds.size > 0) && this.goAfterNilGuardFill(node, rebinds))) {
+        if (nilTest || ((rebinds.size > 0) && this.goAfterNilGuardFill(node, rebinds)) || this.goAfterNilExitGuard(node, name)) {
             return true; // `x == nil` answers the same for a nil map and for the nil box
         }
         if ((parent.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node)) {
@@ -17497,6 +17500,50 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const at = statements.indexOf(guard);
             if (statements.slice(at + 1).some((st: any) => (use.pos >= st.pos) && (use.end <= st.end))) {
                 return true;
+            }
+        }
+        return false;
+    }
+
+    // `client.subscriptions`: the ws client's subscription table, a plain map[string]any of subscription dicts
+    goClientSubscriptionsContainer(container): boolean {
+        return (container?.kind === SyntaxKind.PropertyAccessExpression) && (container.name?.text === 'subscriptions')
+            && (container.expression?.kind === SyntaxKind.Identifier) && (container.expression.text === 'client');
+    }
+
+    // the use is a later statement after `if (x === undefined || ..) { throw | return | continue }` (no else): x is never nil there
+    goAfterNilExitGuard(use, name: string): boolean {
+        const isNil = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+        const isName = (n: any) => (n?.kind === SyntaxKind.Identifier) && (n.text === name);
+        const testsNil = (cond: any): boolean => {
+            const inner: any = this.goUnwrapParenthesizedNode(cond);
+            if (inner?.kind !== SyntaxKind.BinaryExpression) {
+                return false;
+            }
+            const op = inner.operatorToken.kind;
+            if (op === SyntaxKind.BarBarToken) {
+                return testsNil(inner.left) || testsNil(inner.right);
+            }
+            return ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsToken))
+                && ((isName(inner.left) && isNil(inner.right)) || (isNil(inner.left) && isName(inner.right)));
+        };
+        const exits = (st: any): boolean => {
+            const body: any[] = (st?.kind === SyntaxKind.Block) ? st.statements : [ st ];
+            const last: any = body[body.length - 1];
+            return (last?.kind === SyntaxKind.ThrowStatement) || (last?.kind === SyntaxKind.ReturnStatement) || (last?.kind === SyntaxKind.ContinueStatement);
+        };
+        for (let child: any = use, cur: any = use.parent; cur !== undefined; child = cur, cur = cur.parent) {
+            const statements: any[] | undefined = ((cur.kind === SyntaxKind.Block) || (cur.kind === SyntaxKind.SourceFile)) ? cur.statements : undefined;
+            if (statements !== undefined) {
+                const at = statements.indexOf(child);
+                if (statements.slice(0, Math.max(at, 0)).some((st: any) => (st.kind === SyntaxKind.IfStatement) && (st.elseStatement === undefined)
+                    && testsNil(st.expression) && exits(st.thenStatement))) {
+                    return true;
+                }
+            }
+            if ((cur.kind === SyntaxKind.MethodDeclaration) || (cur.kind === SyntaxKind.FunctionDeclaration) || (cur.kind === SyntaxKind.ArrowFunction)
+                || (cur.kind === SyntaxKind.FunctionExpression) || (cur.kind === SyntaxKind.Constructor)) {
+                return false;
             }
         }
         return false;
