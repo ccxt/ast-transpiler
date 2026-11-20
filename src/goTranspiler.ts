@@ -25027,7 +25027,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // dominating nil guard, or a Safe* accessor handed a literal default. A cast (`x as string`,
     // `x!`) is not a proof of the absent state, so it reads through to the value underneath.
     goNilProvenStringPtrArg(arg): boolean {
-        if (this.goNonNilStringOverloadArg(arg) || this.h25g17NonNilOptionSlotArg(arg)) {
+        if (this.goNonNilStringOverloadArg(arg) || this.h25g17NonNilOptionSlotArg(arg) || this.h26g33NonNilMarketTypeSlotArg(arg)) {
             return true;
         }
         if (this.goPrintedArgType(arg) !== '*string') {
@@ -46109,3 +46109,36 @@ GoTranspiler.prototype.h26g32StringSlotOperand = function (node) {
     return (decl?.kind === SyntaxKind.BindingElement) && (this.h26g32LiteralDefaultStringSlot(decl) === 'string');
 };
 // ===== h26-G32 (end) =====
+
+// ===== h26-G33 =====
+export interface GoTranspiler {
+    h26g33NonNilMarketTypeSlotArg(arg): boolean;
+    h26g33AbsentOrUndefined(node): boolean;
+}
+// slot 0 of `const [ t, p ] = this.handleMarketTypeAndParams (m, undefined, params[, '<lit>'])`: with no market the Go base
+// answers a params string, the literal default, a method option string or SafeString2(.., "spot"): never nil
+GoTranspiler.prototype.h26g33NonNilMarketTypeSlotArg = function (arg) {
+    if ((arg?.kind !== SyntaxKind.Identifier) || !this.goCheckerTypeHasFlags(arg, TypeFlags.StringLike)) {
+        return false;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    const isSlot0 = (decl?.kind === SyntaxKind.BindingElement) && (decl.parent?.kind === SyntaxKind.ArrayBindingPattern) && (decl.parent.elements[0] === decl);
+    const holder = isSlot0 ? decl.parent.parent : undefined;
+    const call: any = holder?.initializer;
+    const constant = ((holder?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
+    if (!constant || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression?.name?.text !== 'handleMarketTypeAndParams')) {
+        return false;
+    }
+    const args = call.arguments ?? [];
+    if ((args.length > 4) || args.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+        return false;
+    }
+    const def = args[3];
+    const literalDefault = (def?.kind === SyntaxKind.StringLiteral) || (def?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+    return this.h26g33AbsentOrUndefined(args[1]) && (literalDefault || this.h26g33AbsentOrUndefined(def));
+};
+GoTranspiler.prototype.h26g33AbsentOrUndefined = function (node) {
+    return (node === undefined) || ((node.kind === SyntaxKind.Identifier) && (node.text === 'undefined'));
+};
+// ===== h26-G33 (end) =====
