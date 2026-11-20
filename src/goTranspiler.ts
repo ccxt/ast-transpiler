@@ -1130,6 +1130,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.Symbol': 'string',
     // getSupportedMapping(): the one return is a nil-checked safeString (build goRetypeStringReturns)
     'this.GetSupportedMapping': 'string',
+    // convertTypeToAccount(): every return is the string param or a safeString defaulted to it (build goRetypeStringReturns)
+    'this.ConvertTypeToAccount': 'string',
     // structure parsers retyped by goTranspiler.ts#retypeGoProvenParseMethods (never nil, base + every override)
     ...Object.fromEntries ([ 'SafeOrder', 'SafeTicker', 'SafeLedgerEntry', 'ParseOrder', 'ParseTicker', 'ParseTransaction', 'ParseTransfer', 'ParseLedgerEntry',
         'SafeMarketStructure', 'SafeCurrencyStructure', 'SafeOpenInterest', 'ParseCurrency', 'ParseOpenInterest',
@@ -6973,9 +6975,14 @@ function installCcxtGoUnifiedStringDerefArgs (goTranspiler) {
             if (!this.goIsUnifiedStringParameter (name, i) || (this.goPrintedArgType (a) === 'string')) {
                 return printed;
             }
-            return this.goDerefableStringOperand (a) ? ('*' + printed) : `StringArg(${printed})`;
+            return (this.goDerefableStringOperand (a) || ccxtGoEnclosingGuardedStringPointer (this, a)) ? ('*' + printed) : `StringArg(${printed})`;
         }).join (', ');
     };
+}
+
+// a `*string` identifier inside an if/ternary/&& whose condition tests it `!== undefined` (never rebound)
+function ccxtGoEnclosingGuardedStringPointer (goTranspiler, node) {
+    return (node?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goBoundIdentifierType?.(node) === '*string') && goTranspiler.goHasEnclosingNilGuard (node);
 }
 
 export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = undefined) {

@@ -19692,3 +19692,50 @@ describe('GetSupportedMapping returns a Go string (CCXT_GO_HELPER_RETURN_TYPES)'
         expect(out).toContain('typeId = nil');
     });
 });
+
+describe('ConvertTypeToAccount returns a Go string (CCXT_GO_HELPER_RETURN_TYPES)', () => {
+    const run = (body: string) => {
+        const t = new Transpiler({ verbose: false, go: {} } as any);
+        installCcxtGoHooks((t as any).goTranspiler);
+        installCcxtGoLocalTypes((t as any).goTranspiler);
+        return t.transpileGo("class Exchange {\n    convertTypeToAccount (account: string): string { return account; }\n    convertTypeToAccounts (account: string): string { return account; }\n" + body + "}\n").content;
+    };
+    test('the account local is a string: native compare and concat', () => {
+        const out = run("    m (fromAccount: string) {\n        const fromId = this.convertTypeToAccount (fromAccount);\n        if (fromId === 'margin') { return 1; }\n        return fromId + '_x';\n    }\n");
+        expect(out).toContain('var fromId string = this.ConvertTypeToAccount(fromAccount)');
+        expect(out).toContain('return fromId + "_x"');
+        expect(out).not.toContain('IsEqual(fromId');
+    });
+    test('negative: another method of the same shape stays any', () => {
+        const out = run("    m (fromAccount: string) {\n        const fromId = this.convertTypeToAccounts (fromAccount);\n        return fromId + '_x';\n    }\n");
+        expect(out).toContain('var fromId any = this.ConvertTypeToAccounts(fromAccount)');
+        expect(out).toContain('Add(fromId, "_x")');
+    });
+    test('negative: a local later set to nil and tested against nil keeps the box', () => {
+        const out = run("    m (fromAccount: string) {\n        let fromId = this.convertTypeToAccount (fromAccount);\n        if (fromAccount === 'x') { fromId = undefined; }\n        if (fromId === undefined) { return 0; }\n        return fromId;\n    }\n");
+        expect(out).toContain('var fromId any = this.ConvertTypeToAccount(fromAccount)');
+        expect(out).toContain('fromId = nil');
+    });
+});
+
+describe('a nil-guarded *string tuple slot passed to a unified string param is dereferenced', () => {
+    const run = (body: string) => {
+        const t = new Transpiler({ verbose: false, go: { unifiedStringParams: { convertTypeToAccount: [0] }, stringPointerTupleCalls: ['handleMarketTypeAndParams'] } } as any);
+        installCcxtGoHooks((t as any).goTranspiler);
+        installCcxtGoLocalTypes((t as any).goTranspiler);
+        return t.transpileGo("class Exchange {\n    handleMarketTypeAndParams (m: string, market = undefined, params = {}): [string, any] { return [m, params]; }\n    convertTypeToAccount (account: string): string { return account; }\n" + body + "}\n").content;
+    };
+    test('inside `if (x !== undefined)` the slot is passed as *x', () => {
+        const out = run("    m (params = {}) {\n        const [ marketType, p ] = this.handleMarketTypeAndParams ('x', undefined, params);\n        let a: string = undefined;\n        if (marketType !== undefined) {\n            a = this.convertTypeToAccount (marketType);\n        }\n        return a;\n    }\n");
+        expect(out).toContain('this.ConvertTypeToAccount(*marketType)');
+        expect(out).not.toContain('StringArg(marketType)');
+    });
+    test('negative: without a guard the slot keeps StringArg', () => {
+        const out = run("    m (params = {}) {\n        const [ marketType, p ] = this.handleMarketTypeAndParams ('x', undefined, params);\n        return this.convertTypeToAccount (marketType);\n    }\n");
+        expect(out).toContain('ConvertTypeToAccount(StringArg(marketType))');
+    });
+    test('negative: a rebound slot keeps StringArg inside the guard', () => {
+        const out = run("    m (params = {}) {\n        let [ marketType, p ] = this.handleMarketTypeAndParams ('x', undefined, params);\n        let a: string = undefined;\n        if (marketType !== undefined) {\n            marketType = undefined;\n            a = this.convertTypeToAccount (marketType);\n        }\n        return a;\n    }\n");
+        expect(out).not.toContain('ConvertTypeToAccount(*marketType)');
+    });
+});
