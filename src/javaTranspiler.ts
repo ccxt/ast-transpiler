@@ -5102,7 +5102,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // and the null test reads the bare name
         const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
         if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
-            return this.javaStringListKeyedMapRead(node); // the guard prints the key twice
+            return this.javaStringListKeyedMapRead(node) ?? this.javaMapLiteralKeyedMapRead(node); // the guard prints the key twice
         }
         if (this.javaKeyPrintsPrimitive(operand)) {
             return undefined; // a java primitive cannot take the `instanceof` test
@@ -5137,6 +5137,22 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const target = this.printNode(node.expression, 0);
         return this.javaNullGuardedGet(target, keyText, keyText);
+    }
+
+    // `m[d['k']]` on a declared Map, d a declared Map name: the key is d's side-effect-free get (any
+    // value), so it prints twice; the helper answers null unless the key is a String, then the get
+    javaMapLiteralKeyedMapRead(node): string | undefined {
+        const key = node.argumentExpression;
+        if (!isElementAccessExpression(key) || !isStringLiteralLikeNode(key.argumentExpression)
+            || !isIdentifier(key.expression) || !this.javaDeclaredMapReceiver(key.expression)) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (keyText.includes('Helpers.') || keyText.includes('->')) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
     }
 
     // `this.<hash map field>[k as string]`: the assertion only narrows, so the null test reads the bare name
