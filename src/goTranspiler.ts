@@ -17025,6 +17025,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goNativeCompoundAssignment(op, leftNode, leftText: string, rightNode, rightText: string): string | undefined {
         const leftType = this.goOperandStaticType(leftNode, leftText);
         const rightType = this.goOperandStaticType(rightNode, rightText);
+        if ((leftType === 'string') && (op === SyntaxKind.PlusEqualsToken) && this.goH20g12GuardedPointerAppend(rightNode)) {
+            return `${leftText.trim()} += *${rightText.trim()}`;
+        }
         if (leftType === undefined || rightType === undefined) {
             return undefined;
         }
@@ -17259,7 +17262,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         }
                     } else if ((op === SyntaxKind.PlusEqualsToken) && (goType === 'string')
                         && ((this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === 'string')
-                            || stringWriteProven)) {
+                            || stringWriteProven || this.goH20g12GuardedPointerAppend(parent.right))) {
                         return false;
                     } else if ((op >= SyntaxKind.FirstCompoundAssignment) && (op <= SyntaxKind.LastCompoundAssignment)) {
                         return true;
@@ -42172,3 +42175,15 @@ GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
     return goStringListUseReadsAsH19g06.call(this, node);
 };
 // ===== h19-g06 (end) =====
+
+// ===== h20-g12 =====
+export interface GoTranspiler {
+    goH20g12GuardedPointerAppend(node): boolean;
+}
+// `x += p` where p is a bare `*string` identifier the concat proof shows non-nil at this use
+// (enclosing / exiting nil guard): Add appended *p, so a `string` x appends `*p` natively
+GoTranspiler.prototype.goH20g12GuardedPointerAppend = function (node): boolean {
+    return (node?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === '*string')
+        && this.goConcatDerefableStringOperand(node);
+};
+// ===== h20-g12 (end) =====
