@@ -4435,7 +4435,18 @@ function goNilDeclaredDictSlotRebind (goTranspiler, declaration, right, index) {
     const expr = (right?.kind === ts.SyntaxKind.AwaitExpression) ? right.expression : right;
     const callee = expr?.expression;
     return (expr?.kind === ts.SyntaxKind.CallExpression) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
-        && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword) && goTranspiler.goTupleElementIsDict (expr, index);
+        && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword) && (goTranspiler.goTupleElementIsDict (expr, index) || goAwaitedTupleElementIsDict (goTranspiler, right, index));
+}
+
+// `await this.f (..)` of a `Promise<[T, Dict]>`: the awaited tuple's slot is declared Dict (the Go carrier holds a map)
+function goAwaitedTupleElementIsDict (goTranspiler, right, index) {
+    const checker = goTranspiler.checkerOrUndefined ();
+    if ((checker === undefined) || (right?.kind !== ts.SyntaxKind.AwaitExpression) || (index < 0)) {
+        return false;
+    }
+    const type = checker.getTypeAtLocation (right);
+    const element = ((type !== undefined) && checker.isTupleType (type)) ? checker.getTypeArguments (type)?.[index] : undefined;
+    return (element !== undefined) && !(element.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) && goTranspiler.goParameterTypeIsDict (element);
 }
 
 // cached: the declaration printer and the write-site value half ask the same question
