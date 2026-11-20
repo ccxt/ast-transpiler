@@ -16284,7 +16284,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the checker narrowed the identifier to a plain number here, or an enclosing guard tests it
     goPointerNumberIsNonNil(ident): boolean {
         return this.goHasEnclosingNilGuard(ident) || this.goCheckerTypeHasFlags(ident, TypeFlags.NumberLike)
-            || this.goCheckerTypeIsNumberUnion(ident);
+            || this.goCheckerTypeIsNumberUnion(ident) || this.goConstDefaultedSafeIntegerLocal(ident);
+    }
+
+    // a never-rebound `const p = this.safeInteger (o, k, <int>)`: the defaulted reader returns a fresh non-nil pointer
+    goConstDefaultedSafeIntegerLocal(ident): boolean {
+        const declaration = (ident?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(ident) : undefined;
+        return (declaration?.parent?.kind === SyntaxKind.VariableDeclarationList) && ((declaration.parent.flags & NodeFlags.Const) !== 0)
+            && this.goDefaultedSafeIntegerCall(declaration.initializer);
     }
 
     // a union every member of which is a number (`5 | 50` after `(x === 5) || (x === 50)`): no nil member
@@ -19254,6 +19261,11 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             // an annotated `string` local takes the defaulted SafeString call's deref
             if ((declaredType === 'string') && (unboxValue === undefined)
                 && ((this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*string') || this.goOptionStringSlotLocalOf(declaration))) {
+                declaredValue = '*' + declaredValue;
+            }
+            // an int64 local seeded by a defaulted safeInteger takes the fresh non-nil pointer's deref
+            if ((declaredType === 'int64') && (unboxValue === undefined) && this.goDefaultedSafeIntegerCall(declaration.initializer)
+                && (this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*int64')) {
                 declaredValue = '*' + declaredValue;
             }
             const cacheKeys = this.goCacheKeysRange(declaration, declaredType, varName, identation);
@@ -38848,6 +38860,9 @@ function goIntSeedIntValue (goTranspiler, node, declaration): boolean {
         if (goTranspiler.goDeclarationOfIdentifier (node) === declaration) {
             return true;
         }
+        if (goIntSeedIsIntWrite (goTranspiler, node)) {
+            return true;
+        }
         return (goTranspiler.goDeclaredTypeOfIdentifier (node) === 'int64') || (goTranspiler.goDeclaredParamStaticType (node) === 'int64');
     }
     if (node?.kind === SyntaxKind.BinaryExpression) {
@@ -38861,9 +38876,36 @@ function goIntSeedIntValue (goTranspiler, node, declaration): boolean {
         return goTranspiler.goNativeArithmetic (node)?.goType === 'int64';
     }
     if (node?.kind === SyntaxKind.CallExpression) {
-        return goTranspiler.goTypeOfInitializer (node, goTranspiler.printNode (node, 0)) === 'int64';
+        return goIntSeedSumOfInts (goTranspiler, node, declaration)
+            || (goTranspiler.goTypeOfInitializer (node, goTranspiler.printNode (node, 0)) === 'int64')
+            || ((node === declaration.initializer) && goTranspiler.goDefaultedSafeIntegerCall (node));
     }
     return false;
+}
+// `this.sum (a, b)` / `Math.min|max (a, b)` over the local itself, int values and non-nil `*int64` locals:
+// the 92g7 / 93g4 printers print it native once the written local is declared int64
+function goIntSeedSumOfInts (goTranspiler, call, declaration): boolean {
+    if ((call.arguments?.length !== 2) || (!goTranspiler.go92g7IsBaseSum (call) && (goTranspiler.go92g7MinMaxName (call) === undefined))) {
+        return false;
+    }
+    // only the operand shapes the 92g7 / 93g4 printers print native
+    if ((goTranspiler.go92g7Int64Operands (call) === undefined) && (goTranspiler.go93g4PointerOperands (call, declaration) === undefined)) {
+        return false;
+    }
+    return call.arguments.every ((operand) => {
+        const inner = goIntSeedUnwrap (operand);
+        if ((inner?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclarationOfIdentifier (inner) !== declaration)
+            && (goTranspiler.goDeclaredTypeOfIdentifier (inner) === '*int64')) {
+            return goTranspiler.goPointerNumberIsNonNil (inner);
+        }
+        return (inner?.kind !== SyntaxKind.CallExpression) && goIntSeedIntValue (goTranspiler, inner, declaration);
+    });
+}
+// the whole right side of an `x = n` write, n a local the printer declares Go `int`
+function goIntSeedIsIntWrite (goTranspiler, node): boolean {
+    const write = node.parent;
+    return (write?.kind === SyntaxKind.BinaryExpression) && (write.right === node) && (write.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (goTranspiler.goDeclaredTypeOfIdentifier (node) === 'int');
 }
 function goIntSeedMeetsIntOperand (goTranspiler, scope, declaration): boolean {
     return goTranspiler.hasNodeWhere (scope, (n) => {
@@ -38919,7 +38961,8 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
         });
     }
     // literal seeds and self counters alone need a read against a length or an int64 operand
-    const foreign = writes.some ((w) => !goTranspiler.goIsNumericConstant (goIntSeedUnwrap (w)) && !goIntSeedRefersTo (goTranspiler, w, declaration));
+    const foreign = writes.some ((w) => !goTranspiler.goIsNumericConstant (goIntSeedUnwrap (w)) && (!goIntSeedRefersTo (goTranspiler, w, declaration)
+        || ((goIntSeedUnwrap (w)?.kind === SyntaxKind.CallExpression) && goIntSeedSumOfInts (goTranspiler, goIntSeedUnwrap (w), declaration))));
     let ok = !bad && (foreign || goIntSeedMeetsIntOperand (goTranspiler, scope, declaration))
         && writes.every ((w) => goIntSeedIntValue (goTranspiler, w, declaration));
     if (ok) {
@@ -38940,12 +38983,21 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
 {
     const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
     GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
-        return goIntSeedAdmittedWrites.has (initializer) ? 'int64' : goTypeOfInitializer.call (this, initializer, printedValue);
+        return (goIntSeedAdmittedWrites.has (initializer) && !this.goDefaultedSafeIntegerCall (initializer)) ? 'int64' : goTypeOfInitializer.call (this, initializer, printedValue);
     };
     const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
     GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
         const shipped = getGoLocalType.call (this, declaration, parsedValue);
         return ((shipped === 'any') && goIntSeedInt64Local (this, declaration)) ? 'int64' : shipped;
+    };
+    // an admitted `x = n` write of a Go `int` local converts with Go's own `int64(n)`
+    const printBinaryExpression = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        if ((node.left?.kind === SyntaxKind.Identifier) && (node.right?.kind === SyntaxKind.Identifier) && goIntSeedIsIntWrite (this, node.right)
+            && (this.goDeclaredTypeOfIdentifier (node.left) === 'int64')) {
+            return this.printNode (node.left, 0).trim () + ' = int64(' + this.printNode (node.right, 0).trim () + ')';
+        }
+        return printBinaryExpression.call (this, node, identation);
     };
 }
 
