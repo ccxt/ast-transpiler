@@ -4247,9 +4247,32 @@ const CCXT_GO_NIL_JOIN_READ_RULE = {
         [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
         [ts.SyntaxKind.ShorthandPropertyAssignment]: goReadAccepts,
         [ts.SyntaxKind.CallExpression]: (parent, child, goTranspiler) => ccxtGoNilJoinArgumentSeesAbsent (goTranspiler, parent, parent.arguments.indexOf (child)),
-        [ts.SyntaxKind.VariableDeclaration]: ccxtGoNilJoinStoredCopy,
+        [ts.SyntaxKind.VariableDeclaration]: (parent, child, goTranspiler) => ccxtGoNilJoinStoredCopy (parent, child) || ccxtGoNilJoinFilledCopy (goTranspiler, parent, child),
     },
 };
+
+// `let c: NullableDict = x` where c itself joins to map[string]any from that seed: every write of c is a map
+// (or nil), and c's reads before a proven write are nil-safe, so the typed copy answers as the box did
+function ccxtGoNilJoinFilledCopy (goTranspiler, parent, child) {
+    const list = parent.parent;
+    if ((parent.initializer !== child) || (parent.name?.kind !== ts.SyntaxKind.Identifier) || (list?.kind !== ts.SyntaxKind.VariableDeclarationList)
+        || ((list.flags & ts.NodeFlags.Let) === 0) || (list.declarations.length !== 1) || (list.parent?.kind !== ts.SyntaxKind.VariableStatement)) {
+        return false;
+    }
+    const t = ccxtGoNilJoinCopyType (goTranspiler, parent);
+    return t === 'map[string]any';
+}
+
+// the container join of a `let c = x` copy seeded from a nil-join local; nil writes allowed when c is never element-written
+function ccxtGoNilJoinCopyType (goTranspiler, declaration) {
+    goTranspiler.ccxtGoNilJoinCopyTypes ??= new WeakMap ();
+    const cache = goTranspiler.ccxtGoNilJoinCopyTypes;
+    if (!cache.has (declaration)) {
+        cache.set (declaration, undefined);              // in-progress guard
+        cache.set (declaration, ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, true));
+    }
+    return cache.get (declaration);
+}
 
 // `const c = x` whose every use stores c into an object literal slot: the slot holds the same typed value
 function ccxtGoNilJoinStoredCopy (parent, child) {
@@ -4372,7 +4395,7 @@ function ccxtGoNilJoinBaseMapCall (goTranspiler, right) {
         && ((GO_MARKET_MAP_BASE_CALLS.indexOf (callee.name?.text) >= 0) || (callee.name?.text === 'parseWsTicker')) && !goTranspiler.goNodeIsInPredictionTree (right);
 }
 
-function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) {
+function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, copySeed = false) {
     const name = declaration.name?.text;
     if (name === undefined) {
         return undefined;
@@ -4400,6 +4423,9 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
             }
         },
         writeType: (right) => {
+            if (copySeed && isNilLiteralExpression (right)) {
+                return ccxtGoNilJoinCopyNilWrite (state);
+            }
             const goType = goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
             // a base map producer the upstream veto cannot type: the walk already refused every other write shape
             if ((goType === undefined) && ccxtGoNilJoinBaseMapCall (goTranspiler, right)) {
@@ -4413,7 +4439,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
         writeProvesPresent: (right) => {
             // a safeDict with a never-nil `{}` default answers a map on every path
             const neverNil = goTranspiler.goNeverNilDict (right, goTranspiler.goSourceTreeKind (right) === 'ws');
-            const mayBeAbsent = !neverNil && /^this\.Safe(?:Dict|List)2?$/.test (ccxtGoWriteSiteCallee (goTranspiler, right) ?? '');
+            const mayBeAbsent = (!neverNil && /^this\.Safe(?:Dict|List)2?$/.test (ccxtGoWriteSiteCallee (goTranspiler, right) ?? '')) || isNilLiteralExpression (right);
             state.copies = state.copies || mayBeAbsent;
             return !mayBeAbsent;
         },
@@ -4423,16 +4449,41 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
     if (state.copies && state.mutated) {
         return undefined;                                 // the converted copy would drop the write
     }
+    if (copySeed && !ccxtGoNilJoinCopySeedIsMap (goTranspiler, declaration, state)) {
+        return undefined;
+    }
     if (!state.ok || (state.writes === 0) || (state.goType === undefined)) {
         return undefined;
     }
     if (goTranspiler.goTypeNameIsShadowed (scope, state.goType)) {
         return undefined;
     }
-    if (!goTranspiler.goLocalIsSafeToType (scope, declaration, name, state.goType) && !(state.mapCallWrites && (state.goType === 'map[string]any'))) {
+    // a seeded copy's nil writes are joined by the walk (`c = nil` on a typed map); the shipped veto reads them as foreign
+    const nilWritesJoined = copySeed && state.nilWrites;
+    if (!nilWritesJoined && !goTranspiler.goLocalIsSafeToType (scope, declaration, name, state.goType) && !(state.mapCallWrites && (state.goType === 'map[string]any'))) {
         return undefined;
     }
     return state.goType;
+}
+
+// a nil write of a seeded copy: the local is nil again (never proven present), so element writes refuse
+function ccxtGoNilJoinCopyNilWrite (state) {
+    state.copies = true;
+    state.nilWrites = true;
+    return 'map[string]any';
+}
+
+// a copy with nil writes is never element-written; asked only from the seed's own join walk
+function ccxtGoNilJoinCopySeedIsMap (goTranspiler, declaration, state) {
+    const seed = declaration.initializer;
+    if ((seed?.kind !== ts.SyntaxKind.Identifier) || (state.nilWrites && state.mutated)) {
+        return false;
+    }
+    if (state.goType === undefined) {
+        state.goType = 'map[string]any';                  // no write at all: c holds the seed only
+        state.writes = 1;
+    }
+    return state.goType === 'map[string]any';      // the seed's own join (the caller) proves the seed
 }
 
 // printVariableDeclarationList prints `var x any = nil` for a nil declaration before it
@@ -4445,7 +4496,7 @@ function installCcxtGoNilDeclaredJoin (goTranspiler) {
         }
         const match = new RegExp ('^(\\s*)var (\\w+) any = ' + goTranspiler.UNDEFINED_TOKEN + '$').exec (printed);
         if ((match === null) || (match[2] !== goTranspiler.printNode (declaration.name))) {
-            return printed;
+            return ccxtGoNilJoinCopyDeclaration (goTranspiler, printed, declaration);
         }
         const goType = ccxtGoNilDeclaredContainerJoinType (goTranspiler, declaration);
         if (goType === undefined) {
@@ -4453,6 +4504,17 @@ function installCcxtGoNilDeclaredJoin (goTranspiler) {
         }
         return match[1] + 'var ' + match[2] + ' ' + goType + ' = ' + goTranspiler.UNDEFINED_TOKEN;
     });
+}
+
+// `var c any = h` for a `let c = h` copy of a nil-join map local that joins to a map itself: `var c map[string]any = h`
+function ccxtGoNilJoinCopyDeclaration (goTranspiler, printed, declaration) {
+    const match = /^(\s*)var (\w+) any = (\w+)$/.exec (printed);
+    const seed = declaration.initializer;
+    if ((match === null) || (seed?.kind !== ts.SyntaxKind.Identifier) || (match[3] !== seed.text) || (match[2] !== goTranspiler.printNode (declaration.name))
+        || (ccxtGoNilJoinDeclarationType (goTranspiler, seed) !== 'map[string]any') || !ccxtGoNilJoinFilledCopy (goTranspiler, declaration, seed)) {
+        return printed;
+    }
+    return match[1] + 'var ' + match[2] + ' map[string]any = ' + match[3];
 }
 
 // wrap printVariableDeclarationList: `rewrite (printed, declaration)` sees every printed
@@ -40997,13 +41059,69 @@ GoTranspiler.prototype.printNativeMapWriteOnProvenLocal = function (containerNod
         return shipped;
     }
     const declaration: any = this.goDeclarationOfIdentifier(containerNode);
-    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || !this.goNilInitInitializer(declaration.initializer)
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || !(this.goNilInitInitializer(declaration.initializer) || (declaration.initializer?.kind === SyntaxKind.Identifier))
         || !this.goIsStringKeyExpression(this.goUnwrapPrintedAssertions(keyNode)) || !this.goMapWriteValueIsNotPointer(valueNode)
-        || !ccxtGoNilJoinGuardedRead(containerNode) || (ccxtGoNilDeclaredContainerJoinType(this, declaration) !== 'map[string]any')) {
+        || !(ccxtGoNilJoinGuardedRead(containerNode) || ccxtGoNilJoinFilledBefore(containerNode)) || !ccxtGoNilJoinMapLocal(this, declaration)) {
         return shipped;
     }
     return `${containerStr}[${keyStr}] = ${valueStr}`;
 };
+
+// the nil-join map local itself, or a seeded `let c = h` copy of one
+function ccxtGoNilJoinMapLocal (goTranspiler, declaration): boolean {
+    if (ccxtGoNilDeclaredContainerJoinType(goTranspiler, declaration) === 'map[string]any') {
+        return true;
+    }
+    const seed: any = declaration.initializer;
+    return (seed?.kind === SyntaxKind.Identifier) && (ccxtGoNilJoinDeclarationType(goTranspiler, seed) === 'map[string]any')
+        && ccxtGoNilJoinFilledCopy(goTranspiler, declaration, seed);
+}
+
+// `x = { .. }` (an object literal) or `if (x === undefined) { x = { .. } }` runs earlier in an enclosing block,
+// with no other write of x in between: the map is non-nil at the element write
+function ccxtGoNilJoinFilledBefore (node): boolean {
+    const name = node.text;
+    const isLiteralFill = (st) => (st?.kind === SyntaxKind.ExpressionStatement) && (st.expression.kind === SyntaxKind.BinaryExpression)
+        && (st.expression.operatorToken.kind === SyntaxKind.EqualsToken) && (st.expression.left.kind === SyntaxKind.Identifier)
+        && (st.expression.left.text === name) && (st.expression.right.kind === SyntaxKind.ObjectLiteralExpression);
+    const writes = (st) => {
+        let found = false;
+        const visit = (n) => {
+            found = found || ts.isFunctionLike(n) || ((n.kind === SyntaxKind.BinaryExpression) && isAssignmentOperator(n.operatorToken.kind)
+                && (n.left.kind === SyntaxKind.Identifier) && (n.left.text === name));
+            n.forEachChild(visit);
+        };
+        visit(st);
+        return found;
+    };
+    const isGuardFill = (st) => {
+        const body = (st?.thenStatement?.kind === SyntaxKind.Block) ? st.thenStatement.statements : [ st?.thenStatement ];
+        return (st?.kind === SyntaxKind.IfStatement) && goNilGuardFillsLocal({ nilGuardFills: true }, st, name, true)
+            && (body.length === 1) && isLiteralFill(body[0]);
+    };
+    let child = node;
+    let parent = node.parent;
+    while ((parent !== undefined) && !ts.isFunctionLike(parent)) {
+        if (parent.kind === SyntaxKind.Block) {
+            const statements = parent.statements;
+            for (let i = statements.indexOf(child) - 1; i >= 0; i--) {
+                if (isLiteralFill(statements[i]) || isGuardFill(statements[i])) {
+                    return true;
+                }
+                if (writes(statements[i])) {
+                    return false;
+                }
+            }
+        } else if ((parent.kind !== SyntaxKind.IfStatement) && (parent.kind !== SyntaxKind.ExpressionStatement)
+            && (parent.kind !== SyntaxKind.BinaryExpression) && (parent.kind !== SyntaxKind.ElementAccessExpression)
+            && (parent.kind !== SyntaxKind.PropertyAccessExpression)) {
+            return false;                                  // loops, switch, try: keep the helper
+        }
+        child = parent;
+        parent = parent.parent;
+    }
+    return false;
+}
 
 // ===== h17-g08 (begin): nilable int locals joined as *int64 =====
 // A `Promise<int>` (non-nullable) async receive is a non-nil *int64: besides the store reads it may be
