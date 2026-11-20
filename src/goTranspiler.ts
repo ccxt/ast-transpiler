@@ -671,7 +671,7 @@ function goDefiniteAssignmentWalker (state, declaration, name, readExpression, r
             readExpression (node.expression, assigned);
             const thenAssigned = visitStatement (node.thenStatement, assigned);
             const elseAssigned = (node.elseStatement === undefined) ? assigned : visitStatement (node.elseStatement, assigned);
-            return thenAssigned && elseAssigned;
+            return (thenAssigned && elseAssigned) || goNilGuardFillsLocal (state, node, name, thenAssigned);
         }
         case ts.SyntaxKind.ForStatement: {
             visitStatement (node.initializer, assigned);
@@ -726,6 +726,20 @@ function goDefiniteAssignmentWalker (state, declaration, name, readExpression, r
         }
     };
     return visitStatement;
+}
+
+// `if (x === undefined) { x = <present> }` with no else: x is present after the if on both paths
+function goNilGuardFillsLocal (state, node, name, thenAssigned) {
+    const test = node.expression;
+    if (!state.nilGuardFills || !thenAssigned || (node.elseStatement !== undefined) || (test?.kind !== ts.SyntaxKind.BinaryExpression)) {
+        return false;
+    }
+    const op = test.operatorToken.kind;
+    if ((op !== ts.SyntaxKind.EqualsEqualsEqualsToken) && (op !== ts.SyntaxKind.EqualsEqualsToken)) {
+        return false;
+    }
+    const isName = (n) => (n?.kind === ts.SyntaxKind.Identifier) && (n.text === name);
+    return (isName (test.left) && isUndefinedLiteral (test.right)) || (isName (test.right) && isUndefinedLiteral (test.left));
 }
 
 // the shared join over the writes `x = <rhs>` of one nil-declared local: `rule` classifies every other
@@ -4318,6 +4332,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
             return !mayBeAbsent;
         },
     });
+    state.nilGuardFills = true;
     visitStatement (scope.body, false);
     if (state.copies && state.mutated) {
         return undefined;                                 // the converted copy would drop the write
