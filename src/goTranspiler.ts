@@ -12480,6 +12480,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseTransactionWithType': [ 0 ],
     // its one caller passes a `{}`-defaulted safeDict, printed as the typed SafeDictMap read
     'invertFlatStringDictionary': [ 0 ],
+    // every tree caller passes an object literal or a proven map local
+    'safeOrder': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -12642,7 +12644,9 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
     if (sites.length === 0) { return true; }
     for (const site of sites) {
         if (site.file === myFile) { continue; }  // proven above off the checker
-        if (!go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
+        // a tabled base method has no override, so every venue call reaches it (an abstract `Exchange extends _Exchange` hides the chain)
+        const tabledBase = goIsBaseExchangeFile (fn) && Object.prototype.hasOwnProperty.call (GO_BASE_DICT_PARAMS, name);
+        if (!tabledBase && !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
         const arg = String (site.args?.[index] ?? '').trim ();
         if (arg.startsWith ('{')) { continue; }
         if (/^this\s*\.\s*(extend|deepExtend|keysort|indexBy|groupBy)\s*\(/.test (arg)) { continue; }
