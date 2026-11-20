@@ -8070,6 +8070,25 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `new List<object>(((IDictionary<string,object>)${parsedArg}).Values)`;
     }
 
+    // the emitted declaration type of an identifier when the embedding classifier declares it a
+    // dictionary (ccxt: build/csharp-local-types.js); undefined by default
+    csharpDeclaredLocalDictType(node): string | undefined {
+        return undefined;
+    }
+
+    // `this.toArray (d)` on a local the classifier declares a dictionary: the helper's dictionary
+    // branch is its value list, and null stays null
+    csharpDeclaredDictToArray(node): string | undefined {
+        const callee = node?.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (callee.name?.text !== 'toArray') || (node.arguments?.length !== 1) || !isIdentifier(node.arguments[0])
+            || ![ 'Dictionary<string, object>', 'IDictionary<string, object>' ].includes(this.csharpDeclaredLocalDictType(node.arguments[0]) as string)) {
+            return undefined;
+        }
+        const name = this.printNode(node.arguments[0], 0).trim();
+        return /^\w+$/.test(name) ? `(${name} == null ? null : new List<object>(${name}.Values))` : undefined;
+    }
+
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
         if (this.csharpPromiseAllTypedListRead(node?.expression?.expression) !== undefined) {
             return `${name}.Add(${parsedArg})`; // the list is a List<Task<T>>, Add binds directly
@@ -8770,6 +8789,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const feeTier = csharpFeeTierLiteral(node);
         if (feeTier !== undefined) {
             return feeTier;
+        }
+        const dictValues = this.csharpDeclaredDictToArray(node); // toArray of a declared dictionary
+        if (dictValues !== undefined) {
+            return dictValues;
         }
         const declaredMember = this.csharpDeclaredDictMemberCall(node); // declared dictionary member call
         if (declaredMember !== undefined) {
