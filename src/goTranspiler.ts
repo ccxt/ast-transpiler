@@ -39926,3 +39926,168 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     return (printed === undefined) ? upstream : upstream.substring(0, head) + printed + upstream.substring(upstream.trimEnd().length);
 };
 
+
+// A whole statement whose value is the guarded element read of a declared list (`const x = l[k]` declared any,
+// `x = l[k]` on an any local, a sync `return l[k]`) prints the bounds check as statements with the same nil
+// answer, unless the ccxt build's in-range proof can already drop the guard.
+const GO_GUARDED_LIST_READ = /^func\(\) any \{\n[ \t]*if (\w+) >= 0 && \1 < len\(([A-Za-z_]\w*)\) \{\n[ \t]*return (DerefScalar\()?\2\[\1\]\)?\n[ \t]*\}\n[ \t]*return nil\n[ \t]*\}\(\)$/;
+function goGuardedListReadParts (goTranspiler, read, printed: string): string[] | undefined {
+    while (read?.kind === SyntaxKind.ParenthesizedExpression) {
+        read = read.expression;
+    }
+    if ((read?.kind !== SyntaxKind.ElementAccessExpression) || (read.expression?.kind !== SyntaxKind.Identifier)
+        || !goTranspiler.goDeclaredListIdentifier(read.expression)) {
+        return undefined;
+    }
+    const m = GO_GUARDED_LIST_READ.exec(printed.trim());
+    // a DerefScalar read goes bare only on a list whose elements are never scalar pointers
+    return ((m === null) || (m[2] !== read.expression.text) || ((m[3] !== undefined) && !goTranspiler.goListElementsArePointerFree(read.expression) && !goGuardedListReadSafeListLocal(goTranspiler, read.expression))
+        || goGuardedListReadMayBeProven(goTranspiler, read)) ? undefined : [ m[1], m[2], `${m[2]}[${m[1]}]` ];
+}
+// a never-written local initialised by `this.safeList*`: the unboxed JSON array holds no scalar pointer
+function goGuardedListReadSafeListLocal (goTranspiler, list): boolean {
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    let init: any = declaration?.initializer;
+    while (init?.kind === SyntaxKind.ParenthesizedExpression) {
+        init = init.expression;
+    }
+    const callee: any = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safeList\d*$/.test(callee.name?.text ?? '')
+        && (goTranspiler.goNameWriteSites(goTranspiler.goEnclosingFunction(declaration), list.text, declaration).length === 0)
+        && !goGuardedListReadElementWritten(goTranspiler.goEnclosingFunction(declaration), list.text);
+}
+// `list.push (..)` / `list[k] = ..` can put any value (a scalar pointer too) into the slice
+function goGuardedListReadElementWritten (scope, name: string): boolean {
+    let hit = false;
+    const walk = (n) => {
+        if (hit) {
+            return;
+        }
+        const target: any = (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken) ? n.left
+            : (((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression)) ? n.expression : undefined);
+        if ((target?.kind === SyntaxKind.ElementAccessExpression || target?.kind === SyntaxKind.PropertyAccessExpression)
+            && (target.expression?.kind === SyntaxKind.Identifier) && (target.expression.text === name)
+            && ((target.kind === SyntaxKind.ElementAccessExpression) || (target.name?.text !== 'length'))) {
+            hit = true;
+            return;
+        }
+        n.forEachChild(walk);
+    };
+    scope?.forEachChild(walk);
+    return hit;
+}
+// the ccxt build drops the guard when a length test or loop around (or an exit before) the read, the
+// initializer (split, literal, producer arity) bounds the index: leave every read such a proof can reach to it
+function goGuardedListReadMayBeProven (goTranspiler, read): boolean {
+    const list = read.expression;
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    let init: any = declaration?.initializer;
+    while (init?.kind === SyntaxKind.ParenthesizedExpression) {
+        init = init.expression;
+    }
+    const callee = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+    const split = (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.name?.text === 'split');
+    if ((init?.kind === SyntaxKind.ArrayLiteralExpression) || (split && (read.argumentExpression?.kind === SyntaxKind.NumericLiteral)
+        && (read.argumentExpression.text === '0')) || ((callee !== undefined) && !split
+        && ((callee.kind !== SyntaxKind.PropertyAccessExpression) || !callee.name?.text?.startsWith('safe')))) {
+        return true;
+    }
+    // names bound to `list.length`, then any test of them (or of indexOf for a split) on the read's path
+    const lengths = new Set<string>([ list.text ]);
+    const scope = goTranspiler.goEnclosingFunction(list);
+    const isLength = (n) => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length')
+        && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === list.text);
+    const bind = (n) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && isLength(n.initializer)) {
+            lengths.add(n.name.text);
+        }
+        n.forEachChild(bind);
+    };
+    scope?.forEachChild(bind);
+    const mentions = (n): boolean => {
+        let hit = false;
+        const walk = (m) => {
+            if (hit) {
+                return;
+            }
+            if (isLength(m) || ((m.kind === SyntaxKind.Identifier) && (m.text !== list.text) && lengths.has(m.text))
+                || (split && (m.kind === SyntaxKind.Identifier) && (m.text === 'indexOf'))) {
+                hit = true;
+                return;
+            }
+            m.forEachChild(walk);
+        };
+        if (n !== undefined) {
+            walk(n);
+        }
+        return hit;
+    };
+    for (let node = read; (node !== undefined) && (node !== scope); node = node.parent) {
+        const parent = node.parent;
+        if (((parent?.kind === SyntaxKind.IfStatement) || (parent?.kind === SyntaxKind.WhileStatement)) && mentions(parent.expression)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.ForStatement) && (split || mentions(parent.condition))) {
+            return true;
+        }
+        if (parent?.kind === SyntaxKind.Block) {
+            for (const sibling of parent.statements) {
+                if (sibling === node) {
+                    break;
+                }
+                if ((sibling.kind === SyntaxKind.IfStatement) && mentions(sibling.expression)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+function goGuardedListReadIf (goTranspiler, body: string, parts: string[], identation: number): string {
+    const iden = goTranspiler.getIden(identation);
+    return `${iden}if ${parts[0]} >= 0 && ${parts[0]} < len(${parts[1]}) {\n${goTranspiler.getIden(identation + 1)}${body}\n${iden}}`;
+}
+{
+    const declarationList = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = declarationList.call(this, node, identation);
+        const declaration = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.initializer === undefined)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const head = `${this.getIden(identation)}var ${name} any = `;
+        if (!printed.startsWith(head)) {
+            return printed;
+        }
+        const parts = goGuardedListReadParts(this, declaration.initializer, printed.substring(head.length));
+        return ((parts === undefined) || (parts[0] === name) || (parts[1] === name)) ? printed
+            : `${head}nil\n${goGuardedListReadIf(this, `${name} = ${parts[2]}`, parts, identation)}`;
+    };
+    const expressionStatement = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        const shipped = expressionStatement.call(this, node, identation);
+        const write = node?.expression;
+        if ((typeof shipped !== 'string') || (write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken.kind !== SyntaxKind.EqualsToken)
+            || (write.left?.kind !== SyntaxKind.Identifier)) {
+            return shipped;
+        }
+        // the shipped `x = func() any {..}()` only compiles when x is an `any` local, which also takes nil
+        const target = write.left.text;
+        const head = `${this.getIden(identation)}${target} = `;
+        const parts = shipped.startsWith(head) ? goGuardedListReadParts(this, write.right, shipped.substring(head.length)) : undefined;
+        return ((parts === undefined) || (parts[0] === target) || (parts[1] === target)) ? shipped
+            : `${head}nil\n${goGuardedListReadIf(this, `${target} = ${parts[2]}`, parts, identation)}`;
+    };
+    const returnStatement = GoTranspiler.prototype.printReturnStatement;
+    GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+        const shipped = returnStatement.call(this, node, identation);
+        const head = `${this.getIden(identation)}return `;
+        if ((typeof shipped !== 'string') || (node?.expression === undefined) || this.isInsideAsyncFunction(node) || !shipped.startsWith(head)) {
+            return shipped;
+        }
+        const parts = goGuardedListReadParts(this, node.expression, shipped.substring(head.length));
+        return (parts === undefined) ? shipped : `${goGuardedListReadIf(this, `return ${parts[2]}`, parts, identation)}\n${head}nil`;
+    };
+}

@@ -14444,7 +14444,7 @@ describe ('goPredictionBoundedListReads', () => {
                 '            const row = rows[i];\n' +
                 '            this.parseRow (row);\n' +
                 '        }');
-            expect (out).toContain (GUARD);
+            expect (out).toContain ('var row any = nil\n\t\tif i >= 0 && i < len(rows) {\n\t\t\trow = rows[i]\n\t\t}\n');
         });
 
         test('a counter that moves in the body keeps the guard', () => {
