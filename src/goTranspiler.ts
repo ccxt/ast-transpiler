@@ -5763,6 +5763,13 @@ export const CCXT_GO_GETARG_DECLARED_TYPES = {
     'List': '[]any',
 };
 
+// `limit: Int = 100`: GetArg folds nil and a nil pointer to the default, so the Go binding is never nil
+const h21g06NumericDefaultInt = (param: any, goType: string): boolean => (goType === 'int64')
+    && (param?.type?.getText?.()?.trim() === 'Int') && (param?.initializer?.kind === SyntaxKind.NumericLiteral);
+
+// a unary minus
+const h21g06IsNegation = (node: any): boolean => (node?.kind === SyntaxKind.PrefixUnaryExpression) && (node.operator === SyntaxKind.MinusToken);
+
 // Positions a typed GetArg local may be handed to: `deref` consumers unwrap a pointer twin,
 // `container` ones decide on nil-ness (container locals only), `*` accepts any typed local.
 export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
@@ -23565,6 +23572,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (goType.startsWith('*') || goType.startsWith('map[') || (goType === '[]string')) {
             return true;
         }
+        if (h21g06NumericDefaultInt(param, goType)) {
+            return true;
+        }
         const name = param.name.text;
         let keeps = true;
         const visit = (n) => {
@@ -28646,7 +28656,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             // `_ = x` and other inert statements
             if ((parent?.kind === SyntaxKind.ExpressionStatement)
-                || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)))
+                || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n) || this.h21g06GuardedIntNegation(n, goType)))
                 || ((goType === '*string') && (this.goGetArgPointerIsBalanceKey(n) || this.goGetArgStrPtrGuardedStringCall(n, param)))) {
                 return true;
             }
@@ -28733,6 +28743,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const printed = this.printNode(parent, 0).trim();
         return /^(?:\(\s*)*(?:Divide|Subtract|Multiply|Mod|IsGreaterThan|IsLessThan|IsGreaterThanOrEqual|IsLessThanOrEqual)\(/.test(printed);
+    }
+
+    // `-x` on a `*int64`: nil-guarded it prints `-*x`, else OpNeg(x), which derefScalars a pointer
+    // like the box (a nil pointer and an untyped nil both negate to nil)
+    h21g06GuardedIntNegation(n: any, goType: string): boolean {
+        return (goType === '*int64') && h21g06IsNegation(n.parent);
     }
 
     // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
@@ -30828,10 +30844,33 @@ ${this.getIden(identation)}${returnStatement}`;
         return precedence < cutoff ? ' ' : '';
     }
 
+    // `x === undefined` / `x !== undefined` on a parameter bound as a plain int64 from a numeric
+    // default (h21g06NumericDefaultInt): never nil in Go, so the test prints its constant answer
+    h21g06DeadNilTest(node: any): string | undefined {
+        const op = node.operatorToken?.kind;
+        const negated = (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken);
+        if (!negated && (op !== SyntaxKind.EqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsEqualsToken)) {
+            return undefined;
+        }
+        const ident: any = this.goIsNilLiteral(node.right) ? node.left : (this.goIsNilLiteral(node.left) ? node.right : undefined);
+        if (ident?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const decl: any = this.goGetArgCalleeDeclaration(ident);
+        if ((decl?.kind !== SyntaxKind.Parameter) || !h21g06NumericDefaultInt(decl, String(this.goGetArgParameterType(decl)))) {
+            return undefined;
+        }
+        return negated ? 'true' : 'false';
+    }
+
     printBinaryExpression(node, identation) {
 
         const {left, right, operatorToken} = node;
 
+        const deadNilTest = this.h21g06DeadNilTest(node);
+        if (deadNilTest !== undefined) {
+            return this.getIden(identation) + deadNilTest;
+        }
         const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
         if (customBinaryExp) {
             return customBinaryExp;
