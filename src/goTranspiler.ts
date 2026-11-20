@@ -5278,7 +5278,7 @@ function ccxtGoWriteSiteAssignment (goTranspiler, node, identation) {
     if ((goType === '*string') && ((strPtrFamilyLiteralTemp (goTranspiler, node) !== undefined) || (h18g12SplitHeadList (goTranspiler, node.right) !== undefined))) {
         return goTranspiler.goPointerWriteText (node, identation); // a fresh-local address, no box
     }
-    const nilJoin = ccxtGoNilJoinDeclarationType (goTranspiler, node.left) === goType;
+    const nilJoin = (ccxtGoNilJoinDeclarationType (goTranspiler, node.left) === goType) || h25g02ListSeedJoin (goTranspiler, node.left, goType);
     const conversion = ccxtGoWriteSiteConversion (goTranspiler, goType, node.right, nilJoin);
     if (conversion === undefined) {
         return undefined;
@@ -5413,8 +5413,29 @@ function ccxtGoArrayLiteralLocalIsSafe (goTranspiler, scope, declaration, varNam
         return false;
     }
     return ccxtGoUseScanIsSafe (goTranspiler, scope, declaration, varName, '[]any', {
-        converts: (write) => ccxtGoArrayLiteralWriteConversion (goTranspiler, write) !== undefined,
+        converts: (write) => (ccxtGoArrayLiteralWriteConversion (goTranspiler, write) !== undefined) || h25g02ListEndpointWrite (goTranspiler, declaration, write.right),
+        vetoes: (n) => h25g02EndpointReadVeto (goTranspiler, scope, declaration, n),
     });
+}
+
+// a `[]`-seeded local ts declares a list, written from an awaited `[]any` endpoint stub: the write-site
+// printer binds the typed holder (`PanicOnError(xRecv.Raw)`, then `x = xRecv.Value`), as for a nil-seeded one
+function h25g02ListEndpointWrite (goTranspiler, declaration, right) {
+    return h24n04DeclaredList (declaration?.type) && (ccxtGoNilJoinEndpointElement (goTranspiler, right) === '[]any');
+}
+
+// with an endpoint write the typed view is nil on a non-list response: only reads that answer alike for nil and
+// the empty seed (length, element read, row-list parser argument) are admitted, as for a const receive
+function h25g02EndpointReadVeto (goTranspiler, scope, declaration, n) {
+    const written = goTranspiler.hasNodeWhere (scope, (w) => (w.kind === ts.SyntaxKind.BinaryExpression) && (w.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
+        && isIdentifierNamed (w.left, n.text) && h25g02ListEndpointWrite (goTranspiler, declaration, w.right));
+    return written && !ccxtGoAsyncReceiveReadsTheValue (goTranspiler, n, '[]any') && !ccxtGoEndpointLocalParserRead (n);
+}
+
+// the write-site join flag for `node`: a nil-declared join local, or a `[]`-seeded list-declared one
+function h25g02ListSeedJoin (goTranspiler, node, goType) {
+    const declaration = (goType === '[]any') ? ccxtGoArrayLiteralDeclarationOf (goTranspiler, node) : undefined;
+    return (declaration !== undefined) && h24n04DeclaredList (declaration.type);
 }
 
 // the declaration a write target binds to, when that declaration is an empty array literal
@@ -6515,7 +6536,7 @@ function ccxtGoEndpointHolderApplies (goTranspiler, awaitNode) {
     }
     const assignment = awaitNode.parent;
     return (ccxtGoWriteSiteLocalGoType (goTranspiler, assignment.left) === '[]any')
-        && (ccxtGoWriteSiteConversion (goTranspiler, '[]any', awaitNode, ccxtGoNilJoinDeclarationType (goTranspiler, assignment.left) === '[]any') !== undefined)
+        && (ccxtGoWriteSiteConversion (goTranspiler, '[]any', awaitNode, (ccxtGoNilJoinDeclarationType (goTranspiler, assignment.left) === '[]any') || h25g02ListSeedJoin (goTranspiler, assignment.left, '[]any')) !== undefined)
         && (ccxtGoEndpointListReceive (goTranspiler, awaitNode, '[]any', goTranspiler.printNode (awaitNode, 0)) !== undefined);
 }
 
