@@ -822,6 +822,9 @@ export class JavaTranspiler extends BaseTranspiler {
     asyncExecutor = '';
     // static method emitted in place of CompletableFuture.supplyAsync (it owns the executor choice)
     asyncSupplier = '';
+    // regex over source file names whose async methods print a sync core plus a one-line wrapper ('' = off)
+    asyncCoreSplit = '';
+    javaAsyncCores: Map<any, { name: string; coreBody: string; wrapperBody: string }> = new Map();
     // typed ws handler tables: `const methods = { 'ticker': this.handleTicker }` and its single
     // `method.call (this, client, message)` read are proven together (method references + virtual call)
     javaHandlerTables: Map<any, any> = new Map();
@@ -930,6 +933,7 @@ export class JavaTranspiler extends BaseTranspiler {
         this.applyUserOverrides(config);
         this.asyncExecutor = config['asyncExecutor'] ?? '';
         this.asyncSupplier = config['asyncSupplier'] ?? '';
+        this.asyncCoreSplit = config['asyncCoreSplit'] ?? '';
     }
 
     initConfig() {
@@ -2564,6 +2568,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const supplier = this.asyncSupplier || "java.util.concurrent.CompletableFuture.supplyAsync";
             const executorArg = (!this.asyncSupplier && this.asyncExecutor) ? `, ${this.asyncExecutor}` : "";
+            this.javaStashAsyncCore(node, identation, supplier, executorArg, blockOpen + "\n" + firstStatement + remainingString + "\n" + returnNull.replace(/^ {4}/, '') + blockClose, blockClose);
             const asyncBody = this.getIden(identation + 1) + `return ${supplier}(() -> {\n` +
                     insideWrappers +
                     body + "\n" +
@@ -2634,10 +2639,41 @@ export class JavaTranspiler extends BaseTranspiler {
         const funcBody = this.printFunctionBody(node, identation); // print body first to get var reassignments filled
         // one typed signature: default-valued and `?` parameters are ordinary typed parameters
         let methodDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
-        methodDef += funcBody;
+        methodDef += this.javaAsyncCoreSplit(node, identation, methodDef, funcBody);
         methodDef += this.printOverrideBridges(node, identation);
 
         return methodDef;
+    }
+
+    // an async method prints a private sync `<name>Core` holding the body, and the public method hands it to
+    // the same supplier in one line: same executor and thread; overrides and super calls resolve as before
+    javaStashAsyncCore(node, identation, supplier: string, executorArg: string, coreBody: string, blockClose: string) {
+        if (!isMethodDeclaration(node) || !this.asyncCoreSplit || !new RegExp(this.asyncCoreSplit).test(node.getSourceFile().fileName.replace(/\\/g, '/'))
+            || (node.modifiers ?? []).some((m) => m.kind === SyntaxKind.StaticKeyword) || !isIdentifier(node.name)) {
+            return;
+        }
+        const name = this.transformMethodNameIfNeeded(node.name.text);
+        const members = (node.parent as any)?.members ?? [];
+        if (members.some((m) => (m.name as any)?.text === name + 'Core')) {
+            return;
+        }
+        const args = node.parameters.map((p) => this.printNode(p.name, 0)).join(', ');
+        const wrapper = this.getIden(identation + 1) + `return ${supplier}(() -> this.${name}Core(${args})${executorArg});`;
+        if (wrapper.length > 400) {
+            return;
+        }
+        this.javaAsyncCores.set(node, { name, coreBody, wrapperBody: this.getBlockOpen(identation) + wrapper + blockClose });
+    }
+
+    javaAsyncCoreSplit(node, identation, signature: string, funcBody: string): string {
+        const core = this.javaAsyncCores.get(node);
+        this.javaAsyncCores.delete(node);
+        const future = core === undefined ? null : new RegExp(`CompletableFuture<(.+)> ${core.name}\\(`).exec(signature);
+        if (core === undefined || future === null) {
+            return funcBody;
+        }
+        const params = this.printCoreMethodParameters(node);
+        return core.wrapperBody + "\n\n" + this.getIden(identation) + `private ${future[1]} ${core.name}Core(${params})` + core.coreBody;
     }
 
     printMethodDefinition(node, identation, paramsPrinter = undefined) {
