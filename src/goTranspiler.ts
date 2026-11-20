@@ -41256,3 +41256,86 @@ function goSearchQueriesFeedsListCallee (goTranspiler: GoTranspiler, declaration
         return printed.startsWith('this.ParseSearchQueries(') ? 'ArrayTyped(' + printed + ')' : undefined;
     };
 }
+// A `Dict[]` local seeded with `[]` whose every write is a list literal or `await this.M (..)` with M's
+// channel carrying `[]map[string]any` (host table asyncMapRowListCallees: the receive is MapSliceToList,
+// nil for a nil slice) prints `[]any` when it is only measured, element-read and rebound.
+{
+    const getGoLocalTypeAwaitedRows = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+        const shipped = getGoLocalTypeAwaitedRows.call(this, declaration, parsedValue);
+        return ((shipped === 'any') && goAwaitedRowListLocal(this, declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+    };
+}
+const goAwaitedRowListVerdicts = new WeakMap<any, boolean>();
+function goAwaitedRowListLocal(goTranspiler: GoTranspiler, declaration): boolean {
+    if (goAwaitedRowListVerdicts.has(declaration)) {
+        return goAwaitedRowListVerdicts.get(declaration);
+    }
+    goAwaitedRowListVerdicts.set(declaration, false);
+    const verdict = goAwaitedRowListLocalUncached(goTranspiler, declaration);
+    goAwaitedRowListVerdicts.set(declaration, verdict);
+    return verdict;
+}
+function goAwaitedRowListWrite(goTranspiler: GoTranspiler, right): boolean {
+    const value: any = goTranspiler.goUnwrapParenthesizedNode(right);
+    if (value?.kind === SyntaxKind.ArrayLiteralExpression) {
+        return value.elements.every((e: any) => (e.kind !== SyntaxKind.SpreadElement) && (e.kind !== SyntaxKind.OmittedExpression));
+    }
+    const call: any = (value?.kind === SyntaxKind.AwaitExpression) ? value.expression : undefined;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const name = String(callee.name?.text ?? '');
+    return goTranspiler.asyncMapRowListCallees.has(name.charAt(0).toUpperCase() + name.slice(1));
+}
+function goAwaitedRowListLocalUncached(goTranspiler: GoTranspiler, declaration): boolean {
+    if ((goTranspiler.asyncMapRowListCallees.size === 0) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.VariableStatement)) {
+        return false;
+    }
+    const init: any = goTranspiler.goUnwrapParenthesizedNode(declaration.initializer);
+    if ((init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length !== 0)
+        || !goTranspiler.goListElementsAreObjects(declaration.name)) {
+        return false;
+    }
+    const scope: any = goTranspiler.goEnclosingFunction(declaration);
+    if ((scope === undefined) || goTranspiler.goTypeNameIsShadowed(scope, GO_SAFE_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    const name = declaration.name.text;
+    let awaited = 0;
+    let measured = 0;
+    const unsafe = goTranspiler.hasNodeWhere(scope, (n: any) => {
+        if (((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter) || (n.kind === SyntaxKind.BindingElement))
+            && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true; // a same-name binding elsewhere in the method
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            if (!goAwaitedRowListWrite(goTranspiler, parent.right)) {
+                return true;
+            }
+            awaited += (goTranspiler.goUnwrapParenthesizedNode(parent.right)?.kind === SyntaxKind.AwaitExpression) ? 1 : 0;
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) {
+            measured += 1;
+            return false;
+        }
+        // an element read (never a write through it): a nil slice and the boxed list both have no element
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)
+            && !goTranspiler.isGoElementAccessAssignmentTarget(parent)) {
+            return false;
+        }
+        return true; // a nil test, an argument, a return or a store would observe the typed nil
+    });
+    return !unsafe && (awaited > 0) && (measured > 0);
+}
