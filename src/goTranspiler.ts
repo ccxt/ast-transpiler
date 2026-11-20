@@ -29415,6 +29415,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && (callee.name?.text === 'inArray') && (argIndex === 1)) {
             return true;
         }
+        if (this.h26g29NilSliceIndexRead(callee, argIndex)) {
+            return true;
+        }
         if (!this.goGetArgPositionIsDefaulted(callee, argIndex)) {
             return false;
         }
@@ -45957,3 +45960,14 @@ GoTranspiler.prototype.h26g28BookDerefBefore = function (id) {
     }, () => false);
 };
 // ===== h26-g28 (end) =====
+// ===== h26-G29
+export interface GoTranspiler {
+    h26g29NilSliceIndexRead(callee, argIndex: number): boolean;
+}
+// `this.safeString (xs, i)` / `this.safeValue (xs, i)` on a nil []string: SafeValueN takes its []string
+// arm, finds no index and returns the default, exactly what the absent `any` box answered
+GoTranspiler.prototype.h26g29NilSliceIndexRead = function (callee, argIndex: number): boolean {
+    return (argIndex === 0) && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && ['safeString', 'safeValue'].includes(callee.name?.text);
+};
+// ===== h26-G29 (end) =====
