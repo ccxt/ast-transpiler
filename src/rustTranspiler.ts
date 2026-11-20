@@ -2265,6 +2265,7 @@ export class RustTranspiler extends BaseTranspiler {
         const { left, right } = node;
         const op = node.operatorToken.kind;
         const isAssign = op === SyntaxKind.EqualsToken;
+        const preciseWrite = isAssign ? this.printRustPreciseDecimalsWrite(left, right) : undefined; if (preciseWrite !== undefined) return preciseWrite;
         // ral-56w: the split statement of a watched cache local declares the fresh list local (rustWsCacheListSplit)
         if (isAssign && isIdentifier(left) && this.rustWsCacheUses.get(left) === 'split') {
             return `let mut ${super.printIdentifier(left)}: crate::value::List = ${this.printNode(right, 0).trim()}.into_list()`;
@@ -21676,7 +21677,70 @@ export class RustTranspiler extends BaseTranspiler {
         if (cast65b !== undefined && isIdentifier(cast65b) && this.rustScalarUseForms.get(cast65b) === 'concat' && this.rust65bCastToStringRecv(cast65b)) {
             return this.rustRecordFormatToString(node, `${super.printIdentifier(cast65b)}.as_deref().unwrap_or("null")`);
         }
+        const preciseText = this.printRustPreciseToString(node); if (preciseText !== undefined) return preciseText;
         return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
+    }
+
+    /** `x` is a local of the base `Precise` class: a typed `Precise` struct in Rust (precise.rs) with `integer`, `decimals: i64`. */
+    rustPreciseLocal(x): boolean {
+        const n: any = this.unwrapParens(x);
+        if (n === undefined || !isIdentifier(n)) return false;
+        // the local is declared `const p = new Precise (..)` and the checker types it as that class
+        const declaration: any = this.rustDeclaredNode(n);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.initializer === undefined || !isNewExpression(declaration.initializer)) return false;
+        const ctor: any = declaration.initializer.expression;
+        if (!isIdentifier(ctor) || ctor.text !== 'Precise') return false;
+        try { return this.getChecker().typeToString(this.typeOfNodeIfAny(n)).trim() === 'Precise'; } catch (e) { return false; }
+    }
+
+    /** `p.toString ()` on a `Precise` local: its `Display` text (the TS `toString` port), boxed as the `Str` it always is. */
+    printRustPreciseToString(node): string | undefined {
+        const call: any = node;
+        if (!isCallExpression(call) || call.arguments.length !== 0 || !isPropertyAccessExpression(call.expression) || !this.rustPreciseLocal(call.expression.expression)) return undefined;
+        return `Value::from(${super.printIdentifier(this.unwrapParens(call.expression.expression))}.to_string())`;
+    }
+
+    /** `p.decimals = this.sum (p.decimals, k)` with `k` an `int` / `oint` operand, or
+     *  `p.decimals = Math.max (p.decimals, k)` with `k` an `Int` local under a `k !== undefined` guard, on a `Precise` local:
+     *  the `i64` field written natively. `sum` skips a missing operand (adds 0); the guarded `Math.max` never sees one. */
+    printRustPreciseDecimalsWrite(left, right): string | undefined {
+        const l: any = left, r: any = this.unwrapParens(right);
+        if (!isPropertyAccessExpression(l) || String(l.name.text) !== 'decimals' || !this.rustPreciseLocal(l.expression)) return undefined;
+        if (!isCallExpression(r) || r.arguments.length !== 2 || !isPropertyAccessExpression(r.expression)) return undefined;
+        const p = super.printIdentifier(this.unwrapParens(l.expression));
+        const first: any = this.unwrapParens(r.arguments[0]);
+        if (!isPropertyAccessExpression(first) || String(first.name.text) !== 'decimals' || !isIdentifier(first.expression) || super.printIdentifier(first.expression) !== p) return undefined;
+        const fn = String(r.expression.name.text);
+        const k: any = this.unwrapParens(r.arguments[1]);
+        const field = `(${p}).decimals`;
+        if (r.expression.expression.kind === SyntaxKind.ThisKeyword && fn === 'sum') {
+            const kind = this.rustArithOperandKind(k);
+            if (kind === 'int') return `${field} += ${this.rustScalarOperandText('int', k)}`;
+            if (kind === 'oint') return `${field} += ${this.rustArithTypedIntCall(k) !== undefined ? this.rustBaseTypedBareText(k) : this.rustScalarOperandText('oint', k)}.unwrap_or(0)`;
+            // a base integer reader answers `Int` or `Null` only, so `as_i64` loses nothing `sum` would add
+            const reader = isCallExpression(k) && isPropertyAccessExpression(k.expression) && k.expression.expression.kind === SyntaxKind.ThisKeyword
+                && /^(?:parseToInt|safeInteger)$/.test(String(k.expression.name.text)) && this.rustCalleeIsRuntimeBase(k);
+            return reader ? `${field} += Value::from(${this.printNode(k, 0).trim()}).as_i64().unwrap_or(0)` : undefined;
+        }
+        if (isIdentifier(r.expression.expression) && r.expression.expression.text === 'Math' && fn === 'max' && isIdentifier(k) && this.rustPreciseGuardedInt(k, l)) {
+            const kind = this.rustArithOperandKind(k);
+            if (kind === 'int') return `${field} = i64::max(${field}, ${this.rustScalarOperandText('int', k)})`;
+            if (kind === 'oint') return `${field} = i64::max(${field}, ${this.rustScalarOperandText('oint', k)}.unwrap_or(i64::MIN))`;
+            return undefined;
+        }
+        return undefined;
+    }
+
+    /** `k` is declared `Int`-typed and the write sits directly in `if (k !== undefined) { .. }`. */
+    rustPreciseGuardedInt(k, write): boolean {
+        let stmt: any = write;
+        while (stmt !== undefined && stmt.kind !== SyntaxKind.ExpressionStatement) stmt = stmt.parent;
+        const block: any = stmt?.parent;
+        const guard: any = block !== undefined && isBlock(block) ? block.parent : (block !== undefined && isIfStatement(block) ? block : undefined);
+        if (guard === undefined || !isIfStatement(guard)) return false;
+        const cond: any = this.unwrapParens(guard.expression);
+        return isBinaryExpression(cond) && cond.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken && isIdentifier(cond.left) && cond.left.text === k.text
+            && this.literalKindOfNode(cond.right) === 'null' && this.primitiveKindOfType(this.typeOfNodeIfAny(k)) === 'number';
     }
 
     printToUpperCaseCall(node, identation, name = undefined) {
