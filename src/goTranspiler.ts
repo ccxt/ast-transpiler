@@ -4211,6 +4211,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
             result = undefined;
         }
         result = result ?? h22g05IntPtrReturn (goTranspiler, node, allowed);
+        result = result ?? h26g09MixedStrReturn (goTranspiler, node, allowed);
     } finally {
         CCXT_GO_RETURN_TYPE_IN_PROGRESS.delete (node);
     }
@@ -44911,3 +44912,49 @@ function goH26g07SiblingSliceProducer(initText: string): boolean {
     return false;
 }
 // ===== h26-G07 (end) =====
+// ===== h26-H26-G09 (begin) =====
+// A `: Str` method whose returns are proven `*string` values, native Go `string` values and nil returns `*string`;
+// each `string` return prints `retStrVal := v; return &retStrVal`. The nil paths pass the same caller proof as a
+// plain `*string` method (goGeneralReturnKeepsAbsence), so no typed nil reaches an `any` box.
+const H26G09_ADDRESSED_RETURNS = new WeakSet ();
+function h26g09MixedStrReturn (goTranspiler, node, allowed) {
+    if (!allowed.includes ('*string') || !allowed.includes ('string') || /\bretStrVal\b/.test (node.body?.getText () ?? 'retStrVal')) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    const values = [];
+    for (const r of returns) {
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        if (r.expression === undefined) {
+            return undefined;
+        }
+        if (isAbsentExpression (r.expression)) {
+            continue;
+        }
+        const goType = ccxtGoReturnExpressionType (goTranspiler, r.expression);
+        if (goType === 'string') {
+            values.push (r);
+        } else if (goType !== '*string') {
+            return undefined;
+        }
+    }
+    if ((values.length === 0) || !goGeneralReturnKeepsAbsence (goTranspiler, node, '*string')) {
+        return undefined;
+    }
+    values.forEach ((r) => H26G09_ADDRESSED_RETURNS.add (r));
+    return '*string';
+}
+const printReturnStatementH26g09 = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    if (!H26G09_ADDRESSED_RETURNS.has (node)) {
+        return printReturnStatementH26g09.call (this, node, identation);
+    }
+    const value = this.printNode (node.expression, 0).trim ();
+    const iden = this.getIden (identation);
+    return this.printNodeCommentsIfAny (node, identation, iden + 'retStrVal := ' + value + '\n' + iden + 'return &retStrVal');
+};
+// ===== h26-H26-G09 (end) =====
