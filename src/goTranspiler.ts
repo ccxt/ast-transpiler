@@ -43192,3 +43192,30 @@ function h22g02AliasOf (goTranspiler: GoTranspiler, declaration): any {
     };
 }
 // ===== h22-g02 (end) =====
+// ===== h22-g04 =====
+export interface GoTranspiler {
+    goH22g04NonNilStringDefault(node): boolean;
+}
+// a SafeString-family default that is a hand-written Go `string` field (`this.version`) or a local
+// whose every write is such a defaulted call: ToString of it is non-nil, so the call never answers nil
+GoTranspiler.prototype.goH22g04NonNilStringDefault = function (node): boolean {
+    const call: any = node;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const arity = GO_DEFAULTED_SAFE_STRING_ARITY[call.expression.name?.text];
+    const last: any = call.arguments?.[arity - 1];
+    if ((arity === undefined) || (call.arguments.length !== arity) || (last === undefined)) {
+        return false;
+    }
+    if ((last.kind === SyntaxKind.PropertyAccessExpression) && (last.expression?.kind === SyntaxKind.ThisKeyword)) {
+        return GO_STRING_FIELD_NAMES.indexOf(this.goAstFieldGoName(last)) >= 0;
+    }
+    return (last.kind === SyntaxKind.Identifier) && this.goDefaultedSafeStringLocal(last);
+};
+const h22g04ShippedDefaultedSafeStringCall = GoTranspiler.prototype.goDefaultedSafeStringCall;
+GoTranspiler.prototype.goDefaultedSafeStringCall = function (node): boolean {
+    return h22g04ShippedDefaultedSafeStringCall.call(this, node) || this.goH22g04NonNilStringDefault(node);
+};
+// ===== h22-g04 (end) =====
