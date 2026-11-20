@@ -32776,7 +32776,7 @@ ${tryBodyBlock}
         }
         if ((declaration.kind === SyntaxKind.VariableDeclaration) && (this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE)) {
             // the list is only measured and read, and a local container it was cut from is a decoded JSON document
-            return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name))
+            return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goH26g25JsonListUseIsReadOnly(n, name))
                 && this.goSafeListContainerAdmitted(this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeList')?.container);
         }
         try {
@@ -45657,3 +45657,19 @@ GoTranspiler.prototype.h26g24GuardProves = function (condition, list, index: num
         || (((o === SyntaxKind.EqualsEqualsEqualsToken) || (o === SyntaxKind.EqualsEqualsToken)) && (k === 0) && (index === 0));
 };
 // ===== h26-G24 (end) =====
+// ===== h26-g25 =====
+export interface GoTranspiler {
+    goH26g25JsonListUseIsReadOnly(node, name: string): boolean;
+}
+// a decoded JSON list handed as the first argument to a this.safe* reader stays unwritten: the reader only
+// reads it, so its slots still hold only JSON values (never a Go scalar pointer)
+GoTranspiler.prototype.goH26g25JsonListUseIsReadOnly = function (node, name: string): boolean {
+    if (this.goJsonOriginListUseIsReadOnly(node, name)) {
+        return true;
+    }
+    const call: any = node.parent;
+    const callee: any = call?.expression;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === node) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(?:String|Integer|Number|Float|Bool|Dict|List|Value|Timestamp)\d?$/.test(`${callee.name?.text ?? ''}`);
+};
+// ===== h26-g25 (end) =====
