@@ -23092,7 +23092,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (expr === undefined) {
             return true; // `var x any` never written holds nil
         }
-        if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr) || h26g30GetArgParameterSource(this, expr)) {
+        if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr) || h26g30GetArgParameterSource(this, expr) || this.h26g31NonPointerMethodSource(expr)) {
             return true;
         }
         switch (expr.kind) {
@@ -46005,3 +46005,58 @@ function h26g30GetArgParameterSource(goTranspiler, expr): boolean {
     return !unproven;
 }
 // ===== h26-g30 (end) =====
+
+// ===== h26-G31 =====
+// a sync `this.m (..)` whose single declaration is a method printed with an `any` return and whose every
+// own return is a non-pointer source (nil, a literal, or a const local seeded by an object/array literal):
+// the box never holds a typed nil, so `IsEqual(x, nil)` on a local written only by it is exactly `x == nil`
+export interface GoTranspiler {
+    h26g31NonPointerMethodSource(expr): boolean;
+    h26g31NonPointerReturn(expr): boolean;
+}
+const h26g31Seen = new Map<any, boolean>();
+GoTranspiler.prototype.h26g31NonPointerMethodSource = function (expr) {
+    const callee: any = (expr?.kind === SyntaxKind.CallExpression) ? expr.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const declarations: any[] = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+    const method: any = declarations[0];
+    if ((declarations.length !== 1) || (method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined)
+        || this.isAsyncFunction(method)) {
+        return false;
+    }
+    if (h26g31Seen.has(method)) {
+        return h26g31Seen.get(method);
+    }
+    h26g31Seen.set(method, false);
+    const name = this.transformMethodNameIfNeeded(String(method.name?.text ?? ''));
+    const retyped = (this.provenReturnFamilies ?? []).some((f) => f.names.includes(name))
+        || (this.goMarketProducerReturnType(method) ?? this.goNonceReturnType(method) ?? this.goWsCacheReturnType(method)
+            ?? this.goBasePairReturnType(method) ?? this.goStrPtrFamilyReturnType(method)) !== undefined;
+    const declared = method.type?.getText?.() ?? '';
+    const returns = this.goFunctionLevelReturns(method.body);
+    const ok = !retyped && ([ 'any', 'NullableDict', 'Dict' ].indexOf(declared) >= 0) && (returns.length > 0)
+        && (this.printFunctionType(method).trim() === 'any')
+        && returns.every((r) => this.h26g31NonPointerReturn(r.expression));
+    h26g31Seen.set(method, ok);
+    return ok;
+};
+GoTranspiler.prototype.h26g31NonPointerReturn = function (expr) {
+    expr = this.goUnwrapParenthesizedNode(expr);
+    if ((expr === undefined) || [ SyntaxKind.NullKeyword, SyntaxKind.ObjectLiteralExpression, SyntaxKind.ArrayLiteralExpression ].includes(expr.kind)) {
+        return true;
+    }
+    if (expr.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    if (expr.text === 'undefined') {
+        return true;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(expr)?.valueDeclaration?.resolve?.();
+    const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+    return (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0)
+        && ((init?.kind === SyntaxKind.ObjectLiteralExpression) || (init?.kind === SyntaxKind.ArrayLiteralExpression));
+};
+// ===== h26-G31 (end) =====
