@@ -846,6 +846,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStringListHasConcatPush(n: any): boolean;
     goStringListArgIsProven(arg: any): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string, stringWriteProven?: boolean): boolean;
+    goLiteralDefaultSafeBoolWrite(node: any, goType: string): boolean;
     goSelfIntStepWriteKeepsType(node: any, varName: string, goType: string): boolean;
     goSelfConcatWriteIsString(node: any, varName: string): boolean;
     goSelfConcatIsString(node: any, varName: string): boolean;
@@ -908,6 +909,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goPlainMapContainer(container: any, ws: boolean, noDefault: boolean): boolean;
     goNeverNilDict(call: any, ws: boolean): boolean;
     goNeverNilDictLocalDefault(fallback: any, ws: boolean): boolean;
+    goTupleDictSlotContainer(container: any): boolean;
     goSourceTreeKind(node: any): 'rest' | 'ws' | 'skip';
     goTopFunction(node: any): any;
     goGuardsNonNil(condition: any, name: string): boolean;
@@ -1303,6 +1305,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSiblingPassesUnifiedString(argText: string, fileText: string, at: number | undefined): boolean;
     goSiblingRequiredStringParam(argText: string, tree: any, file: string, at: number | undefined): boolean;
     goNilProvenStringPtrArg(arg: any): boolean;
+    goNonNilStringOverloadArg(arg: any): boolean;
     goSafeStringLiteralDefaultCall(call: any): boolean;
     goHasExitingNilGuard(ident: any): boolean;
     goStatementExitsOnNil(statement: any, ident: any): boolean;
@@ -1416,6 +1419,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
     goSafeDictLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goPlainFieldScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goPlainFieldScalarAccessorStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goScalarAccessorIsBaseMethod(call: any): boolean;
     goIsBaseMapReaderCall(call: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
     goIsNonPointerValue(valueNode: any): boolean;

@@ -4292,6 +4292,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
      *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
     rustLentListRowWrite(access: any): boolean;
+    /** `xs[i]['k'] = v` (statement, REST tier) on a never-reassigned `[]`-defaulted base `safeList*` local, inside its own
+     *  `for (let i = 0; i < xs.length; i++)` whose body never resizes `xs` nor writes `i`: the slot is in bounds, so the helper's
+     *  padding is dead; a fresh response row carries no tag, so the native insert is the whole write (a non-map row is skipped). */
+    printBoundedListRowInsert(left: any, keyText: string, valueText: string): string | undefined;
     /** ral-64i: a never-reassigned local initialised from a base `this.arraySlice (src, ..)` whose `src` is an identifier the
      *  checker types `string[]` (a split): every element is a `Str`, so `Display` joins exactly what the helper joined. */
     rust64iStringSliceDeclaration(declaration: any): boolean;
