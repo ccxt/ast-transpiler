@@ -25946,6 +25946,7 @@ export class RustTranspiler extends BaseTranspiler {
                     writes++;
                     return true;
                 }
+                if (this.rustH26r14RecordWrite(rhs)) { if (kind !== undefined && kind !== 'dict') return false; kind = 'dict'; writes++; return true; }
                 const k = isObjectLiteralExpression(rhs) && !rhs.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment) ? 'dict'
                     : (isArrayLiteralExpression(rhs) && this.rustNilListLiteralOk(rhs) ? 'list' : undefined);
                 if (k === undefined || (kind !== undefined && kind !== k)) return false;
@@ -25963,7 +25964,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return this.literalKindOfNode(this.unwrapParens(parent.left === n ? parent.right : parent.left)) === 'null';
             }
             if ((parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n && !this.rustScalarInNestedWrite(n, true))
-                || (isReturnStatement(parent) && parent.expression === n)) {
+                || (isReturnStatement(parent) && parent.expression === n) || this.rustH26r14RecordBoxUse(n)) {
                 boxes++;
                 return true;
             }
@@ -26121,6 +26122,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${name} = ${this.rustLocalLastUse(rhs, mapSource) ? s : `${s}.clone()`}.into_opt_dict()`;
         }
         if (this.rust67cNilMapExtendWrite(left, this.rustNilMapOf(left))) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
+        if (this.rustH26r14RecordWrite(rhs)) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
         if (isArrayLiteralExpression(rhs)) return `${name} = Some(${this.printBuiltListLiteral(rhs)})`;
         return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
     }
@@ -26142,7 +26144,7 @@ export class RustTranspiler extends BaseTranspiler {
         const extendHeadOf = this.rustNilMapOf(node);
         if (extendHeadOf !== undefined && this.rust67cNilMapExtendHead(node, extendHeadOf)) return `${text}.take()`;
         if (parent === undefined || !((parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node) || (isReturnStatement(parent) && parent.expression === node)
-            || this.rustNilMapExtraBox(node))) return undefined;
+            || this.rustNilMapExtraBox(node) || this.rustH26r14RecordBoxUse(node))) return undefined;
         const declaration = this.rustNilMapOf(node);
         if (declaration === undefined) return undefined;
         const moves = isReturnStatement(parent) || this.rustLocalLastUse(node, declaration);
@@ -40670,7 +40672,15 @@ export class RustTranspiler extends BaseTranspiler {
         return call !== undefined && isCallExpression(call) && call.expression !== n && this.rustVenueStrListSlotOf(call, n);
     }
     // ===== end h26-R01
+    // ===== h26-R14
+    private static readonly RUST_H26R14_RECORD_FNS = new Set([ 'parseOrder', 'parseTrade', 'parseTicker', 'safeOrder', 'safeTrade', 'safeTicker' ]);
 
+    /** `x = this.parseOrder (..)` (and the other record parsers of the table): the ccxt build types each as `Dict` and
+     *  drops a trailing `.into_dict()`, so a nil local written only from them holds `Option<Dict>` (None = the old Null). */
+    rustH26r14RecordWrite(rhs: any): boolean {
+        if (!isCallExpression(rhs) || !isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        return RustTranspiler.RUST_H26R14_RECORD_FNS.has(String(rhs.expression.name.text)) && !rhs.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement);
+    }
 
     // ===== h26-R05
     /** `row['k'] = x` (statement, literal key) on a row copy `const row = this.safeDict (this.balance|options[..], k, {})`:
@@ -40790,4 +40800,14 @@ export class RustTranspiler extends BaseTranspiler {
         return this.untaggedDictField(n);
     }
 
+    /** The settled value of a ws `client.resolve (x, hash)` or the item of a cache `.append (x)`: both take `impl Into<Value>`. */
+    rustH26r14RecordBoxUse(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)) return false;
+        const name = String(call.expression.name.text);
+        const recv: any = call.expression.expression;
+        if (name === 'append') return call.arguments.length === 1 && isPropertyAccessExpression(recv) && recv.expression.kind === SyntaxKind.ThisKeyword;
+        return name === 'resolve' && isIdentifier(recv) && String(recv.text) === 'client' && call.arguments.length === 2;
+    }
+    // ===== end h26-R14
 }
