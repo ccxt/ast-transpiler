@@ -24825,6 +24825,7 @@ export class RustTranspiler extends BaseTranspiler {
             const handed = () => (optAliasInit && this.rustLocalStoreHandOff(n) && !this.rustScalarInNestedWrite(n, true) && ++optionalBoxes > 0
                 || this.rustDictElementBoxUse(n, init) || this.rustWsFieldBoxUse(n, init) || this.rustDefaultedContainerBoxUse(n, init) && ++defaultedBoxes > 0
                 || this.rustBuiltReturnBoxUse(n, init, extendReuse) && ++defaultedBoxes > 0 || this.rustOptReaderBoxUse(n, init) && ++optionalBoxes > 0
+                || this.rustCacheRowStoreBack(n, init) && ++optionalBoxes > 0
                 || this.rustOptionalParamsSlot(up, n) && (from === 'dict' || from === 'api' && this.rustDeclaredEndpointKind(init) === 'dict') && ++paramsBoxes > 0
                 || nilDeclared && this.rustDeclaredEndpointBoxUse(n) && ++endpointBoxes > 0
                 // ral-53a: a shared-map alias handed whole to a plain `Value` slot of a `this.` method (an endpoint argument): the
@@ -26277,6 +26278,17 @@ export class RustTranspiler extends BaseTranspiler {
         return isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === n && up.parent?.kind === SyntaxKind.ExpressionStatement
             && isPropertyAccessExpression(up.expression) && String(up.expression.name.text) === 'append' && isIdentifier(up.expression.expression)
             && this.rustWsCacheMethodReceiver(up.expression.expression);
+    }
+
+    /** `bucket[k] = row` (statement, the row whole) back into the cache bucket the `safeDict*` row was read from: the bucket
+     *  write keeps its helper (tag hooks run), the row boxes once (`None` to the `Null` the boxed row held). */
+    rustCacheRowStoreBack(n: any, init: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || !isElementAccessExpression(up.left) || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        const bucket: any = this.rustSkipWrappers(up.left.expression);
+        return isIdentifier(bucket) && this.rustCacheBucketRow(head) && this.rustDeclarationOfIdentifier(head) === this.rustDeclarationOfIdentifier(bucket);
     }
 
     private rustCacheRowNestedUses = new WeakSet<any>();
