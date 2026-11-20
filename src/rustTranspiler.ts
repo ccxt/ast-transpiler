@@ -20412,6 +20412,8 @@ export class RustTranspiler extends BaseTranspiler {
             // cache / order-book calls on locals and the ws cache constructors (exchange files and the ws base tests)
             const cacheCalls = !test || /ts[/]src[/]pro[/]test[/]base[/]/.test(file);
             const exchangeFile = cacheCalls && !/ts[/]src[/]base[/]/.test(file);
+            // loop-flag names restart per file, so a file prints the same whichever files a run printed before it
+            this.forLoopCounter = 0;
             return RustTranspiler.cloneSliceElements(RustTranspiler.cloneHelperWriteValues(RustTranspiler.cloneCacheCallArgs(RustTranspiler.cloneByValueCallArgs(RustTranspiler.cloneAliasSources(this.printNodeUncloned(node, identation), !test), !ws), exchangeFile, !test))).replaceAll('\u0004', '');
         }
         return this.printNodeUncloned(node, identation);
