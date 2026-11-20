@@ -28174,6 +28174,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     && this.goIsUnifiedStringParameter(calleeName, argIndex) && this.goHasExitingNilGuard(n)) {
                     return true;
                 }
+                if ((goType === '*string') && this.goGetArgStrPtrGuardedNeedle(n, param)) {
+                    return true;
+                }
                 const verdict = verdictOf(calleeName, argIndex);
                 if ((verdict === 'unsafe') || ((verdict === 'container') && nilable)) {
                     return false;
@@ -28264,7 +28267,27 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || (parent.parent.expression !== parent)) {
             return false;
         }
-        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n);
+        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n) || this.goStrParamCheckerNarrowed(n, param);
+    }
+
+    // `s.split (x)` / `s.indexOf (x)` / ... with `x` a parameter declared `Str` / `string` as the sole
+    // needle, nil-guarded at the use: the native form derefs it there, and the helper derefScalars it
+    goGetArgStrPtrGuardedNeedle(n: any, param: any): boolean {
+        const declared = param?.type?.getText?.()?.trim();
+        const call: any = n.parent;
+        const callee: any = call?.expression;
+        if (((declared !== 'Str') && (declared !== 'string')) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 1)
+            || (call.arguments[0] !== n) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || !GO_STRING_PTR_GUARDED_METHODS.includes(callee.name?.text) || (callee.name.text === 'replace')) {
+            return false;
+        }
+        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n) || this.goStrParamCheckerNarrowed(n, param);
+    }
+
+    // a `Str` parameter the checker narrowed to a non-nilable string at this use (the guard sits in an
+    // enclosing if/&& the syntactic scan does not walk, e.g. `a !== undefined && a !== ''`): never nil here
+    goStrParamCheckerNarrowed(n: any, param: any): boolean {
+        return (param?.type?.getText?.()?.trim() === 'Str') && (n?.kind === SyntaxKind.Identifier) && this.goCheckerTypeHasFlags(n, TypeFlags.StringLike);
     }
 
     // `x / 1000`, `x - 1`, `x > 0`: printed through Divide/Subtract/…/IsGreaterThan, which
