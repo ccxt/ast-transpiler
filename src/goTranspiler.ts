@@ -1092,7 +1092,7 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // undefined on every path; the hand-written Go twins and interface lines are *string too
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
     'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
-    'CommonCurrencyCode', 'OmitZero' ];
+    'CommonCurrencyCode', 'MarketId', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -11834,7 +11834,7 @@ function installStringPtrParams (goTranspiler) {
         const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
         return args.map ((a, i) => {
             const text = this.goWithExprDepth (depth, () => this.printNode (a, identation)).trim ();
-            return wrap[i] ? (goStringAddressArg (this, a, text) ?? ccxtGoStringParamAddress (this, a) ?? ('SafeStringPtr(' + text + ')')) : text;
+            return wrap[i] ? (goStringAddressArg (this, a, text) ?? ccxtGoStringParamAddress (this, a) ?? goStringListElementAddressArg (this, a, text) ?? ('SafeStringPtr(' + text + ')')) : text;
         }).join (', ');
     };
 }
@@ -12132,6 +12132,16 @@ function goStringAddressArg (goTranspiler, arg, text) {
     }
     const scope = isParam ? decl.parent : goTranspiler.goEnclosingFunction (decl);
     if ((scope === undefined) || (goTranspiler.goEnclosingFunction (arg) !== scope) || goTranspiler.goLocalIsRebound (scope, decl.name)) {
+        return undefined;
+    }
+    return '&' + text;
+}
+
+// `xs[i]` of a `[]string` local printed as a native index is handed to a `*string` slot as `&xs[i]`:
+// the same non-nil string SafeStringPtr would copy, and the callee never writes through it
+function goStringListElementAddressArg (goTranspiler, arg, text) {
+    if ((arg?.kind !== ts.SyntaxKind.ElementAccessExpression) || !ts.isIdentifier (arg.expression)
+        || !/^[A-Za-z_]\w*\[[A-Za-z_0-9]\w*\]$/.test (text) || (goTranspiler.goDeclaredTypeOfIdentifier (arg.expression) !== '[]string')) {
         return undefined;
     }
     return '&' + text;
@@ -14385,6 +14395,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'selectNetworkKeyFromNetworks': [ 1 ],
     // returns its input or a commonCurrencies string, so nil stays nil
     'commonCurrencyCode': [ 0 ],
+    // returns the market id or its input, so nil stays nil
+    'marketId': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
