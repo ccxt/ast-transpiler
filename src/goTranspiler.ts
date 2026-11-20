@@ -15018,6 +15018,9 @@ const GO_BOOL_CALL_NAMES_NATIVE = [
     'this.IsJsonEncodedObject',
     'this.IsBinaryMessage',
 ];
+// the Go operand types this.NumberToString formats through Itoa / FormatInt / float64ToString (never "")
+const GO_NUMBER_TO_STRING_NON_NIL_OPERANDS = [ 'int', 'int64', 'float64', 'const-int', 'const-float' ];
+const GO_NUMBER_TO_STRING_BASE_CLASSES = [ 'Exchange', 'BaseExchange' ];
 // Pointer-returning accessors the ccxt build pass wraps with DerefScalar but that the
 // Go type table above does not name (their printed Go signature is not in it).
 const GO_DEREF_WRAPPED_CALLS = [ 'NumberToString', 'Parse8601', 'Iso8601' ];
@@ -16668,7 +16671,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // string at that use, a local whose every write is a defaulted SafeString-family
     // call, or such a call inline
     goDerefableStringOperand(node): boolean {
-        if (this.goNilProvenStringDeref(node)) {
+        if (this.goNilProvenStringDeref(node) || this.goNumberToStringOfProvenNumber(node)) {
             return true;
         }
         if (this.goAssertedStringDeref(node)) {
@@ -16681,6 +16684,25 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return this.goDefaultedSafeStringLocal(node);
         }
         return this.goDefaultedSafeStringCall(node);
+    }
+
+    // `this.numberToString (x)` with x typed `number` (no undefined) printing as a Go int / int64 / float64:
+    // the base NumberToString answers strconv.Itoa / FormatInt / float64ToString there, never "", so never nil
+    goNumberToStringOfProvenNumber(node): boolean {
+        const callee: any = node?.expression;
+        if ((node?.kind !== SyntaxKind.CallExpression) || (node.arguments?.length !== 1) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'numberToString')) {
+            return false;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
+        if ((decl?.parent?.kind !== SyntaxKind.ClassDeclaration) || !GO_NUMBER_TO_STRING_BASE_CLASSES.includes(decl.parent.name?.text)) {
+            return false;
+        }
+        const arg = node.arguments[0];
+        if (!this.goCheckerTypeHasFlags(arg, TypeFlags.NumberLike)) {
+            return false;
+        }
+        return GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(this.goOperandStaticType(arg, this.printNode(arg, 0)) ?? '') >= 0;
     }
 
     // the printed text of a `+` operand the concat rule may use: the printer's own
