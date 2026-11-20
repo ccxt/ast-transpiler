@@ -43815,3 +43815,64 @@ function h22g05NumericDefaultCopy (go, target, use, goType: string): boolean {
     return arms.some((a) => (a?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(a.text)) && arms.some((a) => a?.kind === SyntaxKind.Identifier);
 }
 // ===== h22-g05 (end) =====
+// ===== h23-x04: `const x: Dict[] = isArray (r) ? r : this.safeList (o, k, [])` prints a typed []any if/else =====
+// Both arms are never-nil lists: the list arm is r (IsArray true) through ArrayTyped, the other the safeList
+// read with a `[]` default through ArrayTyped, the forms the IsArray-guarded array-literal rule already prints.
+function h23x04ListArm (go, ternary): any {
+    const arm: any = ccxtGoUnwrapParens(ternary.whenTrue);
+    let test: any = ccxtGoUnwrapParens(ternary.condition);
+    if ((arm?.kind !== SyntaxKind.Identifier) || ((go.goDeclarationOfIdentifier(arm)?.parent?.flags ?? 0) & NodeFlags.Const) === 0) {
+        return undefined;
+    }
+    if (test?.kind === SyntaxKind.Identifier) {
+        const alias: any = go.goDeclarationOfIdentifier(test);
+        test = (((alias?.parent?.flags ?? 0) & NodeFlags.Const) !== 0) ? ccxtGoUnwrapParens(alias.initializer) : undefined;
+    }
+    return ccxtGoIsArrayTestOf(test, arm.text) ? arm : undefined;
+}
+function h23x04SafeListArm (ternary): any {
+    const call: any = ccxtGoUnwrapParens(ternary.whenFalse);
+    const callee: any = call?.expression;
+    return ((call?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'safeList') && (call.arguments.length === 3)
+        && ccxtGoArrayLiteralIsEmpty(call.arguments[2])) ? call : undefined;
+}
+function h23x04RowListTernary (go, declaration): any {
+    const ternary: any = ccxtGoUnwrapParens(declaration?.initializer);
+    return ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && ((declaration.parent?.flags ?? 0) & NodeFlags.Const) && (String(declaration.type?.getText() ?? '') === 'Dict[]')
+        && (ternary?.kind === SyntaxKind.ConditionalExpression) && (h23x04ListArm(go, ternary) !== undefined)
+        && (h23x04SafeListArm(ternary) !== undefined)) ? ternary : undefined;
+}
+const h23x04ShippedGetGoLocalType = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    const shipped = h23x04ShippedGetGoLocalType.call(this, declaration, parsedValue);
+    if ((shipped !== 'any') || (h23x04RowListTernary(this, declaration) === undefined)) {
+        return shipped;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    return this.goLocalIsSafeToType(scope, declaration, declaration.name.text, GO_SAFE_LIST_LOCAL_TYPE) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+};
+const h23x04ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration: any = node?.declarations?.[0];
+    const ternary: any = (node?.declarations?.length === 1) ? h23x04RowListTernary(this, declaration) : undefined;
+    if ((ternary === undefined) || (this.goDeclaredTypeOfIdentifier(declaration.name) !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return h23x04ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const arm = h23x04ListArm(this, ternary);
+    const armText = this.printNode(arm, 0).trim();
+    const listValue = (this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) ? armText : `ArrayTyped(${armText})`;
+    const name = this.printNode(declaration.name, 0).trim();
+    const printed = this.goTernaryStatementIfElse(name, ternary, identation);
+    const safeList = this.goPrintTernaryBranch(ternary.whenFalse, 1).trim();
+    if ((printed === undefined) || safeList.includes('\n')) {
+        return h23x04ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const lines = printed.split('\n');
+    const iden = this.getIden(identation);
+    lines[1] = `${iden}\t${name} = ${listValue}`;
+    lines[3] = `${iden}\t${name} = ArrayTyped(${safeList})`;
+    return `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n` + lines.join('\n');
+};
+// ===== h23-x04 (end) =====
