@@ -23723,7 +23723,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // DerefScalar closure) answers what base's GetValue did in one call, so leave such a
         // parameter boxed and keep base's print. A `[]string` element is already a Go string.
         const readsElement = (annotated === GO_SAFE_LIST_LOCAL_TYPE) && this.goBodyReadsElement(fn.body, param.name.text);
-        if (readsElement && !fn.name.text.startsWith('parse')) {
+        if (readsElement && !fn.name.text.startsWith('parse') && !goRowSliceParamBoundedReads(this, fn, param)) {
             return undefined;
         }
         const typed = (this.goParameterCallSitesPassType(fn, index, annotated)
@@ -42953,7 +42953,7 @@ function goAwaitedRowListLocalUncached(goTranspiler: GoTranspiler, declaration):
             return false;
         }
         const parent: any = n.parent;
-        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) || goRowListPassThroughUse(goTranspiler, n)) {
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) || goRowListPassThroughUse(goTranspiler, n) || goRowListArgAfterPassThrough(goTranspiler, n)) {
             return false;
         }
         if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
@@ -43034,6 +43034,49 @@ function goRowListPassThroughValue(goTranspiler: GoTranspiler, value, name: stri
     });
 }
 
+// `this.f (.., x, ..)` right after `x = this.M (x, ..)` in the same block (no write between): M returns the same
+// []any whichever way x is declared, so the boxed argument receives the identical value (nil included)
+function goRowListArgAfterPassThrough(goTranspiler: GoTranspiler, n): boolean {
+    const call: any = n.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression === n) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    let statement: any = call;
+    while ((statement?.parent !== undefined) && (statement.parent.kind !== SyntaxKind.Block)) {
+        if (isFunctionLike(statement.parent)) {
+            return false;
+        }
+        statement = statement.parent;
+    }
+    const siblings: any[] = statement?.parent?.statements ?? [];
+    const at = siblings.indexOf(statement);
+    const writes = (s: any): boolean => goTranspiler.goNameWriteSites(s, n.text).length > 0;
+    for (let i = at - 1; i >= 0; i--) {
+        const prior: any = siblings[i];
+        const e: any = (prior.kind === SyntaxKind.ExpressionStatement) ? prior.expression : undefined;
+        if ((e?.kind === SyntaxKind.BinaryExpression) && (e.left?.kind === SyntaxKind.Identifier) && (e.left.text === n.text)
+            && (e.right?.kind === SyntaxKind.CallExpression) && (e.right.arguments[0] !== undefined)) {
+            const method = String(e.right.expression?.name?.text ?? '');
+            return (method !== 'arraySlice') && (method !== 'arrayConcat') && goRowListPassThroughUse(goTranspiler, e.right.arguments[0]);
+        }
+        if (writes(prior) || goTranspiler.hasNodeWhere(prior, (u: any) => isFunctionLike(u))) {
+            return false;
+        }
+    }
+    return false;
+}
+
+// a sync venue `Dict[]` parameter whose every element read sits in a counting loop over its own length prints
+// the plain slice index (goBoundedLoopListRead, object elements), so the `[]any` slot costs no guarded closure
+function goRowSliceParamBoundedReads(goTranspiler: GoTranspiler, fn, param): boolean {
+    if (goTranspiler.isAsyncFunction(fn) || (String(param.type?.getText() ?? '') !== 'Dict[]') || (param.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const name = param.name.text;
+    return !goTranspiler.hasNodeWhere(fn.body, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
+        && (n.expression.text === name) && (goTranspiler.isGoElementAccessAssignmentTarget(n) || !goTranspiler.goBoundedLoopListRead(n)));
+}
 // `this.market (l[k])` / `this.getUrlByMarketType (l[k], ..)` over a declared `string[]` list l: both take the symbol as
 // `any` and deref a *string box first, so the guarded read hoists into a typed `*string` local (nil when out of range,
 // else &l[k]) in front of the statement: same nil answer, no closure, no `any` local. Later arguments are pure.
