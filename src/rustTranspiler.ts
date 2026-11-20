@@ -5383,7 +5383,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || form === 'bkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n))
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || form === 'bkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n)) || (form === 'key' && this.rustBalanceRowInsertKey(n))
                 // ral-63k: the last key of a nested write on a plain-Dict parameter is the native insert's typed key text
                 || (form === 'mkey' && this.rust63kDictParamNestedKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
@@ -8634,6 +8634,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** How a use of a scalar local prints: `test` (literal/null compare), `cond` (bool condition),
      *  `write` (same-kind assignment statement), `concat` (a `format!` operand) or `box` (a by-value `Value` slot). */
     rustScalarUseForm(n, kind: string): string | undefined {
+        // r04b: the key of `this.safeDict (this.balance, k, d)` lends the string (`Value::from(k.as_deref())`), no copy
+        if ((kind === 'str' || kind === 'ostr') && this.rustBalanceSafeDictKey(n)) return 'mkey';
         const form = this.rustScalarUseFormOwn(n, kind);
         if (form === undefined && kind === 'ostr' && this.rust70fOperandBox(n)) return 'box';
         if (form === undefined && kind === 'ostr' && this.rust70fPushKey(n)) return 'native';
@@ -8649,6 +8651,27 @@ export class RustTranspiler extends BaseTranspiler {
      *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** r04b: `n` is the key argument of `this.safeDict (this.balance, n, d)`; the declared `Dict` field read takes the lent key
+     *  (`None` keys as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceSafeDictKey(n: Node): boolean {
+        const call: any = n?.parent;
+        if (!isIdentifier(n) || call === undefined || !isCallExpression(call) || call.arguments.length !== 3 || call.arguments[1] !== n) return false;
+        const callee: any = call.expression;
+        const field: any = call.arguments[0];
+        return isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeDict'
+            && isPropertyAccessExpression(field) && field.expression.kind === SyntaxKind.ThisKeyword && field.name.text === 'balance';
+    }
+
+    /** r04b: `n` is the key of a statement `row[n] = v` on a const local read by `this.safeDict (this.balance, k, d)`: the
+     *  native insert takes the key text (`None` as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceRowInsertKey(n: Node): boolean {
+        if (!this.rustElemInsertKey(n)) return false;
+        const recv: any = (n.parent as any).expression;
+        const decl: any = isIdentifier(recv) ? this.rustDeclaredNode(recv) : undefined;
+        const init: any = decl !== undefined && isVariableDeclaration(decl) && (decl.parent.flags & NodeFlags.Const) !== 0 ? this.unwrapParens(decl.initializer) : undefined;
+        return init !== undefined && isCallExpression(init) && init.arguments.length === 3 && isIdentifier(init.arguments[1]) && this.rustBalanceSafeDictKey(init.arguments[1]);
+    }
+
     /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
     rust70fCastBase(n: Node): Identifier | undefined {
         let at: Node = n;
