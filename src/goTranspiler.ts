@@ -5776,6 +5776,8 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     'ParseFundingHistories': {'2': 'deref', '3': 'deref'},
     // SafeValue (exchange_safe.go) derefScalars the container, every key and the default
     'SafeValue': '*',
+    // base date formatters (exchange_time.go) derefScalar the timestamp at entry: a nil *int64 returns ""
+    'Yyyymmdd': {'0': 'deref'}, 'Ymdhms': {'0': 'deref'}, 'Ymd': {'0': 'deref'}, 'Yymmdd': {'0': 'deref'},
 };
 
 // Typed async receive: `x := <-this.FooAsync(..)` + PanicOnError(x) becomes
