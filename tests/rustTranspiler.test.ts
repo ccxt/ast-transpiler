@@ -17538,7 +17538,7 @@ describe('ral-48e: a []-defaulted safeList local written row by row is a held Li
     test('the row write hops the held list; a keyed or twice-handed list keeps the box', () => {
         const text = out();
         expect(text).toContain('let mut rows: crate::value::List =');
-        expect(text).toContain('get_value_mut(&mut rows, &Value::Int(i))');
+        expect(text).toContain('if let Some(Value::Dict(__d)) = std::sync::Arc::make_mut(&mut rows).get_mut(i as usize) { std::sync::Arc::make_mut(__d).insert("side".into(), ');
         // negative: the hop is the helper either way; a copy hand-off would trade a move for a clone
         expect(text).toContain('let mut both: Value =');
     });
