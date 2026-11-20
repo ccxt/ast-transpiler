@@ -5623,6 +5623,9 @@ export class RustTranspiler extends BaseTranspiler {
         const castLent = strKind && typedUses > 0 && copied > 0 && this.rustStrCastCall(clockInit) !== undefined && !this.rustStrNoLend
             && !this.rust66s3StrReturnedVeto(declaration, scope) && this.rustReaderLendBoxes(declaration);
         if (castLent) this.rustStrLentLocals.add(declaration);
+        // a `String` base return of the typed-return table (`shortenSlug`) copied only at lending slots lends there, as its
+        // `Option<String>` form did (`Value::from(x.as_str())`: the one copy the `Value` clone made)
+        if (kind === 'str' && copied > 0 && this.rustBaseTypedReturnKind(clockInit) === 'str' && !this.rustStrNoLend && !this.rust66s3StrReturnedVeto(declaration, scope) && this.rustReaderLendBoxes(declaration)) this.rustStrLentLocals.add(declaration);
         if (!numericSum && !clockLent && !castLent && this.rustNewShapeCostly(declaration.initializer, typedUses, kind === 'str' || kind === 'ostr' ? copied : 0)) return undefined;
         if (this.rustFieldKeyCostly(declaration)) return undefined;
         if (this.rustStrRuntimeLocalCostly(declaration)) return undefined;
@@ -6440,6 +6443,8 @@ export class RustTranspiler extends BaseTranspiler {
         parseWsOrderUpdate: [ 'NullableDict', 'odict' ],
         // a pro lookup declared `NullableDict`: the matching subscription map, else undefined
         findSubscription: [ 'NullableDict', 'odict' ],
+        // prediction slug shortener: every return is a `toUpperCase ()` of a joined string
+        shortenSlug: [ 'string', 'str' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
