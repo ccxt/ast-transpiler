@@ -369,6 +369,18 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
         '3': string;
     };
     SafeValue: string;
+    Yyyymmdd: {
+        '0': string;
+    };
+    Ymdhms: {
+        '0': string;
+    };
+    Ymd: {
+        '0': string;
+    };
+    Yymmdd: {
+        '0': string;
+    };
 };
 export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     AddMarginAsync: string;
@@ -774,6 +786,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeStringCall(node: any): boolean;
     goAssertedStringDeref(node: any): boolean;
     goDerefableStringOperand(node: any): boolean;
+    goNumberToStringOfProvenNumber(node: any): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {
         goType: string;
@@ -883,6 +896,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsStructTypedValue(node: any): boolean;
     goPlainMapContainer(container: any, ws: boolean, noDefault: boolean): boolean;
     goNeverNilDict(call: any, ws: boolean): boolean;
+    goNeverNilDictLocalDefault(fallback: any, ws: boolean): boolean;
     goSourceTreeKind(node: any): 'rest' | 'ws' | 'skip';
     goTopFunction(node: any): any;
     goGuardsNonNil(condition: any, name: string): boolean;
@@ -1369,6 +1383,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsSelfMapRebind(expr: any, use: any): boolean;
     goBaseThisCallName(call: any): string | undefined;
     goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
+    goSafeDictLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goIsBaseMapReaderCall(call: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
     goIsNonPointerValue(valueNode: any): boolean;
@@ -1931,4 +1946,18 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goH19g06BoundedStringListRead(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    goH20g12GuardedPointerAppend(node: any): boolean;
+}
+export interface GoTranspiler {
+    goDictLocalTupleRebindIsDict(declaration: any, right: any, index: number): boolean;
+    goDictLocalBindsDictElement(leftElement: any, right: any, index: number): boolean;
+    h20g04SelfOmitDeclaration: any;
+}
+export interface GoTranspiler {
+    goH20g01PointerNestedArithmetic(node: any, leftText: string, rightText: string): {
+        goType: string;
+        text: string;
+    } | undefined;
 }

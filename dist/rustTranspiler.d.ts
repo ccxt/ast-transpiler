@@ -3862,6 +3862,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
      *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
     rustCacheRowOdictRewrite(rhs: any, init: any): boolean;
+    /** `row = this.m (..)` of a same-venue method typed `-> Option<Dict>` (NullableDict table row): the row's own optional
+     *  form takes the result as is (None where the method answered undefined, the Null the boxed write held). */
+    rustCacheRowVenueOdictRewrite(rhs: any, head: any): boolean;
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
      *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
     rustCacheRowDynamicWrite(n: any, init: any): boolean;

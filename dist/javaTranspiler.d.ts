@@ -297,6 +297,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredListElementRead(node: any, isCounter: any): string;
     javaDeclaredMapElementRead(node: any): string;
     javaStringListKeyedMapRead(node: any): string | undefined;
+    javaMapLiteralKeyedMapRead(node: any): string | undefined;
     javaAssertedKeyMapFieldRead(receiver: any, key: any): string | undefined;
     javaFieldMapReadText(receiver: any, key: any): string | undefined;
     javaFieldMapReadIfAllowed(node: any): string | undefined;
