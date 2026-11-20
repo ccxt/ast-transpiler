@@ -21997,6 +21997,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         while (text.startsWith('(') && text.endsWith(')')) {
             text = text.substring(1, text.length - 1).trim();
         }
+        if ((goType === '[]string') && this.goTextTableSliceParameterMatches(text, file, tree, at)) {
+            return true;
+        }
         if ((text.length < 2) || !text.startsWith('[') || !text.endsWith(']')) {
             return false;
         }
@@ -22015,6 +22018,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return elements.every((element) => this.goTextSliceArgumentMatches(element, '[]string', file, tree, at));
         }
         return false;
+    }
+
+    // a sibling-file argument naming a `string[]` parameter of the calling method, where the slice table
+    // prints that parameter `[]string` (base, every override and the typed wrapper): it hands over that slice
+    goTextTableSliceParameterMatches(text: string, file: string, tree, at?: number): boolean {
+        const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
+        const fileText: string = tree.fileText.get(file) ?? '';
+        // the class-member header (4-space indent) above the call, not a nested `if (` / `for (`
+        const headers = [ ...fileText.substring(0, at ?? 0).matchAll(/\n {4}(?:override\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\(/g) ];
+        const last = headers[headers.length - 1];
+        const params = ((identifier === null) || (last === undefined)) ? undefined : goBalancedSliceArgs(fileText, last.index + last[0].length - 1);
+        const enclosing = (params === undefined) ? undefined : { 'name': last[1], params };
+        if (enclosing === undefined) {
+            return false;
+        }
+        const index = enclosing.params.findIndex((p: string) => new RegExp('^\\s*' + identifier[1] + '\\s*:\\s*string\\s*\\[\\s*\\]\\s*$').test(p));
+        const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, enclosing.name) ? this.unifiedSliceParams[enclosing.name] : undefined;
+        return (index >= 0) && (entry?.[index] === '[]string');
     }
 
     goTextStringElementMatches(element: string, file: string, tree, at?: number): boolean {
