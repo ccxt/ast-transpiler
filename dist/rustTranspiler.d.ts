@@ -305,6 +305,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `const row = this.safeDict (this.<plain field>, k, {})`, never rebound: the row of a field the base never
      *  tags, or the fresh plain literal, so a book-meta key needs no `__book_id` guard. */
     rustPlainFieldRowLocal(declaration: VariableDeclaration): boolean;
+    /** A REST-tier local annotated with a map type, initialised by a base `extend` / `deepExtend` / `clone` copy and rebound only
+     *  to such copies or plain literals: a fresh untagged map on every path, so the helper's tag hooks are dead and the native
+     *  insert is the whole write. */
+    rustDeclaredFreshDictLocal(declaration: VariableDeclaration): boolean;
+    /** A literal-key write on a boxed (`Value`-printed) rustDeclaredFreshDictLocal: the native insert receiver. A dynamic key
+     *  would retype the key local and add a clone, so it keeps the helper. */
+    rustFreshDictInsertReceiver(ident: any, keyNode: any): {
+        text: string;
+        isField: boolean;
+        plain: boolean;
+        nameNode: any;
+    } | undefined;
+    static readonly RUST_FRESH_DICT_COPIES: Set<string>;
+    rustFreshDictProducer(node: any): boolean;
     /** An object literal with no runtime tag key — the transpiler built it, so
      *  it is a fresh plain `Value::Map` on every path. */
     rustPlainDictLiteral(node: Node | undefined): boolean;

@@ -789,6 +789,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAssertedStringDeref(node: any): boolean;
     goDerefableStringOperand(node: any): boolean;
     goNumberToStringOfProvenNumber(node: any): boolean;
+    goIso8601OfCurrentTime(node: any): boolean;
+    goBaseThisCall(node: any, name: string, arity: number): boolean;
+    goConstLocalInitializer(node: any): any;
     goNarrowedNumberPointerArg(arg: any, goType: string | undefined): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {
@@ -936,6 +939,11 @@ export declare class GoTranspiler extends BaseTranspiler {
         text: string;
         goType: string;
     } | undefined;
+    goTypedRowBinder(declaration: any): string | undefined;
+    goTypedRowBinderCache: Map<any, string>;
+    goTypedRowBinderWrite(n: any): boolean;
+    goTypedRowBinderDeclaration(declaration: any, identation: number): string | undefined;
+    goTypedRowBinderUse(node: any): string | undefined;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];
     goMethodReturnsMapCache: Map<any, boolean>;
@@ -1407,6 +1415,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBaseThisCallName(call: any): string | undefined;
     goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
     goSafeDictLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goPlainFieldScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
     goIsBaseMapReaderCall(call: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
     goIsNonPointerValue(valueNode: any): boolean;
@@ -1448,6 +1457,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     GO_NATIVE_MAP_ACCESSORS: string[];
     goInOpDictMapType(dictNode: any, dictText?: string): string | undefined;
+    goInOpDeclaredMapLocal(dictNode: any): string | undefined;
     goIfInOpBindingName(statement: any): string | undefined;
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
@@ -1478,6 +1488,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     printIfStatement(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
+    goInt64ArithmeticOperand(pointee: string, node: any): boolean;
+    goInt64ArithmeticLeaf(node: any, pointers: string[], top?: boolean): boolean;
     goIsStringLiteralNode(node: any): boolean;
     goDerefRepeatableOperand(node: any, printedText: string): boolean;
     goIsReadOnlyCallArgument(node: any): boolean;
@@ -1715,6 +1727,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goKeyIsString(node: any, printed: string): any;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
     goProvenPointerKeyMapIndex(keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goIsPushReceiver(node: any): boolean;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     goIntIndexExpression(node: any): boolean;

@@ -76,9 +76,8 @@ describe ('go string locals written from iso8601 of the clock / numberToString i
         expect (out).toMatch (/Add\(Add\(loose, "\/"\), "x"\)/);
     });
 
-    test ('positive: a numberToString write types the Str local read by parseToNumeric under a nil guard', () => {
-        expect (out).toMatch (/var strike \*string = nil/);
-        expect (out).toMatch (/ParseToNumeric\(strike\)/);
+    test ('negative: a Str local written by numberToString and read by parseToNumeric keeps the box', () => {
+        expect (out).toMatch (/var strike any = nil/);
     });
 
     test ('negative: a Str local stored into a map keeps the box', () => {

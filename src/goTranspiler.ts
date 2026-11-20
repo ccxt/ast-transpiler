@@ -20274,9 +20274,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return (type !== undefined) && ((type.flags & TypeFlags.String) !== 0);
         }
         if ((parent?.kind === SyntaxKind.CallExpression) && goNilInitIsAnyArgument(parent, current)) {
-            if (this.goNarrowedStringToBaseParseToNumeric(n, parent)) {
-                return true;
-            }
             const callee = parent.expression;
             const method = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
             // only consumers proven to deref the argument; other accessors may see the typed nil as a value
@@ -20288,16 +20285,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
-    }
-
-    // `this.parseToNumeric (x)` where the checker narrowed x to `string`: the pointer is non-nil there, and
-    // the base ParseToNumeric derefs its argument through NumberToString, so it reads the same value as the box
-    goNarrowedStringToBaseParseToNumeric(n, call): boolean {
-        if ((call.arguments?.[0] !== n) || !this.goBaseThisCall(call, 'parseToNumeric', 1)) {
-            return false;
-        }
-        const type: any = this.checkerOrUndefined()?.getTypeAtLocation(n);
-        return (type !== undefined) && ((type.flags & TypeFlags.String) !== 0);
     }
 
     // an arm of `const y: Str = c ? 'lit' : x` (or mirrored): ccxtGoStrPtrTernaryDeclaration prints y as an `any`
