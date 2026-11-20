@@ -6930,6 +6930,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoTupleBoolElement (goTranspiler);
     installCcxtGoTupleParamsRebind (goTranspiler);
     installCcxtGoTupleResults (goTranspiler);
+    installCcxtGoAsyncVenuePairs (goTranspiler);
     installSelfMapWrites (goTranspiler);
     installB02SafeBalanceLocals (goTranspiler); // safeBalance map locals
     installCcxtGoNestedSafeDictRead (goTranspiler);
@@ -10734,6 +10735,242 @@ function installCcxtGoTupleResults (goTranspiler) {
         const [ a, b ] = expr.elements.map ((e) => this.printNode (e, 0).trim ());
         const bare = ccxtGoJoinedParamsLocal (this, expr.elements[1]);
         return m[1] + ((first === 'Raw') ? a : first + '(' + a + ')') + ', ' + (bare ? b : 'MapTyped(' + b + ')') + m[3];
+    };
+}
+
+// ===== async venue `Promise<[ int, Dict ]>` methods carry a Go MapPair[int64] =====
+// An async venue method annotated `Promise<[ int, Dict ]>` whose every own return is `[ <never-nil int>, <params> ]` sends
+// `AsyncResult[MapPair[int64]]`; every caller is `const [ a, b ] = await this.m (..)` (bound `.Value.V` / `.Value.P`)
+// or a const holder read only as `h[0]` / `h[1]`, so no []any box is ever handed on.
+const CCXT_GO_ASYNC_VENUE_PAIRS = new WeakMap ();
+const CCXT_GO_ASYNC_VENUE_PAIR_CARRIER = 'AsyncResult[MapPair[int64]]';
+
+function ccxtGoAsyncVenuePairOf (method) {
+    if (CCXT_GO_ASYNC_VENUE_PAIRS.has (method)) {
+        return CCXT_GO_ASYNC_VENUE_PAIRS.get (method);
+    }
+    CCXT_GO_ASYNC_VENUE_PAIRS.set (method, false);
+    const file = String (method?.getSourceFile?.()?.fileName ?? '');
+    const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
+    const tuple = (ref (method?.type) === 'Promise') ? method.type.typeArguments?.[0] : undefined;
+    if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.body === undefined) || (tuple?.kind !== ts.SyntaxKind.TupleType)
+        || (tuple.elements.length !== 2) || (ref (tuple.elements[0]) !== 'int') || (ref (tuple.elements[1]) !== 'Dict')
+        || !(method.modifiers ?? []).some ((m) => m.kind === ts.SyntaxKind.AsyncKeyword) || (method.modifiers ?? []).some ((m) => m.kind === ts.SyntaxKind.StaticKeyword)
+        || !/(?:^|[\\/])ts[\\/]src[\\/]/.test (file) || /[\\/](?:base|test|abstract)[\\/]/.test (file)) {
+        return false;
+    }
+    let pairs = 0;
+    let ok = true;
+    const visit = (n) => {
+        if (!ok || ts.isFunctionLike (n) || (n.kind === ts.SyntaxKind.ClassDeclaration) || (n.kind === ts.SyntaxKind.ClassExpression)) {
+            return;
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            const e = n.expression;
+            ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === 2) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement)
+                && (ccxtGoVenueIntSlot (e.elements[0]) !== undefined);
+            pairs += 1;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    method.body.forEachChild (visit);
+    const result = ok && (pairs > 0) && ccxtGoAsyncVenuePairCallersBind (method.name?.text, file);
+    CCXT_GO_ASYNC_VENUE_PAIRS.set (method, result);
+    return result;
+}
+
+// every call of the name in the declaring file and its (transitive) ts/src importers is `const [ a, b ] = await this.m (`
+// or `const h = await this.m (` with h used only as `h[0]` / `h[1]`; no string names the method (dynamic dispatch)
+function ccxtGoAsyncVenuePairCallersBind (name, file) {
+    ccxtGoVenuePairCallersDestructure (name, file);  // primes the ts/src file scan; its sync verdict is not used
+    const state: any = CCXT_GO_VENUE_PAIR_STATE;
+    const own = path.resolve (String (file));
+    if ((typeof name !== 'string') || (state.files === undefined) || !state.files.has (own)) {
+        return false;
+    }
+    const related = new Set ([ own ]);
+    for (let grown = true; grown;) {
+        grown = false;
+        for (const [ f, text ] of state.files) {
+            const imports = [ ...text.matchAll (/from '(\.[^']+)\.js'/g) ].map ((m) => path.resolve (path.dirname (f), m[1] + '.ts'));
+            if (!related.has (f) && imports.some ((i) => related.has (i))) {
+                related.add (f);
+                grown = true;
+            }
+        }
+    }
+    let calls = 0;
+    let bound = 0;
+    let stray = 0;
+    for (const f of related) {
+        const text = state.files.get (f);
+        calls += (text.match (new RegExp ('\\.' + name + ' \\(', 'g')) ?? []).length;
+        bound += (text.match (new RegExp ('const \\[ \\w+, \\w+ \\] = await this\\.' + name + ' \\(', 'g')) ?? []).length;
+        for (const h of text.matchAll (new RegExp ('const (\\w+) = await this\\.' + name + ' \\(', 'g'))) {
+            const uses = (text.match (new RegExp ('\\b' + h[1] + '\\b(?!\\[[01]\\])', 'g')) ?? []).length;
+            const decls = (text.match (new RegExp ('const ' + h[1] + ' = ', 'g')) ?? []).length;
+            bound += (uses === decls) ? 1 : 0;
+        }
+        stray += (text.match (new RegExp ('[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()', 'g')) ?? []).length;
+    }
+    return (calls > 0) && (calls === bound) && (stray === 0);
+}
+
+// the pair method an `await this.m (..)` receives from, or undefined
+function ccxtGoAsyncVenuePairAwait (goTranspiler, node) {
+    let e = node;
+    while (e?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        e = e.expression;
+    }
+    const call = (e?.kind === ts.SyntaxKind.AwaitExpression) ? e.expression : undefined;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    try {
+        const declaration = goTranspiler.getChecker ()?.getResolvedSignature (call)?.declaration?.resolve ();
+        return ccxtGoAsyncVenuePairOf (declaration) ? call : undefined;
+    } catch (err) {
+        return undefined;
+    }
+}
+
+// `h := <-this.MAsync(..)` + the error check; the first line unindented when `flush` (statement printer indents it)
+function ccxtGoAsyncVenuePairReceive (goTranspiler, call, holder, identation) {
+    const iden = goTranspiler.getIden (identation);
+    const callText = String (goTranspiler.printNode (call, 0)).trim ();
+    if (!/^this\.\w+Async\(/.test (callText)) {
+        return undefined;
+    }
+    return [ iden + holder + ' := <-' + callText, iden + 'if ' + holder + '.Err != nil {', iden + '\tpanic(' + holder + '.Err)', iden + '}' ];
+}
+
+// the const binding (element of `const [ a, b ] = await ..` or a holder `const h = await ..`) and its slot, or undefined
+function ccxtGoAsyncVenuePairBinding (goTranspiler, node) {
+    const declaration = (node?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (goTranspiler, node) : undefined;
+    if ((declaration?.kind === ts.SyntaxKind.BindingElement) && (declaration.parent?.elements?.length === 2)) {
+        const list = declaration.parent.parent;
+        if ((list?.kind === ts.SyntaxKind.VariableDeclaration) && ((list.parent.flags & ts.NodeFlags.Const) !== 0)
+            && (ccxtGoAsyncVenuePairAwait (goTranspiler, list.initializer) !== undefined)) {
+            return declaration.parent.elements.indexOf (declaration);
+        }
+    }
+    return undefined;
+}
+
+// a const local initialised with a holder's `h[0]` holds the never-nil int64 slot (annotated `int` or not at all)
+function ccxtGoAsyncVenuePairHolderLocal (goTranspiler, node) {
+    const declaration = (node?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (goTranspiler, node) : undefined;
+    return ccxtGoAsyncVenuePairSlot0Local (goTranspiler, declaration) ? 'int64' : undefined;
+}
+
+function ccxtGoAsyncVenuePairSlot0Local (goTranspiler, declaration) {
+    const read = declaration?.initializer;
+    const typeName = (declaration?.type?.kind === ts.SyntaxKind.TypeReference) ? declaration.type.typeName?.text : undefined;
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
+        || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0) || ((declaration.type !== undefined) && (typeName !== 'int'))
+        || (read?.kind !== ts.SyntaxKind.ElementAccessExpression) || (read.argumentExpression?.kind !== ts.SyntaxKind.NumericLiteral) || (read.argumentExpression.text !== '0')
+        || (read.expression?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const holder = ccxtGoParamDeclarationOf (goTranspiler, read.expression);
+    return (holder?.kind === ts.SyntaxKind.VariableDeclaration) && ((holder.parent?.flags & ts.NodeFlags.Const) !== 0)
+        && (ccxtGoAsyncVenuePairAwait (goTranspiler, holder.initializer) !== undefined);
+}
+
+function installCcxtGoAsyncVenuePairs (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoAsyncVenuePairsInstalled', 'printAsyncDeclarationPair')) {
+        return;
+    }
+    const carrier = CCXT_GO_ASYNC_VENUE_PAIR_CARRIER;
+    // trampoline signature, its channel and the body's channel parameter
+    const printPair = goTranspiler.printAsyncDeclarationPair;
+    goTranspiler.printAsyncDeclarationPair = function (node, identation, def, funcBody, isMethod) {
+        const printed = printPair.call (this, node, identation, def, funcBody, isMethod);
+        if (!isMethod || !ccxtGoAsyncVenuePairOf (node) || !printed.endsWith (funcBody)) {
+            return printed;
+        }
+        const head = printed.slice (0, printed.length - funcBody.length);
+        const typed = head.replace (/<-chan any \{/, '<-chan ' + carrier + ' {').replace ('make(chan any, 1)', 'make(chan ' + carrier + ', 1)').replace ('(ch chan any', '(ch chan ' + carrier);
+        return ((typed.split (carrier).length - 1) === 3) ? typed + funcBody : printed;
+    };
+    // `return [ a, b ]` sends the pair
+    const printReturn = goTranspiler.printReturnStatement;
+    goTranspiler.printReturnStatement = function (node, identation) {
+        const printed = printReturn.call (this, node, identation);
+        let method = node?.parent;
+        while ((method !== undefined) && !ts.isFunctionLike (method)) {
+            method = method.parent;
+        }
+        const expr = node?.expression;
+        if ((typeof printed !== 'string') || (method?.kind !== ts.SyntaxKind.MethodDeclaration) || !ccxtGoAsyncVenuePairOf (method)
+            || (expr?.kind !== ts.SyntaxKind.ArrayLiteralExpression)) {
+            return printed;
+        }
+        const m = /^([\s\S]*?ch <- )\[\]any\{[^\n]*\}(\n[ \t]*return nil\s*)$/.exec (printed);
+        const v = ccxtGoVenueIntSlot (expr.elements[0], String (this.printNode (expr.elements[0], 0)).trim ());
+        if ((m === null) || (v === undefined)) {
+            return printed;
+        }
+        const p = ccxtGoVenueSlotText (this, expr.elements[1], 'map[string]any', 'MapTyped');
+        return m[1] + carrier + '{Value: MapPair[int64]{V: ' + v + ', P: ' + p + '}}' + m[2];
+    };
+    // `const [ a, b ] = await this.m (..)` / `const h = await this.m (..)`
+    const printDeclaration = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const declaration = node?.declarations?.[0];
+        const call = ((node?.declarations?.length === 1) && ((node.flags & ts.NodeFlags.Const) !== 0)) ? ccxtGoAsyncVenuePairAwait (this, declaration.initializer) : undefined;
+        if ((call === undefined) && (node?.declarations?.length === 1) && ccxtGoAsyncVenuePairSlot0Local (this, declaration)) {
+            return this.getIden (identation) + 'var ' + declaration.name.text + ' int64 = ' + declaration.initializer.expression.text + '.Value.V';
+        }
+        if (call === undefined) {
+            return printDeclaration.call (this, node, identation);
+        }
+        const iden = this.getIden (identation);
+        if (declaration.name?.kind === ts.SyntaxKind.Identifier) {
+            const lines = ccxtGoAsyncVenuePairReceive (this, call, declaration.name.text, identation);
+            return (lines === undefined) ? printDeclaration.call (this, node, identation) : lines.join ('\n');
+        }
+        const names = (declaration.name?.kind === ts.SyntaxKind.ArrayBindingPattern) ? declaration.name.elements.map ((e) => (ts.isIdentifier (e.name) ? e.name.text : undefined)) : [];
+        const holder = (names.length === 2) && names.every ((n) => n !== undefined) ? ccxtGoFreeLocalName (this, declaration, names.join ('') + 'Pair') : undefined;
+        const lines = (holder === undefined) ? undefined : ccxtGoAsyncVenuePairReceive (this, call, holder, identation);
+        if (lines === undefined) {
+            return printDeclaration.call (this, node, identation);
+        }
+        return lines.concat ([ iden + 'var ' + names[0] + ' int64 = ' + holder + '.Value.V', iden + 'var ' + names[1] + ' map[string]any = ' + holder + '.Value.P' ]).join ('\n');
+    };
+    // a holder's `h[0]` / `h[1]`
+    const printElement = goTranspiler.printElementAccessExpression;
+    goTranspiler.printElementAccessExpression = function (node, ...rest) {
+        const index = (node?.argumentExpression?.kind === ts.SyntaxKind.NumericLiteral) ? node.argumentExpression.text : undefined;
+        const declaration = ((index === '0') || (index === '1')) && (node.expression?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (this, node.expression) : undefined;
+        if ((declaration?.kind === ts.SyntaxKind.VariableDeclaration) && (declaration.name?.kind === ts.SyntaxKind.Identifier)
+            && ((declaration.parent?.flags & ts.NodeFlags.Const) !== 0) && (ccxtGoAsyncVenuePairAwait (this, declaration.initializer) !== undefined)) {
+            return declaration.name.text + '.Value.' + ((index === '0') ? 'V' : 'P');
+        }
+        return printElement.call (this, node, ...rest);
+    };
+    // the int64 slot is never nil: `x === undefined` is `false` (what IsEqual(int64, nil) answers), `!==` is `true`
+    const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
+    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+        const op = node?.operatorToken?.kind;
+        const eq = (op === ts.SyntaxKind.EqualsEqualsEqualsToken) || (op === ts.SyntaxKind.EqualsEqualsToken);
+        const ne = (op === ts.SyntaxKind.ExclamationEqualsEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsToken);
+        if ((eq || ne) && isAbsentExpression (node.right) && (node.left?.kind === ts.SyntaxKind.Identifier)
+            && ((ccxtGoAsyncVenuePairBinding (this, node.left) === 0) || (ccxtGoAsyncVenuePairHolderLocal (this, node.left) === 'int64'))) {
+            return eq ? 'false' : 'true';
+        }
+        return printCustom.call (this, node, identation);
+    };
+    const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
+    goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
+        const known = shippedDeclared.call (this, node);
+        if (known !== undefined) {
+            return known;
+        }
+        const slot = ccxtGoAsyncVenuePairBinding (this, node);
+        return (slot === 0) ? 'int64' : ((slot === 1) ? 'map[string]any' : ccxtGoAsyncVenuePairHolderLocal (this, node));
     };
 }
 
