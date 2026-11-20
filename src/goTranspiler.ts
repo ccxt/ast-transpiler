@@ -15175,6 +15175,9 @@ const GO_NATIVE_CALL_RETURN_TYPES: { [name: string]: string } = {
     'strings.Join': 'string',
     // printed only over maps.Keys of a string-keyed ws cache map (goWsCacheKeysText)
     'slices.Collect': '[]string',
+    // the method expression printed for `.length` on an order-book side local (h25g12CacheLength)
+    'IOrderBookSide.Len': 'int',
+    'ccxt.IOrderBookSide.Len': 'int',
 };
 
 // `this.<name>`, `this.<name>2` and `this.<name>N` of each accessor family, all typed `goType`
@@ -29115,7 +29118,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const type = (this.getChecker() as Checker).getTypeAtLocation(expression); // eslint-disable-line
             // this.warnIfAnyType(node, type.flags, leftSide, "length");
             // rawExpression = this.isStringType(type.flags) ? `(string${leftSide}).Length` : `(${leftSide}.Cast<object>().ToList()).Count`;
-            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? this.goDerefLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
+            rawExpression = this.printInlineArrayLength(expression, leftSide, node) ?? this.goDerefLength(expression, leftSide, node) ?? this.h25g12CacheLength(expression, leftSide, node) ?? (this.isStringType(type.flags) ? `GetLength(${leftSide})` : `${this.ARRAY_LENGTH_WRAPPER_OPEN}${leftSide}${this.ARRAY_LENGTH_WRAPPER_CLOSE}`); // `(${leftSide}.Cast<object>()).ToList().Count`
             break;
         case 'push':
             rawExpression = `((IList<object>)${leftSide}).Add`;
@@ -44248,3 +44251,61 @@ export function installH25g05UrlsViews (goTranspiler: any) {
     };
 }
 // ===== h25-g05 (end) =====
+
+// ===== h25-g12 (begin): `.length` on a local the printer declares as a ws cache interface =====
+// GetArrayLength answers IOrderBookSide.Len() and len(IArrayCache.ToArray()) for these; an untyped nil
+// interface answers 0 there, so each form needs a proof that the local is never nil.
+export interface GoTranspiler {
+    h25g12CacheLength(expression, printedText: string, lengthNode): string | undefined;
+    h25g12GuardedCacheLocal(declaration): boolean;
+}
+GoTranspiler.prototype.h25g12CacheLength = function (expression, printedText, lengthNode) {
+    if ((expression?.kind !== SyntaxKind.Identifier) || (printedText !== expression.text) || this.goLengthFeedsArithmeticClassifier(lengthNode)) {
+        return undefined;
+    }
+    const declaration = this.goDeclarationOfIdentifier(expression);
+    if ((declaration === undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return undefined;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(expression);
+    // a side local is bound once from a typed book's GetAsks()/GetBids(); every WsOrderBook constructor sets both sides
+    if ((this.goOrderBook !== undefined) && (goType === this.goOrderBook.sideType) && (this.goOrderBookSideLocalType(declaration) === goType)) {
+        return `${goType}.Len(${printedText})`;
+    }
+    if ((goType === GO_WS_CACHE_TYPE) && this.h25g12GuardedCacheLocal(declaration)) {
+        return `len(${printedText}.ToArray())`;
+    }
+    return undefined;
+};
+// `const x = this.f` (a BaseExchange cache field) right after `if (this.f === undefined) { ... this.f = new Cache (..); }`
+// in the same block, with no write to `this.f` and no await between: the field, hence the local, is a constructed cache
+GoTranspiler.prototype.h25g12GuardedCacheLocal = function (declaration) {
+    const init: any = declaration.initializer;
+    if ((init?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression?.kind !== SyntaxKind.ThisKeyword) || !this.goWsCacheField(init)) {
+        return false;
+    }
+    const field = init.name.text;
+    const statement: any = declaration.parent.parent;
+    const block: any = statement.parent;
+    const statements: any[] = (block?.statements !== undefined) ? Array.from(block.statements) : [];
+    const at = statements.indexOf(statement);
+    const isField = (n: any) => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression?.kind === SyntaxKind.ThisKeyword) && (n.name?.text === field);
+    const writesField = (n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken) && isField(n.left);
+    for (let i = at - 1; i >= 0; i--) {
+        const s: any = statements[i];
+        if ((s.kind === SyntaxKind.IfStatement) && (s.elseStatement === undefined) && (s.expression?.kind === SyntaxKind.BinaryExpression)
+            && (s.expression.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken) && isField(s.expression.left)
+            && (s.expression.right?.kind === SyntaxKind.Identifier) && (s.expression.right.text === 'undefined')) {
+            const body: any[] = (s.thenStatement?.kind === SyntaxKind.Block) ? Array.from(s.thenStatement.statements) : [ s.thenStatement ];
+            const last: any = body[body.length - 1];
+            const write: any = (last?.kind === SyntaxKind.ExpressionStatement) ? last.expression : undefined;
+            return (write !== undefined) && writesField(write) && (this.goWsCacheTypeOfNode(write.right) === GO_WS_CACHE_TYPE)
+                && (write.right.kind === SyntaxKind.NewExpression) && !body.slice(0, -1).some((b) => writesField(b) || this.hasNodeWhere(b, writesField));
+        }
+        if (writesField(s) || this.hasNodeWhere(s, (n) => writesField(n) || (n.kind === SyntaxKind.AwaitExpression))) {
+            return false;
+        }
+    }
+    return false;
+};
+// ===== h25-g12 (end) =====
