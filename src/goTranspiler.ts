@@ -14794,6 +14794,10 @@ const GO_NON_NIL_DEFAULT_KINDS = [
 const GO_STRING_METHOD_NAMES = [ 'split', 'replace', 'replaceAll', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase',
     'indexOf', 'length', 'trim', 'padStart', 'padEnd', 'toString' ];
 
+// String methods whose Go print (native or helper) always yields a plain Go string, with their arity
+const GO_STRING_RESULT_METHOD_ARITY = { 'replaceAll': 2, 'toLowerCase': 0, 'toUpperCase': 0, 'trim': 0 };
+const GO_STRING_RESULT_METHOD_NAMES = Object.keys(GO_STRING_RESULT_METHOD_ARITY);
+
 // the operators that write their left operand: an assignment through any of them may
 // store a nil pointer where the deref proof expected the defaulted call's result
 const GO_WRITE_OPERATOR_KINDS = [
@@ -16924,8 +16928,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const declared = this.goDeclaredTypeOfIdentifier(base);
             return declared === GO_STRING_LIST_LOCAL_TYPE;
         }
+        case SyntaxKind.CallExpression:
+            return this.goStringMethodCallIsProven(node);
         }
         return false;
+    }
+
+    // `s.replaceAll (a, b)` / `s.toLowerCase ()` style calls print either the strings.* call or the
+    // boxed helper; both return a Go string (the helper's nil answer is ""), so the value is one
+    goStringMethodCallIsProven(node): boolean {
+        const callee = node.expression;
+        return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+            && GO_STRING_RESULT_METHOD_NAMES.includes(callee.name?.text) && (node.arguments.length === GO_STRING_RESULT_METHOD_ARITY[callee.name.text]);
     }
 
     // reject the refinement when something downstream needs the local to stay `any`:
@@ -18860,6 +18874,30 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return (parent.operatorToken?.kind === SyntaxKind.InKeyword) && (parent.right === node);
         }
         return false;
+    }
+
+    // a whole-argument pass to an own-class method whose parameter ts declares `string[]` (no
+    // optional / union): the callee takes that slice as declared, or boxes the non-nil []string
+    goStringListFeedsStringArrayParam(node): boolean {
+        const call: any = node.parent;
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const index = call.arguments.indexOf(node);
+        let declaration: any;
+        try {
+            declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        const param: any = declaration?.parameters?.[index];
+        if ((index < 0) || (param === undefined) || (param.questionToken !== undefined) || (param.initializer !== undefined)
+            || (param.dotDotDotToken !== undefined)) {
+            return false;
+        }
+        const annotation = param.type;
+        return (annotation?.kind === SyntaxKind.ArrayType) && (annotation.elementType?.kind === SyntaxKind.StringKeyword);
     }
 
     // a write only keeps a container local typed when the value already IS that container:
@@ -40938,6 +40976,9 @@ const GO_STRING_LIST_READER_CALLEES = [ 'this.SafeString', 'this.SafeString2', '
 const goStringListUseReadsAsReader = GoTranspiler.prototype.goStringListUseReadsAs;
 GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
     const parent: any = node?.parent;
+    if (this.goStringListFeedsStringArrayParam(node)) {
+        return true; // decided off the declaration, before the print below re-enters the callee's parameter typing
+    }
     if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === node) && (parent.expression !== node)) {
         const callee = this.goPrintedCallee(this.printNode(parent, 0));
         if (GO_STRING_LIST_READER_CALLEES.indexOf(callee) >= 0) {
