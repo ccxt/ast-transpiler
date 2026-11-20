@@ -31429,10 +31429,21 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
         return true;
     }
     if ((node?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) {
-        return false;
+        return this.goGuardedStringTupleSlot(node);
     }
     const checker: any = this.checkerOrUndefined();
     return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+};
+
+export interface GoTranspiler {
+    goGuardedStringTupleSlot(node): boolean;
+}
+// slot 0 of `const [ x, p ] = this.<stringPointerTupleCall> (…)` (a Go *string) read under an
+// enclosing `x !== undefined` or after an exiting `x === undefined` guard: never nil there
+GoTranspiler.prototype.goGuardedStringTupleSlot = function (node) {
+    return (node?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === undefined)
+        && (this.goBoundIdentifierType(node) === '*string')
+        && (this.goHasExitingNilGuard(node) || this.goHasEnclosingNilGuard(node));
 };
 
 export interface GoTranspiler {
