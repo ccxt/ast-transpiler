@@ -4047,6 +4047,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
         if ((result !== undefined) && !CCXT_GO_PARSE_METHOD.test (name) && !goGeneralReturnKeepsAbsence (goTranspiler, node, result)) {
             result = undefined;
         }
+        result = result ?? h22g05IntPtrReturn (goTranspiler, node, allowed);
     } finally {
         CCXT_GO_RETURN_TYPE_IN_PROGRESS.delete (node);
     }
@@ -28767,6 +28768,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((target === undefined) && (goType === '*int64') && h18g01CopyJoinsAsInt64Ptr(this, use, param)) {
                 return true;
             }
+            if ((target !== undefined) && guarded && h22g05NumericDefaultCopy(this, target, use, goType)) {
+                return true;
+            }
             if (target !== undefined) {
                 if ((!pointer && guarded) || seen.has(target)) {
                     return true;
@@ -43219,3 +43223,83 @@ GoTranspiler.prototype.goDefaultedSafeStringCall = function (node): boolean {
     return h22g04ShippedDefaultedSafeStringCall.call(this, node) || this.goH22g04NonNilStringDefault(node);
 };
 // ===== h22-g04 (end) =====
+
+// ===== h22-g05 (begin): a sync venue `(x: Int): Int` helper whose every caller passes a nil-guarded *int64 =====
+// The parameter prints `*int64` when every same-file call passes a *int64 (or a caller limit assumed bound to one)
+// under an enclosing `x !== undefined` guard and nothing else reaches the method; the return prints `*int64` when every
+// path returns that never-written parameter or an integer literal (`v := int64(n); return &v`), so it is never nil.
+const goRequiredParameterNativeTypeH22g05 = GoTranspiler.prototype.goRequiredParameterNativeType;
+GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, index: number) {
+    const answer = goRequiredParameterNativeTypeH22g05.call(this, fn, param, index);
+    if ((answer !== undefined) || this.isAsyncFunction(fn) || (param.type?.getText() !== 'Int') || (param.initializer !== undefined)
+        || (param.name?.kind !== SyntaxKind.Identifier) || (fn.type?.getText() !== 'Int') || goHasDynamicCall(fn, fn.name.text)) {
+        return answer;
+    }
+    return h22g05GuardedIntPtrCalls(this, fn, index) ? '*int64' : answer;
+};
+function h22g05GuardedIntPtrCalls (go, fn, index: number): boolean {
+    const sites = go.goSameFileCallsOf(fn, fn.name.text);
+    if ((sites.length === 0) || (fn.parameters.length !== 1)) {
+        return false;
+    }
+    for (const site of sites) {
+        const arg = site.arguments?.[index];
+        if ((site.runner !== undefined) || (arg?.kind !== SyntaxKind.Identifier) || !go.goHasEnclosingNilGuard(arg)
+            || (!goNumPtrAssumedArg(go, arg, '*int64') && (go.goPrintedArgType(arg) !== '*int64'))) {
+            return false;
+        }
+    }
+    const param = fn.parameters[index];
+    const tree = go.goTsSrcTree(fn.getSourceFile());
+    if (tree !== undefined) {
+        const myClass = go.goEnclosingClassName(fn);
+        const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        if ((tree.callIndex.get(fn.name.text) ?? []).some((site) => (site.file !== myFile) && go.goTsSrcFileDerivesFrom(tree, site.file, myClass))
+            || !goStringPtrParamOnlyDirectCalls(go, tree, fn.name.text, myClass)) {
+            return false;
+        }
+    }
+    return !goNumPtrParamIsWritten(fn.body, param.name.text) && go.goLocalIsSafeToType(fn.body, param, param.name.text, '*int64');
+}
+const H22G05_LITERAL_RETURNS = new WeakSet<object> ();
+function h22g05IntPtrReturn (go, node, allowed): string | undefined {
+    if (!allowed.includes('*int64') || (node.type?.getText() !== 'Int') || (node.parameters.length !== 1) || go.isAsyncFunction(node)) {
+        return undefined;
+    }
+    const param = node.parameters[0];
+    if ((param.name?.kind !== SyntaxKind.Identifier) || (go.goNativeParameterType(param) !== '*int64') || goNumPtrParamIsWritten(node.body, param.name.text)
+        || node.body.getText().includes('resultValue')) {
+        return undefined;
+    }
+    const literals = [];
+    for (const r of collectReturnStatements(node.body)) {
+        const e = ccxtGoUnwrapParens(r.expression);
+        if ((e?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(e.text)) {
+            literals.push(r);
+        } else if ((e?.kind !== SyntaxKind.Identifier) || (e.text !== param.name.text) || (go.goDeclarationOfIdentifier?.(e) !== undefined)) {
+            return undefined;
+        }
+    }
+    literals.forEach((r) => H22G05_LITERAL_RETURNS.add(r));
+    return '*int64';
+}
+const printReturnStatementH22g05 = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    if (!H22G05_LITERAL_RETURNS.has(node)) {
+        return printReturnStatementH22g05.call(this, node, identation);
+    }
+    const iden = this.getIden(identation);
+    return this.printNodeCommentsIfAny(node, identation, `${iden}resultValue := int64(${ccxtGoUnwrapParens(node.expression).text})\n${iden}return &resultValue`);
+};
+// `const v: Int = (x === undefined) ? 10 : x` over a *int64 limit prints the int64 join (never nil, the
+// pointee or the literal), so any later read of v sees a plain integer whatever the parameter's Go type.
+function h22g05NumericDefaultCopy (go, target, use, goType: string): boolean {
+    const init = ccxtGoUnwrapParens(target.initializer);
+    if ((goType !== '*int64') || (init !== use) || (init?.kind !== SyntaxKind.ConditionalExpression) || (target.type?.getText() !== 'Int')
+        || ((target.parent?.flags & NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const arms = [ ccxtGoUnwrapParens(init.whenTrue), ccxtGoUnwrapParens(init.whenFalse) ];
+    return arms.some((a) => (a?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(a.text)) && arms.some((a) => a?.kind === SyntaxKind.Identifier);
+}
+// ===== h22-g05 (end) =====
