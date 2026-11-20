@@ -10700,7 +10700,7 @@ describe ('goNilInitPointer', () => {
                 '    }\n' +
                 '}\n';
             const out = go(ts);
-            expect(out).toContain('var typeVar any = nil');
+            expect(out).toContain('var typeVar *string = nil');
             expect(out).not.toContain('SafeStringPtr("spot")');
         });
 

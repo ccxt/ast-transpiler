@@ -19172,7 +19172,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
                 return;
             }
-            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)) {
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && !this.goNilInitStrLeftOperandIsRead(parent)) {
                 if ((parent.operatorToken?.kind !== SyntaxKind.EqualsToken) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
                     rejected = true;
                     return;
@@ -19197,6 +19197,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // literal / ternary writes are the value-join passes' `string` locals
             if ((right?.kind === SyntaxKind.StringLiteral) || (right?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
                 || (right?.kind === SyntaxKind.ConditionalExpression)) {
+                if (this.goNilInitStrLiteralWriteOk(writes, write)) {
+                    continue;
+                }
                 return undefined;
             }
             const goType = this.goTypeOfInitializer(right, this.printNode(right, 0));
@@ -19214,8 +19217,43 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return '*string';
     }
 
+    // `this.balance[x]` inside `if (x !== undefined) { .. }` whose body never writes x: the store indexes `[*x]`
+    goNilInitStrGuardedBalanceKey(n): boolean {
+        const parent: any = n.parent;
+        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.argumentExpression !== n) || !this.goBalanceIndexable(parent.expression)) {
+            return false;
+        }
+        for (let child: any = n, up: any = parent; (up !== undefined) && !isFunctionLike(up); child = up, up = up.parent) {
+            if ((up.kind === SyntaxKind.IfStatement) && (up.thenStatement === child) && this.goConditionProvesNonNil(up.expression, n)) {
+                return !this.hasNodeWhere(up.thenStatement, (w: any) => (w.kind === SyntaxKind.Identifier) && (w.text === n.text)
+                    && (this.goRebindingTargetOf(w) !== undefined));
+            }
+        }
+        return false;
+    }
+
+    // `x !== undefined`: the local is the left operand of a nil test, a read the read rule checks
+    goNilInitStrLeftOperandIsRead(parent): boolean {
+        return COMPARISON_TOKENS.includes(parent.operatorToken?.kind) && this.goNilInitInitializer(this.goUnwrapParenthesizedNode(parent.right));
+    }
+
+    // a string literal beside a `*string` write: kept in its own typed local, the pointer takes its address
+    goNilInitStrLiteralWriteOk(writes: any[], write): boolean {
+        const right = this.goUnwrapParenthesizedNode(write.right);
+        if ((right?.kind !== SyntaxKind.StringLiteral) || (this.goStringValueLocalName(write) === undefined)) {
+            return false;
+        }
+        return writes.some((w) => {
+            const r = this.goUnwrapParenthesizedNode(w.right);
+            return (r?.kind === SyntaxKind.CallExpression) && (this.goTypeOfInitializer(r, this.printNode(r, 0)) === '*string');
+        });
+    }
+
     goNilInitStrDeclaredReadOk(n): boolean {
         const { current, parent } = goReadClimb(n);
+        if (this.goNilInitStrBalanceKeyRead(n, parent, current)) {
+            return true;
+        }
         if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.PlusToken)) {
             // the checker narrowed it to `string` here, so the concat derefs a non-nil pointer
             const type: any = this.checkerOrUndefined()?.getTypeAtLocation(n);
@@ -19233,6 +19271,25 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
+    }
+
+    // a nil-guarded Balance key (`this.balance[x]` prints `[*x]`), the key of `this.safeDict (this.balance, x)`
+    // (SafeValue derefs it) or an optional argument of a `this.` method (GetArg* reads a nil pointer as omitted)
+    goNilInitStrBalanceKeyRead(n, parent, current): boolean {
+        if (this.goGetArgPointerIsBalanceKey(n) || this.goNilInitStrGuardedBalanceKey(n)) {
+            return true;
+        }
+        if ((parent?.kind !== SyntaxKind.CallExpression) || !goNilInitIsAnyArgument(parent, current)
+            || (parent.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (parent.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const index = parent.arguments.indexOf(current);
+        if ((parent.expression.name?.text === 'safeDict') && (index === 1) && this.goBalanceIndexable(this.goUnwrapParenthesizedNode(parent.arguments[0]))) {
+            return true;
+        }
+        const method: any = this.checkerOrUndefined()?.getSymbolAtLocation(parent.expression)?.valueDeclaration?.resolve();
+        const param = (method?.kind === SyntaxKind.MethodDeclaration) ? method.parameters?.[index] : undefined;
+        return (param !== undefined) && (param.initializer !== undefined) && (param.dotDotDotToken === undefined);
     }
 
     // the typed-local name goStringPointerStore would use for this statement-level write
@@ -20741,7 +20798,17 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `this.balance[k]` key of a native Balance store: a Go string, or a `*string` (`pointer` = the local still to nil-test)
     goBalanceKey(keyNode): { index: string; pointer?: string } | undefined {
-        return this.goWsKey(keyNode);
+        return this.goBalanceGuardedStrKey(keyNode) ?? this.goWsKey(keyNode);
+    }
+
+    // a `*string` key of `this.balance[k]` inside `if (k !== undefined)` that never rebinds k: `*k`
+    goBalanceGuardedStrKey(keyNode): { index: string } | undefined {
+        const key = this.goUnwrapPrintedAssertions(keyNode);
+        if ((key?.kind !== SyntaxKind.Identifier) || (key !== keyNode) || (this.goDeclaredTypeOfIdentifier(key) !== '*string')
+            || !this.goNilInitStrGuardedBalanceKey(key)) {
+            return undefined;
+        }
+        return { 'index': '*' + this.printNode(key, 0) };
     }
 
     // a Balance value the helper would store unchanged: no scalar pointer or typed-nil list for its derefScalar to fold
