@@ -15140,6 +15140,10 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'commonCurrencyCode': [ 0 ],
     // returns the market id or its input, so nil stays nil
     'marketId': [ 0 ],
+    // no caller in the tree; the body only nil-tests the symbol
+    'checkRequiredMarginArgument': [ 1 ],
+    // the one caller passes a SafeString `*string`; nil returns nil before any other read
+    'integerPrecisionToAmount': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
