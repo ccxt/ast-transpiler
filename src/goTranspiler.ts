@@ -14550,6 +14550,7 @@ export function installFmGo5OG02 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goOwnedGetsInstalled')) { return; }
     installGoGuardedWrappedRead (goTranspiler); // the build installs this group last
     installGoGuardedTypedArgHoist (goTranspiler);
+    installGoGuardedRowSplit (goTranspiler);
 
     const printBlock = goTranspiler.printBlock;
     goTranspiler.printBlock = function (this: any, node: any, identation: number, chainBlock = false) {
@@ -42943,3 +42944,87 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     return h21g03ShippedExpressionStatement.call(this, node, identation);
 };
 // ===== h21-g03 (end) =====
+
+// ===== guarded first-row split (begin) =====
+// A statement holding the bounds closure around `rows[K]` (rows a never-rebound, never-written `Dict[]` or safeList local whose
+// elements are maps or decoded JSON, so a DerefScalar wrap is the identity; K a literal)
+// prints as `if len(rows) > K { S(rows[K]) } else { S(nil) }`: the branch reproduces the closure's nil answer exactly
+// (an untyped nil reaches the same `any` slot), with no closure and no new local.
+const GO_GUARDED_ROW_CLOSURE = /func\(\) any \{\n[ \t]*if (\d+) >= 0 && \1 < len\(([A-Za-z_]\w*)\) \{\n[ \t]*return (DerefScalar\()?\2\[\1\]\)?\n[ \t]*\}\n[ \t]*return nil\n[ \t]*\}\(\)/g;
+function goGuardedRowList (goTranspiler, statement, name: string, deref: boolean): boolean {
+    let found = false;
+    let bad = false;
+    const walk = (n) => {
+        if ((n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === name)) {
+            const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(n.expression)?.valueDeclaration?.resolve?.();
+            const dict = (declaration?.type?.kind === SyntaxKind.ArrayType) && (declaration.type.elementType?.typeName?.text === 'Dict');
+            const scope = goTranspiler.goEnclosingFunction(n);
+            const ok = (declaration?.kind === SyntaxKind.VariableDeclaration) && (n.argumentExpression?.kind === SyntaxKind.NumericLiteral)
+                && !goTranspiler.isGoElementAccessAssignmentTarget(n) && !((n.parent?.kind === SyntaxKind.ElementAccessExpression) && goTranspiler.isGoElementAccessAssignmentTarget(n.parent))
+                && goTranspiler.goDeclaredListIdentifier(n.expression)
+                && ((dict && !deref) || goGuardedRowSafeListInit(declaration))
+                && (goTranspiler.goNameWriteSites(scope, name, declaration).length === 0) && !goGuardedListReadElementWritten(scope, name)
+                && !goGuardedListReadMayBeProven(goTranspiler, n);
+            found = found || ok;
+            bad = bad || !ok;
+        }
+        n.forEachChild(walk);
+    };
+    walk(statement);
+    return found && !bad;
+}
+// `this.safeList* (..)` (through parentheses or an `as` cast): decoded JSON rows, no scalar pointer element
+function goGuardedRowSafeListInit (declaration): boolean {
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.ParenthesizedExpression) || (init?.kind === SyntaxKind.AsExpression)) {
+        init = init.expression;
+    }
+    const callee: any = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+    return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safeList\d*$/.test(callee.name?.text ?? '');
+}
+function goGuardedRowSplit (goTranspiler, statement, printed: string, identation: number): string {
+    if ((typeof printed !== 'string') || (printed.indexOf('func() any {') < 0) || (printed.indexOf('`') >= 0)) {
+        return printed;
+    }
+    const matches = [ ...printed.matchAll(GO_GUARDED_ROW_CLOSURE) ];
+    if (matches.length !== 1) {
+        return printed;
+    }
+    const [ closure, index, list ] = matches[0];
+    const rest = printed.replace(closure, '');
+    // a `:=` binding would scope its name inside the arms
+    if (new RegExp(`\\b${list}\\b`).test(rest) || (rest.indexOf('func(') >= 0) || (rest.indexOf('//') >= 0) || (rest.indexOf(':=') >= 0)
+        || !goGuardedRowList(goTranspiler, statement, list, matches[0][3] !== undefined)) {
+        return printed;
+    }
+    const iden = goTranspiler.getIden(identation);
+    let body = printed.replace(/\s+$/, '').replace(/^\n+/, '');
+    let tail = '';
+    const ret = /\n[ \t]*return nil$/.exec(body);
+    if ((ret !== null) && body.trimStart().startsWith('ch <- ')) {
+        tail = ret[0];
+        body = body.substring(0, ret.index);
+    }
+    let head = '';
+    const decl = /^[ \t]*var (\w+) ([^=\n]+?) = /.exec(body);
+    if (decl !== null) {
+        head = `${iden}var ${decl[1]} ${decl[2]}\n`;
+        body = `${decl[1]} = ${body.substring(decl[0].length)}`;
+    }
+    const arm = (value: string) => goTranspiler.getIden(identation + 1) + body.trimStart().replace(closure, value).split('\n').join('\n' + goTranspiler.getIden(1));
+    const split = `${head}${iden}if len(${list}) > ${index} {\n${arm(`${list}[${index}]`)}\n${iden}} else {\n${arm('nil')}\n${iden}}${tail}`;
+    const lead = /^\n*/.exec(printed)[0];
+    return lead + split + printed.substring(printed.replace(/\s+$/, '').length);
+}
+function installGoGuardedRowSplit (goTranspiler) {
+    if (!goInstallOnce(goTranspiler, '__goGuardedRowSplitInstalled', 'printReturnStatement')) {
+        return;
+    }
+    for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'printReturnStatement' ]) {
+        const shipped = goTranspiler[method];
+        goTranspiler[method] = function (node, identation) {
+            return goGuardedRowSplit(this, node, shipped.call(this, node, identation), identation);
+        };
+    }
+}
+// ===== guarded first-row split (end) =====
