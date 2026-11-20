@@ -31596,7 +31596,7 @@ ${this.getIden(identation)}${returnStatement}`;
         if (this.goSliceReceiverType(node) === undefined) {
             return false;
         }
-        return (this.goSliceLiteralBounds(node) !== undefined) || (this.goSliceLoopCounterArgs(node) !== undefined);
+        return (this.goSliceLiteralBounds(node) !== undefined) || (this.goSliceLoopCounterArgs(node) !== undefined) || this.h26g55IsGuardedSlice(node);
     }
 
     // `x.slice(a, b)` -> `x[a:b]` when the receiver is a local the printer declares
@@ -31612,7 +31612,7 @@ ${this.getIden(identation)}${returnStatement}`;
         }
         const bounds = this.goSliceLiteralBounds(node);
         if (bounds === undefined) {
-            return this.goSliceLoopCounterText(node, receiverText, goType);
+            return this.goSliceLoopCounterText(node, receiverText, goType) ?? this.h26g55GuardedSlice(node, receiverText, goType);
         }
         const { start, hasEnd, end } = bounds;
         if (goType === 'string') {
@@ -46861,3 +46861,133 @@ GoTranspiler.prototype.h26g53ComparisonExpression = function (expr) {
         SyntaxKind.LessThanToken, SyntaxKind.GreaterThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanEqualsToken].includes(op);
 };
 // ===== h26-G53 (end) =====
+
+// ===== h26-G55 =====
+export interface GoTranspiler {
+    h26g55GuardedSlice(node, receiverText: string, goType: string): string | undefined;
+    h26g55GuardConjuncts(node): any[];
+    h26g55LiteralInt(node): number | undefined;
+    h26g55IsLengthOf(node, name: string): boolean;
+    h26g55IsLengthLocalOf(node, name: string): boolean;
+    h26g55IsGuardedSlice(node): boolean;
+}
+// a non-literal `.slice` bound on a proven string whose range an enclosing `if` proves: `s.slice (0, s.length - k)` under
+// `s.endsWith (lit)` (lit at least k long) or `s.length > m` (m >= k - 1); `s.slice (n - k)` with `n = s.length` under
+// `n > k`; `s.slice (i + 1)` under `i > -1 && i < s.length - 1`. The helper answers the plain subscript there.
+GoTranspiler.prototype.h26g55GuardedSlice = function (node, receiverText, goType) {
+    const receiver = this.goUnwrapParenthesizedNode(node?.expression?.expression);
+    const args = node?.arguments ?? [];
+    if ((receiver?.kind !== SyntaxKind.Identifier) || (receiverText !== receiver.text) || (args.length < 1) || (args.length > 2)) {
+        return undefined;
+    }
+    const scope = this.goEnclosingFunction(receiver);
+    if (this.goLocalIsRebound(scope, receiver)) {
+        return undefined;
+    }
+    let value = receiverText;
+    if (goType === '*string') {
+        if (!this.goDerefableStringOperand(receiver)) {
+            return undefined;
+        }
+        value = '(*' + receiverText + ')';
+    } else if (goType !== 'string') {
+        return undefined;
+    }
+    const name = receiver.text;
+    const guards = this.h26g55GuardConjuncts(node);
+    const first = this.goUnwrapParenthesizedNode(args[0]);
+    const second = this.goUnwrapParenthesizedNode(args[1]);
+    const binary = (n, op) => (n?.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === op);
+    if ((args.length === 2) && (this.h26g55LiteralInt(first) === 0) && binary(second, SyntaxKind.MinusToken)
+        && this.h26g55IsLengthOf(second.left, name)) {
+        const k = this.h26g55LiteralInt(second.right);
+        if (k === undefined) {
+            return undefined;
+        }
+        const proven = guards.some((g) => {
+            if ((g.kind === SyntaxKind.CallExpression) && (g.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (g.expression.name?.text === 'endsWith') && (g.expression.expression?.kind === SyntaxKind.Identifier)
+                && (g.expression.expression.text === name) && (g.arguments?.length === 1) && (g.arguments[0].kind === SyntaxKind.StringLiteral)) {
+                return Buffer.byteLength(g.arguments[0].text, 'utf8') >= k;
+            }
+            if (binary(g, SyntaxKind.GreaterThanToken) && this.h26g55IsLengthOf(g.left, name)) {
+                const m = this.h26g55LiteralInt(g.right);
+                return (m !== undefined) && (m >= k - 1);
+            }
+            return false;
+        });
+        return proven ? `${value}[:len(${value})-${k}]` : undefined;
+    }
+    if ((args.length !== 1) || !(binary(first, SyntaxKind.MinusToken) || binary(first, SyntaxKind.PlusToken))
+        || (first.left?.kind !== SyntaxKind.Identifier) || this.goLocalIsRebound(scope, first.left)) {
+        return undefined;
+    }
+    const k = this.h26g55LiteralInt(first.right);
+    const counter = first.left.text;
+    if ((k === undefined) || (this.goPrintedTypeOfExpression(first.left, counter) !== 'int')) {
+        return undefined;
+    }
+    const isCounter = (n) => (this.goUnwrapParenthesizedNode(n)?.kind === SyntaxKind.Identifier) && (this.goUnwrapParenthesizedNode(n).text === counter);
+    let proven = false;
+    if (binary(first, SyntaxKind.MinusToken) && this.h26g55IsLengthLocalOf(first.left, name)) {
+        proven = guards.some((g) => binary(g, SyntaxKind.GreaterThanToken) && isCounter(g.left) && (this.h26g55LiteralInt(g.right) !== undefined)
+            && (this.h26g55LiteralInt(g.right) >= k));
+    } else if (binary(first, SyntaxKind.PlusToken) && (k === 1)) {
+        const low = guards.some((g) => binary(g, SyntaxKind.GreaterThanToken) && isCounter(g.left) && (this.h26g55LiteralInt(g.right) === -1));
+        const high = guards.some((g) => binary(g, SyntaxKind.LessThanToken) && isCounter(g.left) && binary(this.goUnwrapParenthesizedNode(g.right), SyntaxKind.MinusToken)
+            && this.h26g55IsLengthOf(this.goUnwrapParenthesizedNode(g.right).left, name) && (this.h26g55LiteralInt(this.goUnwrapParenthesizedNode(g.right).right) === 1));
+        proven = low && high;
+    }
+    if (!proven) {
+        return undefined;
+    }
+    return `${value}[${counter}${binary(first, SyntaxKind.PlusToken) ? '+' : '-'}${k}:]`;
+};
+// the `&&` conjuncts of every enclosing `if` whose then-branch holds the node (no else-branch reads)
+GoTranspiler.prototype.h26g55GuardConjuncts = function (node) {
+    const out: any[] = [];
+    const split = (c) => {
+        const e = this.goUnwrapParenthesizedNode(c);
+        if ((e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken)) {
+            split(e.left);
+            split(e.right);
+        } else if (e !== undefined) {
+            out.push(e);
+        }
+    };
+    let child: any = node;
+    let current: any = node?.parent;
+    while ((current !== undefined) && (current.kind !== SyntaxKind.MethodDeclaration) && (current.kind !== SyntaxKind.FunctionDeclaration)
+        && (current.kind !== SyntaxKind.ArrowFunction) && (current.kind !== SyntaxKind.FunctionExpression)) {
+        if ((current.kind === SyntaxKind.IfStatement) && (current.thenStatement === child)) {
+            split(current.expression);
+        }
+        child = current;
+        current = current.parent;
+    }
+    return out;
+};
+GoTranspiler.prototype.h26g55LiteralInt = function (node) {
+    const n = this.goUnwrapParenthesizedNode(node);
+    if ((n?.kind === SyntaxKind.PrefixUnaryExpression) && (n.operator === SyntaxKind.MinusToken)) {
+        const inner = this.h26g55LiteralInt(n.operand);
+        return (inner === undefined) ? undefined : -inner;
+    }
+    return ((n?.kind === SyntaxKind.NumericLiteral) && /^\d{1,9}$/.test(n.text)) ? Number(n.text) : undefined;
+};
+GoTranspiler.prototype.h26g55IsLengthOf = function (node, name) {
+    const n = this.goUnwrapParenthesizedNode(node);
+    return (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length')
+        && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === name);
+};
+// a const local initialised to `name.length`
+GoTranspiler.prototype.h26g55IsLengthLocalOf = function (node, name) {
+    const init = this.goConstLocalInitializer(node);
+    return (init !== undefined) && (init !== node) && this.h26g55IsLengthOf(init, name);
+};
+GoTranspiler.prototype.h26g55IsGuardedSlice = function (node) {
+    const receiver = this.goUnwrapParenthesizedNode(node?.expression?.expression);
+    const goType = this.goSliceReceiverType(node);
+    return (receiver?.kind === SyntaxKind.Identifier) && (goType !== undefined) && (this.h26g55GuardedSlice(node, receiver.text, goType) !== undefined);
+};
+// ===== h26-G55 (end) =====
