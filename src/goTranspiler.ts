@@ -4177,8 +4177,45 @@ const CCXT_GO_NIL_JOIN_READ_RULE = {
         [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
         [ts.SyntaxKind.ShorthandPropertyAssignment]: goReadAccepts,
         [ts.SyntaxKind.CallExpression]: (parent, child, goTranspiler) => ccxtGoNilJoinArgumentSeesAbsent (goTranspiler, parent, parent.arguments.indexOf (child)),
+        [ts.SyntaxKind.VariableDeclaration]: ccxtGoNilJoinStoredCopy,
     },
 };
+
+// `const c = x` whose every use stores c into an object literal slot: the slot holds the same typed value
+function ccxtGoNilJoinStoredCopy (parent, child) {
+    const list = parent.parent;
+    if ((parent.initializer !== child) || (parent.name?.kind !== ts.SyntaxKind.Identifier) || (list?.kind !== ts.SyntaxKind.VariableDeclarationList)
+        || ((list.flags & ts.NodeFlags.Const) === 0) || (list.declarations.length !== 1)) {
+        return false;
+    }
+    let scope = list.parent?.parent;
+    while ((scope !== undefined) && !ts.isFunctionLike (scope)) {
+        scope = scope.parent;
+    }
+    const name = parent.name.text;
+    let uses = 0;
+    let ok = scope !== undefined;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === name) && (n !== parent.name)) {
+            const p = n.parent;
+            if (!(((p?.kind === ts.SyntaxKind.PropertyAssignment) && (p.initializer === n)) || (p?.kind === ts.SyntaxKind.ShorthandPropertyAssignment))) {
+                if (!((p?.kind === ts.SyntaxKind.PropertyAccessExpression) && (p.name === n))) {
+                    ok = false;
+                }
+                return;
+            }
+            uses++;
+        }
+        n.forEachChild (visit);
+    };
+    if (ok) {
+        visit (scope);
+    }
+    return ok && (uses > 0);
+}
 
 function ccxtGoNilJoinMemberRead (parent, child) {
     if (parent.expression !== child) {
