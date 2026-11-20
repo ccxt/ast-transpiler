@@ -36135,7 +36135,7 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
     const scope = goTranspiler.goEnclosingFunction(declaration);
     if ((call !== undefined) && (scope !== undefined) && ral84g6OmitArgIsMap(goTranspiler, call.arguments[0])
         && !goTranspiler.goTypeNameIsShadowed(scope, GO_SAFE_DICT_LOCAL_TYPE)
-        && !ral84g6NameBacksIn(goTranspiler, scope, declaration.name.text) && ral84g6HasNativeUse(goTranspiler, scope, declaration)) {
+        && !ral84g6NameBacksIn(goTranspiler, scope, declaration.name.text) && (ral84g6HasNativeUse(goTranspiler, scope, declaration) || h25s01OmitLocalOnlyHandedOn(goTranspiler, scope, declaration))) {
         const name = declaration.name.text;
         // uses resolved through the checker: a same-named local of a sibling block is another declaration
         const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
@@ -36176,6 +36176,21 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
     }
     ral84g6OmitVerdicts.set(declaration, verdict);
     return verdict;
+}
+// the omit result of a proven map is only handed on as a call argument (extend, a safe reader, a params
+// position): the Go map it already holds is the declared type, so the local is `map[string]any` too
+function h25s01OmitLocalOnlyHandedOn(goTranspiler: GoTranspiler, scope, declaration): boolean {
+    let uses = 0;
+    const other = goTranspiler.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+            || (ccxtGoParamDeclarationOf(goTranspiler, n) !== declaration)) {
+            return false;
+        }
+        uses++;
+        const parent = n.parent;
+        return !((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && parent.arguments.includes(n));
+    });
+    return !other && (uses > 0);
 }
 // 87g6 (A): `[ v, x ] = this.handleOptionBoolAndParams (.., <literal>)` (and the other hand-written pair twins the
 // tuple-result join prints as `v, x = this.HandleX(..)`): slot 1 is the twin's `map[string]any`, written with no
