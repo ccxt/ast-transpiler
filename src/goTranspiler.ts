@@ -17844,12 +17844,54 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (nilTest || ((rebinds.size > 0) && this.goAfterNilGuardFill(node, rebinds)) || this.goAfterNilExitGuard(node, name)) {
             return true; // `x == nil` answers the same for a nil map and for the nil box
         }
+        if ((parent.kind === SyntaxKind.CallExpression) && this.goMapArgCalleeTakesNilMap(parent, node, 0)) {
+            return true;
+        }
         if ((parent.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node)) {
             const callee: any = parent.expression;
             return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
                 && /^safe[A-Z]/.test(callee.name?.text ?? '');
         }
         return ws && (parent.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node) && !this.isGoElementAccessAssignmentTarget(parent);
+    }
+
+    // a maybe-nil map handed to a required parameter of a statically resolved `this.m (..)`: the parameter prints
+    // map[string]any, or the body never writes or nil-tests it and only hands it to safe* readers (which read a
+    // nil map inside `any` as absent) or again to such a parameter
+    goMapArgCalleeTakesNilMap(call, arg, depth: number): boolean {
+        const callee: any = call.expression;
+        const index = call.arguments.indexOf(arg);
+        if ((index < 0) || (depth > 3) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const param: any = this.goCallParamAt(call, index);
+        const fn: any = param?.parent;
+        if ((param === undefined) || (param.initializer !== undefined) || (param.questionToken !== undefined) || (fn?.body === undefined)) {
+            return false;
+        }
+        if (this.goNativeParameterType(param) === 'map[string]any') {
+            return true;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const own = checker?.getSymbolAtLocation(param.name);
+        if (own === undefined) {
+            return false;
+        }
+        return this.goDescendantsOf(fn.body).every((n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== param.name.text)
+                || (((n.parent?.kind === SyntaxKind.PropertyAccessExpression) || (n.parent?.kind === SyntaxKind.PropertyAssignment)) && (n.parent.name === n))) {
+                return true;
+            }
+            if (checker.getSymbolAtLocation(n) !== own) {
+                return true;
+            }
+            const use: any = n.parent;
+            if ((use?.kind !== SyntaxKind.CallExpression) || (use.expression === n) || (use.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+                || (use.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+                return false;
+            }
+            return ((use.arguments[0] === n) && /^safe[A-Z]/.test(use.expression.name?.text ?? '')) || this.goMapArgCalleeTakesNilMap(use, n, depth + 1);
+        });
     }
 
     // every declaration of the name is a block-scoped local and the checker resolves each reference to one of them
