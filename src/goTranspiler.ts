@@ -5530,6 +5530,10 @@ function installCcxtGoTypedTernaryDeclaration (goTranspiler) {
         const ternary = ccxtGoUnwrapParens (declaration?.initializer);
         const lead = printed.length - printed.replace (/^\n+/, '').length;
         const lines = printed.substring (lead).split ('\n');
+        const strPtr = ccxtGoStrPtrTernaryDeclaration (goTranspiler, declaration, ternary, lines[0]);
+        if (strPtr !== undefined) {
+            return printed.substring (0, lead) + strPtr;
+        }
         const head = (lines.length === 6) ? CCXT_GO_TYPED_TERNARY_HEAD.exec (lines[0]) : null;
         if ((ternary?.kind !== ts.SyntaxKind.ConditionalExpression) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
             || (head === null) || (head[3] !== head[4]) || (head[3] === 'any') || (head[3] === 'interface{}')
@@ -5560,6 +5564,45 @@ function installCcxtGoTypedTernaryDeclaration (goTranspiler) {
         return printed.substring (0, lead) + [ indent + 'var ' + name + ' ' + goType, indent + lines[1].substring (body.length),
             body + name + ' = ' + whenTrue, indent + '} else {', body + name + ' = ' + whenFalse, indent + '}' ].join ('\n');
     });
+}
+
+// `const x = c ? 'lit' : p` (unannotated / Str, printed `var x any = func() any {`) with p a `*string` local or call:
+// the box takes the string, the pointee, or an untyped nil when p is nil (as the literal's DerefScalar consumers read it);
+// only the taken arm runs, the pointer arm bound once in its own `if derefPtr := p` clause
+function ccxtGoStrPtrTernaryDeclaration (goTranspiler, declaration, ternary, firstLine: string): string | undefined {
+    const name: any = declaration?.name;
+    const annotation: any = declaration?.type;
+    if ((ternary?.kind !== ts.SyntaxKind.ConditionalExpression) || (name?.kind !== ts.SyntaxKind.Identifier)
+        || ((annotation !== undefined) && !((annotation.kind === ts.SyntaxKind.TypeReference) && (annotation.typeName?.text === 'Str')))) {
+        return undefined;
+    }
+    const target = goTranspiler.printNode (name, 0).trim ();
+    const head = /^([ \t]*)var (\w+) any = func\(\) any \{$/.exec (firstLine);
+    if ((head === null) || (head[2] !== target) || (target === 'derefPtr')) {
+        return undefined;
+    }
+    const armType = (arm) => {
+        const t = goTernaryStrPtrArmType (goTranspiler, arm);
+        const node: any = goTranspiler.goUnwrapParenthesizedNode (arm);
+        return ((t === '*string') && (node?.kind !== ts.SyntaxKind.Identifier) && (node?.kind !== ts.SyntaxKind.CallExpression)) ? undefined : t;
+    };
+    const a = armType (ternary.whenTrue);
+    const b = armType (ternary.whenFalse);
+    if (!(((a === 'string') && (b === '*string')) || ((a === '*string') && (b === 'string')))) {
+        return undefined;
+    }
+    const condition = goTranspiler.goWithExprDepth (1, () => goTranspiler.printCondition (ternary.condition, 0));
+    const value = goTranspiler.goPrintTernaryBranch ((a === 'string') ? ternary.whenTrue : ternary.whenFalse, 1).trim ();
+    const pointer = goTranspiler.goPrintTernaryBranch ((a === 'string') ? ternary.whenFalse : ternary.whenTrue, 1).trim ();
+    const own = new RegExp ('\\b(?:' + target + '|derefPtr)\\b');
+    if ([ condition, value, pointer ].some ((t) => t.includes ('\n') || own.test (t)) || /^func\(/.test (pointer)) {
+        return undefined;
+    }
+    const iden = head[1];
+    const deref = (pad: string) => `if derefPtr := ${pointer}; derefPtr != nil {\n${pad}\t${target} = *derefPtr\n${pad}}`;
+    const top = `${iden}var ${target} any\n${iden}if ${goTranspiler.goStripControlClauseParens (condition)} {\n`;
+    return (a === 'string') ? `${top}${iden}\t${target} = ${value}\n${iden}} else ${deref (iden)}`
+        : `${top}${iden}\t${deref (iden + '\t')}\n${iden}} else {\n${iden}\t${target} = ${value}\n${iden}}`;
 }
 
 // declared TypeScript type of a nil-defaulted parameter -> the Go type of its typed GetArg twin

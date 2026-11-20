@@ -117,6 +117,6 @@ describe ('go *string symbol join read by nil-safe callee slots', () => {
     });
     test ('a non-Str first parameter keeps the box', () => {
         const out = print (WATCH.replace ('getUrlByMarketType (symbol: Str = undefined', 'getUrlByMarketType (symbol: any = undefined'));
-        expect (out).toContain ('var symbolResolved any = func() any {');
+        expect (out).toContain ('var symbolResolved any\n');
     });
 });
