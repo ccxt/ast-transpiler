@@ -42621,3 +42621,73 @@ GoTranspiler.prototype.goNativeArithmetic = function (node, leftText = undefined
     return goNativeArithmeticH20g01.call(this, node, leftText, rightText) ?? this.goH20g01PointerNestedArithmetic(node, leftText, rightText);
 };
 // ===== h20-g01 (end) =====
+
+// ===== h21-g03 =====
+export interface GoTranspiler {
+    goH21g03BodyAppendWrite(node): any;
+    goH21g03BodyTextName(node): string;
+    goH21g03NativeBodyAppend(append): boolean;
+}
+// `b = this.json (..); x += b;` with b a boxed local: Json answers a non-nil Go string, so the
+// write binds it in a typed `<b>Text` local too and the append reads that (b keeps its box)
+GoTranspiler.prototype.goH21g03BodyAppendWrite = function (node): any {
+    const append: any = node?.parent;
+    const statement: any = append?.parent;
+    if ((node?.kind !== SyntaxKind.Identifier) || (append?.kind !== SyntaxKind.BinaryExpression) || (append.right !== node)
+        || (append.operatorToken.kind !== SyntaxKind.PlusEqualsToken) || (append.left?.kind !== SyntaxKind.Identifier) || (append.left.text === node.text)
+        || (statement?.kind !== SyntaxKind.ExpressionStatement) || (statement.parent?.kind !== SyntaxKind.Block)) {
+        return undefined;
+    }
+    const statements = statement.parent.statements;
+    const previous: any = statements[statements.indexOf(statement) - 1];
+    const write: any = previous?.expression;
+    const call: any = write?.right;
+    if ((previous?.kind !== SyntaxKind.ExpressionStatement) || (write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken.kind !== SyntaxKind.EqualsToken)
+        || (write.left?.kind !== SyntaxKind.Identifier) || (write.left.text !== node.text) || (call?.kind !== SyntaxKind.CallExpression)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'json') || (call.arguments.length !== 1)) {
+        return undefined;
+    }
+    const checker = this.checkerOrUndefined();
+    const symbol = checker?.getSymbolAtLocation(node);
+    if ((symbol === undefined) || (checker.getSymbolAtLocation(write.left) !== symbol) || (this.goDeclaredTypeOfIdentifier(node) !== undefined)) {
+        return undefined;
+    }
+    const name = this.goH21g03BodyTextName(node);
+    const fn = this.goEnclosingFunction(node);
+    return this.hasNodeWhere(fn, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)) ? undefined : previous;
+};
+GoTranspiler.prototype.goH21g03BodyTextName = function (node): string {
+    return node.text + 'Text';
+};
+const h21g03ShippedOperandStaticType = GoTranspiler.prototype.goOperandStaticType;
+GoTranspiler.prototype.goOperandStaticType = function (node, printedText: string) {
+    return (this.goH21g03BodyAppendWrite(node) !== undefined) ? 'string' : h21g03ShippedOperandStaticType.call(this, node, printedText);
+};
+// the append prints native only onto a Go string accumulator; otherwise nothing is bound
+GoTranspiler.prototype.goH21g03NativeBodyAppend = function (append): boolean {
+    return (this.goH21g03BodyAppendWrite(append?.right) !== undefined)
+        && (h21g03ShippedOperandStaticType.call(this, append.left, this.printNode(append.left, 0)) === 'string');
+};
+const h21g03ShippedNativeCompoundAssignment = GoTranspiler.prototype.goNativeCompoundAssignment;
+GoTranspiler.prototype.goNativeCompoundAssignment = function (op, leftNode, leftText: string, rightNode, rightText: string) {
+    if ((op === SyntaxKind.PlusEqualsToken) && this.goH21g03NativeBodyAppend(rightNode?.parent)) {
+        return `${leftText.trim()} += ${this.goH21g03BodyTextName(rightNode)}`;
+    }
+    return h21g03ShippedNativeCompoundAssignment.call(this, op, leftNode, leftText, rightNode, rightText);
+};
+const h21g03ShippedExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const statements: any = (node?.parent?.kind === SyntaxKind.Block) ? node.parent.statements : undefined;
+    const next: any = statements?.[statements.indexOf(node) + 1]?.expression;
+    if ((next?.kind === SyntaxKind.BinaryExpression) && (this.goH21g03BodyAppendWrite(next.right) === node) && this.goH21g03NativeBodyAppend(next)) {
+        const write: any = node.expression;
+        const value = this.printNode(write.right, 0).trim();
+        const target = this.printNode(write.left, 0).trim();
+        const name = this.goH21g03BodyTextName(next.right);
+        const iden = this.getIden(identation);
+        return this.printNodeCommentsIfAny(node, identation, `${iden}var ${name} string = ${value}\n${iden}${target} = ${name}${this.LINE_TERMINATOR}`);
+    }
+    return h21g03ShippedExpressionStatement.call(this, node, identation);
+};
+// ===== h21-g03 (end) =====
