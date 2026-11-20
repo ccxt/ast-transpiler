@@ -4891,7 +4891,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
         // a Safe* accessor may answer absent: the local is not proven present after it
         writeProvesPresent: (right) => {
             // a safeDict with a never-nil `{}` default answers a map on every path
-            const neverNil = goTranspiler.goNeverNilDict (right, goTranspiler.goSourceTreeKind (right) === 'ws');
+            const neverNil = goTranspiler.goNeverNilDict (right, goTranspiler.goSourceTreeKind (right) === 'ws') || h24n04NeverNilListWrite (declaration, right);
             const mayBeAbsent = (!neverNil && /^this\.Safe(?:Dict|List)2?$/.test (ccxtGoWriteSiteCallee (goTranspiler, right) ?? '')) || isNilLiteralExpression (right);
             state.copies = state.copies || mayBeAbsent;
             return !mayBeAbsent;
@@ -4919,6 +4919,33 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
         return undefined;
     }
     return state.goType;
+}
+
+// a local ts declares a list (`List`, `NullableList`, `T[]`), written from `this.safeList (c, k, [])`: SafeList hands back
+// the member list or the `[]any{}` default, never nil, so later reads see a present list
+function h24n04NeverNilListWrite (declaration, right) {
+    return h24n04DeclaredList (declaration?.type) && h24n04EmptyDefaultSafeList (right);
+}
+
+function h24n04DeclaredList (type) {
+    if (type?.kind === ts.SyntaxKind.ArrayType) {
+        return true;
+    }
+    if (type?.kind === ts.SyntaxKind.UnionType) {
+        return type.types.some ((t) => h24n04DeclaredList (t))
+            && type.types.every ((t) => h24n04DeclaredList (t) || (t.kind === ts.SyntaxKind.UndefinedKeyword) || (t.kind === ts.SyntaxKind.LiteralType));
+    }
+    return (type?.kind === ts.SyntaxKind.TypeReference) && [ 'List', 'NullableList' ].includes (type.typeName?.text);
+}
+
+function h24n04EmptyDefaultSafeList (right) {
+    const callee = right?.expression;
+    const name = callee?.name?.text;
+    const arity = (name === 'safeList') ? 3 : ((name === 'safeList2') ? 4 : 0);
+    const fallback = right?.arguments?.[arity - 1];
+    return (right?.kind === ts.SyntaxKind.CallExpression) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === ts.SyntaxKind.ThisKeyword) && (arity > 0) && (right.arguments.length === arity)
+        && (fallback?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0);
 }
 
 // a nil write of a seeded copy: the local is nil again (never proven present), so element writes refuse
