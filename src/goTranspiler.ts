@@ -1873,7 +1873,7 @@ function installCcxtGoDeclarationUnbox (goTranspiler) {
     goTranspiler.printVariableDeclarationList = function (node, identation) {
         const printed = upstream.call (this, node, identation);
         const unboxed = CCXT_GO_UNBOX_DECLARATIONS.reduce ((text, [ pattern, goType ]) => ccxtGoUnboxDeclaration (text, pattern, goType), printed);
-        return ccxtGoGuardedAddChainDeclaration (this, node, ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (unboxed)));
+        return ccxtGoGuardedAddChainDerefDeclaration (this, node, ccxtGoGuardedAddChainDeclaration (this, node, ccxtGoWrapAddChainDeclaration (ccxtGoWrapUrlsDeclaration (unboxed))));
     };
 }
 
@@ -1927,6 +1927,37 @@ function ccxtGoGuardedAddChainDeclaration (goTranspiler, node, printed) {
     const lead = match[1].substring (0, match[1].length - indent.length);
     const pointer = goTranspiler.printNode (pointers[0], 0);
     return lead + indent + 'var ' + name + ' *string = nil\n' + indent + 'if ' + pointer + ' != nil {\n'
+        + indent + '\t' + name + 'Value := ' + texts.join (' + ') + '\n' + indent + '\t' + name + ' = &' + name + 'Value\n' + indent + '}';
+}
+
+// the declaration form whose `*string` leaves are derefable (proven non-nil) except ONE unguarded identifier
+// (it may repeat): Add answers nil exactly when that pointer is nil, so one nil test
+function ccxtGoGuardedAddChainDerefDeclaration (goTranspiler, node, printed) {
+    const declarations = node?.declarations ?? [];
+    const declaration = declarations[0];
+    const match = (typeof printed === 'string') ? /^(\s*)var ([A-Za-z0-9_]+) \*string = (?:ccxt\.)?SafeStringPtr\((?:ccxt\.)?Add\(/.exec (printed) : null;
+    if ((match === null) || (declarations.length !== 1) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
+        || (match[2] !== goTranspiler.printNode (declaration.name, 0)) || printed.trim ().includes ('\n')
+        || ccxtGoScopeNamesIdentifier (goTranspiler.goEnclosingFunction?.(declaration), declaration.name.text + 'Value')) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (declaration.initializer, []);
+    const pointer = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string');
+    const derefable = (leaf) => pointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const guarded = leaves.filter ((leaf) => pointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    const names = new Set (guarded.map ((leaf) => leaf.text));
+    if ((leaves.length < 2) || (names.size !== 1)
+        || !leaves.every ((leaf) => guarded.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return printed;
+    }
+    const texts = leaves.map ((leaf) => ((guarded.includes (leaf) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    if (texts.some ((text) => text.includes ('\n'))) {
+        return printed;
+    }
+    const [ indent, name ] = [ match[1].replace (/^\n+/, ''), match[2] ];
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const test = goTranspiler.printNode (guarded[0], 0) + ' != nil';
+    return lead + indent + 'var ' + name + ' *string = nil\n' + indent + 'if ' + test + ' {\n'
         + indent + '\t' + name + 'Value := ' + texts.join (' + ') + '\n' + indent + '\t' + name + ' = &' + name + 'Value\n' + indent + '}';
 }
 
