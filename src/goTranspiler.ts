@@ -23044,7 +23044,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (expr === undefined) {
             return true; // `var x any` never written holds nil
         }
-        if (this.goNonPointerAccessorSource(expr)) {
+        if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr)) {
             return true;
         }
         switch (expr.kind) {
@@ -44376,3 +44376,22 @@ GoTranspiler.prototype.h25g12GuardedCacheLocal = function (declaration) {
     return false;
 };
 // ===== h25-g12 (end) =====
+
+// ===== h25-g16 =====
+// base safeDict/safeList(2/N) with no default or a literal one: the Go body returns a value that passed
+// IsDictionary/IsArray (both derefScalar first, so never a typed nil) or GetArg's default, never a nil *T
+const H25G16_BASE_CONTAINER_KEYS: { [name: string]: number } = { 'safeDict': 2, 'safeList': 2, 'safeDict2': 3, 'safeList2': 3, 'safeDictN': 2, 'safeListN': 2 };
+function h25g16BaseContainerSource(goTranspiler, expr): boolean {
+    const callee: any = (expr?.kind === SyntaxKind.CallExpression) ? expr.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const keys = H25G16_BASE_CONTAINER_KEYS[callee.name.text];
+    if ((keys === undefined) || (expr.arguments.length < keys) || (expr.arguments.length > keys + 1)
+        || ((expr.arguments.length === keys + 1) && !goTranspiler.goLiteralDefaultArg(expr.arguments[keys]))) {
+        return false;
+    }
+    return goTranspiler.goIsBaseExchangeMethod(callee.name);
+}
+// ===== h25-g16 (end) =====
