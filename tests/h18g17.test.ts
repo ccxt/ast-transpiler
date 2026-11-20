@@ -72,6 +72,6 @@ describe ('go Add-chain declaration with one unguarded *string leaf keeps the ni
     });
 
     test ('negative: two nilable leaves keep the helper', () => {
-        expect (print ()).not.toContain ('hashCValue');
+        expect (print ()).toMatch (/if a != nil && b != nil \{\n\s*hashCValue := \*a \+ ":" \+ \*b/);
     });
 });

@@ -75,7 +75,7 @@ describe ('go *string declaration from a concat of derefable and unguarded *stri
         expect (b).not.toMatch (/Add\(/);
     });
     test ('negative: two distinct unguarded leaves keep the helper', () => {
-        expect (body ('two')).toMatch (/Add\(/);
+        expect (body ('two')).toMatch (/if a != nil && b != nil \{\n\s*hValue := "x:" \+ \*a \+ ":" \+ \*b/);
     });
     test ('negative: an any leaf keeps the helper', () => {
         expect (body ('anyLeaf')).toMatch (/Add\(/);

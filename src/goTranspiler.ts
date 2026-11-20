@@ -1946,7 +1946,7 @@ function ccxtGoGuardedAddChainDerefDeclaration (goTranspiler, node, printed) {
     const derefable = (leaf) => pointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
     const guarded = leaves.filter ((leaf) => pointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
     const names = new Set (guarded.map ((leaf) => leaf.text));
-    if ((leaves.length < 2) || (names.size !== 1)
+    if ((leaves.length < 2) || (names.size < 1) || ((names.size > 1) && !ccxtGoDerefDeclarationPointersOk (goTranspiler, declaration, guarded))
         || !leaves.every ((leaf) => guarded.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
         return printed;
     }
@@ -1956,7 +1956,7 @@ function ccxtGoGuardedAddChainDerefDeclaration (goTranspiler, node, printed) {
     }
     const [ indent, name ] = [ match[1].replace (/^\n+/, ''), match[2] ];
     const lead = match[1].substring (0, match[1].length - indent.length);
-    const test = goTranspiler.printNode (guarded[0], 0) + ' != nil';
+    const test = ccxtGoDerefDeclarationNilTest (goTranspiler, guarded);
     return lead + indent + 'var ' + name + ' *string = nil\n' + indent + 'if ' + test + ' {\n'
         + indent + '\t' + name + 'Value := ' + texts.join (' + ') + '\n' + indent + '\t' + name + ' = &' + name + 'Value\n' + indent + '}';
 }
@@ -45077,3 +45077,22 @@ function installH26g12AddChainCallArgument (goTranspiler) {
     };
 }
 // ===== h26-G12 (end) =====
+
+// ===== h26-H26-G13
+// two or more distinct unguarded `*string` leaves: Add answers nil when ANY is nil, so one combined nil test
+function ccxtGoDerefDeclarationNilTest (goTranspiler, guarded) {
+    const seen = [];
+    for (const leaf of guarded) {
+        const text = goTranspiler.printNode (leaf, 0);
+        if (!seen.includes (text)) {
+            seen.push (text);
+        }
+    }
+    return seen.map ((text) => text + ' != nil').join (' && ');
+}
+
+// the combined form is taken only for plain identifiers that are not the declared target itself
+function ccxtGoDerefDeclarationPointersOk (goTranspiler, declaration, guarded) {
+    return guarded.every ((leaf) => (leaf.text !== declaration.name.text) && /^[A-Za-z_][A-Za-z0-9_]*$/.test (goTranspiler.printNode (leaf, 0)));
+}
+// ===== end h26-H26-G13
