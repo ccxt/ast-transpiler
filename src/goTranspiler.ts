@@ -45301,3 +45301,63 @@ GoTranspiler.prototype.h26g21IsWritten = function (scope, declaration): boolean 
             && ((n.operator === SyntaxKind.PlusPlusToken) || (n.operator === SyntaxKind.MinusMinusToken)) && isTarget(n.operand)));
 };
 // ===== h26-H26-G21 (end) =====
+// ===== h26-G22: `const x = isArray (r) ? r : []` prints a typed []any if/else =====
+// Both arms are never-nil lists: r through ArrayTyped (IsArray holds), the other the empty literal; the
+// declaration is unannotated or `Dict[]`/`any[]`, and the use scan still has to accept []any.
+function h26g22EmptyListTernary (go, declaration): any {
+    const ternary: any = ccxtGoUnwrapParens(declaration?.initializer);
+    const declared = String(declaration?.type?.getText() ?? '');
+    return ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && ((declaration.parent?.flags ?? 0) & NodeFlags.Const) && ((declared === '') || (declared === 'Dict[]') || (declared === 'any[]'))
+        && (ternary?.kind === SyntaxKind.ConditionalExpression) && ccxtGoArrayLiteralIsEmpty(ccxtGoUnwrapParens(ternary.whenFalse))
+        && (h23x04ListArm(go, ternary) !== undefined)) ? ternary : undefined;
+}
+const h26g22ShippedGetGoLocalType = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    const shipped = h26g22ShippedGetGoLocalType.call(this, declaration, parsedValue);
+    if ((shipped !== 'any') || (h26g22EmptyListTernary(this, declaration) === undefined)) {
+        return shipped;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    return (!h26g22ElementPushed(scope, declaration.name.text) && this.goLocalIsSafeToType(scope, declaration, declaration.name.text, GO_SAFE_LIST_LOCAL_TYPE))
+        ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+};
+// an element pushed into another list would print DerefScalar(x[i]) (no pointer-free proof for a response)
+function h26g22ElementPushed (scope, name: string): boolean {
+    let pushed = false;
+    const visit = (n) => {
+        if ((n.kind === SyntaxKind.ElementAccessExpression) && (ccxtGoUnwrapParens(n.expression)?.text === name)
+            && (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression?.name?.text === 'push')) {
+            pushed = true;
+        }
+        if (!pushed) {
+            n.forEachChild(visit);
+        }
+    };
+    if (scope !== undefined) {
+        scope.forEachChild(visit);
+    }
+    return pushed;
+}
+const h26g22ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration: any = node?.declarations?.[0];
+    const ternary: any = (node?.declarations?.length === 1) ? h26g22EmptyListTernary(this, declaration) : undefined;
+    if ((ternary === undefined) || (this.goDeclaredTypeOfIdentifier(declaration.name) !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return h26g22ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const arm = h23x04ListArm(this, ternary);
+    const armText = this.printNode(arm, 0).trim();
+    const listValue = (this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) ? armText : `ArrayTyped(${armText})`;
+    const name = this.printNode(declaration.name, 0).trim();
+    const printed = this.goTernaryStatementIfElse(name, ternary, identation);
+    if (printed === undefined) {
+        return h26g22ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const lines = printed.split('\n');
+    const iden = this.getIden(identation);
+    lines[1] = `${iden}\t${name} = ${listValue}`;
+    lines[3] = `${iden}\t${name} = []any{}`;
+    return `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n` + lines.join('\n');
+};
+// ===== h26-G22 (end) =====
