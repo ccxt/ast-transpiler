@@ -15192,6 +15192,31 @@ const GO_ANY_FRAMED_VENUES = new Set([ 'bitfinex', 'toobit', 'coincheck', 'sxbet
 // base accessors/builders whose generated Go result is already the market dictionary
 const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Extend', 'DeepExtend', 'MapTyped', 'MarketTyped' ];
 
+// Go struct fields of the typed market / currency rows (go/v4/exchange_types.go): ts key -> [Go field, Go type],
+// or a value struct's { go, fields }. `info`, pointer structs and non-map collections are left out.
+const GO_ROW_MINMAX = { 'min': [ 'Min', '*float64' ], 'max': [ 'Max', '*float64' ] };
+const GO_TYPED_ROW_FIELDS: { [tsType: string]: any } = {
+    'MarketInterface': {
+        ...Object.fromEntries([ 'market', 'marketType', 'executionModel', 'collateral', 'resolvedOutcome', 'id', 'uppercaseId', 'lowercaseId', 'symbol',
+            'baseId', 'quoteId', 'type', 'settle', 'settleId', 'expiryDatetime', 'optionType', 'baseName', 'id2', 'subType', 'feeSide' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*string' ] ])),
+        'base': [ 'BaseCurrency', '*string' ], 'quote': [ 'QuoteCurrency', '*string' ],
+        ...Object.fromEntries([ 'spot', 'swap', 'future', 'option', 'contract' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), 'bool' ] ])),
+        ...Object.fromEntries([ 'resolved', 'active', 'margin', 'index', 'stock', 'linear', 'inverse', 'quanto', 'prediction', 'percentage', 'tierBased' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*bool' ] ])),
+        ...Object.fromEntries([ 'contractSize', 'strike', 'taker', 'maker', 'numericId' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*float64' ] ])),
+        ...Object.fromEntries([ 'expiry', 'created', 'instIdCode' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*int64' ] ])),
+        'tiers': [ 'Tiers', 'map[string]any' ],
+        'precision': { 'go': 'Precision', 'fields': Object.fromEntries([ 'amount', 'price', 'cost', 'base', 'quote' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*float64' ] ])) },
+        'limits': { 'go': 'Limits', 'fields': Object.fromEntries([ 'amount', 'cost', 'leverage', 'price' ].map((k) => [ k, { 'go': k[0].toUpperCase() + k.slice(1), 'fields': GO_ROW_MINMAX } ])) },
+    },
+    'CurrencyInterface': {
+        ...Object.fromEntries([ 'id', 'code', 'name', 'type' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*string' ] ])),
+        'precision': [ 'Precision', '*float64' ], 'fee': [ 'Fee', '*float64' ], 'numericId': [ 'NumericId', '*int64' ], 'valueScale': [ 'ValueScale', '*int64' ],
+        ...Object.fromEntries([ 'active', 'deposit', 'withdraw', 'margin' ].map((k) => [ k, [ k[0].toUpperCase() + k.slice(1), '*bool' ] ])),
+        'fees': [ 'Fees', 'map[string]any' ],
+        'limits': { 'go': 'Limits', 'fields': { 'amount': { 'go': 'Amount', 'fields': GO_ROW_MINMAX }, 'withdraw': { 'go': 'Withdraw', 'fields': GO_ROW_MINMAX } } },
+    },
+};
+
 // Base producers declared as an OVERLOAD PAIR (two signatures + the implementation). At a venue
 // call site the body proof cannot resolve the body-carrying declaration of an overloaded name, so
 // every caller boxed the row and wrapped it in MapTyped; the base-file print proves the body and
@@ -16479,7 +16504,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         case SyntaxKind.ElementAccessExpression:
         {
-            const element = this.goLoopBoundedStringElementType(initializer, printedValue);
+            const element = this.goTypedRowFieldRead(initializer)?.goType ?? this.goLoopBoundedStringElementType(initializer, printedValue);
             if (element !== undefined) {
                 return element;
             }
@@ -18625,6 +18650,78 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return type.getTypes().some((t) => isMarketInterface(t));
         }
         return false;
+    }
+
+    // a string-literal read on a checker-typed MarketInterface / CurrencyInterface row is the Go struct field
+    // (`market.Symbol`, `market.Precision.Price`) once rows are stored as structs; switched on by the embedder's
+    // nativeStoreFields 'markets' row. Pointer fields fire only where the consumer keeps the nil answer.
+    goTypedRowFieldRead(node): { text: string, goType: string } | undefined {
+        if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (node?.kind !== SyntaxKind.ElementAccessExpression)
+            || this.isGoElementAccessAssignmentTarget(node) || (node.parent?.kind === SyntaxKind.ElementAccessExpression && node.parent.expression === node)) {
+            return undefined;
+        }
+        const keys: string[] = [];
+        let base: any = node;
+        while (base?.kind === SyntaxKind.ElementAccessExpression) {
+            const key = base.argumentExpression;
+            if ((key?.kind !== SyntaxKind.StringLiteral) && (key?.kind !== SyntaxKind.NoSubstitutionTemplateLiteral)) {
+                return undefined;
+            }
+            keys.unshift(key.text);
+            base = this.goUnwrapParenthesizedNode(base.expression);
+        }
+        const table = (base?.kind === SyntaxKind.Identifier) ? this.goTypedRowTable(base, keys[0]) : undefined;
+        let entry: any = table;
+        const goPath: string[] = [];
+        for (const key of keys) {
+            entry = ((typeof entry === 'object') && Object.prototype.hasOwnProperty.call(entry, key)) ? entry[key] : undefined;
+            if (entry === undefined) {
+                return undefined;
+            }
+            goPath.push(Array.isArray(entry) ? entry[0] : entry.go);
+            entry = Array.isArray(entry) ? entry : entry.fields;
+        }
+        if (!Array.isArray(entry)) {
+            return undefined; // a nested struct itself is not a map value
+        }
+        return this.goTypedRowFieldText(node, `${base.text}.${goPath.join('.')}`, entry[1]);
+    }
+
+    // the field table of the row's checker type, after the ts declaration proves the first key is its member
+    goTypedRowTable(base, firstKey: string): any {
+        const checker: any = this.checkerOrUndefined();
+        const located: any = checker?.getTypeAtLocation(base);
+        const type: any = (located !== undefined) ? checker.getNonNullableType(located) : undefined;
+        const name = type?.getAliasSymbol()?.name ?? type?.getSymbol()?.name;
+        const table = GO_TYPED_ROW_FIELDS[name];
+        return ((table !== undefined) && (checker.getPropertyOfType(type, firstKey) !== undefined)) ? table : undefined;
+    }
+
+    // value fields read anywhere; a pointer field only initialises a local of its type, is nil-tested, or (for
+    // *bool) is a truth test printed nil-guarded; else it stays a map read
+    goTypedRowFieldText(node, text: string, goType: string): { text: string, goType: string } | undefined {
+        if (!goType.startsWith('*')) {
+            return { text, goType };
+        }
+        let outer: any = node;
+        while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            outer = outer.parent;
+        }
+        const parent: any = outer.parent;
+        const op = (parent?.kind === SyntaxKind.BinaryExpression) ? parent.operatorToken.kind : undefined;
+        const truthTest = ((parent?.kind === SyntaxKind.IfStatement) && (parent.expression === outer))
+            || ((parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator === SyntaxKind.ExclamationToken))
+            || ((parent?.kind === SyntaxKind.ConditionalExpression) && (parent.condition === outer))
+            || (op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken);
+        if (truthTest) {
+            return (goType === '*bool') ? { text: `(${text} != nil && *${text})`, goType: 'bool' } : undefined;
+        }
+        const declared = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === outer);
+        // only against nil: a native `==` on a pointer would compare addresses or not compile against a value
+        const other: any = (op !== undefined) ? this.goUnwrapParenthesizedNode((parent.left === outer) ? parent.right : parent.left) : undefined;
+        const nilOperand = (other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'));
+        const compared = nilOperand && ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken));
+        return (declared || compared) ? { text, goType } : undefined;
     }
 
     // The `Market`-returning producers print `any` because their TS type names no Go type, so callers
@@ -32596,7 +32693,7 @@ ${tryBodyBlock}
     }
 
     printElementAccessExpression(node, identation) {
-        const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node)]);
+        const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node), () => this.goTypedRowFieldRead(node)?.text]);
         if (cacheText !== undefined) {
             return cacheText;
         }
