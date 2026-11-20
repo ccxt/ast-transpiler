@@ -41030,6 +41030,7 @@ export interface GoTranspiler {
     goTernaryStatementArms(ternary): string | undefined;
     goTernaryStatementIfElse(target: string, ternary, identation: number): string | undefined;
     goTernaryStatementNilSeededBox(decl, declared: string | undefined, armType: string | undefined): boolean;
+    goTernaryStatementStrPtrArm(left, ternary, identation: number): string | undefined;
 }
 
 GoTranspiler.prototype.goTernaryStatementArms = function (ternary) {
@@ -41066,6 +41067,52 @@ GoTranspiler.prototype.goTernaryStatementNilSeededBox = function (decl, declared
     return (declared === undefined) && (armType === 'string') && untyped && this.goNilInitInitializer(decl.initializer);
 };
 
+// the same nil-seeded box with one string arm and one `*string` local arm: the pointer arm stores its pointee, or an
+// untyped nil when the pointer is nil (consumers deref the box: IsEqual, dict values); only the taken arm runs
+// an identifier arm declared `*string`, or slot 0 of a `p, q := pair (..)` binding with a `*string` slot 0
+function goTernaryStrPtrArmType (goTranspiler, node): string | undefined {
+    const arm: any = goTranspiler.goUnwrapParenthesizedNode(node);
+    if (arm?.kind !== SyntaxKind.Identifier) {
+        return goTranspiler.goTernaryJoinArmType(node);
+    }
+    if (goTranspiler.goDeclaredTypeOfIdentifier(arm) === '*string') {
+        return '*string';
+    }
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(arm)?.valueDeclaration?.resolve?.();
+    const pattern: any = (decl?.kind === SyntaxKind.BindingElement) ? decl.parent : undefined;
+    const call: any = pattern?.parent?.initializer;
+    if ((pattern?.elements?.length !== 2) || (pattern.elements[0] !== decl) || !pattern.elements.every((e) => e.name?.kind === SyntaxKind.Identifier)
+        || (ccxtGoPairSlot0(goTranspiler, call) !== '*string')) {
+        return goTranspiler.goTernaryJoinArmType(node);
+    }
+    const names = pattern.elements.map((e) => e.name.text).join(', ');
+    const printed = goTranspiler.printNode(pattern.parent.parent, 0) ?? '';
+    return new RegExp('^\\s*' + names + ' := ').test(printed) ? '*string' : goTranspiler.goTernaryJoinArmType(node);
+}
+GoTranspiler.prototype.goTernaryStatementStrPtrArm = function (left, ternary, identation: number): string | undefined {
+    const decl: any = (left?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve() : undefined;
+    const a = goTernaryStrPtrArmType(this, ternary.whenTrue);
+    const b = goTernaryStrPtrArmType(this, ternary.whenFalse);
+    const ptrNode: any = this.goUnwrapParenthesizedNode((a === '*string') ? ternary.whenTrue : ternary.whenFalse);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || !(((a === 'string') && (b === '*string')) || ((a === '*string') && (b === 'string')))
+        || (ptrNode?.kind !== SyntaxKind.Identifier)
+        || !this.goTernaryStatementNilSeededBox(decl, this.goDeclaredTypeOfIdentifier(left), 'string')) {
+        return undefined;
+    }
+    const target = this.printNode(left, 0).trim();
+    const pointer = this.printNode(ptrNode, 0).trim();
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const value = this.goPrintTernaryBranch((a === 'string') ? ternary.whenTrue : ternary.whenFalse, 1).trim();
+    if ([ condition, value ].some((t) => t.includes('\n')) || (target === pointer) || (target === 'derefPtr')) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const deref = (pad: string) => `if derefPtr := ${pointer}; derefPtr != nil {\n${pad}\t${target} = *derefPtr\n${pad}} else {\n${pad}\t${target} = nil\n${pad}}`;
+    const head = `${iden}if ${this.goStripControlClauseParens(condition)} {\n`;
+    return (a === 'string') ? `${head}${iden}\t${target} = ${value}\n${iden}} else ${deref(iden)}`
+        : `${head}${iden}\t${deref(iden + '\t')}\n${iden}} else {\n${iden}\t${target} = ${value}\n${iden}}`;
+};
+
 const h15x1UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
 GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     const write: any = node?.expression;
@@ -41076,6 +41123,10 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     }
     const left: any = write.left;
     const armType = this.goTernaryStatementArms(ternary);
+    const strPtrArm = (armType === undefined) ? this.goTernaryStatementStrPtrArm(left, ternary, identation) : undefined;
+    if (strPtrArm !== undefined) {
+        return this.printNodeCommentsIfAny(node, identation, strPtrArm);
+    }
     let target: string | undefined = undefined;
     if ((armType !== undefined) && (left.kind === SyntaxKind.Identifier)) {
         const declared = this.goDeclaredTypeOfIdentifier(left);
