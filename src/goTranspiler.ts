@@ -1092,7 +1092,7 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // undefined on every path; the hand-written Go twins and interface lines are *string too
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
     'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
-    'CommonCurrencyCode', 'MarketId', 'OmitZero' ];
+    'CommonCurrencyCode', 'MarketId', 'GetBaseDomainFromUrl', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -6777,7 +6777,7 @@ function ccxtGoAsyncScalarReceive (goTranspiler, awaitNode, call) {
     }
     const m = /^Promise<\s*(\w+)\s*>$/.exec ((text ?? '').trim ());
     const scalar = (m === null) ? undefined : CCXT_GO_ASYNC_SCALAR_TYPES[m[1]];
-    const read = (m !== null) && (m[1] === 'int') ? h17g08NonNilIntSumRead : ccxtGoAsyncScalarRead;
+    const read = (m !== null) && (m[1] === 'int') ? h17g08NonNilIntSumRead : ((m !== null) && (m[1] === 'string') ? h20g05NonNilStringRead : ccxtGoAsyncScalarRead);
     if ((scalar === undefined) || (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, scalar[0], read) === undefined)) {
         return undefined;
     }
@@ -42440,3 +42440,63 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
     const call = ral84g6OmitCall (initializer);
     return ((call !== undefined) && (ccxtGoParamDeclarationOf (this, call.arguments[0]) === proving)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
 };
+
+// ===== h20-g05 (begin): awaited / ternary-built *string consts =====
+// `const x = await this.f ()` / `const x = c ? a : b` declared `var x *string` by a later rule (the
+// await-receive unbox, the ternary lift join): publish that printed type, so the checker-narrowed
+// nil proofs (goNilProvenStringDeref) see it. Only *string, only consts, read from the own print.
+const h20g05Visiting = new Set<object>();
+const h20g05Cache = new WeakMap<object, string | undefined>();
+function h20g05PrintedStrPtrConst (goTranspiler, node): string | undefined {
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const list: any = decl?.parent;
+    let init: any = decl?.initializer;
+    while (init?.kind === SyntaxKind.ParenthesizedExpression) {
+        init = init.expression;
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || (list?.kind !== SyntaxKind.VariableDeclarationList) || ((list.flags & ts.NodeFlags.Const) === 0)
+        || (list.declarations?.length !== 1) || (decl.type !== undefined)
+        || ((init?.kind !== SyntaxKind.AwaitExpression) && (init?.kind !== SyntaxKind.ConditionalExpression))) {
+        return undefined;
+    }
+    if (h20g05Cache.has(decl)) {
+        return h20g05Cache.get(decl);
+    }
+    if (h20g05Visiting.has(decl)) {
+        return undefined;
+    }
+    h20g05Visiting.add(decl);
+    let result: string | undefined;
+    try {
+        // the closure-literal joins compare printed lines against the block indentation: try 1 and 0
+        const name = decl.name.text.replace(/[^\w]/g, '');
+        const head = new RegExp('^\\s*var ' + name + ' \\*string = ', 'm');
+        result = [ 1, 0 ].some((depth) => head.test(String(goTranspiler.printVariableDeclarationList(list, depth) ?? ''))) ? '*string' : undefined;
+    } catch (e) {
+        result = undefined;
+    } finally {
+        h20g05Visiting.delete(decl);
+    }
+    if (h20g05Visiting.size === 0) {
+        h20g05Cache.set(decl, result);
+    }
+    return result;
+}
+// a `Promise<string>` (non-nullable) receive may also be the receiver of `x.toLowerCase ()` /
+// `x.toUpperCase ()`: ToLower/ToUpper deref the pointer exactly as they unwrapped the box
+function h20g05NonNilStringRead (n) {
+    const parent = n.parent;
+    return ccxtGoAsyncScalarRead (n) || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
+        && [ 'toLowerCase', 'toUpperCase' ].includes (parent.name?.text)
+        && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent));
+}
+const goDeclaredTypeOfIdentifierBaseH20g05 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | undefined {
+    const shipped = goDeclaredTypeOfIdentifierBaseH20g05.call(this, node);
+    if ((shipped !== undefined) || (node?.kind !== SyntaxKind.Identifier) || (h20g05Visiting.size > 0)) {
+        return shipped;
+    }
+    return h20g05PrintedStrPtrConst(this, node);
+};
+// ===== h20-g05 (end) =====
