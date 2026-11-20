@@ -16828,7 +16828,22 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!this.goCheckerTypeHasFlags(arg, TypeFlags.NumberLike)) {
             return false;
         }
-        return GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(this.goOperandStaticType(arg, this.printNode(arg, 0)) ?? '') >= 0;
+        const goType = this.goOperandStaticType(arg, this.printNode(arg, 0)) ?? '';
+        return (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(goType) >= 0)
+            || ((arg.kind === SyntaxKind.Identifier) && this.goNarrowedNumberPointerArg(arg, this.goDeclaredTypeOfIdentifier(arg)));
+    }
+
+    // a `*int64` / `*float64` identifier whose declared type admits undefined but which the checker narrowed to
+    // number here (an enclosing `!== undefined` guard): the pointer is non-nil, so NumberToString formats it, never ""
+    goNarrowedNumberPointerArg(arg, goType: string | undefined): boolean {
+        if ((arg?.kind !== SyntaxKind.Identifier) || ((goType !== '*int64') && (goType !== '*float64'))) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const symbol: any = checker?.getSymbolAtLocation(arg);
+        const declared: any = (symbol !== undefined) ? checker.getTypeOfSymbol(symbol) : undefined;
+        const members: any[] = declared?.types ?? [];
+        return ((declared?.flags & TypeFlags.Union) !== 0) && members.some((t) => (t.flags & TypeFlags.Undefined) !== 0);
     }
 
     // the printed text of a `+` operand the concat rule may use: the printer's own
@@ -20306,7 +20321,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const call: any = declaration.initializer;
-        if (!this.goDefaultedSafeStringCallOrTypedDefault(call)) {
+        if (!this.goDefaultedSafeStringCallOrTypedDefault(call) && !this.goNumberToStringOfProvenNumber(call)) {
             return false;
         }
         return !this.goTypeNameIsShadowed(scope, 'string') && this.goLocalIsSafeToType(scope, declaration, name, 'string')
