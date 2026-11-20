@@ -12666,7 +12666,7 @@ function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass) {
         if (!go.goTsSrcFileDerivesFrom (tree, file, myClass)) {
             continue;
         }
-        const code = goMaskTsStrings (text.replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, ''));
+        const code = h26g05BlankShadowLocal (goMaskTsStrings (text.replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, '')), name);
         const refs = (code.match (anyRef) ?? []).length;
         const calls = (code.match (direct) ?? []).length + (code.match (declared) ?? []).length;
         if (refs !== calls) {
@@ -12785,7 +12785,8 @@ function goStringPtrParamProven (go, param) {
         const arg = (site.args[index] ?? '').trim ();
         const fileText = tree.fileText.get (site.file) ?? '';
         if ((arg !== 'undefined') && !go.goTextArgMatchesType (arg, '*string', site.file, tree, site.at)
-            && !go.goSiblingPassesUnifiedString (arg, fileText, site.at) && !goSiblingSoleUseStrParam (arg, fileText, site.at)) {
+            && !go.goSiblingPassesUnifiedString (arg, fileText, site.at) && !goSiblingSoleUseStrParam (arg, fileText, site.at)
+            && !h26g05SiblingStrTupleSlot (arg, fileText, site.at)) {
             return false;
         }
     }
@@ -44799,3 +44800,64 @@ function h26g04NeverNilUse (goTranspiler: GoTranspiler, node): boolean {
     };
 }
 // ===== h26-G04 (end) =====
+
+// ===== h26-G05 =====
+// A file that declares a plain local `const|let <name> =` reuses the method name for a value: its bare
+// (non-member) mentions are that local, never the method (a class method is only reached through a
+// receiver), so they are blanked before the method-reference count. Destructured names stay counted.
+function h26g05BlankShadowLocal (code: string, name: string): string {
+    if (!new RegExp ('\\b(?:const|let)\\s+' + name + '\\s*(?::[^=;\\n]*)?=').test (code)) {
+        return code;
+    }
+    const bare = new RegExp ('(?<!\\.\\s*)(?<![\\w$])' + name + '(?![\\w$])(?!\\s*\\()(?!\\s*:)', 'g');
+    return code.replace (bare, (m) => ' '.repeat (m.length));
+}
+// a sibling-file local whose every write is undefined, a literal, a safeString* read, slot 0 of
+// handleMarketTypeAndParams / handleSubTypeAndParams or such a local prints `*string` (never another
+// type); a literal-only local is left to the plain `string` proof
+const H26G05_STR_PTR_WRITES = /^(?:undefined|'[^'\\]*'|this\s*\.\s*safeString[A-Za-z0-9]*\s*\((?:[^()]|\([^()]*\))*\))$/;
+const H26G05_STR_TUPLE_PRODUCERS = /^this\s*\.\s*(?:handleMarketTypeAndParams|handleSubTypeAndParams)\s*\((?:[^()]|\([^()]*\))*\)(?:\s*\[\s*0\s*\])?$/;
+function h26g05SiblingStrTupleSlot (argText: string, fileText: string, at: number | undefined): boolean {
+    const name = /^([A-Za-z_]\w*)$/.exec ((argText ?? '').trim ())?.[1];
+    if ((name === undefined) || (at === undefined) || goSiblingLiteralStringLocal (argText, fileText, at)) {
+        return false;
+    }
+    const signature = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \([^\n]*\)(?:: [^\n{]*)? \{\n/g;
+    let start = -1;
+    for (let m = signature.exec (fileText); (m !== null) && (m.index < at); m = signature.exec (fileText)) {
+        start = m.index + m[0].length;
+    }
+    const end = fileText.indexOf ('\n    }\n', at);
+    if ((start < 0) || (end < 0) || /\n {4}\}/.test (fileText.substring (start, at))) {
+        return false;
+    }
+    const body = goMaskTsStrings (fileText.substring (start, end).replace (/\/\*[\s\S]*?\*\//g, '').replace (/\/\/.*$/gm, ''));
+    return h26g05StrPtrLocal (body, name, 0);
+}
+function h26g05StrPtrLocal (body: string, name: string, depth: number): boolean {
+    if (depth > 2) {
+        return false;
+    }
+    const writes = [ ...body.matchAll (new RegExp ('(?<![\\w$.])' + name + '(?![\\w$])\\s*(?::[^=;\\n]*)?(=(?!=)|[-+*/]=|\\+\\+|--)\\s*([^;]*);?', 'g')) ];
+    const slots = [ ...body.matchAll (new RegExp ('\\[\\s*' + name + '\\s*,[^\\]=]*\\]\\s*=\\s*([^;]+);', 'g')) ];
+    const elsewhere = [ ...body.matchAll (new RegExp ('(?:(?<![\\w$)\\]])\\[|,)\\s*' + name + '\\s*[,\\]][^;=]*=(?!=)', 'g')) ].length;
+    if ((writes.length + slots.length === 0) || (elsewhere !== slots.length)) {
+        return false; // never written, or written from a non-first tuple slot
+    }
+    for (const w of writes) {
+        const value = w[2].trim ();
+        if (w[1] !== '=') {
+            return false;
+        }
+        const local = /^([A-Za-z_]\w*)$/.exec (value)?.[1];
+        if (!H26G05_STR_PTR_WRITES.test (value) && !H26G05_STR_TUPLE_PRODUCERS.test (value)
+            && ((local === undefined) || (local === 'undefined') || !h26g05StrPtrLocal (body, local, depth + 1))) {
+            return false;
+        }
+        if (H26G05_STR_TUPLE_PRODUCERS.test (value) && !/\[\s*0\s*\]$/.test (value)) {
+            return false; // the whole tuple, not its string slot
+        }
+    }
+    return slots.every ((m) => H26G05_STR_TUPLE_PRODUCERS.test (m[1].trim ()) && !/\[\s*0\s*\]$/.test (m[1].trim ()));
+}
+// ===== h26-G05 (end) =====
