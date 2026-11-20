@@ -72,8 +72,8 @@ describe ('go Add-chain assignment with one unguarded *string leaf keeps the nil
         expect (out).not.toContain ('Add("orders::", sym)');
     });
 
-    test ('negative: two nilable leaves keep Add', () => {
-        expect (out).toMatch (/hashC = Add\(/);
+    test ('two nilable leaves: not the one-pointer form (combined nil test instead)', () => {
+        expect (out).toMatch (/if a != nil && b != nil \{/);
     });
 
     test ('negative: an any leaf keeps Add', () => {

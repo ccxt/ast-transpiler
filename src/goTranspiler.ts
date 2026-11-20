@@ -1971,6 +1971,53 @@ function installCcxtGoGuardedAddChainAssignment (goTranspiler) {
     };
 }
 
+// `x = Add(.., p, .., q, ..)` into an `any` local whose leaves are Go strings (or guarded pointers) plus two or
+// more unguarded `*string` identifiers: Add stores nil when any of them is nil, so one combined nil test
+function ccxtGoGuardedAddChainAssignmentPointers (goTranspiler, node, printed) {
+    const expression = node?.expression;
+    const match = (typeof printed === 'string') ? /^(\s*)([A-Za-z0-9_]+) = ((?:ccxt\.)?Add\([\s\S]*?)(\s*)$/.exec (printed) : null;
+    if ((match === null) || (expression?.kind !== ts.SyntaxKind.BinaryExpression) || (expression.operatorToken?.kind !== ts.SyntaxKind.EqualsToken)
+        || (expression.left?.kind !== ts.SyntaxKind.Identifier) || (match[2] !== goTranspiler.printNode (expression.left, 0))
+        || match[3].includes ('\n') || (ccxtGoWholeAddCallEnd (match[3].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const targetType = goTranspiler.goDeclaredTypeOfIdentifier?.(expression.left);
+    if (((targetType !== undefined) && (targetType !== 'any')) || (ccxtGoWriteSiteLocalGoType (goTranspiler, expression.left) ?? 'any') !== 'any') {
+        return printed;
+    }
+    return ccxtGoGuardedAddChainPointersText (goTranspiler, ccxtGoAddChainLeaves (expression.right, []), match);
+}
+
+function ccxtGoGuardedAddChainPointersText (goTranspiler, leaves, match) {
+    const isPointer = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string');
+    const derefable = (leaf) => isPointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const pointers = leaves.filter ((leaf) => isPointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    const names = [ ...new Set (pointers.map ((leaf) => goTranspiler.printNode (leaf, 0))) ];
+    if ((leaves.length < 3) || (names.length < 2) || pointers.some ((leaf) => goTranspiler.goHasEnclosingNilGuard (leaf) || goTranspiler.goHasExitingNilGuard (leaf))
+        || !leaves.every ((leaf) => pointers.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return match.input;
+    }
+    const texts = leaves.map ((leaf) => ((pointers.includes (leaf) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    if (texts.some ((text) => text.includes ('\n'))) {
+        return match.input;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const name = match[2];
+    return lead + indent + 'if ' + names.map ((n) => n + ' != nil').join (' && ') + ' {\n' + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n'
+        + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
+}
+
+function installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoGuardedAddChainAssignmentPointersInstalled', 'printExpressionStatement')) {
+        return;
+    }
+    const upstream = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return ccxtGoGuardedAddChainAssignmentPointers (this, node, upstream.call (this, node, identation));
+    };
+}
+
 // Types `this.safeDict` / `this.safeList` / `this.safeDict2` / `this.safeList2` locals the printer's
 // own predicate leaves boxed: cast-wrapped initializers, kept defaults, the two-key accessors and
 // the list family's `this.Safe*` reads; nothing that writes or hands out the local is typed.
@@ -7090,6 +7137,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // the arithmetic / currency / sum types need the `.(T)` unbox at the declaration
     installCcxtGoDeclarationUnbox (goTranspiler);
     installCcxtGoGuardedAddChainAssignment (goTranspiler);
+    installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
