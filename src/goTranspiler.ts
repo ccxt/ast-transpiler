@@ -22735,6 +22735,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
                     ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs)
                     ?? this.goOrderBookClearText(baseExpr, containerStr, keys[0], right)
+                    ?? this.h26g28OrderBookFieldWrite(baseExpr, containerStr, keys[0], right, rhs)
                     ?? this.goNonNilMapLocalScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation))
                 : undefined);
             const cacheStore = (keyStrs.length === 1) ? this.goWsCacheStoreText(baseExpr, keys[0], this.goWsCacheValue(baseExpr, right, rhs), node, identation) : undefined;
@@ -45876,3 +45877,83 @@ GoTranspiler.prototype.h26g27RowWrite = function (node, identation) {
     return `if ${r} >= 0 && ${r} < ${bound} {\n${this.getIden(identation + 1)}${list}[${r}][${c}] = ${rhs}\n${this.getIden(identation)}}`;
 };
 // ===== h26-G27 (end) =====
+
+// ===== h26-g28 =====
+export interface GoTranspiler {
+    h26g28OrderBookFieldWrite(baseExpr, containerStr: string, keyNode, valueNode, valueStr: string): string | undefined;
+    h26g28SetterValue(setter: { method: string, value: string, type: string }, valueNode, valueStr: string): string | undefined;
+    h26g28BookDerefBefore(id): boolean;
+}
+// `book.timestamp|nonce|datetime|symbol = v` that goOrderBookSetterText declined: the book is a never-rebound local that
+// already panicked on nil earlier (a side read in every branch of an earlier if/else, or a cache read after an earlier
+// sibling stored a book under that key), or a value of the setter's scalar type / a ternary of setter-typed pointers
+GoTranspiler.prototype.h26g28OrderBookFieldWrite = function (baseExpr, containerStr, keyNode, valueNode, valueStr) {
+    const cfg = this.goOrderBook;
+    if ((cfg?.setters === undefined) || (baseExpr?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.StringLiteral)
+        || !Object.prototype.hasOwnProperty.call(cfg.setters, keyNode.text) || (this.goBookDeclaredType(baseExpr) !== cfg.type)) {
+        return undefined;
+    }
+    const arg = this.h26g28SetterValue(cfg.setters[keyNode.text], valueNode, valueStr);
+    if ((arg === undefined) || (!this.goOrderBookLocalNeverNil(baseExpr) && !this.goOrderBookSideReadFollows(baseExpr) && !this.h26g28BookDerefBefore(baseExpr))) {
+        return undefined;
+    }
+    return `${containerStr}.${cfg.setters[keyNode.text].method}(${arg})`;
+};
+// the setter takes *T and copies the pointee (nil is a no-op, like the helper's typed-nil skip): a whole producer call
+// or a local of type *T passes as is, a local of the plain type T passes by address (the helper stores the same value)
+GoTranspiler.prototype.h26g28SetterValue = function (setter, valueNode, valueStr) {
+    const value = valueStr.trim();
+    const node: any = this.goUnwrapParenthesizedNode(valueNode);
+    const open = value.indexOf('(');
+    if (new RegExp(setter.value).test(value) && (open > 0) && this.isWholePrintedCall(value, open)) {
+        return value;
+    }
+    if (!/^\w+$/.test(value)) {
+        return undefined;
+    }
+    if (node?.kind === SyntaxKind.Identifier) {
+        const t = this.goDeclaredTypeOfIdentifier(node);
+        return (t === setter.type) ? value : ((('*' + t) === setter.type) ? '&' + value : undefined);
+    }
+    // `c ? a : b` hoisted to one local: both arms are *T locals
+    const arm = (n: any): boolean => (this.goUnwrapParenthesizedNode(n)?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(this.goUnwrapParenthesizedNode(n)) === setter.type);
+    return ((node?.kind === SyntaxKind.ConditionalExpression) && arm(node.whenTrue) && arm(node.whenFalse)) ? value : undefined;
+};
+// the book local is never rebound and an earlier sibling statement of an enclosing block either reads a side of it in
+// every branch (GetAsks/GetBids on a nil interface panics first) or stored a book under the key the local was read from
+GoTranspiler.prototype.h26g28BookDerefBefore = function (id) {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve?.();
+    const scope: any = (decl === undefined) ? undefined : this.goEnclosingFunction(decl);
+    if ((scope === undefined) || ![ SyntaxKind.VariableDeclaration, SyntaxKind.Parameter ].includes(decl.kind)) {
+        return false;
+    }
+    const name: string = decl.name.text;
+    const all = this.goDescendantsOf(scope);
+    if (all.some((n: any) => (n.kind === SyntaxKind.DeleteExpression) || ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== decl.name)
+        && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n) && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment)
+        && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment)))) {
+        return false;
+    }
+    const sideRead = (s: any): boolean => {
+        const isBook = (n: any): boolean => (n?.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
+            && (n.expression.text === name) && this.goIdentifierRefersToDeclaration(n.expression, decl) && this.goIsOrderBookSideAccess(n);
+        const first: any = this.goBlockStatements(s)[0];
+        const call: any = (first?.kind === SyntaxKind.ExpressionStatement) ? first.expression : undefined;
+        return ((first?.kind === SyntaxKind.VariableStatement) && first.declarationList.declarations.some((d: any) => isBook(d.initializer)))
+            || ((call?.kind === SyntaxKind.CallExpression) && call.arguments.some(isBook));
+    };
+    const read = ((decl.kind === SyntaxKind.VariableDeclaration) && (decl.initializer !== undefined)) ? this.goOrderBookCacheRead(decl.initializer) : undefined;
+    const declStmt: any = decl.parent?.parent;
+    let prev: any = undefined;
+    return this.goEnclosingBlocksProve(id, [ SyntaxKind.Block, SyntaxKind.CaseClause, SyntaxKind.DefaultClause ], (st) => {
+        prev = (st.parent?.statements?.[0] === st) ? undefined : prev;
+        const storedJustBefore = (st === declStmt) && (read !== undefined) && (prev !== undefined) && this.goStoresBookInCache([ prev ], read);
+        prev = st;
+        if (st.pos < decl.end) {
+            return storedJustBefore;
+        }
+        return ((st.kind === SyntaxKind.ExpressionStatement) && sideRead(st)) || ((st.kind === SyntaxKind.IfStatement) && (st.elseStatement !== undefined)
+            && (st.elseStatement.kind === SyntaxKind.Block) && sideRead(st.thenStatement) && sideRead(st.elseStatement));
+    }, () => false);
+};
+// ===== h26-g28 (end) =====
