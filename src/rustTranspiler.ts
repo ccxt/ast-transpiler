@@ -2435,6 +2435,7 @@ export class RustTranspiler extends BaseTranspiler {
             const helperWrite = this.rustDictHoistHosts.has(node) || this.rustHelperWriteReadsRoot(baseExpr, right)
                 ? `{ let __be_tmp = ${rhs.trim()}; add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${this.rustDictHoistHosts.has(node) ? '' : '\u0004'}__be_tmp); }` : helperCall;
             const boundedRow = keyStrs.length === 2 ? this.printBoundedListRowInsert(left, keyStrs[0], RustTranspiler.cloneIfBareLocal(rhs.trim())) : undefined; if (boundedRow !== undefined) return boundedRow;
+            const guardedRow = keyStrs.length === 2 ? this.printGuardedFirstRowInsert(left, keyStrs[0], RustTranspiler.cloneIfBareLocal(rhs.trim())) : undefined; if (guardedRow !== undefined) return guardedRow;
             const nestedInsert = keyStrs.length === 2
                 ? (this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs)
                     ?? this.nestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite))
@@ -29036,6 +29037,55 @@ export class RustTranspiler extends BaseTranspiler {
         const name = this.printNode(list, 0).trim();
         const value = valueText.startsWith('Value::') ? valueText : `Value::from(${valueText})`;
         const out = `if let Some(Value::Dict(__d)) = std::sync::Arc::make_mut(&mut ${name}).get_mut(${String(index.text)} as usize) { std::sync::Arc::make_mut(__d).insert(${this.quotedStringLiteral(String(left.argumentExpression.text))}.into(), ${value}); }`;
+        return out.length + 40 > 400 ? undefined : out;
+    }
+
+    /** `xs[0]['k'] = v` under `if (first !== undefined && ..)` where `const first = this.safeDict (xs, 0)` sits in the same
+     *  block and nothing in between touches xs: row 0 exists, so the helper's Null padding never runs. */
+    printGuardedFirstRowInsert(left: any, keyText: string, valueText: string): string | undefined {
+        const row: any = left.expression;
+        const list: any = this.rustSkipWrappers(row?.expression);
+        const index: any = this.rustSkipWrappers(row?.argumentExpression);
+        if (!isStringLiteral(left.argumentExpression) || !isElementAccessExpression(row) || list === undefined || !isIdentifier(list)
+            || index === undefined || !isNumericLiteral(index) || index.text !== '0' || keyText !== 'Value::Int(0)'
+            || !/\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(left)) || this.rustHelperWriteReadsRoot(row, (left.parent as any).right)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(list);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustLentListLocal(declaration)
+            || !this.rustDefaultedListRead(this.rustSkipWrappers(declaration.initializer))) return undefined;
+        const listSym = this.rustSymbolOf(list);
+        const mentions = (n: any): boolean => n !== undefined && ((isIdentifier(n) && this.rustSymbolOf(n) === listSym) || (n.forEachChild((c: any) => mentions(c) || undefined) ?? false));
+        const stmt: any = left.parent?.parent;
+        if (!isBinaryExpression(left.parent) || stmt?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        const thenBlock: any = isBlock(stmt.parent) ? stmt.parent : undefined;
+        const guard: any = thenBlock !== undefined ? thenBlock.parent : stmt.parent;
+        if (!isIfStatement(guard) || (thenBlock !== undefined ? guard.thenStatement !== thenBlock : guard.thenStatement !== stmt)) return undefined;
+        if (thenBlock !== undefined && thenBlock.statements.slice(0, thenBlock.statements.indexOf(stmt)).some((x: any) => mentions(x))) return undefined;
+        // the condition is an `&&` chain holding `first !== undefined` for a const `first = this.safeDict (xs, 0)`
+        const conjuncts: any[] = [];
+        const split = (e: any): void => { e = this.rustSkipWrappers(e); if (isBinaryExpression(e) && e.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) { split(e.left); split(e.right); } else conjuncts.push(e); };
+        split(guard.expression);
+        if (conjuncts.some((c: any) => mentions(c))) return undefined;
+        const firstDecl: any = conjuncts.map((c: any) => isBinaryExpression(c) && c.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken
+            && this.rustSkipWrappers(c.right)?.kind === SyntaxKind.Identifier && String(this.rustSkipWrappers(c.right).text) === 'undefined'
+            && isIdentifier(this.rustSkipWrappers(c.left)) ? this.rustSingleLocalDeclaration(this.rustSkipWrappers(c.left)) : undefined).find((d: any) => d !== undefined);
+        const init: any = firstDecl !== undefined && isVariableDeclaration(firstDecl) && isVariableDeclarationList(firstDecl.parent)
+            && (firstDecl.parent.flags & NodeFlags.Const) !== 0 ? this.rustSkipWrappers(firstDecl.initializer) : undefined;
+        const callee: any = init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
+        if (callee === undefined || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict' || init.arguments.length !== 2
+            || !isIdentifier(this.rustSkipWrappers(init.arguments[0])) || this.rustSymbolOf(this.rustSkipWrappers(init.arguments[0])) !== listSym
+            || !isNumericLiteral(this.rustSkipWrappers(init.arguments[1])) || this.rustSkipWrappers(init.arguments[1]).text !== '0') return undefined;
+        const calleeDecl: any = this.rustScalarCallee(init);
+        if (calleeDecl === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(calleeDecl.getSourceFile().fileName))) return undefined;
+        // the `first` declaration and the guard are siblings, and the statements between them leave xs alone
+        const firstStmt: any = firstDecl.parent.parent;
+        const host: any = guard.parent;
+        if (firstStmt?.kind !== SyntaxKind.VariableStatement || firstStmt.parent !== host || !isBlock(host)) return undefined;
+        const a = host.statements.indexOf(firstStmt);
+        const b = host.statements.indexOf(guard);
+        if (a < 0 || b <= a || host.statements.slice(a + 1, b).some((x: any) => mentions(x))) return undefined;
+        const name = this.printNode(list, 0).trim();
+        const value = valueText.startsWith('Value::') ? valueText : `Value::from(${valueText})`;
+        const out = `if let Some(Value::Dict(__d)) = std::sync::Arc::make_mut(&mut ${name}).get_mut(0) { std::sync::Arc::make_mut(__d).insert(${this.quotedStringLiteral(String(left.argumentExpression.text))}.into(), ${value}); }`;
         return out.length + 40 > 400 ? undefined : out;
     }
 
