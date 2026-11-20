@@ -19667,3 +19667,28 @@ describe('a venue Str parameter every caller hands a Go string or literal prints
         expect(out).not.toContain('Kind(m string)');
     });
 });
+
+describe('GetSupportedMapping returns a Go string (CCXT_GO_HELPER_RETURN_TYPES)', () => {
+    const run = (body: string) => {
+        const t = new Transpiler({ verbose: false, go: {} } as any);
+        installCcxtGoHooks((t as any).goTranspiler);
+        installCcxtGoLocalTypes((t as any).goTranspiler);
+        return t.transpileGo("class Exchange {\n    getSupportedMapping (key: string, mapping = {}): string { return key; }\n    getMapping (key: string, mapping = {}): string { return key; }\n" + body + "}\n").content;
+    };
+    test('the mapped local is a string: native compare and concat', () => {
+        const out = run("    m (type: string) {\n        const typeId = this.getSupportedMapping (type, { 'spot': 'spot' });\n        if (typeId === 'spot') { return 1; }\n        return typeId + '.orders';\n    }\n");
+        expect(out).toContain('var typeId string = this.GetSupportedMapping(typeVar');
+        expect(out).toContain('return typeId + ".orders"');
+        expect(out).not.toContain('Add(typeId');
+    });
+    test('negative: another base method of the same shape stays any', () => {
+        const out = run("    m (type: string) {\n        const typeId = this.getMapping (type, { 'spot': 'spot' });\n        return typeId + '.orders';\n    }\n");
+        expect(out).toContain('var typeId any = this.GetMapping(typeVar');
+        expect(out).toContain('Add(typeId, ".orders")');
+    });
+    test('negative: a local later set to nil and tested against nil keeps the box', () => {
+        const out = run("    m (type: string) {\n        let typeId = this.getSupportedMapping (type, { 'spot': 'spot' });\n        if (type === 'x') { typeId = undefined; }\n        if (typeId === undefined) { return 0; }\n        return typeId;\n    }\n");
+        expect(out).toContain('var typeId any = this.GetSupportedMapping(typeVar');
+        expect(out).toContain('typeId = nil');
+    });
+});

@@ -27025,3 +27025,24 @@ describe('optional list written a spread-free literal builds the list into Some'
         expect(out).not.toMatch(/orders = Some\(std::sync::Arc::new/);
     });
 });
+
+describe('rust shadow safeString read keyed by a declared string parameter', () => {
+    const D = "interface Dictionary<T> { [key: string]: T; }\ntype Dict = Dictionary<any>;\ntype Str = string | undefined;\nclass C {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o; }\n    safeDict (o: any, k: any, d: any = undefined): Dict { return o; }\n";
+    test('getSupportedMapping shape keeps the map shadow and its Object.keys', () => {
+        const out = transpiler.transpileRust(D + "    f (key: Str, mapping: Dict = {}): string {\n        if (key in mapping) { return this.safeString (mapping, key, key); }\n        const keys = Object.keys (mapping);\n        throw new Error (keys.join (','));\n    }\n}").content;
+        expect(out).toContain('let mapping = mapping.as_map().unwrap_or(&__mapping_empty);');
+        expect(out).toContain('match key.as_str() { Some(__k) => mapping.get(__k).cloned(), None => None }');
+        expect(out).toContain('mapping.keys().cloned()');
+        expect(out).not.toContain('object_keys(');
+    });
+    test('negative: a key that is an untyped local keeps the helper', () => {
+        const out = transpiler.transpileRust(D + "    f (mapping: Dict, other: any): string {\n        const k = other;\n        return this.safeString (mapping, k, 'x');\n    }\n}").content;
+        expect(out).toContain('self.safeString(mapping, k,');
+        expect(out).not.toContain('__mapping_empty');
+    });
+    test('negative: a safeDict read keyed by a string parameter keeps the helper', () => {
+        const out = transpiler.transpileRust(D + "    f (key: Str, mapping: Dict = {}): any {\n        if (key in mapping) { return this.safeDict (mapping, key); }\n        return Object.keys (mapping);\n    }\n}").content;
+        expect(out).toContain('self.safeDict(mapping.clone(), key');
+        expect(out).toContain('object_keys(&mapping)');
+    });
+});

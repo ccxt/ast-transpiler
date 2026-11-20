@@ -19498,7 +19498,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustShadowSafeCallee(parent) === undefined) return false;
             const args: NodeArray<Expression> = parent.arguments;
             if (args[0] !== id || args.length < 2 || args.length > 3) return false;
-            return this.rustShadowKeyIsLiteral(args[1]);
+            return this.rustShadowKeyIsLiteral(args[1]) || (!literalKeys && this.rustShadowSafeCallee(parent) === 'safeString' && this.rustShadowSafeReadKeyParam(args[1]));
         }
         return false;
     }
@@ -19523,6 +19523,18 @@ export class RustTranspiler extends BaseTranspiler {
         // A loop-counter place (`for (let i = 0; ...)`) is a `Value::Int` on
         // every path, so the slice read below answers the helper's Int arm.
         return this.isRustValueIndexKey(key);
+    }
+
+    /** A safe-read key that is a parameter of the reading function declared string (`string` / `Str`): a `Value::Str`
+     *  or `Value::Null` in the port, read as `K.as_str()` (a Null key answers the default, as the helper does). */
+    private rustShadowSafeReadKeyParam(key: any): boolean {
+        if (key === undefined || !isIdentifier(key) || !this.rustKeyIsProvenString(key)) return false;
+        if (this.rustNodeIsKeyUnsafePlace(String(key.text))) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(key);
+        if (declaration === undefined || !isParameterDeclaration(declaration) || declaration.type === undefined) return false;
+        let fn: any = key.parent;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        return fn !== undefined && declaration.parent === fn;
     }
 
     private rustShadowKeyIsLiteral(key: any): boolean {
@@ -19605,6 +19617,7 @@ export class RustTranspiler extends BaseTranspiler {
         const shadow = this.rustParamShadowOf(args[0]);
         if (shadow === undefined || shadow.kind !== RUST_PARAM_SHADOWS.MAP) return undefined;
         const key: any = args[1];
+        if (callee === 'safeString' && this.rustShadowSafeReadKeyParam(key)) return callee;
         if (!isStringLiteralLikeNode(key)) return undefined;
         const text = String(key.text);
         if (!this.rustShadowKeyLiteral(text) || this.rustNodeIsKeyUnsafePlace(text)) return undefined;
@@ -19630,9 +19643,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (callee === undefined) return undefined;
         const args: any[] = (node as any).arguments ?? [];
         const shadow = this.rustParamShadowOf(args[0]);
-        const text = String(args[1].text);
         const fallback = args.length === 3 ? this.printNode(args[2], 0).trim() : 'Value::Null';
-        const get = `${shadow.name}.get("${text}")`;
+        if (!isStringLiteralLikeNode(args[1])) {
+            // string-param key: an owned copy of the entry, moved into the result (a Null key answers the default)
+            const at = `match ${this.printNode(args[1], 0).trim()}.as_str() { Some(__k) => ${shadow.name}.get(__k).cloned(), None => None }`;
+            return `(match ${at} { Some(Value::Str(__s)) if !__s.is_empty() => Value::Str(__s), Some(Value::Int(__n)) => Value::Str(__n.to_string().into()), Some(Value::Float(__f)) => Value::Str(__f.to_string().into()), _ => ${fallback} })`;
+        }
+        const get = `${shadow.name}.get("${String(args[1].text)}")`;
         // The ccxt post-pass strips the `;` of a statement ending in `};`
         // (`[/\};(\s*\n)/g, '}$1']`), so the match — like the printer's other
         // block-valued expressions — is parenthesized.
