@@ -46223,3 +46223,77 @@ GoTranspiler.prototype.h26g37NonNilSafeStringWrite = function (node, varName: st
     return (arity !== undefined) && (node.arguments.length === arity) && (last?.kind === SyntaxKind.Identifier) && (last.text === varName);
 };
 // ===== h26-g37 (end) =====
+// ===== h26-G38 =====
+// A list local whose every value is a filterBy result (Go FilterBy appends only map[string]any rows), or a
+// sortBy / sortBy2 / toArray of a list local already proven pointer-free (Go copies or returns the same
+// elements), holds no scalar pointer: DerefScalar on its element is the identity, nil included.
+function goH26g38ProducerProof (goTranspiler: GoTranspiler, list, depth: number): boolean {
+    if ((list?.kind !== SyntaxKind.Identifier) || (depth > 3)) {
+        return false;
+    }
+    const declaration: any = goTranspiler.goDeclarationOfIdentifier (list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined)) {
+        return false;
+    }
+    const produced = (e: any): boolean => {
+        const call: any = goTranspiler.goUnwrapParenthesizedNode (e);
+        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments.length < 1)) {
+            return false;
+        }
+        const name = `${call.expression.name?.text ?? ''}`;
+        if (name === 'filterBy') {
+            return true;
+        }
+        const source: any = goTranspiler.goUnwrapParenthesizedNode (call.arguments[0]);
+        return /^(sortBy2?|toArray)$/.test (name) && (source?.kind === SyntaxKind.Identifier) && (source.text !== list.text)
+            && (goTranspiler.goListElementsArePointerFree (source, depth + 1) || goH26g38JsonListLocal (goTranspiler, source));
+    };
+    if (!produced (declaration.initializer)) {
+        return false;
+    }
+    return goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), list.text, declaration).every ((site: any) => {
+        const parent: any = site.parent;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === site)
+            && (parent.operatorToken.kind === SyntaxKind.EqualsToken) && produced (parent.right);
+    });
+}
+// `const xs = this.safeList (doc, k, ..)` on a decoded JSON document, never written: its elements are JSON values
+function goH26g38JsonListLocal (goTranspiler: GoTranspiler, list): boolean {
+    const declaration: any = goTranspiler.goDeclarationOfIdentifier (list);
+    const call: any = goTranspiler.goUnwrapParenthesizedNode (declaration?.initializer);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || !/^safeList2?$/.test (`${call.expression.name?.text ?? ''}`)
+        || (call.arguments.length < 1) || !goTranspiler.goJsonOriginContainer (goTranspiler.goUnwrapParenthesizedNode (call.arguments[0]))) {
+        return false;
+    }
+    return goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), list.text, declaration).length === 0;
+}
+// every value of the local is a this.filterBy / sortBy / sortBy2 / toArray call
+function goH26g38ProducerLocal (goTranspiler: GoTranspiler, list): boolean {
+    const declaration: any = (list?.kind === SyntaxKind.Identifier) ? goTranspiler.goDeclarationOfIdentifier (list) : undefined;
+    const producer = (e: any): boolean => {
+        const call: any = goTranspiler.goUnwrapParenthesizedNode (e);
+        return (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && /^(filterBy|sortBy2?|toArray)$/.test (`${call.expression.name?.text ?? ''}`);
+    };
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || !producer (declaration.initializer)) {
+        return false;
+    }
+    return goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), list.text, declaration).every ((site: any) => (site.parent?.kind === SyntaxKind.BinaryExpression)
+        && (site.parent.left === site) && (site.parent.operatorToken.kind === SyntaxKind.EqualsToken) && producer (site.parent.right));
+}
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFree.call (this, list, depth) || goH26g38ProducerProof (this, list, depth);
+    };
+    const guardedValue = GoTranspiler.prototype.goGuardedListElementValue;
+    GoTranspiler.prototype.goGuardedListElementValue = function (readBase, containerStr: string, keyStr: string): string {
+        // a producer call returns a plain []any (never a tuple), so the pointer-free proof alone clears the guarded read
+        const bare = goH26g38ProducerProof (this, readBase, 0) || (goH26g38ProducerLocal (this, readBase) && this.goListElementsArePointerFree (readBase));
+        return bare ? `${containerStr}[${keyStr}]` : guardedValue.call (this, readBase, containerStr, keyStr);
+    };
+}
+// ===== h26-G38 (end) =====
