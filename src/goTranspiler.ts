@@ -17466,6 +17466,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // or an element read of a []string slice. Printing here would resolve other locals' types
     // from inside a declaration's own safety scan and poison their caches.
     goStringValueNodeIsProven(node): boolean {
+        if (this.goStringConcatIsProven(node)) {
+            return true;
+        }
         switch (node?.kind) {
         case SyntaxKind.StringLiteral:
         case SyntaxKind.NoSubstitutionTemplateLiteral:
@@ -17494,6 +17497,81 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const callee = node.expression;
         return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind !== SyntaxKind.ThisKeyword)
             && GO_STRING_RESULT_METHOD_NAMES.includes(callee.name?.text) && (node.arguments.length === GO_STRING_RESULT_METHOD_ARITY[callee.name.text]);
+    }
+
+    // a `+` chain the printer's concat rules print as the native Go operator: ts types it
+    // `string` and no Add helper remains, so the Go value is a string and a push keeps []string
+    goStringConcatIsProven(node): boolean {
+        if ((node?.kind !== SyntaxKind.BinaryExpression) || (node.operatorToken?.kind !== SyntaxKind.PlusToken)
+            || !this.goCheckerTypeHasFlags(node, TypeFlags.String)) {
+            return false;
+        }
+        return !/^(?:ccxt\.)?Add\(/.test(this.printNode(node, 0).trim());
+    }
+
+    // a []string local handed to a `string[]` parameter outside the slice table: when another call
+    // site of that callee passes a list the printer cannot prove, the parameter prints `[]any`, so
+    // this local must stay `[]any` too (a []string is not assignable there)
+    goStringListArgMixesSlot(n): boolean {
+        const call = n.parent;
+        if ((call?.kind !== SyntaxKind.CallExpression) || !(call.arguments ?? []).includes(n)) {
+            return false;
+        }
+        if (!this.goStringListHasConcatPush(n)) {
+            return false; // only the concat push rule widens a local here; older proofs stay as they were
+        }
+        const index = call.arguments.indexOf(n);
+        const param: any = this.goResolvedCallParameter(call, index);
+        const fn = param?.parent;
+        if ((fn === undefined) || (fn.name === undefined) || (fn.getSourceFile() !== n.getSourceFile())
+            || this.goIsUnifiedSliceParameter(fn.name.text, index) || !this.goAnnotatedStringSliceSlot(fn, index, '[]string')) {
+            return false; // only an exchange-local callee: its parameter type comes from this file's callers
+        }
+        const tree = this.goTsSrcTree(fn.getSourceFile());
+        const myFile = tree?.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        const myClass = this.goEnclosingClassName(fn);
+        if ((tree?.callIndex.get(fn.name.text) ?? []).some((site) => (site.file !== myFile) && this.goTsSrcFileDerivesFrom(tree, site.file, myClass))) {
+            return true; // a sibling-file caller is not proven here
+        }
+        return this.goSameFileCallsOf(fn, fn.name.text).some((other) => !this.goStringListArgIsProven(other.arguments?.[index]));
+    }
+
+    // the local's declaration scope holds a `x.push (a + b)` string concat
+    goStringListHasConcatPush(n): boolean {
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const scope = decl?.parent?.parent?.parent;
+        return (scope !== undefined) && this.hasNodeWhere(scope, (m: any) => (m.kind === SyntaxKind.CallExpression)
+            && (m.expression?.kind === SyntaxKind.PropertyAccessExpression) && (m.expression.name?.text === 'push')
+            && (m.expression.expression?.kind === SyntaxKind.Identifier) && (m.expression.expression.text === n.text)
+            && (m.arguments?.[0]?.kind === SyntaxKind.BinaryExpression) && (m.arguments[0].operatorToken?.kind === SyntaxKind.PlusToken));
+    }
+
+    // a call argument proven `[]string` without printing (no type cache is touched): a literal of
+    // proven string elements, or a local initialised `[]` whose every write is a proven string push
+    goStringListArgIsProven(arg): boolean {
+        if (arg?.kind === SyntaxKind.ArrayLiteralExpression) {
+            return (arg.elements ?? []).every((e) => (e.kind !== SyntaxKind.SpreadElement) && this.goStringValueNodeIsProven(e));
+        }
+        if (arg?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer?.kind !== SyntaxKind.ArrayLiteralExpression)
+            || ((decl.initializer.elements ?? []).length !== 0)) {
+            return false;
+        }
+        const scope = decl.parent?.parent?.parent;
+        return (scope !== undefined) && !this.hasNodeWhere(scope, (m: any) => {
+            if ((m.kind !== SyntaxKind.Identifier) || (m.text !== arg.text) || (m === decl.name)) {
+                return false;
+            }
+            const p = m.parent;
+            if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === m) && (p.name?.text === 'push')) {
+                const value = p.parent?.arguments?.[0];
+                return !this.goStringValueNodeIsProven(value);
+            }
+            return (p?.kind === SyntaxKind.BinaryExpression) && (p.left === m);
+        });
     }
 
     // reject the refinement when something downstream needs the local to stay `any`:
@@ -19560,6 +19638,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // a whole-argument pass to an own-class method whose parameter ts declares `string[]` (no
     // optional / union): the callee takes that slice as declared, or boxes the non-nil []string
     goStringListFeedsStringArrayParam(node): boolean {
+        if (this.goStringListArgMixesSlot(node)) {
+            return false;
+        }
         const call: any = node.parent;
         if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
             || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
@@ -23222,6 +23303,22 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     goSliceParamsKeepingGetValue = new Set<any>();
 
+    // a required `string[]` parameter of an async method outside the slice table: an array literal at a
+    // call site is proven by its own elements (the literal-slice rule), so `[ channel ]` passes a `[]string`
+    goAnnotatedStringSliceSlot(fn, index: number, goType: string): boolean {
+        const param = (fn?.parameters ?? [])[index];
+        return (goType === '[]string') && (param !== undefined) && (param.initializer === undefined) && (param.questionToken === undefined)
+            && (param.dotDotDotToken === undefined) && (param.type?.kind === SyntaxKind.ArrayType)
+            && (param.type.elementType?.kind === SyntaxKind.StringKeyword) && this.isAsyncFunction(fn);
+    }
+
+    // the call-site twin: the resolved callee parameter is annotated `string[]` and prints `[]string`
+    goResolvedStringSliceSlot(node, index: number): boolean {
+        const param: any = this.goResolvedCallParameter(node, index);
+        const fn = param?.parent;
+        return (fn !== undefined) && this.goAnnotatedStringSliceSlot(fn, index, '[]string') && (this.goNativeParameterType(param) === '[]string');
+    }
+
     // the slice type an array-annotated parameter prints, undefined for every other annotation
     goAnnotatedSliceParameterType(param): string | undefined {
         const checker: any = this.checkerOrUndefined();
@@ -23724,7 +23821,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         let marked = 0;
         for (let i = 0; i < args.length; i++) {
             const arg = args[i];
-            if ((arg.kind !== SyntaxKind.ArrayLiteralExpression) || !this.goIsUnifiedSliceParameter(name, i)) {
+            if ((arg.kind !== SyntaxKind.ArrayLiteralExpression) || !(this.goIsUnifiedSliceParameter(name, i) || this.goResolvedStringSliceSlot(node, i))) {
                 continue;
             }
             const goType = this.goCallSliceArgumentType(node, name, i);
@@ -24065,7 +24162,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // at a table slot an array literal is the slice its own elements prove,
             // not the `[]any` box the default print opens. Every other parameter keeps the
             // printer's own argument type, so no existing `[]any` slot changes shape.
-            const tableSlot = ((goType === '[]string') || (goType === '[][]string')) && this.goIsUnifiedSliceParameter(name, index);
+            const tableSlot = (((goType === '[]string') || (goType === '[][]string')) && this.goIsUnifiedSliceParameter(name, index)) || this.goAnnotatedStringSliceSlot(fn, index, goType);
             const argType = tableSlot ? this.goSliceArgumentType(arg, goType) : this.goPrintedArgType(arg);
             if ((argType !== goType)
                 && !((goType === 'string') && (call.runner === undefined) && this.goNilProvenStringPtrArg(arg))) {
