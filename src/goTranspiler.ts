@@ -39351,6 +39351,9 @@ function goElementReadHasDerefConsumer (goTranspiler, node, keyNode?): boolean {
         child = parent;
         parent = parent.parent;
     }
+    if (goIsExtendArgument (parent, child) || ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] !== child) && goArgumentParameterIsDict (goTranspiler, parent, child))) {
+        return true;
+    }
     if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === child)
         && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
         const callee = `${parent.expression.name?.text ?? ''}`;
@@ -39414,7 +39417,7 @@ function goListBoundOnceFromJson (list, listDeclaration): boolean {
     const init = listDeclaration?.initializer;
     if ((listDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (init?.kind !== SyntaxKind.CallExpression)
         || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)
-        || !/^(toArray|safeList)$/.test (`${init.expression.name?.text ?? ''}`)) {
+        || !/^(toArray|safeList|safeList2)$/.test (`${init.expression.name?.text ?? ''}`)) {
         return false;
     }
     // bound once: no assignment to the local and no push/element write into it anywhere in its scope
@@ -39486,13 +39489,20 @@ function goElementLocalHasDerefConsumers (goTranspiler, declaration, access): bo
                 const callee = isCall ? `${call.expression.name?.text ?? ''}` : '';
                 const safeArg0 = isCall && (call.arguments[0] === n) && GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee);
                 const methodArg0 = isCall && (call.arguments[0] === n) && GO_DEREF_AT_ENTRY_METHOD_ARG0.has (callee);
-                ok = safeArg0 || methodArg0 || (isCall && goArgumentParameterIsDictType (goTranspiler, call, n));
+                ok = safeArg0 || methodArg0 || goIsExtendArgument (call, n) || (isCall && goArgumentParameterIsDictType (goTranspiler, call, n));
             }
         }
         n.forEachChild (visit);
     };
     visit (scope);
     return ok && (uses > 0);
+}
+// any argument of `this.extend (..)`: ExtendMap copies only map[string]any operands, so a scalar
+// pointer, its dereferenced value and nil are all skipped alike
+function goIsExtendArgument (call, arg): boolean {
+    return (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (`${call.expression.name?.text ?? ''}` === 'extend')
+        && (call.arguments.indexOf (arg) >= 0);
 }
 // a value read of `e`: not a write target, delete operand, or the base of a further write/call
 function goElementAccessIsPlainRead (e): boolean {
