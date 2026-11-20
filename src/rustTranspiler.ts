@@ -20673,6 +20673,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const typedElem = this.printTypedResultElemRead(link);
                 if (typedElem !== undefined) { acc = typedElem; continue; }
             }
+            if (link === chain[0] && chain.length > 1 && isIdentifier(receiver) && this.rustCacheRowNestedReads.has(receiver)) { const rowRead = this.printDictKeyRead(link); if (rowRead !== undefined) { acc = rowRead; continue; } }
             if (link === chain[0] && this.rustBorrowedIndexReads.has(link) && isIdentifier(receiver)) {
                 const borrowedKey = isIdentifier(key) && this.rustBorrowedStrElems.has(this.rustDeclarationOfIdentifier(key));
                 // ral-90rh R2: an `okey` `Option<String>` local under `as string` boxes its payload for the by-reference read
@@ -24707,6 +24708,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!sbAlias && this.rustAeoTargetWrite(n) && !this.rustAeoBoxedNative(n)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
             if (!sbAlias && this.rustCacheRowDynamicWrite(n, init)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
             if (!sbAlias && this.rustCacheRowNestedUse(n, init)) return this.rustCacheRowNestedUses.add(n) && ++reads > 0;
+            if (!sbAlias && this.rustCacheRowNestedRead(n, init)) return this.rustCacheRowNestedReads.add(n) && ++reads > 0;
             // ral-50b: `xs[0] = v` (statement, one level, integer literal index) on a never-null list local: the runtime
             // `add_element_to_object` takes the typed list (`impl AddTarget for List`) and writes the index exactly as the boxed
             // `Value::Arr` arm did (padding with Null); the value may read `xs` (bound first, as the boxed write did)
@@ -26177,6 +26179,29 @@ export class RustTranspiler extends BaseTranspiler {
         return top === access && this.rustBearerElementPushCall(up?.parent) === access && !reads(up.parent.arguments[0]);
     }
 
+    private rustCacheRowNestedReads = new WeakSet<any>();
+
+    /** `row['k1']['k2']..` read (plain literal keys, not a write target, call receiver or key) on a `safeDict*` cache-bucket row:
+     *  the first hop prints `KeyRead::key_read` (Null for a `None` row or a missing key, as the boxed read), lower hops keep `get_value_k`. */
+    rustCacheRowNestedRead(n: any, init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))
+            || !this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]))) return false;
+        const access: any = n.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n || !isElementAccessExpression(access.parent) || access.parent.expression !== access) return false;
+        let top: any = access;
+        while (isElementAccessExpression(top.parent) && top.parent.expression === top) {
+            top = top.parent;
+            const k: any = this.rustSkipWrappers(top.argumentExpression);
+            if (k === undefined || !isStringLiteralLikeNode(k) || /^\d+$/.test(String(k.text))) return false;
+        }
+        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        if (key === undefined || !isStringLiteralLikeNode(key) || String(key.text) in this.StringLiteralReplacements || /^\d+$/.test(String(key.text)) || String(key.text).startsWith('__')) return false;
+        const use: any = top.parent;
+        if (use === undefined || ((isPropertyAccessExpression(use) || isCallExpression(use)) && use.expression === top) || (isElementAccessExpression(use) && use.argumentExpression === top)) return false;
+        if (isDeleteExpression(use) || (isBinaryExpression(use) && use.left === top && rustIsAssignmentOperator(use.operatorToken.kind))) return false;
+        return use.kind !== SyntaxKind.PrefixUnaryExpression && use.kind !== SyntaxKind.PostfixUnaryExpression;
+    }
+
     /** The `&mut` map of a typed cache-row local: `if let Some(__d) = &mut row {` on the optional form (a `None` row skips the
      *  write, as the helper skipped `Null`), else the plain map; undefined when the local is not typed. */
     rustCacheRowMapHead(recv: any): [string, string] | undefined {
@@ -26942,7 +26967,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (recv !== undefined && isIdentifier(recv) && this.rustMarketKeyOfLookup(recv) && this.rustSafeMarketLocalOf(recv) !== undefined) {
             return `crate::value::KeyRead::key_read(&&${super.printIdentifier(recv)}, "${this.escapeRustStringLiteral(String(node.argumentExpression.text))}")`;
         }
-        if (recv === undefined || !isIdentifier(recv) || !this.rustDictKeyReadUse(recv)) return undefined;
+        if (recv === undefined || !isIdentifier(recv) || !(this.rustDictKeyReadUse(recv) || this.rustCacheRowNestedReads.has(recv))) return undefined;
         // an inlined map row (annotatedMapRowSource) has no local: its read prints through the row's source
         if (this.annotatedMapRowUse(recv) !== undefined) return undefined;
         const optMarket = this.printOptMarketKeyRead(node); if (optMarket !== undefined) return optMarket;
