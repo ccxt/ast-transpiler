@@ -18568,6 +18568,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     getGoLocalType(declaration, parsedValue: string): string {
+        if (this.goOptionStringSlotLocalOf(declaration)) {
+            return 'string';
+        }
         const goType = this.goTypeOfInitializer(declaration.initializer, parsedValue);
         if ((goType === undefined) || (goType === GO_SAFE_LIST_LOCAL_TYPE)) {
             // the initializer's own shape named nothing, or named the []any it opens every
@@ -18620,6 +18623,46 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const call: any = declaration.initializer;
         if (!this.goDefaultedSafeStringCallOrTypedDefault(call)) {
+            return false;
+        }
+        return !this.goTypeNameIsShadowed(scope, 'string') && this.goLocalIsSafeToType(scope, declaration, name, 'string')
+            && !this.goAnnotatedStringLocalHasNilShapedRead(scope, declaration, name);
+    }
+
+    // `let x: string = slot` where `const [ slot, p ] = this.handleOptionStringAndParams[2] (.., dflt)` and dflt
+    // is a string literal or a Go `string`: CheckOptionString answers a non-nil *string (or panics), so x takes its deref.
+    goOptionStringSlotLocalOf(declaration): boolean {
+        if ((declaration?.type?.kind !== SyntaxKind.StringKeyword) || (declaration.initializer?.kind !== SyntaxKind.Identifier)
+            || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+            return false;
+        }
+        if (!this.goOptionStringSlotLocalCache.has(declaration)) {
+            this.goOptionStringSlotLocalCache.set(declaration, false);  // a recursive ask during the proof keeps the box
+            this.goOptionStringSlotLocalCache.set(declaration, this.goOptionStringSlotLocal(declaration, this.goEnclosingFunction(declaration), declaration.name.text));
+        }
+        return this.goOptionStringSlotLocalCache.get(declaration);
+    }
+    goOptionStringSlotLocalCache = new WeakMap<object, boolean>();
+
+    goOptionStringSlotLocal(declaration, scope, name: string): boolean {
+        if (scope === undefined) {
+            return false;
+        }
+        const element: any = this.checkerOrUndefined()?.getSymbolAtLocation(declaration.initializer)?.valueDeclaration?.resolve();
+        const pattern: any = element?.parent;
+        const call: any = pattern?.parent?.initializer;
+        if ((element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements.indexOf(element) !== 0)
+            || (pattern.parent?.kind !== SyntaxKind.VariableDeclaration) || (call?.kind !== SyntaxKind.CallExpression)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const slot = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4 }[call.expression.name?.text];
+        const fallback: any = (slot === undefined) ? undefined : call.arguments[slot];
+        if ((fallback === undefined) || (call.arguments.length !== slot + 1)) {
+            return false;
+        }
+        const literal = (fallback.kind === SyntaxKind.StringLiteral) || (fallback.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+        if (!literal && !((fallback.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(fallback) === 'string'))) {
             return false;
         }
         return !this.goTypeNameIsShadowed(scope, 'string') && this.goLocalIsSafeToType(scope, declaration, name, 'string')
@@ -18916,7 +18959,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             let declaredValue = (unboxValue !== undefined) ? unboxValue : ((structBox !== undefined) ? `${structBox}(${parsedValue.trim()})` : parsedValue.trimStart());
             // an annotated `string` local takes the defaulted SafeString call's deref
             if ((declaredType === 'string') && (unboxValue === undefined)
-                && (this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*string')) {
+                && ((this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*string') || this.goOptionStringSlotLocalOf(declaration))) {
                 declaredValue = '*' + declaredValue;
             }
             const cacheKeys = this.goCacheKeysRange(declaration, declaredType, varName, identation);
