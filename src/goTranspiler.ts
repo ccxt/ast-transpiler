@@ -24842,6 +24842,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (arg.kind !== SyntaxKind.Identifier) {
             return false;
         }
+        if (this.h26g53ConstComparisonLocal(arg, checker)) {
+            return true;
+        }
         const decl: any = checker?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve();
         if ((decl?.kind !== SyntaxKind.Parameter) || (decl.type?.kind !== SyntaxKind.BooleanKeyword)
             || ((decl.initializer?.kind !== SyntaxKind.TrueKeyword) && (decl.initializer?.kind !== SyntaxKind.FalseKeyword))) {
@@ -46818,3 +46821,43 @@ GoTranspiler.prototype.h26g52SymbolIsRebound = function (scope, declaration) {
     return rebound;
 };
 // ===== h26-g52 (end) =====
+
+// ===== h26-G53 =====
+export interface GoTranspiler {
+    h26g53ConstComparisonLocal(arg, checker): boolean;
+    h26g53ComparisonExpression(expr): boolean;
+}
+// a `const` local initialised from a comparison (===, !==, <, ...), a negation, a true/false literal or an
+// &&/|| of those is a Go `bool` that is never nil: it proves a required boolean parameter of the callee
+GoTranspiler.prototype.h26g53ConstComparisonLocal = function (arg, checker) {
+    const decl: any = checker?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.type !== undefined)
+        || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0)) {
+        return false;
+    }
+    return this.h26g53ComparisonExpression(decl.initializer);
+};
+GoTranspiler.prototype.h26g53ComparisonExpression = function (expr) {
+    if (expr === undefined) {
+        return false;
+    }
+    if (expr.kind === SyntaxKind.ParenthesizedExpression) {
+        return this.h26g53ComparisonExpression(expr.expression);
+    }
+    if ((expr.kind === SyntaxKind.TrueKeyword) || (expr.kind === SyntaxKind.FalseKeyword)) {
+        return true;
+    }
+    if ((expr.kind === SyntaxKind.PrefixUnaryExpression) && (expr.operator === SyntaxKind.ExclamationToken)) {
+        return true;
+    }
+    if (expr.kind !== SyntaxKind.BinaryExpression) {
+        return false;
+    }
+    const op = expr.operatorToken.kind;
+    if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
+        return this.h26g53ComparisonExpression(expr.left) && this.h26g53ComparisonExpression(expr.right);
+    }
+    return [SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.EqualsEqualsToken, SyntaxKind.ExclamationEqualsToken,
+        SyntaxKind.LessThanToken, SyntaxKind.GreaterThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanEqualsToken].includes(op);
+};
+// ===== h26-G53 (end) =====
