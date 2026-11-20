@@ -6358,7 +6358,8 @@ function ccxtGoAsyncScalarReceive (goTranspiler, awaitNode, call) {
     }
     const m = /^Promise<\s*(\w+)\s*>$/.exec ((text ?? '').trim ());
     const scalar = (m === null) ? undefined : CCXT_GO_ASYNC_SCALAR_TYPES[m[1]];
-    if ((scalar === undefined) || (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, scalar[0], ccxtGoAsyncScalarRead) === undefined)) {
+    const read = (m !== null) && (m[1] === 'int') ? h17g08NonNilIntSumRead : ccxtGoAsyncScalarRead;
+    if ((scalar === undefined) || (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, scalar[0], read) === undefined)) {
         return undefined;
     }
     return { goType: scalar[0], wrap: (recv) => scalar[1] + '(PanicOnError(' + recv.trim () + '))' };
@@ -36271,7 +36272,7 @@ function ral90g5PointerSeed(goTranspiler, declaration, goType: string): string |
     if ((RAL90G5_POINTEE[goType] === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
         || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
         || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations?.length !== 1)
-        || !ral90g5ReaderCall(declaration.initializer)) {
+        || !(ral90g5ReaderCall(declaration.initializer) || h17g08ReaderLocalCopy(goTranspiler, declaration.initializer))) {
         return undefined;
     }
     const cached = ral90g5Verdicts.get(declaration);
@@ -40398,3 +40399,58 @@ GoTranspiler.prototype.printNativeMapWriteOnProvenLocal = function (containerNod
     }
     return `${containerStr}[${keyStr}] = ${valueStr}`;
 };
+
+// ===== h17-g08 (begin): nilable int locals joined as *int64 =====
+// A `Promise<int>` (non-nullable) async receive is a non-nil *int64: besides the store reads it may be
+// an operand of `x + <int literal>`, which prints `*x + 20` (goPointerNumberIsNonNil: checker number).
+function h17g08NonNilIntSumRead (n) {
+    if (ccxtGoAsyncScalarRead (n)) {
+        return true;
+    }
+    let node = n;
+    while (node.parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        node = node.parent;
+    }
+    const parent = node.parent;
+    if ((parent?.kind !== ts.SyntaxKind.BinaryExpression) || (parent.operatorToken.kind !== ts.SyntaxKind.PlusToken)) {
+        return false;
+    }
+    const other = (parent.left === node) ? parent.right : parent.left;
+    return (other?.kind === ts.SyntaxKind.NumericLiteral) && /^[0-9]+$/.test (other.text) && Number.isSafeInteger (Number (other.text));
+}
+// `let x = o` where o is a never-rebound `const o = this.safeInteger (k, ..)` reader local (no default):
+// x starts as the same pointer, so the ral-90g5 pointer seed applies to it as to the reader call itself.
+function h17g08ReaderLocalCopy (goTranspiler, initializer): boolean {
+    const init = ral90g5UnwrapNode(initializer);
+    if (init?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const source: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(init)?.valueDeclaration?.resolve();
+    return (source?.kind === SyntaxKind.VariableDeclaration) && (source.parent?.kind === SyntaxKind.VariableDeclarationList)
+        && ((source.parent.flags & ts.NodeFlags.Const) !== 0) && ral90g5ReaderCall(source.initializer);
+}
+// the printer declares such a receive `var x *int64 = Int64PtrTyped(..)`: publish that type to the
+// operand readers too, so `x + 20` and writes of it into a *int64 local are typed.
+const h17g08AwaitVisiting = new Set<object>();
+const goDeclaredTypeOfIdentifierBaseH17g08 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | undefined {
+    const shipped = goDeclaredTypeOfIdentifierBaseH17g08.call(this, node);
+    if ((shipped !== undefined) || (node?.kind !== SyntaxKind.Identifier)) {
+        return shipped;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const init: any = decl?.initializer;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.parent?.kind !== SyntaxKind.VariableDeclarationList)
+        || (init?.kind !== SyntaxKind.AwaitExpression) || h17g08AwaitVisiting.has(decl)) {
+        return undefined;
+    }
+    h17g08AwaitVisiting.add(decl);
+    try {
+        return (this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType === '*int64') ? '*int64' : undefined;
+    } catch (e) {
+        return undefined;
+    } finally {
+        h17g08AwaitVisiting.delete(decl);
+    }
+};
+// ===== h17-g08 (end) =====
