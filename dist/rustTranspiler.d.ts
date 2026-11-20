@@ -1441,6 +1441,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust90bHandleSyncedInTest(node: Node, plan: {
         bindPos: number;
     }): boolean;
+    /** `this.safeX (client.subscriptions, k, ..)` after a write reads the handle's snapshot when every write of the field
+     *  is a whole `client.subscriptions[k] = v` / `delete` statement (both update the snapshot with the live client) and no
+     *  await or whole hand-off of `client` can run before the read (earlier in the method, or in a loop around it). */
+    rustHandleSyncedSafeRead(node: Node, plan: {
+        bindPos: number;
+    }): boolean;
     /** ral-80b: a `const client = this.client (url)` local whose declaration has not printed yet. A scalar decision made
      *  ahead of the method's print (a key local's use walk) would otherwise see `declOk` false and refuse every handle
      *  key use; the declaration prints `let mut client: Value = self.client(..)` on one line (the declOk test) when its
@@ -3841,6 +3847,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `row['k'][..] = v` (statement, first key a plain literal, value and keys not reading `row`) or `row['k'].push (v)`
      *  (statement, one argument) on a `safeDict*` row of a cache bucket. */
     rustCacheRowNestedUse(n: any, init: any): boolean;
+    private rustCacheRowNestedReads;
+    /** `row['k1']['k2']..` read (plain literal keys, not a write target, call receiver or key) on a `safeDict*` cache-bucket row:
+     *  the first hop prints `KeyRead::key_read` (Null for a `None` row or a missing key, as the boxed read), lower hops keep `get_value_k`. */
+    rustCacheRowNestedRead(n: any, init: any): boolean;
     /** The `&mut` map of a typed cache-row local: `if let Some(__d) = &mut row {` on the optional form (a `None` row skips the
      *  write, as the helper skipped `Null`), else the plain map; undefined when the local is not typed. */
     rustCacheRowMapHead(recv: any): [string, string] | undefined;

@@ -289,6 +289,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaWsClientMapReceiver(expression: any): boolean;
     javaWsClientObjectMapReceiver(expression: any): boolean;
     javaWsClientMapReadText(receiver: any, key: any): string | undefined;
+    javaWsClientListKeyedRead(receiver: any, key: any): string | undefined;
     javaWsClientMapRead(node: any): string | undefined;
     javaElementReadClaimed(node: any): boolean;
     javaWsClientLocalType(declaration: any): string | undefined;

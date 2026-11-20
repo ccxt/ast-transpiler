@@ -365,6 +365,7 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
         '2': string;
         '3': string;
     };
+    SafeValue: string;
 };
 export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     AddMarginAsync: string;
@@ -692,6 +693,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         [method: string]: number[];
     };
     stringPointerTupleCalls: string[];
+    guardedStringTupleCalls: string[];
     siblingStringPassthroughPattern: RegExp | undefined;
     predictionMapFields: Set<string>;
     goTupleSlotTypes: {
@@ -887,6 +889,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMapLocalRebindWrites: Map<any, Set<any>>;
     goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
     goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
+    goClientSubscriptionsContainer(container: any): boolean;
+    goAfterNilExitGuard(use: any, name: string): boolean;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
     goMapLocalKeyIsString(key: any, printed: string): boolean;
@@ -948,6 +952,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilInitInitializer(initializer: any): boolean;
     goNilInitLocalType(declaration: any): string | undefined;
     goNilInitLocalTypeScan(declaration: any): string | undefined;
+    goNilInitStrDeclaredLocalType(declaration: any): string | undefined;
+    goNilInitStrDeclaredReadOk(n: any): boolean;
+    goStringPointerStoreLocalName(node: any): string | undefined;
     goNilInitListLocalType(declaration: any): string | undefined;
     goNilInitStringLocalType(declaration: any): string | undefined;
     goNilInitStringScanCache: WeakMap<object, string>;
@@ -1024,6 +1031,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goReceiverIsOrderBook(node: any): boolean;
     goOrderBookSetterText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any, valueStr: string): string | undefined;
     goOrderBookSideReadFollows(id: any): boolean;
+    goOrderBookClearText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any): string | undefined;
     goOrderBookLocalNeverNil(id: any): boolean;
     goWsCacheClassType(type: any): boolean;
     goWsCacheField(node: any): boolean;
@@ -1116,6 +1124,12 @@ export declare class GoTranspiler extends BaseTranspiler {
                 method: string;
                 value: string;
                 type: string;
+            };
+        };
+        clears?: {
+            accessor: string;
+            fields: {
+                [field: string]: string;
             };
         };
     } | undefined;
@@ -1450,6 +1464,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgWriteIsNativeArithmetic(rhs: any): boolean;
     goGetArgCopyTarget(use: any, body: any): any;
     goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
+    goGetArgPointerIsBalanceKey(n: any): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
@@ -1565,6 +1580,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         hasEnd: boolean;
         end: number;
     } | undefined;
+    goSliceLoopCounterArgs(node: any): string | undefined;
+    goSliceLoopCounterText(node: any, receiverText: string, goType: string): string | undefined;
     goIsNativeSliceCall(node: any): boolean;
     printInlineSlice(node: any, receiverText: string): string | undefined;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -1740,6 +1757,10 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goGuardedStringTupleSlot(node: any): boolean;
+}
+export interface GoTranspiler {
+    goGuardedTupleSlot0(node: any): boolean;
+    goNonNilStringOverloadSlot(node: any): boolean;
 }
 export interface GoTranspiler {
     goCurrencyRowLocal(node: any): boolean;
