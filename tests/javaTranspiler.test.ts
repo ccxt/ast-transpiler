@@ -10824,3 +10824,62 @@ describe('fee tier parseNumber literals', () => {
         expect((out.match(/parseNumber\(/g) || []).length).toBe(5);
     });
 });
+
+describe('ws client owner map read keyed by a declared-List counter element: Helpers.GetValue -> guarded get', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-ws-client-list-keyed-reads');
+    const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
+    const run = (listed: string[]) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => (listed.includes(declaration?.name?.text) ? 'List<Object>' : undefined);
+        return byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    };
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(CLIENT_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(CLIENT_FIXTURE,
+            "export default class Client {\n" +
+            "    subscriptions: { [key: string]: any } = {};\n" +
+            "    other: { [key: string]: any } = {};\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Client from '../base/ws/Client';\n" +
+            "class Probe {\n" +
+            "    match (client: Client, n: number) {\n" +
+            "        const hashes = Object.keys (client.subscriptions);\n" +
+            "        let loose: any = undefined;\n" +
+            "        loose = client.other;\n" +
+            "        for (let i = 0; i < hashes.length; i++) {\n" +
+            "            const a = client.subscriptions[hashes[i]];\n" +
+            "            const b = client.other[hashes[i]];\n" +
+            "            const c = client.subscriptions[loose[i]];\n" +
+            "            const d = client.subscriptions[hashes[n]];\n" +
+            "            if (a === undefined || b === undefined || c === undefined || d === undefined) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n");
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a counter read of a declared List key prints the null-guarded native get', () => {
+        const out = run([ 'hashes', 'loose' ]);
+        expect(out).not.toContain('Helpers.GetValue(client.subscriptions, (hashes');
+        expect(out).toMatch(/Object a = \(client\.subscriptions == null \|\| \(hashes == null[^;]*\.get\(i\)\) == null \? null : client\.subscriptions\.get\(\(hashes/);
+    });
+
+    test('a non-ws-client map, a non-counter index or an undeclared key list keeps the helper', () => {
+        const out = run([ 'hashes' ]);
+        expect(out).toContain('Object b = Helpers.GetValue(client.other,');
+        expect(out).toContain('Object c = Helpers.GetValue(client.subscriptions, Helpers.GetValue(loose, i))');
+        expect(out).toMatch(/Object d = Helpers\.GetValue\(client\.subscriptions, /);
+        const none = run([]);
+        expect(none).toMatch(/Object a = Helpers\.GetValue\(client\.subscriptions, /);
+    });
+});

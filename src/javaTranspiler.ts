@@ -4958,6 +4958,10 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // `client.<map>[k]` with a repeatable non-primitive identifier key: the null-guarded native get
     javaWsClientMapReadText(receiver, key): string | undefined {
+        const listKeyed = this.javaWsClientListKeyedRead(receiver, key);
+        if (listKeyed !== undefined) {
+            return listKeyed;
+        }
         if (this.javaWsClientMapField(receiver) === undefined || !isIdentifier(key)
             || !this.javaRepeatableOperand(key) || this.javaOperandPrintsPrimitiveNumber(key) || this.javaKeyPrintsPrimitive(key)) {
             return undefined;
@@ -4965,6 +4969,22 @@ export class JavaTranspiler extends BaseTranspiler {
         const target = this.printNode(receiver, 0);
         const keyText = this.printNode(key, 0);
         return this.javaNullGuardedGet(target, keyText, keyText);
+    }
+
+    // `client.<map>[keys[i]]`, keys a declared List read at a counter: the key prints the guarded
+    // native list read (side-effect free, printed twice); the String-keyed Map `get` behind both null
+    // tests is the helper's Map branch
+    javaWsClientListKeyedRead(receiver, key): string | undefined {
+        if (this.javaWsClientMapField(receiver) === undefined || !isElementAccessExpression(key)
+            || !this.javaPrimitiveCounterIndex(key.argumentExpression)
+            || !JAVA_DECLARED_LIST_TYPES.test(this.javaDeclaredTypeOf(key.expression) ?? '')) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (!keyText.startsWith('(') || keyText.includes('Helpers.')) {
+            return undefined;
+        }
+        return this.javaNullGuardedGet(this.printNode(receiver, 0), keyText, keyText);
     }
 
     javaWsClientMapRead(node): string | undefined {
