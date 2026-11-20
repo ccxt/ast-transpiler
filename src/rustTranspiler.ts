@@ -2344,6 +2344,7 @@ export class RustTranspiler extends BaseTranspiler {
             const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.print84dStoreKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
+            const rowNested = keyStrs.length > 1 ? this.printCacheRowNestedWrite(baseExpr, keyStrs, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (rowNested !== undefined) return rowNested;
             // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
             // ral-55n: a registered `i64` counter as the written key is the `Int` the boxed counter held (marked closed only below,
             // when this helper write is what prints)
@@ -21581,6 +21582,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(node, identation, name = undefined, parsedArg = undefined) {
+        const rowPush = this.printCacheRowFieldPush(node, parsedArg); if (rowPush !== undefined) return rowPush;
         const recv: any = this.rustBearerElementPushCall(node);
         if (recv !== undefined && parsedArg !== undefined && this.rustDictBearerDeclaration(recv.expression) !== undefined) {
             const text = this.rustBearerElementPushText(node, RustTranspiler.cloneIfBareLocal(parsedArg.trim()));
@@ -24660,6 +24662,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-84d R2: a variable-key write on a defaulted `safeDict (this.options, 'k', {})` copy (an untagged plain store): native insert
             if (!extendReuse && !sbAlias && from === 'dict' && this.rust84dStoreKeyWrite(n, init)) return keyWriteUses.push(n) > 0 && store84dWrites.push(n.parent.parent) > 0 && ++keyWrites > 0 && ++reads > 0;
             if (!sbAlias && this.rustAeoTargetWrite(n) && !this.rustAeoBoxedNative(n)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
+            if (!sbAlias && this.rustCacheRowDynamicWrite(n, init)) return aeoWriteUses.push(n) > 0 && ++reads > 0;
+            if (!sbAlias && this.rustCacheRowNestedUse(n, init)) return this.rustCacheRowNestedUses.add(n) && ++reads > 0;
             // ral-50b: `xs[0] = v` (statement, one level, integer literal index) on a never-null list local: the runtime
             // `add_element_to_object` takes the typed list (`impl AddTarget for List`) and writes the index exactly as the boxed
             // `Value::Arr` arm did (padding with Null); the value may read `xs` (bound first, as the boxed write did)
@@ -24843,7 +24847,7 @@ export class RustTranspiler extends BaseTranspiler {
             && this.rustNullTestedDictLocal(init, nullTests, writes);
         if (optKeySetsOnly) this.rustOptKeySetLocals.add(declaration);
         if ((keySets > 0 || keyWrites > 0) && (from !== 'dict' || (optional && !onlySafeDictWrites && !optKeySetsOnly) || (init !== undefined && !extendReuse && this.rustInitReadsTaggedStore(init)))) return undefined;
-        if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, optional ? 30 : 0))) return undefined;
+        if (keyWriteUses.some((n: any) => !this.rustBuiltKeyWriteLineOk(n, optional ? 30 : 0) && !this.rustCacheRowFirstLineOk(n, init))) return undefined;
         if (extendReuse && (keySets > 0 || boxedElementUses.some((n: any) => !this.rustBoxLineOk(n)))) return undefined;
         // ral-vf: a `safeDict` result shares the response's Arc; a key write copies on write in both forms (the helper's
         // `Arc::make_mut` too), and a store-read source is refused above, so no tagged write is lost
@@ -26062,8 +26066,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (key === undefined || key.startsWith('__')) return false;
         if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))) return false;
         if (!this.rustBorrowedDictSource(init) || this.rustInitReadsTaggedStore(init)) return false;
-        if (!/(?:^|[\\/])ts[\\/]src[\\/][^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
         const head: any = this.rustSkipWrappers(init.arguments[0]);
+        if (!/(?:^|[\\/])ts[\\/]src[\\/][^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return this.rustCacheBucketRow(head);
         // the read's head is a local (or one element of a local list), never a `this.` store or a field of another object
         if (head === undefined) return false;
         if (isElementAccessExpression(head)) return isIdentifier(head.expression);
@@ -26074,6 +26078,112 @@ export class RustTranspiler extends BaseTranspiler {
             return at !== undefined && this.literalKindOfNode(at) === 'number' && this.rustCallBuildsContainer(head, 'list');
         }
         return isIdentifier(head);
+    }
+
+    /** A row read by key out of a ws cache bucket (`const b = this.safeDict (c.hashmap, sym, {})`, `b` a const never written):
+     *  the runtime tags only the bucket (`__cache_backref`), never its rows, so a row write is the helper's plain insert. */
+    rustCacheBucketRow(head: any): boolean {
+        if (head === undefined || !isIdentifier(head)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(head);
+        if (d === undefined || !isVariableDeclaration(d) || (d.parent.flags & NodeFlags.Const) === 0) return false;
+        const b: any = this.rustSkipWrappers(d.initializer);
+        if (b === undefined || !isCallExpression(b) || !isPropertyAccessExpression(b.expression) || String(b.expression.name.text) !== 'safeDict') return false;
+        const src: any = this.rustSkipWrappers(b.arguments[0]);
+        return src !== undefined && isPropertyAccessExpression(src) && String(src.name.text) === 'hashmap';
+    }
+
+    /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
+     *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
+    rustCacheRowDynamicWrite(n: any, init: any): boolean {
+        const access: any = n.parent;
+        const write: any = access?.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n || !isBinaryExpression(write) || write.left !== access
+            || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))) return false;
+        if (!this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]))) return false;
+        const name = String(n.text);
+        const reads = (x: any): boolean => (isIdentifier(x) && String(x.text) === name) || (x.forEachChild(reads) ?? false);
+        return !reads(write.right) && !reads(access.argumentExpression);
+    }
+
+    /** `c.append (x)` (statement, sole argument) on a local ws cache (`CacheSlot::append` takes the item as a `Value`). */
+    rustLocalCacheAppendArg(n: any): boolean {
+        const up: any = n.parent;
+        return isCallExpression(up) && up.arguments.length === 1 && up.arguments[0] === n && up.parent?.kind === SyntaxKind.ExpressionStatement
+            && isPropertyAccessExpression(up.expression) && String(up.expression.name.text) === 'append' && isIdentifier(up.expression.expression)
+            && this.rustWsCacheMethodReceiver(up.expression.expression);
+    }
+
+    private rustCacheRowNestedUses = new WeakSet<any>();
+
+    /** `row['k'][..] = v` (statement, first key a plain literal, value and keys not reading `row`) or `row['k'].push (v)`
+     *  (statement, one argument) on a `safeDict*` row of a cache bucket. */
+    rustCacheRowNestedUse(n: any, init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))
+            || !this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]))) return false;
+        const access: any = n.parent;
+        if (!isElementAccessExpression(access) || access.expression !== n) return false;
+        const key: any = this.rustSkipWrappers(access.argumentExpression);
+        if (key === undefined || !isStringLiteralLikeNode(key) || String(key.text) in this.StringLiteralReplacements || /^\d+$/.test(String(key.text)) || String(key.text).startsWith('__')) return false;
+        const name = String(n.text);
+        const reads = (x: any): boolean => (isIdentifier(x) && String(x.text) === name) || (x.forEachChild(reads) ?? false);
+        let top: any = access;
+        while (isElementAccessExpression(top.parent) && top.parent.expression === top) { if (reads(top.parent.argumentExpression)) return false; top = top.parent; }
+        const up: any = top.parent;
+        if (top !== access && isBinaryExpression(up) && up.left === top && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return !reads(up.right);
+        return top === access && this.rustBearerElementPushCall(up?.parent) === access && !reads(up.parent.arguments[0]);
+    }
+
+    /** The `&mut` map of a typed cache-row local: `if let Some(__d) = &mut row {` on the optional form (a `None` row skips the
+     *  write, as the helper skipped `Null`), else the plain map; undefined when the local is not typed. */
+    rustCacheRowMapHead(recv: any): [string, string] | undefined {
+        if (!isIdentifier(recv)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustBorrowedLocalKind(declaration) !== 'dict') return undefined;
+        const name = super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+        return this.rustOptContainerLocals.has(declaration) ? [ `if let Some(__d) = &mut ${name} { `, ' }' ] : [ `{ let __d = &mut ${name}; `, ' }' ];
+    }
+
+    /** `row['k1'][..]['kN'] = v` on a typed cache row: the first hop is the map's own `entry("k1").or_insert(Value::Null)`
+     *  (the arm `get_value_mut` runs on a `Value::Dict` with a `Str` key); lower hops and the write keep their helpers. */
+    printCacheRowNestedWrite(baseExpr: any, keyStrs: string[], valueText: string): string | undefined {
+        const access: any = baseExpr?.parent;
+        if (access === undefined || !this.rustCacheRowNestedUses.has(baseExpr)) return undefined;
+        const head = this.rustCacheRowMapHead(baseExpr);
+        if (head === undefined) return undefined;
+        let acc = `std::sync::Arc::make_mut(__d).entry(${this.quotedStringLiteral(String(this.rustSkipWrappers(access.argumentExpression).text))}.to_string()).or_insert(Value::Null)`;
+        for (const k of keyStrs.slice(1, -1)) acc = `get_value_mut(${acc}, &${k})`;
+        const value = valueText.trim().startsWith('\u0004') ? valueText.trim() : RustTranspiler.cloneIfBareLocal(valueText.trim());
+        return `${head[0]}add_element_to_object(${acc}, &${keyStrs[keyStrs.length - 1]}, ${value});${head[1]}`;
+    }
+
+    /** `row['k'].push (v)` on a typed cache row: `append_to_object_array`'s map arm (`entry(k).or_insert_with(empty list)`, a
+     *  push when the entry is a list). Its book-cache route needs a tagged order book at `row['k']`; cache rows are parsed
+     *  orders / positions and never hold one. */
+    printCacheRowFieldPush(node: any, parsedArg: string | undefined): string | undefined {
+        const access: any = this.rustBearerElementPushCall(node);
+        if (access === undefined || parsedArg === undefined || !this.rustCacheRowNestedUses.has(access.expression)) return undefined;
+        const head = this.rustCacheRowMapHead(access.expression);
+        if (head === undefined) return undefined;
+        const key = this.quotedStringLiteral(String(this.rustSkipWrappers(access.argumentExpression).text));
+        return `${head[0]}if let Value::Arr(__a) = std::sync::Arc::make_mut(__d).entry(${key}.to_string()).or_insert_with(|| Value::Array(Vec::new())) { std::sync::Arc::make_mut(__a).push(${RustTranspiler.cloneIfBareLocal(parsedArg.trim())}); }${head[1]}`;
+    }
+
+    /** A multi-line value written into a cache-bucket row: only its first printed line joins the insert line (400-char budget). */
+    rustCacheRowFirstLineOk(n: any, init: any): boolean {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict(?:2|N)?$/.test(String(init.expression.name.text))
+            || !this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]))) return false;
+        const write: any = n.parent.parent;
+        let depth = 0;
+        for (let up: any = write; up !== undefined && !isFunctionLike(up); up = up.parent) if (isBlock(up)) depth++;
+        let rhs = '';
+        try {
+            rhs = this.printNode(write.right, 0).trim();
+        } catch (e) {
+            return false;
+        }
+        const lines = rhs.split('\n');
+        return lines.length > 1 && lines.every((l: string) => depth * 4 + l.length + 100 <= 400) && depth * 4 + String(n.text).length + lines[0].length + 100 <= 400;
     }
 
     /** ral-40g: `row['k'] = v` (statement, literal non-meta key) on a row of a typed `Dict[]` list local (`rows[i]`, the checker
@@ -26382,6 +26492,7 @@ export class RustTranspiler extends BaseTranspiler {
             && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && (this.rustThisRootedPlace(up.left) || this.rustLocalKeyPlace(up.left, n))) return true;
         if (this.rustLocalStoreHandOff(n)) return true;
         if (this.rustValueLocalWriteHandOff(n)) return true;
+        if (this.rustLocalCacheAppendArg(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
@@ -26594,6 +26705,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustWsDispatchCallArg(n)) return true;
         // ral-84a: the argument of `book.cache.push (x)` on a typed book local (the book's `cache_push(v: Value)`)
         if (this.rust84aBookCachePushArg(n)) return true;
+        // `c.append (x)` on a local ws cache: the runtime `append` takes a `Value`, so `None` boxes to the reader's Null
+        if (this.rustLocalCacheAppendArg(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
