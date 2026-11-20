@@ -15094,6 +15094,7 @@ export class GoTranspiler extends BaseTranspiler {
     uncalledStringParams: { [method: string]: number[] } = {};
     // base methods whose tuple result slot 0 is the Go `*string` (TS declares `string`)
     stringPointerTupleCalls: string[] = [];
+    guardedStringTupleCalls: string[] = [];
     // exchange-local methods (by name pattern) whose sibling-file call sites may pass a unified-string
     // parameter of their enclosing method straight through
     siblingStringPassthroughPattern: RegExp | undefined = undefined;
@@ -15170,6 +15171,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.unifiedNullableInt64Params = config['unifiedNullableInt64Params'] ?? {};
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
         this.stringPointerTupleCalls = config['stringPointerTupleCalls'] ?? [];
+        this.guardedStringTupleCalls = config['guardedStringTupleCalls'] ?? [];
         this.predictionMapFields = new Set<string>(config['predictionMapFields'] ?? []);
         this.siblingStringPassthroughPattern = (typeof config['siblingStringPassthroughPattern'] === 'string') ? new RegExp(config['siblingStringPassthroughPattern']) : undefined;
         // consumer tables for the stdlib import placement (goStdlibImportIsPlaceable): the source paths
@@ -32089,7 +32091,7 @@ GoTranspiler.prototype.goConcatDerefableStringOperand = function (node) {
         return this.goGuardedStringTupleSlot(node);
     }
     const checker: any = this.checkerOrUndefined();
-    return (checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node));
+    return ((checker !== undefined) && this.goStringLiteralUnionType(checker.getTypeAtLocation(node))) || this.goGuardedStringTupleSlot(node);
 };
 
 export interface GoTranspiler {
@@ -32098,9 +32100,34 @@ export interface GoTranspiler {
 // slot 0 of `const [ x, p ] = this.<stringPointerTupleCall> (…)` (a Go *string) read under an
 // enclosing `x !== undefined` or after an exiting `x === undefined` guard: never nil there
 GoTranspiler.prototype.goGuardedStringTupleSlot = function (node) {
-    return (node?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === undefined)
-        && (this.goBoundIdentifierType(node) === '*string')
-        && (this.goHasExitingNilGuard(node) || this.goHasEnclosingNilGuard(node));
+    const slot = (node?.kind === SyntaxKind.Identifier) && (((this.goDeclaredTypeOfIdentifier(node) === undefined)
+        && (this.goBoundIdentifierType(node) === '*string')) || this.goGuardedTupleSlot0(node));
+    return slot && (this.goHasExitingNilGuard(node) || this.goHasEnclosingNilGuard(node) || this.goNonNilStringOverloadSlot(node));
+};
+
+export interface GoTranspiler {
+    goGuardedTupleSlot0(node): boolean;
+    goNonNilStringOverloadSlot(node): boolean;
+}
+// handleOptionStringAndParams(2) with a string-literal default resolves to the `[string, Dict]` overload:
+// the Go base returns that default or a present string option (another type panics), never nil
+GoTranspiler.prototype.goNonNilStringOverloadSlot = function (node) {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    const call: any = decl?.parent?.parent?.initializer;
+    const name = call?.expression?.name?.text;
+    const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4 }[name];
+    const literal = call?.arguments?.[at]?.kind === SyntaxKind.StringLiteral;
+    return literal && this.goGuardedTupleSlot0(node) && this.goCheckerTypeHasFlags(node, TypeFlags.StringLike);
+};
+// slot 0 of `const [ x, p ] = this.<guardedStringTupleCall> (…)`: a Go *string read only by the guarded concat proof
+GoTranspiler.prototype.goGuardedTupleSlot0 = function (node) {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    const isSlot0 = (decl?.kind === SyntaxKind.BindingElement) && (decl.parent?.kind === SyntaxKind.ArrayBindingPattern) && (decl.parent.elements[0] === decl);
+    const holder = isSlot0 ? decl.parent.parent : undefined;
+    const init = holder?.initializer;
+    const constant = ((holder?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
+    return constant && (init?.kind === SyntaxKind.CallExpression) && (init.expression?.expression?.kind === SyntaxKind.ThisKeyword)
+        && this.guardedStringTupleCalls.includes(init.expression?.name?.text);
 };
 
 export interface GoTranspiler {
