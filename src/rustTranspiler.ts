@@ -1505,7 +1505,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeDictInsert(baseExpr, keyNode, keyText, valueText): string | undefined {
-        const fresh = this.rustFreshDictInsertReceiver(baseExpr, keyNode);
+        const fresh = this.rustFreshDictInsertReceiver(baseExpr, keyNode) ?? this.rustFreshDictDynamicKeyReceiver(baseExpr, keyNode);
         const receiver = fresh ?? this.rustNativeInsertReceiver(baseExpr);
         if (receiver === undefined || (fresh === undefined && !this.rustReceiverStaysDict(baseExpr, receiver))) {
             return undefined;
@@ -1554,6 +1554,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // Dynamic key: a plain place, never one that reads the receiver (the
         // insert holds its `&mut`). Every other key shape keeps the helper.
+        if (receiver.ownedKey && this.rustScalarInsertKeyArg(keyNode)?.endsWith('.clone()')) return `${super.printIdentifier(this.rustSkipWrappers(keyNode))}.to_string()`;
         const scalarKey = this.rustScalarInsertKeyArg(keyNode); if (scalarKey !== undefined) return scalarKey;
         const key = keyText.trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
@@ -40684,6 +40685,47 @@ export class RustTranspiler extends BaseTranspiler {
         const dflt: any = this.rustSkipWrappers(init.arguments[2]);
         return isObjectLiteralExpression(dflt) && dflt.properties.length === 0 && this.rustBalanceOptionsPlace(this.rustSkipWrappers(init.arguments[0]));
     }
+
+    // ===== h26-R10
+    /** A local-identifier-key write on a boxed Dict-annotated REST local whose every binding is a plain literal, a
+     *  base copy call or a base `groupBy`/`indexBy` (all fresh untagged maps): the native insert with the helper's key
+     *  conversion (`stringify_param`), so the key local keeps its type and no clone is added. */
+    rustFreshDictDynamicKeyReceiver(ident: any, keyNode: any): { text: string, isField: boolean, plain: boolean, nameNode: any, ownedKey: boolean } | undefined {
+        if (!isIdentifier(ident) || !isIdentifier(keyNode)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || declaration.type === undefined || !isIdentifier(declaration.name)
+            || !/\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(declaration))) return undefined;
+        const keyDeclaration: any = this.rustSingleLocalDeclaration(keyNode);
+        const annotated = this.getCheckedTypeOf(declaration.type);
+        const scope = this.rustEnclosingFunction(declaration);
+        if (keyDeclaration === undefined || !isVariableDeclaration(keyDeclaration) || annotated === undefined || !this.isProvenMapType(annotated)
+            || scope === undefined || !this.rustFreshGroupedDictProducer(declaration.initializer)
+            || this.rustDictLocalIsTyped(declaration) || this.rustDeclaredLocalEntry(ident) !== undefined) return undefined;
+        const name = String(declaration.name.text);
+        const symbol = this.rustSymbolOf(declaration.name);
+        let fresh = true;
+        this.rustWalkScope(scope, (n) => {
+            if (!fresh) return RUST_WALK_STOP;
+            if (n !== declaration && this.rustBindsName(n, name)) { fresh = false; return RUST_WALK_STOP; }
+            if (isArrayLiteralExpression(n) && isBinaryExpression(n.parent) && n.parent.left === n
+                && n.elements.some((e) => isIdentifier(e) && String(e.text) === name)) { fresh = false; return RUST_WALK_STOP; }
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier(n.left) && String(n.left.text) === name
+                && (symbol === undefined || this.rustSymbolOf(n.left) === symbol)
+                && (n.operatorToken.kind !== SyntaxKind.EqualsToken || !this.rustFreshGroupedDictProducer(n.right))) { fresh = false; return RUST_WALK_STOP; }
+        });
+        return fresh ? { text: name, isField: false, plain: true, nameNode: ident, ownedKey: true } : undefined;
+    }
+
+    rustFreshGroupedDictProducer(node: any): boolean {
+        const e: any = this.rustStripWrappers(node);
+        if (e === undefined) return false;
+        if (this.rustFreshDictProducer(e)) return true;
+        if (!isCallExpression(e) || !isPropertyAccessExpression(e.expression) || e.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !['groupBy', 'indexBy'].includes(String(e.expression.name.text))) return false;
+        const declaration: any = this.rustScalarCallee(e);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
+    }
+
 }
 
 
