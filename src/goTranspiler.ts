@@ -19923,7 +19923,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 bail = true;
                 return;
             }
-            if (goReadRuleAccepts(GO_NIL_INIT_STRING_READ_RULE, this, n)) {
+            if (goReadRuleAccepts(GO_NIL_INIT_STRING_READ_RULE, this, n) || this.goNilInitStringMethodArgRead(n)) {
                 reads.push(n);
                 return;
             }
@@ -19961,7 +19961,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((readParent?.kind === SyntaxKind.BinaryExpression) && (readParent.operatorToken?.kind === SyntaxKind.PlusToken)) {
                 continue;
             }
-            if (!this.goNilInitWriteDominates(writes, read)) {
+            if (!this.goNilInitWriteDominates(writes, read) && !this.goNilInitWritesCoverRead(writes, read)) {
                 return undefined;
             }
         }
@@ -20077,6 +20077,66 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 }
             }
             statement = this.goNilInitEnclosingStatement(block);
+        }
+        return false;
+    }
+
+    // an earlier sibling of the read (or of an enclosing statement) that writes on every path, also through
+    // an if / else whose branches all write: the nil seed is never what the read sees
+    goNilInitWritesCoverRead(writes: any[], read): boolean {
+        const writeStatements = new Set(writes.map((write) => this.goNilInitEnclosingStatement(write)));
+        let statement = this.goNilInitEnclosingStatement(read);
+        while ((statement !== undefined) && (statement.parent?.kind === SyntaxKind.Block)) {
+            const siblings = statement.parent.statements;
+            for (const sibling of siblings) {
+                if (sibling.end > statement.pos) {
+                    break;
+                }
+                if (this.goNilInitStatementAlwaysWrites(sibling, writeStatements)) {
+                    return true;
+                }
+            }
+            statement = this.goNilInitEnclosingStatement(statement.parent);
+        }
+        return false;
+    }
+
+    // an argument of a `this.` method whose Go parameter stays `any` (or is `string`): a string reaches it as the
+    // boxed string did; the caller still proves every path wrote the local before this read
+    goNilInitStringMethodArgRead(n): boolean {
+        const { current, parent } = goReadClimb(n);
+        // `other = x` copies the value into another local, which answers for its own type
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (parent.right === current) && (parent.left?.kind === SyntaxKind.Identifier) && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            return true;
+        }
+        if ((parent?.kind !== SyntaxKind.CallExpression) || !goNilInitIsAnyArgument(parent, current)) {
+            return false;
+        }
+        const callee = parent.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const declaration = this.goMethodDeclarationOfCallee(callee);
+        const index = parent.arguments.indexOf(current);
+        const param = declaration?.parameters?.[index];
+        if ((param === undefined) || (param.dotDotDotToken !== undefined)) {
+            return false;
+        }
+        const goType = this.goNativeParameterType(param);
+        return (goType === undefined) || (goType === 'string');
+    }
+
+    goNilInitStatementAlwaysWrites(statement, writeStatements: Set<any>): boolean {
+        if (writeStatements.has(statement)) {
+            return true;
+        }
+        if (statement?.kind === SyntaxKind.Block) {
+            return statement.statements.some((child) => this.goNilInitStatementAlwaysWrites(child, writeStatements));
+        }
+        if ((statement?.kind === SyntaxKind.IfStatement) && (statement.elseStatement !== undefined)) {
+            return this.goNilInitStatementAlwaysWrites(statement.thenStatement, writeStatements)
+                && this.goNilInitStatementAlwaysWrites(statement.elseStatement, writeStatements);
         }
         return false;
     }
