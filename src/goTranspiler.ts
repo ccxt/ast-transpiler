@@ -44757,3 +44757,45 @@ function h26g03BaseMethod (goTranspiler, callee) {
     }
 }
 // ===== h26-G03 (end) =====
+
+// ===== h26-G04: list-declared locals seeded by `this.safeList (c, k, [])` (begin) =====
+// `const xs: Dict[] | any[] | List = this.safeList (c, k, [])` reads SafeListSlice: the member list or the empty
+// default, never nil (as the box, which SafeList never left nil either), so nil tests, copies into list/any locals,
+// hand-offs to `this.method (..)` arguments and rebinding to a declared []any keep their answers.
+function h26g04SeededListLocal (goTranspiler: GoTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || !h24n04DeclaredList (declaration.type) || !h24n04EmptyDefaultSafeList (declaration.initializer)
+        || (declaration.initializer.expression.name.text !== 'safeList')) {
+        return false;
+    }
+    return goTranspiler.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => goTranspiler.goSafeListUseReadsTheList (n)
+        || goTranspiler.goListLocalSinkReadsAsList (n, true) || h26g04NeverNilUse (goTranspiler, n)) !== undefined;
+}
+function h26g04NeverNilUse (goTranspiler: GoTranspiler, node): boolean {
+    const parent: any = node.parent;
+    if (goTranspiler.goIsNilComparisonOperand (node, parent)) {
+        return true;
+    }
+    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === node)) {
+        const right: any = goTranspiler.goUnwrapParenthesizedNode (parent.right);
+        return (right?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier (right) === GO_SAFE_LIST_LOCAL_TYPE);
+    }
+    const callee: any = (parent?.kind === SyntaxKind.CallExpression) ? parent.expression : undefined;
+    return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && (parent.arguments.indexOf (node) >= 0) && !/^safe/.test (String (callee.name?.text ?? ''));
+}
+{
+    const listType = GoTranspiler.prototype.goSafeListLocalUnbox;
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        return listType.call (this, declaration) ?? (h26g04SeededListLocal (this, declaration) ? GO_SAFE_LIST_LOCAL_TYPE : undefined);
+    };
+    const listValue = GoTranspiler.prototype.goSafeListUnboxValue;
+    GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
+        if ((listType.call (this, declaration) === undefined) && h26g04SeededListLocal (this, declaration)) {
+            const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, (i === 0) ? identation : 0).trim ());
+            return `this.SafeListSlice(${args.join (', ')})`;
+        }
+        return listValue.call (this, declaration, identation);
+    };
+}
+// ===== h26-G04 (end) =====
