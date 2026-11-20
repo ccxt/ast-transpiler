@@ -10874,9 +10874,115 @@ function goGeneralReturnKeepsAbsence (goTranspiler, node, goType) {
         return true;
     }
     if (goType === '*string') {
-        return collectReturnStatements (node.body).every ((statement) => (statement.expression !== undefined) && !isAbsentExpression (statement.expression));
+        return collectReturnStatements (node.body).every ((statement) => (statement.expression !== undefined) && !isAbsentExpression (statement.expression))
+            || goStrReturnCallersKeepNil (node.getSourceFile?. ()?.fileName, node.name?.text, new Set ());
     }
     return ccxtGoGeneralReturnKeepsAbsence (goTranspiler, node, goType);
+}
+
+// a `: Str` method with a nil path may print `*string` only when every ts/src call of it binds a const local
+// whose reads never box the pointer: nil tests, a pointer compare with another such local, a store guarded
+// by `x !== undefined`, or `return x` from a `: Str` method passing this same proof
+function goStrReturnCallersKeepNil (fileName, name, seen) {
+    const graph = (typeof fileName === 'string') ? ccxtGoTsSrcImportGraph (fileName) : undefined;
+    if ((graph === undefined) || (typeof name !== 'string') || seen.has (name)) {
+        return (graph !== undefined) && seen.has (name);
+    }
+    seen.add (name);
+    const callRe = new RegExp ('\\b' + name + '\\b');
+    let calls = 0;
+    for (const [ file, text ] of graph.texts) {
+        if (!callRe.test (text)) {
+            continue;
+        }
+        let ok = true;
+        const visit = (n) => {
+            if (!ok) {
+                return;
+            }
+            if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === name) && !((n.parent?.kind === ts.SyntaxKind.MethodDeclaration) && (n.parent.name === n))) {
+                calls += 1;
+                ok = goStrCallBindsNilSafeLocal (n, fileName, seen);
+            }
+            n?.forEachChild (visit);
+        };
+        visit (ts.createSourceFile (file, text));
+        if (!ok) {
+            return false;
+        }
+    }
+    return calls > 0;
+}
+
+function goStrCallBindsNilSafeLocal (id, fileName, seen) {
+    const access = id.parent;
+    const call = access?.parent;
+    const decl = call?.parent;
+    if ((access?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (access.name !== id) || (access.expression.kind !== ts.SyntaxKind.ThisKeyword)
+        || (call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression !== access) || (decl?.kind !== ts.SyntaxKind.VariableDeclaration)
+        || (decl.initializer !== call) || (decl.name.kind !== ts.SyntaxKind.Identifier) || ((decl.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    let method = decl.parent;
+    while ((method !== undefined) && (method.kind !== ts.SyntaxKind.MethodDeclaration)) {
+        method = method.parent;
+    }
+    if (method === undefined) {
+        return false;
+    }
+    const local = decl.name.text;
+    const isNil = (e) => (e !== undefined) && isAbsentExpression (e);
+    const guarded = (n) => {
+        for (let up = n.parent; (up !== undefined) && (up !== method); up = up.parent) {
+            const c = up.expression;
+            if ((up.kind === ts.SyntaxKind.IfStatement) && (c?.kind === ts.SyntaxKind.BinaryExpression) && (c.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)
+                && (c.left.kind === ts.SyntaxKind.Identifier) && (c.left.text === local) && isNil (c.right) && (n.pos >= up.thenStatement.pos) && (n.end <= up.thenStatement.end)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    let ok = true;
+    const visit = (n) => {
+        if (!ok || ((n !== method.body) && isFunctionLike (n))) {
+            ok = ok && !((n.kind !== ts.SyntaxKind.MethodDeclaration) && n.getText ().includes (local));
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === local) && (n !== decl.name)) {
+            const p = n.parent;
+            const binary = (p?.kind === ts.SyntaxKind.BinaryExpression) ? p : undefined;
+            const op = binary?.operatorToken.kind;
+            const compare = (op === ts.SyntaxKind.EqualsEqualsEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+            const other = (binary?.left === n) ? binary?.right : binary?.left;
+            if (compare && (isNil (other) || (other.kind === ts.SyntaxKind.Identifier))) {
+                ok = isNil (other) || goStrLocalIsSameProof (other, method, fileName, seen);
+            } else if ((op === ts.SyntaxKind.EqualsToken) && (binary.right === n) && (binary.left.kind === ts.SyntaxKind.ElementAccessExpression)) {
+                ok = guarded (n);
+            } else if (p?.kind === ts.SyntaxKind.ReturnStatement) {
+                ok = (method.type?.getText () === 'Str') && goStrReturnCallersKeepNil (fileName, method.name?.text, seen);
+            } else {
+                ok = false;
+            }
+        }
+        n?.forEachChild (visit);
+    };
+    visit (method.body);
+    return ok;
+}
+
+// the other operand of a pointer compare is a const local bound to a call of a method under the same proof
+function goStrLocalIsSameProof (other, method, fileName, seen) {
+    let found = false;
+    const visit = (n) => {
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name.kind === ts.SyntaxKind.Identifier) && (n.name.text === other.text)) {
+            const callee = n.initializer?.expression;
+            found = (n.initializer?.kind === ts.SyntaxKind.CallExpression) && (callee?.kind === ts.SyntaxKind.PropertyAccessExpression)
+                && seen.has (callee.name.text);
+        }
+        n?.forEachChild (visit);
+    };
+    visit (method.body);
+    return found;
 }
 
 // `: Strings` / `: string[]` on a closed non-parse method: `[]any`, admitted only when every path is never nil
