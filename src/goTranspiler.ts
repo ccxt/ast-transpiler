@@ -44861,3 +44861,31 @@ function h26g05StrPtrLocal (body: string, name: string, depth: number): boolean 
     return slots.every ((m) => H26G05_STR_TUPLE_PRODUCERS.test (m[1].trim ()) && !/\[\s*0\s*\]$/.test (m[1].trim ()));
 }
 // ===== h26-G05 (end) =====
+// ===== h26-g06 (begin) =====
+// `this.markets` / `this.currencies` / `this.options` (and the *_by_id tables) as a call argument: go/v4/exchange.go
+// declares these fields `map[string]any`, so the argument is that map (a nil field is a nil map, never a pointer)
+const H26G06_BASE_MAP_FIELDS = new Set<string> ([ 'markets', 'markets_by_id', 'currencies', 'currencies_by_id', 'options' ]);
+{
+    const printedArgType = GoTranspiler.prototype.goPrintedArgType;
+    GoTranspiler.prototype.goPrintedArgType = function (arg) {
+        return printedArgType.call(this, arg) ?? (this.h26g06BaseMapFieldArg(arg) ? 'map[string]any' : undefined);
+    };
+}
+GoTranspiler.prototype.h26g06BaseMapFieldArg = function (arg) {
+    if ((arg?.kind !== SyntaxKind.PropertyAccessExpression) || (arg.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (arg.name?.kind !== SyntaxKind.Identifier) || !H26G06_BASE_MAP_FIELDS.has(arg.name.text)) {
+        return false;
+    }
+    let decls: any[] = [];
+    try {
+        decls = this.checkerOrUndefined()?.getSymbolAtLocation(arg.name)?.declarations?.map((d) => d.resolve()) ?? [];
+    } catch (e) {
+        decls = [];
+    }
+    return (decls.length > 0) && decls.every((d) => (d?.kind === SyntaxKind.PropertyDeclaration)
+        && /[\\/]base[\\/]Exchange\.ts$/.test(d.getSourceFile().fileName));
+};
+export interface GoTranspiler {
+    h26g06BaseMapFieldArg(arg): boolean;
+}
+// ===== h26-g06 (end) =====
