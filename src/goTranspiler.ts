@@ -4401,7 +4401,7 @@ const CCXT_GO_NIL_JOIN_READ_RULE = {
         [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
         [ts.SyntaxKind.ShorthandPropertyAssignment]: goReadAccepts,
         [ts.SyntaxKind.CallExpression]: (parent, child, goTranspiler) => ccxtGoNilJoinArgumentSeesAbsent (goTranspiler, parent, parent.arguments.indexOf (child)),
-        [ts.SyntaxKind.VariableDeclaration]: (parent, child, goTranspiler) => ccxtGoNilJoinStoredCopy (parent, child) || ccxtGoNilJoinFilledCopy (goTranspiler, parent, child),
+        [ts.SyntaxKind.VariableDeclaration]: (parent, child, goTranspiler) => ccxtGoNilJoinStoredCopy (parent, child) || ccxtGoNilJoinFilledCopy (goTranspiler, parent, child) || ccxtGoNilJoinEmptyDefaultCopy (parent, child),
     },
 };
 
@@ -4438,6 +4438,90 @@ function ccxtGoNilJoinNilMapTernaryArm (goTranspiler, parent, child) {
         return false;
     }
     return goTranspiler.goTernaryJoinNilMapParts (owner, GO_SAFE_DICT_LOCAL_TYPE) !== undefined;
+}
+
+// `const c = x; x = (c === undefined) ? {} : c;`: c is read only by that rebind of x, so x holds its own
+// joined map or a fresh empty map, and c is the same typed value (or nil) the join already allows
+function ccxtGoNilJoinEmptyDefaultRebind (node) {
+    const parent = node?.parent;
+    let test = parent;
+    while (test?.parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        test = test.parent;
+    }
+    const cond = test?.parent;
+    if ((parent?.kind !== ts.SyntaxKind.BinaryExpression) || (parent.left !== node) || (cond?.kind !== ts.SyntaxKind.ConditionalExpression)
+        || (cond.condition !== test) || (parent.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken) || !isNilLiteralExpression (parent.right)) {
+        return undefined;
+    }
+    const empty = cond.whenTrue;
+    const arm = cond.whenFalse;
+    if ((empty?.kind !== ts.SyntaxKind.ObjectLiteralExpression) || (empty.properties.length !== 0) || (arm?.kind !== ts.SyntaxKind.Identifier) || (arm.text !== node.text)) {
+        return undefined;
+    }
+    const store = cond.parent;
+    return ((store?.kind === ts.SyntaxKind.BinaryExpression) && (store.right === cond) && (store.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+        && (store.left?.kind === ts.SyntaxKind.Identifier)) ? store : undefined;
+}
+function ccxtGoNilJoinEmptyDefaultCopy (parent, child) {
+    const list = parent.parent;
+    if ((parent.initializer !== child) || (child.kind !== ts.SyntaxKind.Identifier) || (parent.name?.kind !== ts.SyntaxKind.Identifier)
+        || (list?.kind !== ts.SyntaxKind.VariableDeclarationList) || ((list.flags & ts.NodeFlags.Const) === 0) || (list.declarations.length !== 1)) {
+        return false;
+    }
+    const scope = list.parent?.parent;
+    const name = parent.name.text;
+    let store;
+    let uses = 0;
+    let ok = scope !== undefined;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === name) && (n !== parent.name)) {
+            uses += 1;
+            const rebind = ccxtGoNilJoinEmptyDefaultRebind ((n.parent?.kind === ts.SyntaxKind.BinaryExpression) ? n : ccxtGoNilJoinEmptyDefaultTest (n.parent));
+            if ((rebind === undefined) || (rebind.left.text !== child.text) || ((store !== undefined) && (store !== rebind))) {
+                ok = false;
+            }
+            store = rebind;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    visit (scope);
+    return ok && (uses === 2);
+}
+// the rebind write itself: either arm is a map[string]any (the copy is the joined local's own value)
+function ccxtGoNilJoinEmptyDefaultWrite (right, name) {
+    const test = ccxtGoNilJoinEmptyDefaultTest (right);
+    const store = (test?.kind === ts.SyntaxKind.Identifier) ? ccxtGoNilJoinEmptyDefaultRebind (test) : undefined;
+    if ((store === undefined) || (store.left.text !== name) || (store.right !== right)) {
+        return false;
+    }
+    let scope = store.parent;
+    while ((scope !== undefined) && !ts.isFunctionLike (scope)) {
+        scope = scope.parent;
+    }
+    // the tested name is a `const c = <name>` copy declared in the same function
+    let copied = false;
+    const visit = (n) => {
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.text === test.text)) {
+            copied = (n.initializer?.kind === ts.SyntaxKind.Identifier) && (n.initializer.text === name) && ccxtGoNilJoinEmptyDefaultCopy (n, n.initializer);
+        }
+        n.forEachChild (visit);
+    };
+    if (scope !== undefined) {
+        visit (scope);
+    }
+    return copied;
+}
+// the tested identifier of `(c === undefined) ? .. : ..`
+function ccxtGoNilJoinEmptyDefaultTest (cond) {
+    let test = (cond?.kind === ts.SyntaxKind.ConditionalExpression) ? cond.condition : undefined;
+    while (test?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        test = test.expression;
+    }
+    return (test?.kind === ts.SyntaxKind.BinaryExpression) ? test.left : undefined;
 }
 
 // a nil-seeded local the container join types as a map is a map arm of that same ternary
@@ -4587,6 +4671,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
                     fail ();                              // AppendToArray(&x) needs an `any` box
                 } else if (!assigned) {
                     if (!goReadRuleAccepts (CCXT_GO_NIL_JOIN_READ_RULE, goTranspiler, node) && !ccxtGoNilJoinGuardedRead (node)) {
+
                         fail ();
                     }
                 }
@@ -4598,6 +4683,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
             if (copySeed && isNilLiteralExpression (right)) {
                 return ccxtGoNilJoinCopyNilWrite (state);
             }
+            if (ccxtGoNilJoinEmptyDefaultWrite (right, name)) { return 'map[string]any'; }
             const goType = goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
             // a base map producer the upstream veto cannot type: the walk already refused every other write shape
             if ((goType === undefined) && ccxtGoNilJoinBaseMapCall (goTranspiler, right)) {
@@ -4624,6 +4710,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
     if (copySeed && !ccxtGoNilJoinCopySeedIsMap (goTranspiler, declaration, state)) {
         return undefined;
     }
+
     if (!state.ok || (state.writes === 0) || (state.goType === undefined)) {
         return undefined;
     }
@@ -4633,6 +4720,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
     // a seeded copy's nil writes are joined by the walk (`c = nil` on a typed map); the shipped veto reads them as foreign
     const nilWritesJoined = copySeed && state.nilWrites;
     if (!nilWritesJoined && !goTranspiler.goLocalIsSafeToType (scope, declaration, name, state.goType) && !(state.mapCallWrites && (state.goType === 'map[string]any'))) {
+
         return undefined;
     }
     return state.goType;
@@ -17284,7 +17372,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 && parent.parent?.kind === SyntaxKind.BinaryExpression
                 && parent.parent.left === parent
                 && parent.parent.operatorToken.kind === SyntaxKind.EqualsToken
-                && !((goType === 'map[string]any') && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
+                && !((goType === 'map[string]any') && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))
+                && !((goType === 'map[string]any') && this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
                     return true;
                 }
                 if (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n) {
@@ -21572,7 +21661,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const statement = this.getIden(identation) + ((pointerWrite !== undefined)
                     ? ((safeWrite !== undefined) ? `${e} = ${safeWrite}(${syntheticName}[0])`
                         : `if p, ok := ${syntheticName}[0].(${pointerWrite}); ok { ${e} = p }`)
-                    : (this.goGetArgBindsDictElement(arrayBindingPatternElements[index], right, index)
+                    : ((this.goGetArgBindsDictElement(arrayBindingPatternElements[index], right, index) || this.goDictLocalBindsDictElement(arrayBindingPatternElements[index], right, index))
                         ? `${e} = MapTyped(GetValue(${syntheticName}, ${index}))`
                         : `${e} = GetValue(${syntheticName}, ${index})`));
                 if (index < parsedArrayBindingElements.length - 1) {
@@ -42230,3 +42319,124 @@ GoTranspiler.prototype.goH20g12GuardedPointerAppend = function (node): boolean {
         && this.goConcatDerefableStringOperand(node);
 };
 // ===== h20-g12 (end) =====
+
+// a `x = (c === undefined) ? {} : c` rebind of a nil-join map local through its own const copy c is a map write
+const h20g04ShippedTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = h20g04ShippedTypeOfInitializer.call (this, initializer, printedValue);
+    if (known !== undefined) {
+        return known;
+    }
+    const store = initializer?.parent;
+    const name = ((store?.kind === SyntaxKind.BinaryExpression) && (store.right === initializer) && (store.left?.kind === SyntaxKind.Identifier)) ? store.left.text : undefined;
+    return ((name !== undefined) && ccxtGoNilJoinEmptyDefaultWrite (initializer, name)) ? 'map[string]any' : undefined;
+};
+// the copy `const c = x` of a nil-join map x, read only by `x = (c === undefined) ? {} : c`: c is that map
+function h20g04EmptyDefaultCopySource (goTranspiler, declaration) {
+    const seed = declaration?.initializer;
+    return ((seed?.kind === SyntaxKind.Identifier) && ccxtGoNilJoinEmptyDefaultCopy (declaration, seed)
+        && (ccxtGoNilJoinDeclarationType (goTranspiler, seed) === 'map[string]any')) ? seed : undefined;
+}
+const h20g04ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration = node?.declarations?.[0];
+    if ((node?.declarations?.length === 1) && (h20g04EmptyDefaultCopySource (this, declaration) !== undefined)) {
+        return this.getIden (identation) + 'var ' + this.printNode (declaration.name, 0) + ' map[string]any = ' + this.printNode (declaration.initializer, 0);
+    }
+    return h20g04ShippedPrintDeclarationList.call (this, node, identation);
+};
+const h20g04ShippedPrintCustomBinary = GoTranspiler.prototype.printCustomBinaryExpressionIfAny;
+GoTranspiler.prototype.printCustomBinaryExpressionIfAny = function (node, identation) {
+    const test = ccxtGoNilJoinEmptyDefaultTest (node?.right);
+    if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.left?.kind === SyntaxKind.Identifier) && (test?.kind === SyntaxKind.Identifier)
+        && ccxtGoNilJoinEmptyDefaultWrite (node.right, node.left.text) && (ccxtGoNilJoinDeclarationType (this, node.left) === 'map[string]any')) {
+        const x = this.printNode (node.left, 0);
+        const c = this.printNode (test, 0);
+        const pad = this.getIden (identation);
+        const inner = this.getIden (identation + 1);
+        return 'if ' + c + ' == nil {\n' + inner + x + ' = map[string]any{}\n' + pad + '} else {\n' + inner + x + ' = ' + c + '\n' + pad + '}';
+    }
+    return h20g04ShippedPrintCustomBinary.call (this, node, identation);
+};
+// an element write right after that rebind: either arm left x a non-nil map
+const h20g04ShippedProvenLocalMapWrite = GoTranspiler.prototype.printNativeMapWriteOnProvenLocal;
+GoTranspiler.prototype.printNativeMapWriteOnProvenLocal = function (containerNode, containerStr, keyNode, keyStr, valueStr, valueNode?, identation = 0) {
+    const shipped = h20g04ShippedProvenLocalMapWrite.call (this, containerNode, containerStr, keyNode, keyStr, valueStr, valueNode, identation);
+    if ((shipped !== undefined) || (containerNode?.kind !== SyntaxKind.Identifier) || (valueNode === undefined)) {
+        return shipped;
+    }
+    const write = containerNode.parent?.parent;
+    const statement = write?.parent;
+    const block = statement?.parent;
+    const at = (block?.kind === SyntaxKind.Block) ? block.statements.indexOf (statement) : -1;
+    const previous = (at > 0) ? block.statements[at - 1] : undefined;
+    const rebind = previous?.expression;
+    if ((previous?.kind !== SyntaxKind.ExpressionStatement) || (rebind?.kind !== SyntaxKind.BinaryExpression) || (rebind.left?.kind !== SyntaxKind.Identifier)
+        || (rebind.left.text !== containerNode.text) || !ccxtGoNilJoinEmptyDefaultWrite (rebind.right, containerNode.text)
+        || (ccxtGoNilJoinDeclarationType (this, containerNode) !== 'map[string]any')
+        || !this.goIsStringKeyExpression (this.goUnwrapPrintedAssertions (keyNode)) || !this.goMapWriteValueIsNotPointer (valueNode)) {
+        return shipped;
+    }
+    return `${containerStr}[${keyStr}] = ${valueStr}`;
+};
+
+export interface GoTranspiler {
+    goDictLocalTupleRebindIsDict(declaration, right, index: number): boolean;
+    goDictLocalBindsDictElement(leftElement, right, index: number): boolean;
+    h20g04SelfOmitDeclaration: any;
+}
+// a `let x: Dict` local rebound by `[.., x] = this.handleXAndParams (..)` whose tuple slot is declared Dict:
+// the producer's Go slot is a map[string]any on every path, so the rebind keeps the local's map type
+GoTranspiler.prototype.goDictLocalTupleRebindIsDict = function (declaration, right, index: number): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type === undefined) || !this.goParameterTypeIsDict (this.checkerOrUndefined ()?.getTypeFromTypeNode (declaration.type))) {
+        return false;
+    }
+    // an element-written local would take the generic native store, which skips the helper's value deref
+    const scope = this.goEnclosingFunction (declaration);
+    const name = declaration.name.text;
+    if ((scope === undefined) || this.hasNodeWhere (scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && ccxtGoNilJoinIsElementWrite (n))) {
+        return false;
+    }
+    const expr = (right?.kind === SyntaxKind.AwaitExpression) ? right.expression : right;
+    const callee = expr?.expression;
+    return (expr?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && this.goTupleElementIsDict (expr, index);
+};
+GoTranspiler.prototype.goDictLocalBindsDictElement = function (leftElement, right, index: number): boolean {
+    if (leftElement?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration: any = this.goDeclarationOfIdentifier (leftElement);
+    if ((declaration?.initializer === undefined) || !this.goDictLocalTupleRebindIsDict (declaration, right, index)) {
+        return false;
+    }
+    return this.getGoLocalType (declaration, this.printNode (declaration.initializer, 0)) === 'map[string]any';
+};
+// a Dict-annotated local with a Dict tuple-slot rebind may also re-omit itself (`x = this.omit (x, ..)`): omit
+// of the map the local is being proven to hold is a fresh map, so that write keeps the type too
+const h20g04ShippedLocalIsSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if ((goType !== GO_SAFE_DICT_LOCAL_TYPE) || (scope === undefined) || (this.h20g04SelfOmitDeclaration !== undefined)
+        || !this.hasNodeWhere (scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === varName) && (n.parent?.kind === SyntaxKind.ArrayLiteralExpression)
+            && (ccxtGoParamDeclarationOf (this, n) === declaration)
+            && this.goDictLocalTupleRebindIsDict (declaration, n.parent.parent?.right, n.parent.elements.indexOf (n)))) {
+        return h20g04ShippedLocalIsSafeToType.call (this, scope, declaration, varName, goType, stringWriteProven);
+    }
+    this.h20g04SelfOmitDeclaration = declaration;
+    try {
+        return h20g04ShippedLocalIsSafeToType.call (this, scope, declaration, varName, goType, stringWriteProven);
+    } finally {
+        this.h20g04SelfOmitDeclaration = undefined;
+    }
+};
+const h20g04SelfOmitShippedTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = h20g04SelfOmitShippedTypeOfInitializer.call (this, initializer, printedValue);
+    const proving = this.h20g04SelfOmitDeclaration;
+    if ((known !== undefined) || (proving === undefined)) {
+        return known;
+    }
+    const call = ral84g6OmitCall (initializer);
+    return ((call !== undefined) && (ccxtGoParamDeclarationOf (this, call.arguments[0]) === proving)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
+};
