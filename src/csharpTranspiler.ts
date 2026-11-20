@@ -2691,6 +2691,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((declared === wanted) || (wanted.endsWith('?') && (declared === wanted.slice(0, -1)))) {
             return text;
         }
+        const intOperand = (declared === 'int') || ((declared === undefined) && (this.csharpExpressionTypeOf(operand) === 'int'));
+        if (intOperand && ((wanted === 'Int64') || (wanted === 'Int64?'))) {
+            return text; // an `int` widens implicitly to the same Int64 value
+        }
         return ((wanted === 'double') && (declared === 'double?')) ? '(' + text + ' ?? 0d)' : '';
     }
 

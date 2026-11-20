@@ -8471,4 +8471,18 @@ describe('csharp fee tier literals', () => {
             expect(out).toContain(`"parseNumber", new object[] {${kept === ' x ' ? ' x ' : ' ' + kept + ' '}}`);
         }
     });
+    test('an int local passes bare to a call-site Int64 parameter; an object one keeps the conversion', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csa-'));
+        const file = path.join(dir, 'ts', 'src', 'thing.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'class Test {\n    pickAt (xs, index) {\n        return index;\n    }\n    caller (xs: string[], o) {\n        const n = xs.length;\n        this.pickAt (xs, n);\n        return this.pickAt (xs, o);\n    }\n}\n');
+        const config = { 'verbose': false, 'csharp': { 'callSiteArgTypes': { 'pickAt': { 1: 'Int64' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        const output = new Transpiler(config as any).transpileCSharpByPath(file).content;
+        expect(output).toContain('int n = ');
+        expect(output).toContain('this.pickAt(xs, n);');
+        expect(output).toContain('this.pickAt(xs,ccxt.BaseExchange.ToInt64ArgRequired(o));');
+    });
 });
