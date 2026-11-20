@@ -32284,11 +32284,24 @@ ${tryBodyBlock}
             && this.goKeyIsString(keyNodes[0], keyStrs[0])) {
             acc = `${containerStr}[${keyStrs[0]}]`;
             first = 1;
+        } else if (this.goBoundedListRowWriteContainer(baseExpr, containerStr, keyNodes, keyStrs)) {
+            acc = `${containerStr}[${keyStrs[0]}]`;
+            first = 1;
         }
         for (let i = first; i < keyStrs.length - 1; i++) {
             acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
         }
         return acc;
+    }
+
+    // `rows[i][k] = v` on a declared `[]any` local inside a counting loop over its own length (goBoundedLoopListRead)
+    // whose elements are never scalar pointers: GetValue(rows, i) is then exactly rows[i] (in range, no deref to do),
+    // so the write container is the plain index. A typed-nil element stays a no-op target, as before.
+    goBoundedListRowWriteContainer(baseExpr, containerStr: string, keyNodes, keyStrs: string[]): boolean {
+        const row: any = keyNodes[0]?.parent;
+        return (keyStrs.length > 1) && (baseExpr?.kind === SyntaxKind.Identifier) && (row?.kind === SyntaxKind.ElementAccessExpression)
+            && (row.expression === baseExpr) && (row.argumentExpression === keyNodes[0]) && !containerStr.includes('\n')
+            && this.goDeclaredListIdentifier(baseExpr) && this.goBoundedLoopListRead(row) && this.goListElementsArePointerFree(baseExpr);
     }
 
     // true when the printed key is a Go string, so `m[key]` reads the map with the
