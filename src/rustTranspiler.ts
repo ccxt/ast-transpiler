@@ -26750,6 +26750,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (up.kind === SyntaxKind.PropertyAssignment) return up.initializer === n;
         // ral-84a: `book.cache.push (x)` on a typed book local (`cache_push(v: Value)`)
         if (this.rust84aBookCachePushArg(n)) return true;
+        if (this.rustH26r05BalanceRowStore(n)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const callee = String(up.expression.name.text);
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
@@ -26836,6 +26837,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (up.kind === SyntaxKind.ArrayLiteralExpression) return !this.rustInDestructureWrite(n);
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement
             && (isElementAccessExpression(up.left) || isPropertyAccessExpression(up.left)) && (this.rustThisRootedPlace(up.left) || this.rustLocalKeyPlace(up.left, n))) return true;
+        if (this.rustH26r05BalanceRowStore(n)) return true;
         if (this.rustLocalStoreHandOff(n)) return true;
         if (this.rustValueLocalWriteHandOff(n)) return true;
         if (this.rustLocalCacheAppendArg(n)) return true;
@@ -40610,6 +40612,26 @@ export class RustTranspiler extends BaseTranspiler {
     }
     // ===== end h26-R01
 
+
+    // ===== h26-R05
+    /** `row['k'] = x` (statement, literal key) on a row copy `const row = this.safeDict (this.balance|options[..], k, {})`:
+     *  the same by-value store the `this.balance[k]['k'] = x` write took, so x keeps its typed local and is boxed there
+     *  once (`Value::from(&x)`, or moved at its last use). */
+    rustH26r05BalanceRowStore(n: any): boolean {
+        const up: any = n?.parent;
+        if (!isIdentifier(n) || !isBinaryExpression(up) || up.right !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const place: any = up.left;
+        if (!isElementAccessExpression(place) || !isStringLiteralLikeNode(this.rustSkipWrappers(place.argumentExpression))) return false;
+        const recv: any = place.expression;
+        if (!isIdentifier(recv) || recv.text === n.text) return false;
+        const d: any = this.rustDeclarationOfIdentifier(recv);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === recv || this.rustEnclosingFunction(d) !== this.rustEnclosingFunction(n)) return false;
+        const init: any = this.rustSkipWrappers(d.initializer);
+        if (init === undefined || !isCallExpression(init) || init.arguments.length !== 3 || !isPropertyAccessExpression(init.expression)
+            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || String(init.expression.name.text) !== 'safeDict') return false;
+        const dflt: any = this.rustSkipWrappers(init.arguments[2]);
+        return isObjectLiteralExpression(dflt) && dflt.properties.length === 0 && this.rustBalanceOptionsPlace(this.rustSkipWrappers(init.arguments[0]));
+    }
 }
 
 
