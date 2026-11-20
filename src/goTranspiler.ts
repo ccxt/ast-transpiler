@@ -1077,7 +1077,7 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // omitZero / currencyToPrecision / networkCodeToId / handleTimeInForce answer a string or
 // undefined on every path; the hand-written Go twins and interface lines are *string too
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
-    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'OmitZero' ];
+    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
