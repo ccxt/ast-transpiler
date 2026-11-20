@@ -17706,6 +17706,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return ws && (parent.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === node) && !this.isGoElementAccessAssignmentTarget(parent);
     }
 
+    // every declaration of the name is a block-scoped local and the checker resolves each reference to one of them
+    goSafeDictSiblingsResolve(scope, name: string, bindings: any[]): boolean {
+        if (!bindings.every((b: any) => (b.kind === SyntaxKind.VariableDeclaration) && ((b.parent?.flags ?? 0) & (NodeFlags.Let | NodeFlags.Const)) !== 0)) {
+            return false;
+        }
+        return this.goDescendantsOf(scope).every((n: any) => (n.kind !== SyntaxKind.Identifier) || (n.text !== name) || bindings.some((b: any) => b.name === n)
+            || ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+            || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))
+            || bindings.includes(this.goDeclarationOfIdentifier(n)));
+    }
+
     goSafeDictMapLocal(declaration): string | undefined {
         return this.goCachedLocalUnbox(this.goSafeDictMapLocalCache, declaration, () => this.goSafeDictMapLocalUncached(declaration));
     }
@@ -17730,7 +17741,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const bindings = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)
             || (n.kind === SyntaxKind.BindingElement)) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
         // the ohlcv book local may be declared again in a sibling block; every use then resolves to its own declaration
-        const siblings = (bindings.length > 1) && (this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true)
+        const siblings = (bindings.length > 1) && ((this.goOhlcvsBookCall(declaration.initializer)?.withDefault === true) || this.goSafeDictSiblingsResolve(scope, name, bindings))
             && bindings.every((b: any) => b.kind === SyntaxKind.VariableDeclaration);
         if ((bindings.length !== 1) && !siblings) {
             return undefined;
