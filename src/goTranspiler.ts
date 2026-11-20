@@ -4047,7 +4047,7 @@ function ccxtGoTsSrcImportGraph (fileName) {
                 }
                 continue;
             }
-            if (!entry.name.endsWith ('.ts') || entry.name.endsWith ('.d.ts')) {
+            if (!goIsOwnTsSourceName (entry.name)) {
                 continue;
             }
             let text;
@@ -7830,7 +7830,7 @@ function ccxtGoTupleOverridesAgree (declaration, name, index, goType) {
     const base = fileName.endsWith ('/base/Exchange.ts');
     const texts = [];
     for (const dir of [ root, root + '/pro' ]) {
-        for (const file of fs.readdirSync (dir).filter ((f) => f.endsWith ('.ts'))) {
+        for (const file of fs.readdirSync (dir).filter ((f) => goIsOwnTsSourceName (f))) {
             texts.push ([ path.join (dir, file), fs.readFileSync (path.join (dir, file), 'utf8') ]);
         }
     }
@@ -11146,7 +11146,7 @@ function ccxtGoVenuePairCallersDestructure (name, file = '', holders = false) {
         const walk = (dir) => {
             for (const entry of (fs.existsSync (dir) ? fs.readdirSync (dir, { 'withFileTypes': true }) : [])) {
                 const full = path.join (dir, entry.name);
-                if (entry.isDirectory ()) { walk (full); } else if (entry.name.endsWith ('.ts')) { state.files.set (path.resolve (full), fs.readFileSync (full, 'utf8')); }
+                if (entry.isDirectory ()) { walk (full); } else if (goIsOwnTsSourceName (entry.name)) { state.files.set (path.resolve (full), fs.readFileSync (full, 'utf8')); }
             }
         };
         walk (path.join ('ts', 'src'));
@@ -25260,7 +25260,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     }
                     continue;
                 }
-                if (!entry.name.endsWith('.ts') || entry.name.endsWith('.d.ts')) {
+                if (!goIsOwnTsSourceName(entry.name)) {
                     continue;
                 }
                 const relPath = rel + entry.name;
@@ -47032,3 +47032,11 @@ GoTranspiler.prototype.h26g57ForCounterSeed = function (declaration) {
     return (this.goDeclaredTypeOfIdentifier (init) === 'int64') ? `int(${this.printNode (init, 0)})` : undefined;
 };
 // ===== h26-G57 (end) =====
+// ===== h26-g60 =====
+// a ts/src source file of this process: another transpiler running in parallel writes temporary copies
+// of Exchange.ts there (`.__ExchangeNoOverloads.ts`, `Exchange.nooverloads.<pid>.ts`), which must not count
+export function goIsOwnTsSourceName (name: string): boolean {
+    const temp = /\.nooverloads\.(\d+)\.ts$/.exec (name);
+    return name.endsWith ('.ts') && !name.endsWith ('.d.ts') && !name.startsWith ('.') && ((temp === null) || (temp[1] === String (process.pid)));
+}
+// ===== h26-g60 (end) =====
