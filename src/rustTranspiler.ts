@@ -1505,8 +1505,9 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printNativeDictInsert(baseExpr, keyNode, keyText, valueText): string | undefined {
-        const receiver = this.rustNativeInsertReceiver(baseExpr);
-        if (receiver === undefined || !this.rustReceiverStaysDict(baseExpr, receiver)) {
+        const fresh = this.rustFreshDictInsertReceiver(baseExpr, keyNode);
+        const receiver = fresh ?? this.rustNativeInsertReceiver(baseExpr);
+        if (receiver === undefined || (fresh === undefined && !this.rustReceiverStaysDict(baseExpr, receiver))) {
             return undefined;
         }
         // A bucket read off `cache.hashmap` / client `subscriptions`/`futures` carries a runtime
@@ -1773,6 +1774,53 @@ export class RustTranspiler extends BaseTranspiler {
             }
         });
         return !rebound;
+    }
+
+    /** A REST-tier local annotated with a map type, initialised by a base `extend` / `deepExtend` / `clone` copy and rebound only
+     *  to such copies or plain literals: a fresh untagged map on every path, so the helper's tag hooks are dead and the native
+     *  insert is the whole write. */
+    rustDeclaredFreshDictLocal(declaration: VariableDeclaration): boolean {
+        if (declaration.type === undefined || !isIdentifier(declaration.name) || !/\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(declaration))) return false;
+        const annotated = this.getCheckedTypeOf(declaration.type);
+        const scope = this.rustEnclosingFunction(declaration);
+        // a literal initializer is the typed-Dict local family's (rustDictLocalIsTyped): only a copy-call head here
+        if (annotated === undefined || !this.isProvenMapType(annotated) || scope === undefined || isObjectLiteralExpression(this.rustStripWrappers(declaration.initializer))
+            || !this.rustFreshDictProducer(declaration.initializer)) return false;
+        const name = String(declaration.name.text);
+        const declarationSymbol = this.rustSymbolOf(declaration.name);
+        let fresh = true;
+        this.rustWalkScope(scope, (n) => {
+            if (!fresh) return RUST_WALK_STOP;
+            if (n !== declaration && this.rustBindsName(n, name)) { fresh = false; return RUST_WALK_STOP; }
+            if (isArrayLiteralExpression(n) && isBinaryExpression(n.parent) && n.parent.left === n
+                && n.elements.some((e) => isIdentifier(e) && String(e.text) === name)) { fresh = false; return RUST_WALK_STOP; }
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier(n.left) && String(n.left.text) === name
+                && (declarationSymbol === undefined || this.rustSymbolOf(n.left) === declarationSymbol)
+                && (n.operatorToken.kind !== SyntaxKind.EqualsToken || !this.rustFreshDictProducer(n.right))) { fresh = false; return RUST_WALK_STOP; }
+        });
+        return fresh;
+    }
+
+    /** A literal-key write on a boxed (`Value`-printed) rustDeclaredFreshDictLocal: the native insert receiver. A dynamic key
+     *  would retype the key local and add a clone, so it keeps the helper. */
+    rustFreshDictInsertReceiver(ident: any, keyNode: any): { text: string, isField: boolean, plain: boolean, nameNode: any } | undefined {
+        if (!isIdentifier(ident) || !isStringLiteral(keyNode)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(ident);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !this.rustDeclaredFreshDictLocal(declaration)
+            || this.rustDictLocalIsTyped(declaration) || this.rustDeclaredLocalEntry(ident) !== undefined) return undefined;
+        return { text: String(ident.text), isField: false, plain: true, nameNode: ident };
+    }
+
+    static readonly RUST_FRESH_DICT_COPIES = new Set([ 'extend', 'deepExtend', 'clone' ]);
+
+    rustFreshDictProducer(node: any): boolean {
+        const e: any = this.rustStripWrappers(node);
+        if (e === undefined) return false;
+        if (isObjectLiteralExpression(e)) return this.rustPlainDictLiteral(e);
+        if (!isCallExpression(e) || !isPropertyAccessExpression(e.expression) || e.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !RustTranspiler.RUST_FRESH_DICT_COPIES.has(String(e.expression.name.text))) return false;
+        const declaration: any = this.rustScalarCallee(e);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
 
     /** An object literal with no runtime tag key — the transpiler built it, so
