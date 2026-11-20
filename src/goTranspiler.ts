@@ -28179,8 +28179,50 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         case SyntaxKind.FalseKeyword:
             return pointee === 'bool';
         }
+        if (this.goInt64ArithmeticOperand(pointee, otherNode)) {
+            return true;
+        }
         const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
         return otherType === pointee;
+    }
+
+    // `a + b` / `a - b` that Go evaluates as int64: every leaf is an integer constant, an `int64`
+    // local, or a `*int64` local the printer already dereferences (nil-guarded by the ts narrowing).
+    goInt64ArithmeticOperand(pointee: string, node): boolean {
+        if ((pointee !== 'int64') || (this.goUnwrapParenthesizedNode(node)?.kind !== SyntaxKind.BinaryExpression)) {
+            return false;
+        }
+        const pointers: string[] = [];
+        if (!this.goInt64ArithmeticLeaf(this.goUnwrapParenthesizedNode(node), pointers, true)) {
+            return false;
+        }
+        // every *int64 leaf must print dereferenced (the ts narrowing proved it non-nil)
+        const text = this.printNode(node, 0);
+        return /^[\w\s()*+-]+$/.test(text) && pointers.every((name) => !new RegExp('(^|[^*\\w])' + name + '\\b').test(text));
+    }
+
+    goInt64ArithmeticLeaf(node, pointers: string[], top = false): boolean {
+        const inner = this.goUnwrapParenthesizedNode(node);
+        if (inner?.kind === SyntaxKind.BinaryExpression) {
+            const op = inner.operatorToken?.kind;
+            return ((op === SyntaxKind.PlusToken) || (op === SyntaxKind.MinusToken))
+                && this.goInt64ArithmeticLeaf(inner.left, pointers) && this.goInt64ArithmeticLeaf(inner.right, pointers);
+        }
+        if (top) {
+            return false;
+        }
+        if (this.goIsNumericConstant(inner)) {
+            return this.goNumericLiteralKind(inner) === 'int';
+        }
+        if (inner?.kind !== SyntaxKind.Identifier) {
+            return false;
+        }
+        const declared = this.goDeclaredTypeOfIdentifier(inner);
+        if (declared === '*int64') {
+            pointers.push (inner.text);
+            return true;
+        }
+        return declared === 'int64';
     }
 
     // a node the printer prints as a Go string constant: both literal forms are
