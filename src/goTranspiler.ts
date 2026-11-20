@@ -15274,6 +15274,8 @@ const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Ex
 // Go struct fields of the typed market / currency rows (go/v4/exchange_types.go): ts key -> [Go field, Go type],
 // or a value struct's { go, fields }. `info`, pointer structs and non-map collections are left out.
 const GO_ROW_MINMAX = { 'min': [ 'Min', '*float64' ], 'max': [ 'Max', '*float64' ] };
+// the row accessors whose local binds the typed Go row (goTypedRowBinder), by TS name -> Go row type
+const GO_TYPED_ROW_BINDER_CALLS: { [tsName: string]: string } = { 'market': 'MarketInterface', 'safeMarket': 'MarketInterface', 'currency': 'Currency', 'safeCurrency': 'Currency' };
 const GO_TYPED_ROW_FIELDS: { [tsType: string]: any } = {
     'MarketInterface': {
         ...Object.fromEntries([ 'market', 'marketType', 'executionModel', 'collateral', 'resolvedOutcome', 'id', 'uppercaseId', 'lowercaseId', 'symbol',
@@ -18918,6 +18920,70 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         return (declared || compared) ? { text, goType } : undefined;
     }
 
+    // a local bound once from `this.market/safeMarket/currency/safeCurrency(..)` is the typed row while the
+    // 'markets' rowStructReads row is on: it never holds nil (the accessor throws or builds a row), so a local
+    // that is nil-tested, rebound or written through keeps the map. Answers the Go row type or undefined.
+    goTypedRowBinder(declaration): string | undefined {
+        if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+            || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return undefined;
+        }
+        const call: any = declaration.initializer;
+        const callee: any = (call?.kind === SyntaxKind.CallExpression) ? call.expression : undefined;
+        const goType = GO_TYPED_ROW_BINDER_CALLS[(callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : ''];
+        if ((goType === undefined) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || this.goNodeIsInPredictionTree(call)) {
+            return undefined;
+        }
+        if (!this.goTypedRowBinderCache.has(declaration)) {
+            this.goTypedRowBinderCache.set(declaration, undefined);
+            this.goTypedRowBinderCache.set(declaration, this.goDeclaredLocalTypeIfSafe(declaration, goType,
+                (n) => !this.goTypedRowBinderWrite(n) && !this.goIsNilComparisonOperand(n, this.goUnwrapParenthesizedNode(n.parent)),
+                (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
+                    || !this.goIdentifierRefersToDeclaration(n, declaration)));
+        }
+        return this.goTypedRowBinderCache.get(declaration);
+    }
+
+    goTypedRowBinderCache = new Map<any, string | undefined>();
+
+    // a write to the local or through it (`m = ..`, `m[k] = ..`, `m[k][j] = ..`, `delete m[k]`)
+    goTypedRowBinderWrite(n): boolean {
+        let target: any = n;
+        while ((target.parent?.kind === SyntaxKind.ElementAccessExpression) && (target.parent.expression === target)) {
+            target = target.parent;
+        }
+        const parent: any = target.parent;
+        const assigned = (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === target)
+            && (parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (parent.operatorToken.kind <= SyntaxKind.LastAssignment);
+        return assigned || (parent?.kind === SyntaxKind.DeleteExpression)
+            || (parent?.kind === SyntaxKind.PostfixUnaryExpression) || (parent?.kind === SyntaxKind.PrefixUnaryExpression && parent.operator !== SyntaxKind.ExclamationToken);
+    }
+
+    // the binder's declaration line: the row converted once from the accessor's map result
+    goTypedRowBinderDeclaration(declaration, identation: number): string | undefined {
+        const goType = this.goTypedRowBinder(declaration);
+        if (goType === undefined) {
+            return undefined;
+        }
+        const value = this.printNode(declaration.initializer, identation).trim();
+        return `${this.getIden(identation)}var ${this.printNode(declaration.name)} ${goType} = ${goType}FromMap(${value})`;
+    }
+
+    // a use of the binder that no struct-field rule printed (callee argument, safe accessor, request-map store,
+    // other read) takes the map form through the one conversion call
+    goTypedRowBinderUse(node): string | undefined {
+        if ((node?.kind !== SyntaxKind.Identifier) || ((node.parent?.kind === SyntaxKind.PropertyAccessExpression) && (node.parent.name === node))
+            || (this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true)) {
+            return undefined;
+        }
+        const declaration = this.goDeclarationOfIdentifier(node);
+        if ((declaration === undefined) || (declaration.name === node)) {
+            return undefined;
+        }
+        const goType = this.goTypedRowBinder(declaration);
+        return (goType !== undefined) ? `${goType}ToMap(${super.printIdentifier(node)})` : undefined;
+    }
+
     // The `Market`-returning producers print `any` because their TS type names no Go type, so callers
     // box the row and read it back through GetValue. A producer whose every path answers a dictionary
     // prints `map[string]any`, and its caller's local is declared with it (reads go native).
@@ -20788,7 +20854,8 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         }
 
         const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
-            () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation)]);
+            () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
+            () => this.goTypedRowBinderDeclaration(declaration, identation)]);
         if (shapedDeclaration !== undefined) {
             return shapedDeclaration;
         }
@@ -30147,6 +30214,10 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printIdentifier(node) {
+        const rowUse = this.goTypedRowBinderUse(node);
+        if (rowUse !== undefined) {
+            return rowUse;
+        }
         const row: any = (node?.parent?.kind === SyntaxKind.ElementAccessExpression) && (node.parent.expression === node)
             ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
         if ((row !== undefined) && (row.name !== node) && this.goAssertedRowDeclaration(row)) {
