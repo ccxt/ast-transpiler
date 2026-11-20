@@ -1111,6 +1111,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.Currency': 'map[string]any',
     'this.SafeCurrency': 'map[string]any',
     'this.SafeMarket': 'map[string]any',
+    // symbol(): a nil argument panics and the market symbol defaults to that argument (build goRetypeStringReturns)
+    'this.Symbol': 'string',
     // structure parsers retyped by goTranspiler.ts#retypeGoProvenParseMethods (never nil, base + every override)
     ...Object.fromEntries ([ 'SafeOrder', 'SafeTicker', 'SafeLedgerEntry', 'ParseOrder', 'ParseTicker', 'ParseTransaction', 'ParseTransfer', 'ParseLedgerEntry',
         'SafeMarketStructure', 'SafeCurrencyStructure', 'SafeOpenInterest', 'ParseCurrency', 'ParseOpenInterest',
