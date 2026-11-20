@@ -1756,6 +1756,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     printBlock(node: any, identation: any, chainBlock?: boolean): string;
     goAssertedRowDeclarationUncached(declaration: any): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
+    goGuardedListElementValue(readBase: any, containerStr: string, keyStr: string): string;
+    goListWritesCarryNoAny(list: any): boolean;
     generatedListCallees: Set<string>;
     goHostListCalleeType(callee: string, initializer: any): string | undefined;
     goWritesOrRebindsName(n: any, name: string, mutators: string[]): boolean;
