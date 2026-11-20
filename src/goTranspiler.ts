@@ -1925,6 +1925,50 @@ function ccxtGoGuardedAddChainDeclaration (goTranspiler, node, printed) {
         + indent + '\t' + name + 'Value := ' + texts.join (' + ') + '\n' + indent + '\t' + name + ' = &' + name + 'Value\n' + indent + '}';
 }
 
+// `x = Add(.., p, ..)` into an `any` local whose leaves are Go strings (or guarded pointers) plus ONE unguarded
+// `*string` identifier: Add stores nil exactly when that pointer is nil, else the concatenation
+function ccxtGoGuardedAddChainAssignment (goTranspiler, node, printed) {
+    const expression = node?.expression;
+    const match = (typeof printed === 'string') ? /^(\s*)([A-Za-z0-9_]+) = ((?:ccxt\.)?Add\([\s\S]*?)(\s*)$/.exec (printed) : null;
+    if ((match === null) || (expression?.kind !== ts.SyntaxKind.BinaryExpression) || (expression.operatorToken?.kind !== ts.SyntaxKind.EqualsToken)
+        || (expression.left?.kind !== ts.SyntaxKind.Identifier) || (match[2] !== goTranspiler.printNode (expression.left, 0))
+        || match[3].includes ('\n') || (ccxtGoWholeAddCallEnd (match[3].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const targetType = goTranspiler.goDeclaredTypeOfIdentifier?.(expression.left);
+    if (((targetType !== undefined) && (targetType !== 'any')) || (ccxtGoWriteSiteLocalGoType (goTranspiler, expression.left) ?? 'any') !== 'any') {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (expression.right, []);
+    const derefable = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string')
+        && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const pointers = leaves.filter ((leaf) => (leaf?.kind === ts.SyntaxKind.Identifier)
+        && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string') && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    if ((leaves.length < 2) || (pointers.length !== 1) || goTranspiler.goHasEnclosingNilGuard (pointers[0]) || goTranspiler.goHasExitingNilGuard (pointers[0])
+        || !leaves.every ((leaf) => (leaf === pointers[0]) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return printed;
+    }
+    const texts = leaves.map ((leaf) => (((leaf === pointers[0]) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    if (texts.some ((text) => text.includes ('\n'))) {
+        return printed;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const [ name, pointer ] = [ match[2], goTranspiler.printNode (pointers[0], 0) ];
+    return lead + indent + 'if ' + pointer + ' != nil {\n' + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n'
+        + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
+}
+
+function installCcxtGoGuardedAddChainAssignment (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoGuardedAddChainAssignmentInstalled', 'printExpressionStatement')) {
+        return;
+    }
+    const upstream = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return ccxtGoGuardedAddChainAssignment (this, node, upstream.call (this, node, identation));
+    };
+}
+
 // Types `this.safeDict` / `this.safeList` / `this.safeDict2` / `this.safeList2` locals the printer's
 // own predicate leaves boxed: cast-wrapped initializers, kept defaults, the two-key accessors and
 // the list family's `this.Safe*` reads; nothing that writes or hands out the local is typed.
@@ -7020,6 +7064,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     goTranspiler.__ccxtGoLocalTypesInstalled = true;
     // the arithmetic / currency / sum types need the `.(T)` unbox at the declaration
     installCcxtGoDeclarationUnbox (goTranspiler);
+    installCcxtGoGuardedAddChainAssignment (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
