@@ -60,8 +60,7 @@ describe ('go marketOutcomeToSymbol is a *string producer', () => {
 
     test ('negative: an unguarded (nilable) leaf keeps the Add helper', () => {
         const out = print ();
-        expect (out).toContain ('Add("orders::", sym)');
-        expect (out).not.toContain ('"orders::"+*sym');
+        expect (out).toMatch (/if sym != nil \{\n\s*client\.Resolve\(1, "orders::" \+ \*sym\)\n\s*\} else \{\n\s*client\.Resolve\(1, nil\)/);
     });
 
     test ('negative: a local rebound to a non-string keeps its box', () => {

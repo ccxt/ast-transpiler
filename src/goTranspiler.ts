@@ -7679,6 +7679,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler);
     installCcxtGoGuardedAddChainReturn (goTranspiler);
     installCcxtGoGuardedAddChainThrow (goTranspiler);
+    installH26g12AddChainCallArgument (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
@@ -45029,3 +45030,50 @@ function h26g10CallBindsNullableDictLocal (id) {
     return (decls.length === 1) && (decls[0].type?.getText () === 'NullableDict');
 }
 // ===== end h26-H26-G10
+
+// ===== h26-G12 =====
+// `f(.., a + p + .., ..)` as a statement: the one concat argument has Go string / derefable leaves plus ONE `*string`
+// identifier; Add hands the slot nil when that pointer is nil, so print the native concat under the nil test and
+// keep the same statement with an untyped `nil` argument as the nil answer
+function h26g12AddChainCallArgument (goTranspiler, node, printed) {
+    const match = (typeof printed === 'string') ? /^(\s*)([^\n]*?)(\s*)$/.exec (printed) : null;
+    const expr = node?.expression;
+    const call = ((expr?.kind === SyntaxKind.BinaryExpression) && (expr.operatorToken?.kind === SyntaxKind.EqualsToken)) ? expr.right : expr;
+    if ((match === null) || (call?.kind !== SyntaxKind.CallExpression)) {
+        return printed;
+    }
+    const chains = (call.arguments ?? []).filter ((a) => (a.kind === SyntaxKind.BinaryExpression) && (a.operatorToken?.kind === SyntaxKind.PlusToken));
+    if (chains.length !== 1) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (chains[0], []);
+    const isPointer = (leaf) => (leaf?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string');
+    const derefable = (leaf) => isPointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const pointers = leaves.filter ((leaf) => isPointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    const names = [ ...new Set (pointers.map ((leaf) => goTranspiler.printNode (leaf, 0))) ];
+    if ((leaves.length < 2) || (names.length !== 1)
+        || pointers.some ((leaf) => goTranspiler.goHasEnclosingNilGuard (leaf) || goTranspiler.goHasExitingNilGuard (leaf))
+        || !leaves.every ((leaf) => pointers.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return printed;
+    }
+    const argText = goTranspiler.printNode (chains[0], 0).trim ();
+    const texts = leaves.map ((leaf) => ((pointers.includes (leaf) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    if (!/^(?:ccxt\.)?Add\(/.test (argText) || (match[2].indexOf (argText) < 0) || (match[2].split (argText).length !== 2) || texts.some ((t) => t.includes ('\n'))) {
+        return printed;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    return lead + indent + 'if ' + names[0] + ' != nil {\n' + indent + '\t' + match[2].replace (argText, () => texts.join (' + ')) + '\n'
+        + indent + '} else {\n' + indent + '\t' + match[2].replace (argText, 'nil') + '\n' + indent + '}' + match[3];
+}
+
+function installH26g12AddChainCallArgument (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h26g12AddChainCallArgumentInstalled', 'printExpressionStatement')) {
+        return;
+    }
+    const upstream = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return h26g12AddChainCallArgument (this, node, upstream.call (this, node, identation));
+    };
+}
+// ===== h26-G12 (end) =====
