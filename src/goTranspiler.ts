@@ -15046,6 +15046,8 @@ function goBalancedSliceArgs (text: string, open: number): string[] | undefined 
 const GO_STRING_PTR_SAFE_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith' ];
 // methods whose every such read sits under a `!== undefined` guard of that parameter
 const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket', 'generateClientOrderId' ];
+// string methods whose Go helper derefScalars its receiver (exchange_helpers.go)
+const GO_STRING_PTR_GUARDED_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase', 'replace' ];
 
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'fetch2': [ 1, 3 ],
@@ -27837,7 +27839,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // `_ = x` and other inert statements
             if ((parent?.kind === SyntaxKind.ExpressionStatement)
                 || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)))
-                || ((goType === '*string') && this.goGetArgPointerIsBalanceKey(n))) {
+                || ((goType === '*string') && (this.goGetArgPointerIsBalanceKey(n) || this.goGetArgStrPtrGuardedStringCall(n, param)))) {
                 return true;
             }
             // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would
@@ -27871,6 +27873,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goGetArgPointerIsBalanceKey(n: any): boolean {
         const parent: any = n.parent;
         if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.argumentExpression !== n) || !this.goBalanceIndexable(parent.expression)) {
+            return false;
+        }
+        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n);
+    }
+
+    // `x.toUpperCase ()` / `x.replace (..)` / ... on a parameter declared `Str` / `string`, nil-guarded at the use:
+    // the native form derefs a pointer proven non-nil there, and the helper fallback derefScalars it as the box did
+    goGetArgStrPtrGuardedStringCall(n: any, param: any): boolean {
+        const declared = param?.type?.getText?.()?.trim();
+        const parent: any = n.parent;
+        if (((declared !== 'Str') && (declared !== 'string')) || (parent?.kind !== SyntaxKind.PropertyAccessExpression) || (parent.expression !== n)
+            || !GO_STRING_PTR_GUARDED_METHODS.includes(parent.name?.text) || (parent.parent?.kind !== SyntaxKind.CallExpression)
+            || (parent.parent.expression !== parent)) {
             return false;
         }
         return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n);

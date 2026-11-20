@@ -42,9 +42,9 @@ describe ('go nil-guarded string reads of a Str optional in generateClientOrderI
         expect (out).not.toContain ('GetIndexOf(path,');
         expect (out).not.toContain ('GetIndexOf(api,');
     });
-    test ('the same body in a method outside the table keeps the box', () => {
+    test ('the same body in a method outside the table binds by its Str declaration', () => {
         const out = print ('otherClientOrderId', GUARDED);
-        expect (out).toContain ('GetIndexOf(path, "um/")');
+        expect (out).toContain ('strings.Index(*path, "um/")');
     });
     test ('a body writing a non-string into the parameter keeps the box', () => {
         const out = print ('generateClientOrderId',
