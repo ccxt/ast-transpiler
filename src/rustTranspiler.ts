@@ -17552,7 +17552,7 @@ export class RustTranspiler extends BaseTranspiler {
             const arg: any = this.unwrapParens(node.arguments[at]);
             return isIdentifier(arg) && node.arguments.slice(0, at).some((e: any) => isIdentifier(e) && e.text === arg.text);
         };
-        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
+        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustStrListSliceLent(node.arguments[at]) ? RustTranspiler.rustLentMark(a) : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
         if (optName !== undefined) {
             // ral-62o: the `Option<String>` twin of the reader, chosen from the call node (`_k` when the key is a plain literal)
             this.rustOptReaderPrinted.add(node);
@@ -17711,6 +17711,7 @@ export class RustTranspiler extends BaseTranspiler {
         const pads: string[] = [];
         for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++) pads.push(this.rustPositionalPad(params[at]));
         return [ ...Array.from(node.arguments).map((arg, at) => {
+            if (this.rustStrListSliceLent(arg)) return RustTranspiler.rustLentMark(String((arg as any).text));
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
             if (at < params.length && this.rustBookSideParam(params[at])) return this.printBookSideArg(arg, identation);
             // a lent `Option<&Market>` is `Copy`: a bare one is marked so the by-value clone step leaves it
@@ -19494,7 +19495,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.isProvenShadowListType(type) ? RUST_PARAM_SHADOWS.LIST : undefined;
             if (kind === undefined) continue;
             if (this.rustParameterIsClientHandle(param)) continue;
-            if (this.rustParamShadowUseCensus(fn, param, kind, wsDict) === undefined) continue;
+            if (this.rustParamShadowUseCensus(fn, param, kind, wsDict, kind === RUST_PARAM_SHADOWS.LIST && this.rustVenueStrListParam(param)) === undefined) continue;
             table.set(name, { kind, name, declaration: param });
         }
         return table;
@@ -19519,7 +19520,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  one must exist; anything else (a write, a `Value` pass-through, a Null
      *  comparison, a marker key) answers undefined and the parameter keeps its
      *  box. */
-    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false): { reads: number } | undefined {
+    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false, strList = false): { reads: number } | undefined {
         const name = String((param.name as Identifier).text);
         const paramSymbol = this.rustSymbolOf(param.name as Identifier);
         if (paramSymbol === undefined) return undefined;
@@ -19528,7 +19529,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !this.rustParamUseIsRead(node, kind, literalKeys)) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -19666,7 +19667,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!Number.isInteger(index) || index < 0) return undefined;
             return `${shadow.name}.get(${index}).cloned().unwrap_or(Value::Null)`;
         }
-        if (!this.isRustValueIndexKey(key)) return undefined;
+        if (!this.isRustValueIndexKey(key)) return this.rustVenueStrListParam(shadow.declaration) ? this.printStrListNumberKeyRead(shadow.name, key) : undefined;
         const place = this.printNode(key, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place)) return undefined;
         // a typed `i64` loop counter indexes the slice directly
@@ -32115,7 +32116,7 @@ export class RustTranspiler extends BaseTranspiler {
         const slots = [0, 1, 2, 3, 4].map((at) => {
             const arg: any = node.arguments[at];
             if (arg === undefined) return at === 3 && single ? 'None::<&str>' : 'Value::Null';
-            if (!this.rustWsWatchSlot(node, at)) return this.rustSliceArgText(printed[at]);
+            if (!this.rustWsWatchSlot(node, at)) return this.rustStrListSliceLent(arg) ? RustTranspiler.rustLentMark(String(arg.text)) : this.rustSliceArgText(printed[at]);
             return at > 0 && this.rustWsNumberSlot(arg) ? this.rustWsNumberSlotText(arg, printed[at]) : this.rustWsWatchSlotText(arg, printed[at]);
         });
         return `self.${methodName}(${slots.join(', ')})`;
@@ -39819,13 +39820,20 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsStrVec(param) || this.rustParamIsLentList(param) || this.rustParamIsLentVenue(param) || this.rustParamReadsByReference(param) || this.rustParameterIsClientHandle(param)) return false;
         // every caller hands a list it holds by name (a local or a lent parameter): it lends, nothing is rebuilt
         const at = params.indexOf(param);
+        let held = 0;
         for (const call of this.rustVenueStrCallSites(method)) {
             if (Array.from(call.arguments ?? []).some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
             const arg: any = call.arguments?.[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            // an array literal is built in place as a slice; at least one caller must lend a held list
+            if (arg !== undefined && isArrayLiteralExpression(arg) && !arg.elements.some((e: any) => e.kind === SyntaxKind.SpreadElement)) continue;
             const decl: any = arg !== undefined && isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
-            if (decl === undefined || decl.name === arg || !(isVariableDeclaration(decl) || (isParameterDeclaration(decl) && decl !== param && this.rustVenueStrListParam(decl)))) return false;
+            // a caller's own required `string[]` parameter lends whichever form it prints (slice, shadow or boxed list)
+            const listParam = decl !== undefined && isParameterDeclaration(decl) && decl !== param && isIdentifier(decl.name) && decl.initializer === undefined && decl.questionToken === undefined
+                && decl.type?.kind === SyntaxKind.ArrayType && (decl.type as any).elementType?.kind === SyntaxKind.StringKeyword && !this.rustLocalIsReassigned(decl, String(decl.name.text));
+            if (decl === undefined || decl.name === arg || !(isVariableDeclaration(decl) || listParam)) return false;
+            held++;
         }
-        return this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.LIST) !== undefined;
+        return held > 0 && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.LIST, false, true) !== undefined;
     }
 
     /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
@@ -39834,6 +39842,61 @@ export class RustTranspiler extends BaseTranspiler {
         const at = Array.from(call.arguments ?? []).indexOf(arg);
         const params: any = at < 0 ? undefined : this.rustCalleeParams(call);
         return params !== undefined && at < params.length && this.rustVenueStrListParam(params[at]);
+    }
+
+    /** A lent string-list parameter handed whole to a base reader that takes a slice: the `watchMultiple` hash lists
+     *  (`impl WsHashList`) or the `inArray` haystack (`impl ContainerArg`). */
+    rustStrListSliceUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (!isIdentifier(id) || !isCallExpression(call) || call.expression === id || !isPropertyAccessExpression(call.expression)) return false;
+        if (call.expression.expression.kind !== SyntaxKind.ThisKeyword || call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const decl: any = this.rustDeclarationOfIdentifier(id);
+        if (decl === undefined || !isParameterDeclaration(decl) || decl.type?.kind !== SyntaxKind.ArrayType) return false;
+        const at = Array.from(call.arguments).indexOf(id);
+        const name = String(call.expression.name.text);
+        const slot = (name === 'watchMultiple' && (at === 1 || at === 3) && this.rustWsWatchSlot(call, 0)) || (name === 'inArray' && at === 1 && call.arguments.length === 2);
+        return slot && this.rustCalleeIsRuntimeBase(call);
+    }
+
+    /** A number key of a lent string-list read: an `i64` / `Option<i64>` local, a `Value` number parameter, or `xs[N]` of a
+     *  held `Vec<Value>`. Int indexes the slice, anything else misses (Null), as `get_list_value` answers a number box. */
+    rustStrListNumberKeyText(key: any): string | undefined {
+        const inner: any = this.rustSkipWrappers(key);
+        const type: any = inner === undefined ? undefined : this.getCheckedTypeOf(inner);
+        if (type === undefined || !(type.flags & (TypeFlags.Number | TypeFlags.NumberLiteral))) return undefined;
+        if (isIdentifier(inner)) {
+            const kind = this.rustScalarIdentifierKind(inner);
+            const name = super.printIdentifier(inner);
+            if (kind === 'int') return `${name} as usize`;
+            if (kind === 'oint') return `${name}.unwrap_or(-1) as usize`;
+            const decl: any = this.rustDeclarationOfIdentifier(inner);
+            if (kind === undefined && decl !== undefined && isParameterDeclaration(decl) && decl.initializer === undefined && decl.questionToken === undefined
+                && this.rustParamType(decl) === 'Value' && !this.rustLocalIsReassigned(decl, String(inner.text))) return `${name}.as_i64().unwrap_or(-1) as usize`;
+            return undefined;
+        }
+        if (isElementAccessExpression(inner) && isIdentifier(inner.expression) && isNumericLiteral(inner.argumentExpression) && /^\d+$/.test(String(inner.argumentExpression.text))
+            && (this.rustVecLocalDeclarationOf(inner.expression) !== undefined || this.rustReadBearerKind(inner.expression) === 'list')) {
+            return `${super.printIdentifier(inner.expression)}.get(${inner.argumentExpression.text}).and_then(Value::as_i64).unwrap_or(-1) as usize`;
+        }
+        return undefined;
+    }
+
+    /** A slice-slot use whose parameter itself prints as a lent `&[crate::Value]` slice. */
+    rustStrListSliceLent(id: any): boolean {
+        if (!this.rustStrListSliceUse(id)) return false;
+        const decl: any = this.rustDeclarationOfIdentifier(id);
+        return decl !== undefined && this.rustVenueStrListParam(decl);
+    }
+
+    rustStrListNumberKeyUse(id: any): boolean {
+        const read: any = id.parent;
+        if (!isElementAccessExpression(read) || read.expression !== id || this.isNativeWriteTargetBase(id) || !this.isNativeAccessPositionSafe(id)) return false;
+        return !this.isWriteBackBindRead(read) && this.rustStrListNumberKeyText(read.argumentExpression) !== undefined;
+    }
+
+    printStrListNumberKeyRead(name: string, key: any): string | undefined {
+        const index = this.rustStrListNumberKeyText(key);
+        return index === undefined ? undefined : `${name}.get(${index}).cloned().unwrap_or(Value::Null)`;
     }
 
     /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
@@ -39845,6 +39908,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (decl !== undefined && isVariableDeclaration(decl) && this.rustClientHandleKeysAlias(this.unwrapParens(this.unwrapParens(decl.initializer)?.arguments?.[0])) !== undefined
             && this.printClientHandleKeys(decl.initializer) !== undefined && !this.rustLocalReassigned(decl)) return `&${String(inner.text)}`;
         const text = this.printNode(arg, 0).trim();
+        const literal = isArrayLiteralExpression(inner) ? /^Value::from\(vec!\[(.*)\]\)$/s.exec(text) : null;
+        if (literal !== null) return `&[${literal[1]}]`;
         const arr = /^Value::Arr\((\w+)(?:\.clone\(\))?\)$/.exec(text);
         if (arr !== null) return `&${arr[1]}`;
         // an `Option<List>` local: viewed in place, None reads as the empty list
