@@ -7202,7 +7202,8 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     }
     const text = (printedInitializer ?? '').replace (/\s+/g, ' ').trim ();
     const shaped = ccxtGoWsListStreamReceive (goTranspiler, awaitNode) ?? ccxtGoAwaitSpecialReceive (goTranspiler, awaitNode, text)
-        ?? ccxtGoWsKeyedStructureReceive (goTranspiler, awaitNode, text);
+        ?? ccxtGoWsKeyedStructureReceive (goTranspiler, awaitNode, text)
+        ?? h26g41NonNilDictReceive (goTranspiler, awaitNode, text);
     if (shaped !== undefined) {
         return shaped;
     }
@@ -46337,3 +46338,80 @@ function h26g39IsPlainString (go, e) {
     }
 }
 // ===== h26-G39 (end) =====
+
+// ===== h26-H26-G41 =====
+// `const x = await this.m (..)` where m is declared Promise<Dict> and every return of its body is a value that is
+// never nil (object literal, this.extend (..), or a const local initialised by one): x is a map[string]any local.
+function h26g41NeverNilDict (node, body, depth = 0): boolean {
+    while (node?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    if (node?.kind === ts.SyntaxKind.ObjectLiteralExpression) {
+        return true;
+    }
+    if ((node?.kind === ts.SyntaxKind.CallExpression) && (node.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (node.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (node.expression.name?.text === 'extend')) {
+        return true;
+    }
+    if ((node?.kind !== ts.SyntaxKind.Identifier) || (depth > 0)) {
+        return false;
+    }
+    const name = node.text;
+    const decls = [];
+    let rebound = false;
+    const visit = (n) => {
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name?.kind === ts.SyntaxKind.Identifier) && (n.name.text === name)) {
+            decls.push (n);
+        }
+        if ((n.kind === ts.SyntaxKind.Parameter) && (n.name?.text === name)) {
+            rebound = true;
+        }
+        if ((n.kind === ts.SyntaxKind.BinaryExpression) && (n.left?.kind === ts.SyntaxKind.Identifier) && (n.left.text === name)
+            && (n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= ts.SyntaxKind.LastAssignment)) {
+            rebound = true;
+        }
+        n.forEachChild (visit);
+    };
+    visit (body);
+    return !rebound && (decls.length === 1) && h26g41NeverNilDict (decls[0].initializer, body, depth + 1);
+}
+
+function h26g41NonNilDictReceive (goTranspiler, awaitNode, text) {
+    const declaration = ccxtGoAsyncReceiveLocal (awaitNode);
+    const call = awaitNode.expression;
+    const callee = call?.expression;
+    if ((declaration === undefined) || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0)
+        || !/^\(\s*<-\s*this\.\w+Async\s*\(/.test (text) || (call?.kind !== ts.SyntaxKind.CallExpression)
+        || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    let method = undefined;
+    try {
+        method = goTranspiler.getChecker ().getSymbolAtLocation (callee.name)?.valueDeclaration?.resolve ();
+    } catch (e) {
+        return undefined;
+    }
+    const statements = method?.body?.statements;
+    if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || !/^Promise<\s*Dict\s*>$/.test ((method.type?.getText?. () ?? '').trim ())
+        || !(method.modifiers ?? []).some ((m) => m.kind === ts.SyntaxKind.AsyncKeyword)
+        || (statements === undefined) || (statements.length === 0) || (statements[statements.length - 1].kind !== ts.SyntaxKind.ReturnStatement)) {
+        return undefined;
+    }
+    let proven = true;
+    const visit = (n) => {
+        if (!proven || ((n !== method.body) && (isFunctionLike (n) || (n.kind === ts.SyntaxKind.ClassDeclaration)))) {
+            return;
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            proven = h26g41NeverNilDict (n.expression, method.body);
+        }
+        n.forEachChild (visit);
+    };
+    visit (method.body);
+    if (!proven || (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, 'map[string]any', () => true,
+        (n) => ccxtGoIsNotAReference (goTranspiler, n, declaration)) === undefined)) {
+        return undefined;
+    }
+    return { goType: 'map[string]any', wrap: (recv) => 'MapTyped(PanicOnError(' + recv.trim () + '))' };
+}
+// ===== h26-H26-G41 (end) =====
