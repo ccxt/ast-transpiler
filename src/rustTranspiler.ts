@@ -1669,6 +1669,9 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustInsertReceiverBuildsPlainDict(declaration as VariableDeclaration)) {
                 return true;
             }
+            if (this.rustPlainFieldRowLocal(declaration as VariableDeclaration)) {
+                return true;
+            }
             // A local the declared-Dict table proves holds a Dict at every use
             // (alwaysDict && stable): the helper's non-dict branches are dead,
             // so only the tag hooks and the insert remain — the key rules of
@@ -1744,6 +1747,32 @@ export class RustTranspiler extends BaseTranspiler {
             }
         });
         return plain;
+    }
+
+    /** `const row = this.safeDict (this.<plain field>, k, {})`, never rebound: the row of a field the base never
+     *  tags, or the fresh plain literal, so a book-meta key needs no `__book_id` guard. */
+    rustPlainFieldRowLocal(declaration: VariableDeclaration): boolean {
+        const init: any = this.rustStripWrappers(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
+            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || init.expression.name.text !== 'safeDict' || init.arguments.length !== 3) {
+            return false;
+        }
+        const field: any = init.arguments[0];
+        if (!isPropertyAccessExpression(field) || field.expression.kind !== SyntaxKind.ThisKeyword
+            || !RustTranspiler.RUST_PLAIN_DICT_FIELDS.has(field.name.text) || !this.rustPlainDictLiteral(init.arguments[2])) {
+            return false;
+        }
+        const name = String((declaration.name as Identifier).text);
+        const declarationSymbol = this.rustSymbolOf(declaration.name as Identifier);
+        const scope = this.rustEnclosingFunction(declaration);
+        let rebound = scope === undefined;
+        this.rustWalkScope(scope, (n) => {
+            if (!rebound && isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(n.left)
+                && String(n.left.text) === name && (declarationSymbol === undefined || this.rustSymbolOf(n.left) === declarationSymbol)) {
+                rebound = true;
+            }
+        });
+        return !rebound;
     }
 
     /** An object literal with no runtime tag key — the transpiler built it, so

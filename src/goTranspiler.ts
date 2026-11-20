@@ -31498,6 +31498,23 @@ ${tryBodyBlock}
         return `func() any {\n${body}if ${keyStr} == nil {\n${this.getIden(level + 2)}return nil\n${body}}\n${body}return ${containerStr}[*${keyStr}]\n${this.getIden(level)}}()`;
     }
 
+    // a `*string` key an enclosing guard proves non-nil (never rebound): GetValue's nil-key branch
+    // is dead, so the plain index of `*k` gives the same answer (missing key reads the `any` nil).
+    // A method receiver (`m[k].push (x)`) or a synthetic node keeps the guarded form the write-back pass expects.
+    goProvenPointerKeyMapIndex(keyNode, containerStr: string, keyStr: string): string | undefined {
+        if (!/^[A-Za-z_]\w*$/.test(keyStr.trim())) {
+            return undefined;
+        }
+        let statement: any = keyNode;
+        while ((statement?.parent !== undefined) && (statement.parent.kind !== SyntaxKind.Block)) {
+            statement = statement.parent;
+        }
+        if (!this.goIsNilGuardedStringPointerKey(keyNode) && !this.goInOpPointerKeyProvenNonNil(statement, keyNode)) {
+            return undefined;
+        }
+        return `${containerStr}[*${keyStr.trim()}]`;
+    }
+
     // true for `this.<field>` — the one property-access shape whose Go type the
     // printer itself cannot name (the fields live in the hand-written Go structs)
     isGoThisPropertyAccessExpression(node) {
@@ -32781,6 +32798,11 @@ ${tryBodyBlock}
             // receiver cannot carry the guard's own indentation, so it keeps the helper.
             if ((keys[0]?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(keys[0]) === '*string') && !containerStr.includes('\n')
                 && !this.isGoElementAccessAssignmentTarget(node)) {
+                const provenKey = ((node.parent === undefined) || (node.parent.kind === SyntaxKind.PropertyAccessExpression)) ? undefined
+                    : this.goProvenPointerKeyMapIndex(keys[0], containerStr, keyStrs[0]);
+                if (provenKey !== undefined) {
+                    return this.goElementAccessChain(provenKey, keyStrs);
+                }
                 return this.goElementAccessChain(this.printNilGuardedMapIndex(containerStr, keyStrs[0]), keyStrs);
             }
         }
