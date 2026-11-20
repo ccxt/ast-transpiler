@@ -17625,6 +17625,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         if ((goType === 'string') && this.goSelfConcatWriteIsString(parent.right, varName)) {
                             return false;
                         }
+                        if (this.goSelfIntStepWriteKeepsType(parent.right, varName, goType)) {
+                            return false;
+                        }
                         // the nil-init string scan already proved every write prints a Go string
                         if (stringWriteProven && (goType === 'string')) {
                             return false;
@@ -17647,6 +17650,25 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         });
         return safe;
+    }
+
+    // `x = x + N` / `x = x - N` on an int/int64 local, N an integer literal fitting int: the
+    // local stays a never-nil integer of its declared kind (the untyped constant adapts)
+    goSelfIntStepWriteKeepsType(node, varName: string, goType: string): boolean {
+        while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if (((goType !== 'int') && (goType !== 'int64')) || (node?.kind !== SyntaxKind.BinaryExpression)
+            || ((node.operatorToken.kind !== SyntaxKind.PlusToken) && (node.operatorToken.kind !== SyntaxKind.MinusToken))) {
+            return false;
+        }
+        let left = node.left;
+        while (left?.kind === SyntaxKind.ParenthesizedExpression) {
+            left = left.expression;
+        }
+        const right = node.right;
+        return (left?.kind === SyntaxKind.Identifier) && (left.text === varName)
+            && (right?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(right.text) && this.goLiteralFitsKind(right, 'int');
     }
 
     // `x = <+ chain>` that reads x itself: only a whole chain prints native (a bare
