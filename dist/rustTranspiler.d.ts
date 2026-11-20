@@ -3865,6 +3865,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `row = this.m (..)` of a same-venue method typed `-> Option<Dict>` (NullableDict table row): the row's own optional
      *  form takes the result as is (None where the method answered undefined, the Null the boxed write held). */
     rustCacheRowVenueOdictRewrite(rhs: any, head: any): boolean;
+    /** `row = this.safePosition ({ .. })` (a plain literal) on a cache-bucket row: the base builder answers `Dict` on every path
+     *  (build `rustTypedParsePositionFamilies`), so the optional row takes `Some(map)`, the Dict the boxed write held. */
+    rustCacheRowBuiltRewrite(rhs: any, init: any): boolean;
+    /** The callee resolves to the base tier's `safePosition` (no venue override). */
+    rustCacheRowBuiltRewriteDecl(rhs: any): boolean;
+    /** `(row as Dict)['k'] = v` on a cache-bucket row: the cast only retypes the TS side, so the write is the row's own
+     *  literal-key write; answers the parenthesised head the key-write rules take, else undefined. */
+    rustCacheRowCastWriteHead(n: any, init: any): any;
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
      *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
     rustCacheRowDynamicWrite(n: any, init: any): boolean;
@@ -5711,6 +5719,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrListParamUncached(param: any): boolean;
     /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
     rustVenueStrListSlotOf(call: any, arg: any): boolean;
+    /** A lent string-list parameter handed whole to a base reader that takes a slice: the `watchMultiple` hash lists
+     *  (`impl WsHashList`) or the `inArray` haystack (`impl ContainerArg`). */
+    rustStrListSliceUse(id: any): boolean;
+    /** A number key of a lent string-list read: an `i64` / `Option<i64>` local, a `Value` number parameter, or `xs[N]` of a
+     *  held `Vec<Value>`. Int indexes the slice, anything else misses (Null), as `get_list_value` answers a number box. */
+    rustStrListNumberKeyText(key: any): string | undefined;
+    /** A slice-slot use whose parameter itself prints as a lent `&[crate::Value]` slice. */
+    rustStrListSliceLent(id: any): boolean;
+    rustStrListNumberKeyUse(id: any): boolean;
+    printStrListNumberKeyRead(name: string, key: any): string | undefined;
     /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
     rustVenueStrListArgText(arg: any): string;
     /** An optional `Str` slot of a sync ws method with no arm whose every caller passes a literal, `undefined`, or a

@@ -12908,13 +12908,48 @@ function ccxtGoGuardedAddChainPointersText(goTranspiler, leaves, match) {
   const name = match[2];
   return lead + indent + "if " + names.map((n) => n + " != nil").join(" && ") + " {\n" + indent + "	" + name + " = " + texts.join(" + ") + "\n" + indent + "} else {\n" + indent + "	" + name + " = nil\n" + indent + "}" + match[4];
 }
+function ccxtGoGuardedAddChainCallPointersAssignment(goTranspiler, node, printed) {
+  const expression = node?.expression;
+  const match = typeof printed === "string" ? /^(\s*)([A-Za-z0-9_]+) = ((?:ccxt\.)?Add\([\s\S]*?)(\s*)$/.exec(printed) : null;
+  if (match === null || expression?.kind !== ts.SyntaxKind.BinaryExpression || expression.operatorToken?.kind !== ts.SyntaxKind.EqualsToken || expression.left?.kind !== ts.SyntaxKind.Identifier || match[2] !== goTranspiler.printNode(expression.left, 0) || match[3].includes("\n") || ccxtGoWholeAddCallEnd(match[3].replace(/^ccxt\./, "")) < 0) {
+    return printed;
+  }
+  const scope = goTranspiler.goEnclosingFunction?.(expression);
+  const targetType = goTranspiler.goDeclaredTypeOfIdentifier?.(expression.left);
+  const pieces = [match[2] + "Piece", match[2] + "Piece2"];
+  if (targetType !== void 0 && targetType !== "any" || (ccxtGoWriteSiteLocalGoType(goTranspiler, expression.left) ?? "any") !== "any" || pieces.some((piece) => ccxtGoScopeNamesIdentifier(scope, piece)) || ccxtGoScopeNilTestsIdentifier(scope, match[2])) {
+    return printed;
+  }
+  return ccxtGoGuardedAddChainCallPointersText(goTranspiler, ccxtGoAddChainLeaves(expression.right, []), match, pieces);
+}
+function ccxtGoGuardedAddChainCallPointersText(goTranspiler, leaves, match, pieces) {
+  const isPointer = (leaf) => leaf?.kind === ts.SyntaxKind.Identifier && goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === "*string";
+  const derefable = (leaf) => isPointer(leaf) && goTranspiler.goConcatDerefableStringOperand(leaf);
+  const calls = leaves.filter((leaf) => leaf?.kind === ts.SyntaxKind.CallExpression && !goStringOperand(goTranspiler, leaf));
+  const pointers = leaves.filter((leaf) => isPointer(leaf) && !goStringOperand(goTranspiler, leaf) && !derefable(leaf));
+  const names = [...new Set(pointers.map((leaf) => goTranspiler.printNode(leaf, 0)))];
+  if (calls.length < 1 || calls.length > 2 || calls.length + names.length < 2 || calls.some((call) => goTranspiler.goTypeOfInitializer(call, goTranspiler.printNode(call, 0)) !== "*string") || pointers.some((leaf) => goTranspiler.goHasEnclosingNilGuard(leaf) || goTranspiler.goHasExitingNilGuard(leaf)) || !leaves.every((leaf) => calls.includes(leaf) || pointers.includes(leaf) || goStringOperand(goTranspiler, leaf) || derefable(leaf))) {
+    return match.input;
+  }
+  const bound = calls.map((call, i) => pieces[i]);
+  const texts = leaves.map((leaf) => calls.includes(leaf) ? "*" + bound[calls.indexOf(leaf)] : (pointers.includes(leaf) || derefable(leaf) ? "*" : "") + goTranspiler.printNode(leaf, 0));
+  const callTexts = calls.map((call) => goTranspiler.printNode(call, 0));
+  if (texts.concat(callTexts).some((text) => text.includes("\n"))) {
+    return match.input;
+  }
+  const indent = match[1].replace(/^\n+/, "");
+  const lead = match[1].substring(0, match[1].length - indent.length);
+  const name = match[2];
+  const test = bound.concat(names).map((n) => n + " != nil").join(" && ");
+  return lead + indent + "if " + bound.join(", ") + " := " + callTexts.join(", ") + "; " + test + " {\n" + indent + "	" + name + " = " + texts.join(" + ") + "\n" + indent + "} else {\n" + indent + "	" + name + " = nil\n" + indent + "}" + match[4];
+}
 function installCcxtGoGuardedAddChainAssignmentPointers(goTranspiler) {
   if (!goInstallOnce(goTranspiler, "__ccxtGoGuardedAddChainAssignmentPointersInstalled", "printExpressionStatement")) {
     return;
   }
   const upstream = goTranspiler.printExpressionStatement;
   goTranspiler.printExpressionStatement = function(node, identation) {
-    return ccxtGoGuardedAddChainAssignmentPointers(this, node, upstream.call(this, node, identation));
+    return ccxtGoGuardedAddChainCallPointersAssignment(this, node, ccxtGoGuardedAddChainAssignmentPointers(this, node, upstream.call(this, node, identation)));
   };
 }
 var CCXT_GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
@@ -14854,6 +14889,28 @@ function nilJoinOccurrenceKind(node) {
   return "read";
 }
 var CCXT_GO_NIL_JOIN_CACHE = /* @__PURE__ */ new WeakMap();
+function goNilJoinDictSlotWriteType(goTranspiler, declaration, expression, name) {
+  const left = expression?.left;
+  if (expression?.kind !== ts.SyntaxKind.BinaryExpression || expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken || left?.kind !== ts.SyntaxKind.ArrayLiteralExpression) {
+    return void 0;
+  }
+  const index = left.elements.findIndex((e) => e.kind === ts.SyntaxKind.Identifier && e.text === name);
+  return index >= 0 && goNilDeclaredDictSlotRebind(goTranspiler, declaration, expression.right, index) ? "map[string]any" : void 0;
+}
+function goNilDeclaredDictSlotRebind(goTranspiler, declaration, right, index) {
+  if (declaration?.kind !== ts.SyntaxKind.VariableDeclaration || declaration.name?.kind !== ts.SyntaxKind.Identifier || !isNilDeclaredInitializer(declaration.initializer)) {
+    return false;
+  }
+  const scope = goTranspiler.goEnclosingFunction(declaration);
+  const name = declaration.name.text;
+  const vetoed = (n) => n.kind === ts.SyntaxKind.Identifier && n.text === name && (ccxtGoNilJoinIsElementWrite(n) || n.parent?.kind === ts.SyntaxKind.ArrayLiteralExpression && !(n.parent.parent?.kind === ts.SyntaxKind.BinaryExpression && n.parent.parent.left === n.parent));
+  if (scope === void 0 || goTranspiler.hasNodeWhere(scope, vetoed)) {
+    return false;
+  }
+  const expr = right?.kind === ts.SyntaxKind.AwaitExpression ? right.expression : right;
+  const callee = expr?.expression;
+  return expr?.kind === ts.SyntaxKind.CallExpression && callee?.kind === ts.SyntaxKind.PropertyAccessExpression && callee.expression?.kind === ts.SyntaxKind.ThisKeyword && goTranspiler.goTupleElementIsDict(expr, index);
+}
 function ccxtGoNilDeclaredContainerJoinType(goTranspiler, declaration) {
   if (CCXT_GO_NIL_JOIN_CACHE.has(declaration)) {
     return CCXT_GO_NIL_JOIN_CACHE.get(declaration);
@@ -15134,6 +15191,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached(goTranspiler, declaration, c
       }
       return NIL_JOIN_TYPES.indexOf(goType) >= 0 ? goType : NIL_JOIN_TYPES.find((t) => ccxtGoWriteSiteConversion(goTranspiler, t, right, true) !== void 0);
     },
+    slotWriteType: (expression) => goNilJoinDictSlotWriteType(goTranspiler, declaration, expression, name),
     // a Safe* accessor may answer absent: the local is not proven present after it
     writeProvesPresent: (right) => {
       const neverNil = goTranspiler.goNeverNilDict(right, goTranspiler.goSourceTreeKind(right) === "ws");
@@ -15958,6 +16016,8 @@ var CCXT_GO_GETARG_DECLARED_TYPES = {
   "Dict[]": "[]map[string]any",
   "List": "[]any"
 };
+var h21g06NumericDefaultInt = (param, goType) => goType === "int64" && param?.type?.getText?.()?.trim() === "Int" && param?.initializer?.kind === SyntaxKind5.NumericLiteral;
+var h21g06IsNegation = (node) => node?.kind === SyntaxKind5.PrefixUnaryExpression && node.operator === SyntaxKind5.MinusToken;
 var CCXT_GO_GETARG_SAFE_CONSUMERS = {
   // deref-aware helpers (value and key/dict arguments)
   "GetValue": "*",
@@ -24600,6 +24660,52 @@ var GO_MARKET_LOCAL_TYPE = "map[string]any";
 var GO_MARKET_PRODUCER_METHODS = ["parseMarket", "getMarketFromSymbols", "getMarketFromClientAndMessage"];
 var GO_ANY_FRAMED_VENUES = /* @__PURE__ */ new Set(["bitfinex", "toobit", "coincheck", "sxbet", "gemini"]);
 var GO_MARKET_MAP_CALLS = ["Market", "SafeMarket", "SafeMarketStructure", "Extend", "DeepExtend", "MapTyped", "MarketTyped"];
+var GO_ROW_MINMAX = { "min": ["Min", "*float64"], "max": ["Max", "*float64"] };
+var GO_TYPED_ROW_FIELDS = {
+  "MarketInterface": {
+    ...Object.fromEntries([
+      "market",
+      "marketType",
+      "executionModel",
+      "collateral",
+      "resolvedOutcome",
+      "id",
+      "uppercaseId",
+      "lowercaseId",
+      "symbol",
+      "baseId",
+      "quoteId",
+      "type",
+      "settle",
+      "settleId",
+      "expiryDatetime",
+      "optionType",
+      "baseName",
+      "id2",
+      "subType",
+      "feeSide"
+    ].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*string"]])),
+    "base": ["BaseCurrency", "*string"],
+    "quote": ["QuoteCurrency", "*string"],
+    ...Object.fromEntries(["spot", "swap", "future", "option", "contract"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "bool"]])),
+    ...Object.fromEntries(["resolved", "active", "margin", "index", "stock", "linear", "inverse", "quanto", "prediction", "percentage", "tierBased"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*bool"]])),
+    ...Object.fromEntries(["contractSize", "strike", "taker", "maker", "numericId"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*float64"]])),
+    ...Object.fromEntries(["expiry", "created", "instIdCode"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*int64"]])),
+    "tiers": ["Tiers", "map[string]any"],
+    "precision": { "go": "Precision", "fields": Object.fromEntries(["amount", "price", "cost", "base", "quote"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*float64"]])) },
+    "limits": { "go": "Limits", "fields": Object.fromEntries(["amount", "cost", "leverage", "price"].map((k) => [k, { "go": k[0].toUpperCase() + k.slice(1), "fields": GO_ROW_MINMAX }])) }
+  },
+  "CurrencyInterface": {
+    ...Object.fromEntries(["id", "code", "name", "type"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*string"]])),
+    "precision": ["Precision", "*float64"],
+    "fee": ["Fee", "*float64"],
+    "numericId": ["NumericId", "*int64"],
+    "valueScale": ["ValueScale", "*int64"],
+    ...Object.fromEntries(["active", "deposit", "withdraw", "margin"].map((k) => [k, [k[0].toUpperCase() + k.slice(1), "*bool"]])),
+    "fees": ["Fees", "map[string]any"],
+    "limits": { "go": "Limits", "fields": { "amount": { "go": "Amount", "fields": GO_ROW_MINMAX }, "withdraw": { "go": "Withdraw", "fields": GO_ROW_MINMAX } } }
+  }
+};
 var GO_MARKET_MAP_BASE_CALLS = [
   "getMarketFromSymbols",
   // BaseExchange methods whose Go signature is `map[string]any` on the base, on every venue override
@@ -26063,7 +26169,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         break;
       }
       case SyntaxKind5.ElementAccessExpression: {
-        const element = this.goLoopBoundedStringElementType(initializer, printedValue);
+        const element = this.goTypedRowFieldRead(initializer)?.goType ?? this.goLoopBoundedStringElementType(initializer, printedValue);
         if (element !== void 0) {
           return element;
         }
@@ -26954,7 +27060,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
         if (parent?.kind === SyntaxKind5.SpreadElement) {
           return true;
         }
-        if (parent?.kind === SyntaxKind5.ArrayLiteralExpression && parent.parent?.kind === SyntaxKind5.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === SyntaxKind5.EqualsToken && !(goType === "map[string]any" && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n))) && !(goType === "map[string]any" && this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))) {
+        if (parent?.kind === SyntaxKind5.ArrayLiteralExpression && parent.parent?.kind === SyntaxKind5.BinaryExpression && parent.parent.left === parent && parent.parent.operatorToken.kind === SyntaxKind5.EqualsToken && !(goType === "map[string]any" && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n))) && !(goType === "map[string]any" && (this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)) || goNilDeclaredDictSlotRebind(this, declaration, parent.parent.right, parent.elements.indexOf(n))))) {
           return true;
         }
         if (parent?.kind === SyntaxKind5.BinaryExpression && parent.left === n) {
@@ -27952,6 +28058,70 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
     }
     return false;
   }
+  // a string-literal read on a checker-typed MarketInterface / CurrencyInterface row is the Go struct field
+  // (`market.Symbol`, `market.Precision.Price`) once rows are stored as structs; switched on by the embedder's
+  // nativeStoreFields 'markets' row. Pointer fields fire only where the consumer keeps the nil answer.
+  goTypedRowFieldRead(node) {
+    if (this.nativeStoreFields?.["markets"]?.["rowStructReads"] !== true || node?.kind !== SyntaxKind5.ElementAccessExpression || this.isGoElementAccessAssignmentTarget(node) || node.parent?.kind === SyntaxKind5.ElementAccessExpression && node.parent.expression === node) {
+      return void 0;
+    }
+    const keys = [];
+    let base = node;
+    while (base?.kind === SyntaxKind5.ElementAccessExpression) {
+      const key = base.argumentExpression;
+      if (key?.kind !== SyntaxKind5.StringLiteral && key?.kind !== SyntaxKind5.NoSubstitutionTemplateLiteral) {
+        return void 0;
+      }
+      keys.unshift(key.text);
+      base = this.goUnwrapParenthesizedNode(base.expression);
+    }
+    const table = base?.kind === SyntaxKind5.Identifier ? this.goTypedRowTable(base, keys[0]) : void 0;
+    let entry = table;
+    const goPath = [];
+    for (const key of keys) {
+      entry = typeof entry === "object" && Object.prototype.hasOwnProperty.call(entry, key) ? entry[key] : void 0;
+      if (entry === void 0) {
+        return void 0;
+      }
+      goPath.push(Array.isArray(entry) ? entry[0] : entry.go);
+      entry = Array.isArray(entry) ? entry : entry.fields;
+    }
+    if (!Array.isArray(entry)) {
+      return void 0;
+    }
+    return this.goTypedRowFieldText(node, `${base.text}.${goPath.join(".")}`, entry[1]);
+  }
+  // the field table of the row's checker type, after the ts declaration proves the first key is its member
+  goTypedRowTable(base, firstKey) {
+    const checker = this.checkerOrUndefined();
+    const located = checker?.getTypeAtLocation(base);
+    const type = located !== void 0 ? checker.getNonNullableType(located) : void 0;
+    const name = type?.getAliasSymbol()?.name ?? type?.getSymbol()?.name;
+    const table = GO_TYPED_ROW_FIELDS[name];
+    return table !== void 0 && checker.getPropertyOfType(type, firstKey) !== void 0 ? table : void 0;
+  }
+  // value fields read anywhere; a pointer field only initialises a local of its type, is nil-tested, or (for
+  // *bool) is a truth test printed nil-guarded; else it stays a map read
+  goTypedRowFieldText(node, text, goType) {
+    if (!goType.startsWith("*")) {
+      return { text, goType };
+    }
+    let outer = node;
+    while (outer.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+      outer = outer.parent;
+    }
+    const parent = outer.parent;
+    const op = parent?.kind === SyntaxKind5.BinaryExpression ? parent.operatorToken.kind : void 0;
+    const truthTest = parent?.kind === SyntaxKind5.IfStatement && parent.expression === outer || parent?.kind === SyntaxKind5.PrefixUnaryExpression && parent.operator === SyntaxKind5.ExclamationToken || parent?.kind === SyntaxKind5.ConditionalExpression && parent.condition === outer || op === SyntaxKind5.AmpersandAmpersandToken || op === SyntaxKind5.BarBarToken;
+    if (truthTest) {
+      return goType === "*bool" ? { text: `(${text} != nil && *${text})`, goType: "bool" } : void 0;
+    }
+    const declared = parent?.kind === SyntaxKind5.VariableDeclaration && parent.initializer === outer;
+    const other = op !== void 0 ? this.goUnwrapParenthesizedNode(parent.left === outer ? parent.right : parent.left) : void 0;
+    const nilOperand = other?.kind === SyntaxKind5.NullKeyword || other?.kind === SyntaxKind5.Identifier && other.text === "undefined";
+    const compared = nilOperand && (op === SyntaxKind5.EqualsEqualsEqualsToken || op === SyntaxKind5.ExclamationEqualsEqualsToken);
+    return declared || compared ? { text, goType } : void 0;
+  }
   // every `return` the body itself reaches: the returns of a nested function literal are that
   // literal's, and say nothing about this signature
   goFunctionLevelReturns(body) {
@@ -28892,6 +29062,9 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
   }
   goNilInitStrDeclaredReadOk(n) {
     const { current, parent } = goReadClimb(n);
+    if (this.goNilInitStrLiteralTernaryArmRead(current, parent)) {
+      return true;
+    }
     if (this.goNilInitStrBalanceKeyRead(n, parent, current)) {
       return true;
     }
@@ -28908,6 +29081,17 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
       return false;
     }
     return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n);
+  }
+  // an arm of `const y: Str = c ? 'lit' : x` (or mirrored): ccxtGoStrPtrTernaryDeclaration prints y as an `any`
+  // box taking 'lit', *x, or an untyped nil for a nil x, which is what the box read before
+  goNilInitStrLiteralTernaryArmRead(current, parent) {
+    const decl = parent?.parent;
+    if (parent?.kind !== SyntaxKind5.ConditionalExpression || parent.condition === current || decl?.kind !== SyntaxKind5.VariableDeclaration || this.goUnwrapParenthesizedNode(decl.initializer) !== parent || decl.name?.kind !== SyntaxKind5.Identifier || current.kind !== SyntaxKind5.Identifier || this.hasNodeWhere(parent.condition, (c) => c.kind === SyntaxKind5.Identifier && c.text === current.text)) {
+      return false;
+    }
+    const annotation = decl.type;
+    const other = this.goUnwrapParenthesizedNode(parent.whenTrue === current ? parent.whenFalse : parent.whenTrue);
+    return (annotation === void 0 || annotation.kind === SyntaxKind5.TypeReference && annotation.typeName?.text === "Str") && other?.kind === SyntaxKind5.StringLiteral;
   }
   // a nil-guarded Balance key (`this.balance[x]` prints `[*x]`), the key of `this.safeDict (this.balance, x)`
   // (SafeValue derefs it) or an optional argument of a `this.` method (GetArg* reads a nil pointer as omitted)
@@ -29043,7 +29227,7 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
         bail = true;
         return;
       }
-      if (goReadRuleAccepts(GO_NIL_INIT_STRING_READ_RULE, this, n)) {
+      if (goReadRuleAccepts(GO_NIL_INIT_STRING_READ_RULE, this, n) || this.goNilInitStringMethodArgRead(n)) {
         reads.push(n);
         return;
       }
@@ -29074,7 +29258,7 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
       if (readParent?.kind === SyntaxKind5.BinaryExpression && readParent.operatorToken?.kind === SyntaxKind5.PlusToken) {
         continue;
       }
-      if (!this.goNilInitWriteDominates(writes, read)) {
+      if (!this.goNilInitWriteDominates(writes, read) && !this.goNilInitWritesCoverRead(writes, read)) {
         return void 0;
       }
     }
@@ -29178,6 +29362,60 @@ ${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
         }
       }
       statement = this.goNilInitEnclosingStatement(block);
+    }
+    return false;
+  }
+  // an earlier sibling of the read (or of an enclosing statement) that writes on every path, also through
+  // an if / else whose branches all write: the nil seed is never what the read sees
+  goNilInitWritesCoverRead(writes, read) {
+    const writeStatements = new Set(writes.map((write) => this.goNilInitEnclosingStatement(write)));
+    let statement = this.goNilInitEnclosingStatement(read);
+    while (statement !== void 0 && statement.parent?.kind === SyntaxKind5.Block) {
+      const siblings = statement.parent.statements;
+      for (const sibling of siblings) {
+        if (sibling.end > statement.pos) {
+          break;
+        }
+        if (this.goNilInitStatementAlwaysWrites(sibling, writeStatements)) {
+          return true;
+        }
+      }
+      statement = this.goNilInitEnclosingStatement(statement.parent);
+    }
+    return false;
+  }
+  // an argument of a `this.` method whose Go parameter stays `any` (or is `string`): a string reaches it as the
+  // boxed string did; the caller still proves every path wrote the local before this read
+  goNilInitStringMethodArgRead(n) {
+    const { current, parent } = goReadClimb(n);
+    if (parent?.kind === SyntaxKind5.BinaryExpression && parent.operatorToken?.kind === SyntaxKind5.EqualsToken && parent.right === current && parent.left?.kind === SyntaxKind5.Identifier && parent.parent?.kind === SyntaxKind5.ExpressionStatement) {
+      return true;
+    }
+    if (parent?.kind !== SyntaxKind5.CallExpression || !goNilInitIsAnyArgument(parent, current)) {
+      return false;
+    }
+    const callee = parent.expression;
+    if (callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return false;
+    }
+    const declaration = this.goMethodDeclarationOfCallee(callee);
+    const index = parent.arguments.indexOf(current);
+    const param = declaration?.parameters?.[index];
+    if (param === void 0 || param.dotDotDotToken !== void 0) {
+      return false;
+    }
+    const goType = this.goNativeParameterType(param);
+    return goType === void 0 || goType === "string";
+  }
+  goNilInitStatementAlwaysWrites(statement, writeStatements) {
+    if (writeStatements.has(statement)) {
+      return true;
+    }
+    if (statement?.kind === SyntaxKind5.Block) {
+      return statement.statements.some((child) => this.goNilInitStatementAlwaysWrites(child, writeStatements));
+    }
+    if (statement?.kind === SyntaxKind5.IfStatement && statement.elseStatement !== void 0) {
+      return this.goNilInitStatementAlwaysWrites(statement.thenStatement, writeStatements) && this.goNilInitStatementAlwaysWrites(statement.elseStatement, writeStatements);
     }
     return false;
   }
@@ -32228,6 +32466,9 @@ ${iden}}`;
   // guarded DerefScalar closure, a helper rise.
   goParameterKeepsNilCompareNative(body, param, goType) {
     if (goType.startsWith("*") || goType.startsWith("map[") || goType === "[]string") {
+      return true;
+    }
+    if (h21g06NumericDefaultInt(param, goType)) {
       return true;
     }
     const name = param.name.text;
@@ -36711,7 +36952,7 @@ ${indent}}`);
       if ((goType === "*int64" || goType === "*float64") && parent?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === n && parent.name?.text === "toString" && parent.parent?.kind === SyntaxKind5.CallExpression && parent.parent.expression === parent && (parent.parent.arguments?.length ?? 0) === 0 && /^ToString\(\w+\)$/.test(this.printNode(parent.parent, 0).trim())) {
         return true;
       }
-      if (parent?.kind === SyntaxKind5.ExpressionStatement || pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)) || goType === "*string" && (this.goGetArgPointerIsBalanceKey(n) || this.goGetArgStrPtrGuardedStringCall(n, param))) {
+      if (parent?.kind === SyntaxKind5.ExpressionStatement || pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n) || this.h21g06GuardedIntNegation(n, goType)) || goType === "*string" && (this.goGetArgPointerIsBalanceKey(n) || this.goGetArgStrPtrGuardedStringCall(n, param))) {
         return true;
       }
       return !pointer && !nilable;
@@ -36794,6 +37035,11 @@ ${indent}}`);
     }
     const printed = this.printNode(parent, 0).trim();
     return /^(?:\(\s*)*(?:Divide|Subtract|Multiply|Mod|IsGreaterThan|IsLessThan|IsGreaterThanOrEqual|IsLessThanOrEqual)\(/.test(printed);
+  }
+  // `-x` on a `*int64`: nil-guarded it prints `-*x`, else OpNeg(x), which derefScalars a pointer
+  // like the box (a nil pointer and an untyped nil both negate to nil)
+  h21g06GuardedIntNegation(n, goType) {
+    return goType === "*int64" && h21g06IsNegation(n.parent);
   }
   // `request[k] = x` / `{ k: x }`: the pointer lands in an `any` dictionary whose readers
   // (GetValue, Urlencode, Json, IsEqual) derefScalar it; a `*Request` builder returns that
@@ -38577,8 +38823,30 @@ ${this.getIden(identation)}return nil`;
     }
     return precedence < cutoff ? " " : "";
   }
+  // `x === undefined` / `x !== undefined` on a parameter bound as a plain int64 from a numeric
+  // default (h21g06NumericDefaultInt): never nil in Go, so the test prints its constant answer
+  h21g06DeadNilTest(node) {
+    const op = node.operatorToken?.kind;
+    const negated = op === SyntaxKind5.ExclamationEqualsToken || op === SyntaxKind5.ExclamationEqualsEqualsToken;
+    if (!negated && op !== SyntaxKind5.EqualsEqualsToken && op !== SyntaxKind5.EqualsEqualsEqualsToken) {
+      return void 0;
+    }
+    const ident = this.goIsNilLiteral(node.right) ? node.left : this.goIsNilLiteral(node.left) ? node.right : void 0;
+    if (ident?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const decl = this.goGetArgCalleeDeclaration(ident);
+    if (decl?.kind !== SyntaxKind5.Parameter || !h21g06NumericDefaultInt(decl, String(this.goGetArgParameterType(decl)))) {
+      return void 0;
+    }
+    return negated ? "true" : "false";
+  }
   printBinaryExpression(node, identation) {
     const { left, right, operatorToken } = node;
+    const deadNilTest = this.h21g06DeadNilTest(node);
+    if (deadNilTest !== void 0) {
+      return this.getIden(identation) + deadNilTest;
+    }
     const customBinaryExp = this.printCustomBinaryExpressionIfAny(node, identation);
     if (customBinaryExp) {
       return customBinaryExp;
@@ -39972,7 +40240,7 @@ ${ind}}
     return void 0;
   }
   printElementAccessExpression(node, identation) {
-    const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node)]);
+    const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node), () => this.goTypedRowFieldRead(node)?.text]);
     if (cacheText !== void 0) {
       return cacheText;
     }
@@ -48298,6 +48566,9 @@ GoTranspiler.prototype.goDictLocalBindsDictElement = function(leftElement, right
     return false;
   }
   const declaration = this.goDeclarationOfIdentifier(leftElement);
+  if (isNilDeclaredInitializer(declaration?.initializer) && goNilDeclaredDictSlotRebind(this, declaration, right, index)) {
+    return ccxtGoNilJoinDeclarationType(this, leftElement) === "map[string]any";
+  }
   if (declaration?.initializer === void 0 || !this.goDictLocalTupleRebindIsDict(declaration, right, index)) {
     return false;
   }
@@ -48305,7 +48576,7 @@ GoTranspiler.prototype.goDictLocalBindsDictElement = function(leftElement, right
 };
 var h20g04ShippedLocalIsSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
 GoTranspiler.prototype.goLocalIsSafeToType = function(scope, declaration, varName, goType, stringWriteProven = false) {
-  if (goType !== GO_SAFE_DICT_LOCAL_TYPE || scope === void 0 || this.h20g04SelfOmitDeclaration !== void 0 || !this.hasNodeWhere(scope, (n) => n.kind === SyntaxKind5.Identifier && n.text === varName && n.parent?.kind === SyntaxKind5.ArrayLiteralExpression && ccxtGoParamDeclarationOf(this, n) === declaration && this.goDictLocalTupleRebindIsDict(declaration, n.parent.parent?.right, n.parent.elements.indexOf(n)))) {
+  if (goType !== GO_SAFE_DICT_LOCAL_TYPE || scope === void 0 || this.h20g04SelfOmitDeclaration !== void 0 || !this.hasNodeWhere(scope, (n) => n.kind === SyntaxKind5.Identifier && n.text === varName && n.parent?.kind === SyntaxKind5.ArrayLiteralExpression && ccxtGoParamDeclarationOf(this, n) === declaration && (this.goDictLocalTupleRebindIsDict(declaration, n.parent.parent?.right, n.parent.elements.indexOf(n)) || goNilDeclaredDictSlotRebind(this, declaration, n.parent.parent?.right, n.parent.elements.indexOf(n))))) {
     return h20g04ShippedLocalIsSafeToType.call(this, scope, declaration, varName, goType, stringWriteProven);
   }
   this.h20g04SelfOmitDeclaration = declaration;
@@ -48381,6 +48652,60 @@ GoTranspiler.prototype.goNativeArithmetic = function(node, leftText = void 0, ri
   leftText = leftText ?? this.printNode(node.left, 0);
   rightText = rightText ?? this.printNode(node.right, 0);
   return goNativeArithmeticH20g01.call(this, node, leftText, rightText) ?? this.goH20g01PointerNestedArithmetic(node, leftText, rightText);
+};
+GoTranspiler.prototype.goH21g03BodyAppendWrite = function(node) {
+  const append = node?.parent;
+  const statement = append?.parent;
+  if (node?.kind !== SyntaxKind5.Identifier || append?.kind !== SyntaxKind5.BinaryExpression || append.right !== node || append.operatorToken.kind !== SyntaxKind5.PlusEqualsToken || append.left?.kind !== SyntaxKind5.Identifier || append.left.text === node.text || statement?.kind !== SyntaxKind5.ExpressionStatement || statement.parent?.kind !== SyntaxKind5.Block) {
+    return void 0;
+  }
+  const statements = statement.parent.statements;
+  const previous = statements[statements.indexOf(statement) - 1];
+  const write = previous?.expression;
+  const call = write?.right;
+  if (previous?.kind !== SyntaxKind5.ExpressionStatement || write?.kind !== SyntaxKind5.BinaryExpression || write.operatorToken.kind !== SyntaxKind5.EqualsToken || write.left?.kind !== SyntaxKind5.Identifier || write.left.text !== node.text || call?.kind !== SyntaxKind5.CallExpression || call.expression?.kind !== SyntaxKind5.PropertyAccessExpression || call.expression.expression?.kind !== SyntaxKind5.ThisKeyword || call.expression.name?.text !== "json" || call.arguments.length !== 1) {
+    return void 0;
+  }
+  const checker = this.checkerOrUndefined();
+  const symbol = checker?.getSymbolAtLocation(node);
+  if (symbol === void 0 || checker.getSymbolAtLocation(write.left) !== symbol || this.goDeclaredTypeOfIdentifier(node) !== void 0) {
+    return void 0;
+  }
+  const name = this.goH21g03BodyTextName(node);
+  const fn = this.goEnclosingFunction(node);
+  return this.hasNodeWhere(fn, (n) => n.kind === SyntaxKind5.Identifier && n.text === name) ? void 0 : previous;
+};
+GoTranspiler.prototype.goH21g03BodyTextName = function(node) {
+  return node.text + "Text";
+};
+var h21g03ShippedOperandStaticType = GoTranspiler.prototype.goOperandStaticType;
+GoTranspiler.prototype.goOperandStaticType = function(node, printedText) {
+  return this.goH21g03BodyAppendWrite(node) !== void 0 ? "string" : h21g03ShippedOperandStaticType.call(this, node, printedText);
+};
+GoTranspiler.prototype.goH21g03NativeBodyAppend = function(append) {
+  return this.goH21g03BodyAppendWrite(append?.right) !== void 0 && h21g03ShippedOperandStaticType.call(this, append.left, this.printNode(append.left, 0)) === "string";
+};
+var h21g03ShippedNativeCompoundAssignment = GoTranspiler.prototype.goNativeCompoundAssignment;
+GoTranspiler.prototype.goNativeCompoundAssignment = function(op, leftNode, leftText, rightNode, rightText) {
+  if (op === SyntaxKind5.PlusEqualsToken && this.goH21g03NativeBodyAppend(rightNode?.parent)) {
+    return `${leftText.trim()} += ${this.goH21g03BodyTextName(rightNode)}`;
+  }
+  return h21g03ShippedNativeCompoundAssignment.call(this, op, leftNode, leftText, rightNode, rightText);
+};
+var h21g03ShippedExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function(node, identation) {
+  const statements = node?.parent?.kind === SyntaxKind5.Block ? node.parent.statements : void 0;
+  const next = statements?.[statements.indexOf(node) + 1]?.expression;
+  if (next?.kind === SyntaxKind5.BinaryExpression && this.goH21g03BodyAppendWrite(next.right) === node && this.goH21g03NativeBodyAppend(next)) {
+    const write = node.expression;
+    const value = this.printNode(write.right, 0).trim();
+    const target = this.printNode(write.left, 0).trim();
+    const name = this.goH21g03BodyTextName(next.right);
+    const iden = this.getIden(identation);
+    return this.printNodeCommentsIfAny(node, identation, `${iden}var ${name} string = ${value}
+${iden}${target} = ${name}${this.LINE_TERMINATOR}`);
+  }
+  return h21g03ShippedExpressionStatement.call(this, node, identation);
 };
 
 // src/javaTranspiler.ts
@@ -75195,7 +75520,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       const arg = this.unwrapParens(node.arguments[at]);
       return isIdentifier4(arg) && node.arguments.slice(0, at).some((e) => isIdentifier4(e) && e.text === arg.text);
     };
-    const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== void 0 || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : (at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `${a}` : this.rustSliceArgText(a));
+    const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== void 0 || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustStrListSliceLent(node.arguments[at]) ? _RustTranspiler.rustLentMark(a) : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== void 0 ? a : (at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `${a}` : this.rustSliceArgText(a));
     if (optName !== void 0) {
       this.rustOptReaderPrinted.add(node);
       const head = optName.key !== void 0 ? [cloned[0], optName.key] : cloned.slice(0, fixed);
@@ -75355,6 +75680,8 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++)
       pads.push(this.rustPositionalPad(params[at]));
     return [...Array.from(node.arguments).map((arg, at) => {
+      if (this.rustStrListSliceLent(arg))
+        return _RustTranspiler.rustLentMark(String(arg.text));
       const venueStr = this.rustVenueStrSlot(params, at);
       if (venueStr !== void 0)
         return this.rustVenueStrArgText(arg, venueStr, identation);
@@ -77157,7 +77484,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
         continue;
       if (this.rustParameterIsClientHandle(param))
         continue;
-      if (this.rustParamShadowUseCensus(fn, param, kind, wsDict) === void 0)
+      if (this.rustParamShadowUseCensus(fn, param, kind, wsDict, kind === RUST_PARAM_SHADOWS.LIST && this.rustVenueStrListParam(param)) === void 0)
         continue;
       table.set(name, { kind, name, declaration: param });
     }
@@ -77187,7 +77514,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
    *  one must exist; anything else (a write, a `Value` pass-through, a Null
    *  comparison, a marker key) answers undefined and the parameter keeps its
    *  box. */
-  rustParamShadowUseCensus(fn, param, kind, literalKeys = false) {
+  rustParamShadowUseCensus(fn, param, kind, literalKeys = false, strList = false) {
     const name = String(param.name.text);
     const paramSymbol = this.rustSymbolOf(param.name);
     if (paramSymbol === void 0)
@@ -77198,7 +77525,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       if (!ok)
         return;
       if (isIdentifier4(node) && node.text === name && node !== param.name) {
-        if (this.rustSymbolOf(node) !== paramSymbol || !this.rustParamUseIsRead(node, kind, literalKeys)) {
+        if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node)))) {
           ok = false;
           return;
         }
@@ -77343,7 +77670,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return `${shadow.name}.get(${index}).cloned().unwrap_or(Value::Null)`;
     }
     if (!this.isRustValueIndexKey(key))
-      return void 0;
+      return this.rustVenueStrListParam(shadow.declaration) ? this.printStrListNumberKeyRead(shadow.name, key) : void 0;
     const place = this.printNode(key, 0).trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(place))
       return void 0;
@@ -82385,6 +82712,8 @@ ${iden}}`;
         return ++reads > 0;
       if (!extendReuse && this.rustSafeDictKeyWriteOk(n, init))
         return keyWriteUses.push(n) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
+      if (!extendReuse && this.rustCacheRowCastWriteHead(n, init) !== void 0)
+        return keyWriteUses.push(this.rustCacheRowCastWriteHead(n, init)) > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
       if (!extendReuse && this.rustElementKeyWriteOk(n, init))
         return keyWriteUses.push(n) > 0 && ++elementKeyWrites > 0 && ++safeDictKeyWrites > 0 && ++keyWrites > 0 && ++reads > 0;
       if (this.rustUntilHeadKeyWrite(n) !== void 0 && (extendReuse ? this.rustExtendReuseKeyWriteOk(n, declaration) : init !== void 0 && isCallExpression7(init) && (this.rustBuiltReturnSourceKind(init) === "dict" || this.rustBuiltMapKeyWriteOk(n, init))))
@@ -83783,6 +84112,8 @@ ${iden}}`;
   /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
    *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
   rustCacheRowOdictRewrite(rhs, init) {
+    if (this.rustCacheRowBuiltRewrite(rhs, init))
+      return true;
     if (!isCallExpression7(rhs) || this.rustBaseTypedReturnKindAll(rhs) !== "odict")
       return false;
     if (init === void 0 || !isCallExpression7(init) || !isPropertyAccessExpression4(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text)))
@@ -83801,6 +84132,32 @@ ${iden}}`;
     if (!isPropertyAccessExpression4(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind7.ThisKeyword || !this.rustCacheBucketRow(head))
       return false;
     return _RustTranspiler.RUST_BASE_TYPED_METHODS[String(rhs.expression.name.text)]?.[0] === "NullableDict";
+  }
+  /** `row = this.safePosition ({ .. })` (a plain literal) on a cache-bucket row: the base builder answers `Dict` on every path
+   *  (build `rustTypedParsePositionFamilies`), so the optional row takes `Some(map)`, the Dict the boxed write held. */
+  rustCacheRowBuiltRewrite(rhs, init) {
+    if (!isCallExpression7(rhs) || !isPropertyAccessExpression4(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind7.ThisKeyword || String(rhs.expression.name.text) !== "safePosition" || rhs.arguments.length !== 1)
+      return false;
+    const arg = this.rustSkipWrappers(rhs.arguments[0]);
+    if (!isObjectLiteralExpression4(arg) || !this.rustSameKindRewrite(arg, "dict"))
+      return false;
+    if (init === void 0 || !isCallExpression7(init) || !isPropertyAccessExpression4(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text)))
+      return false;
+    return this.rustCacheRowBuiltRewriteDecl(rhs) && this.rustCacheBucketRow(this.rustSkipWrappers(init.arguments[0]));
+  }
+  /** The callee resolves to the base tier's `safePosition` (no venue override). */
+  rustCacheRowBuiltRewriteDecl(rhs) {
+    const d = this.rustScalarCallee(rhs);
+    return d !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName));
+  }
+  /** `(row as Dict)['k'] = v` on a cache-bucket row: the cast only retypes the TS side, so the write is the row's own
+   *  literal-key write; answers the parenthesised head the key-write rules take, else undefined. */
+  rustCacheRowCastWriteHead(n, init) {
+    const cast = n.parent;
+    const head = cast?.parent;
+    if (!isAsExpression3(cast) || cast.expression !== n || String(cast.type?.getText?.() ?? "") !== "Dict" || !isParenthesizedExpression3(head))
+      return void 0;
+    return this.rustSafeDictKeyWriteOk(head, init) ? head : void 0;
   }
   /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
    *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
@@ -84524,7 +84881,7 @@ ${iden}}`;
       return true;
     if (this.rust84aBookCachePushArg(n))
       return true;
-    if (this.rustLocalCacheAppendArg(n))
+    if (this.rustLocalCacheAppendArg(n) || isAsExpression3(up) && up.expression === n && this.rustLocalCacheAppendArg(up))
       return true;
     if (!isCallExpression7(up) || up.expression === n || !isPropertyAccessExpression4(up.expression) || up.expression.expression.kind !== SyntaxKind7.ThisKeyword)
       return false;
@@ -85093,6 +85450,8 @@ ${iden}}`;
       const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
       return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
     }
+    if (local.kind === "dict" && this.rustCacheRowBuiltRewriteDecl(rhs) && isCallExpression7(rhs) && String(rhs.expression.name?.text) === "safePosition")
+      return `${name} = Some(${this.printNode(right, 0).trim()}.into_dict())`;
     return `${name} = ${(local.kind === "list" ? this.rustOptListLiteralSome(right) : this.rustOdictCallText(right)) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
   }
   /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
@@ -90097,7 +90456,7 @@ ${iden}}`;
       if (arg === void 0)
         return at === 3 && single ? "None::<&str>" : "Value::Null";
       if (!this.rustWsWatchSlot(node, at))
-        return this.rustSliceArgText(printed[at]);
+        return this.rustStrListSliceLent(arg) ? _RustTranspiler.rustLentMark(String(arg.text)) : this.rustSliceArgText(printed[at]);
       return at > 0 && this.rustWsNumberSlot(arg) ? this.rustWsNumberSlotText(arg, printed[at]) : this.rustWsWatchSlotText(arg, printed[at]);
     });
     return `self.${methodName}(${slots.join(", ")})`;
@@ -92570,10 +92929,11 @@ ${iden}}`;
   }
   /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
   printUntilHeadKeyWrite(left, right, valueText) {
-    const recv = isElementAccessExpression5(left) ? left.expression : void 0;
+    const head = isElementAccessExpression5(left) ? left.expression : void 0;
+    const recv = this.rustSkipWrappers(head);
     if (recv === void 0 || !isIdentifier4(recv))
       return void 0;
-    const key = this.rustUntilHeadKeyWrite(recv);
+    const key = this.rustUntilHeadKeyWrite(head);
     const declaration = this.rustDeclaredNode(recv);
     if (key === void 0 || declaration === recv || !(this.rustUntilHeadSlot(declaration) || this.rustMutableDictSlot(declaration)))
       return void 0;
@@ -98015,15 +98375,20 @@ ${this.getIden(identation)}}`;
     if (this.rustParamPrintsStrVec(param) || this.rustParamIsLentList(param) || this.rustParamIsLentVenue(param) || this.rustParamReadsByReference(param) || this.rustParameterIsClientHandle(param))
       return false;
     const at = params.indexOf(param);
+    let held = 0;
     for (const call of this.rustVenueStrCallSites(method)) {
       if (Array.from(call.arguments ?? []).some((a) => a.kind === SyntaxKind7.SpreadElement))
         return false;
       const arg = call.arguments?.[at] === void 0 ? void 0 : this.unwrapParens(call.arguments[at]);
+      if (arg !== void 0 && isArrayLiteralExpression4(arg) && !arg.elements.some((e) => e.kind === SyntaxKind7.SpreadElement))
+        continue;
       const decl = arg !== void 0 && isIdentifier4(arg) ? this.rustDeclarationOfIdentifier(arg) : void 0;
-      if (decl === void 0 || decl.name === arg || !(isVariableDeclaration3(decl) || isParameterDeclaration3(decl) && decl !== param && this.rustVenueStrListParam(decl)))
+      const listParam = decl !== void 0 && isParameterDeclaration3(decl) && decl !== param && isIdentifier4(decl.name) && decl.initializer === void 0 && decl.questionToken === void 0 && decl.type?.kind === SyntaxKind7.ArrayType && decl.type.elementType?.kind === SyntaxKind7.StringKeyword && !this.rustLocalIsReassigned(decl, String(decl.name.text));
+      if (decl === void 0 || decl.name === arg || !(isVariableDeclaration3(decl) || listParam))
         return false;
+      held++;
     }
-    return this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.LIST) !== void 0;
+    return held > 0 && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.LIST, false, true) !== void 0;
   }
   /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
   rustVenueStrListSlotOf(call, arg) {
@@ -98032,6 +98397,63 @@ ${this.getIden(identation)}}`;
     const at = Array.from(call.arguments ?? []).indexOf(arg);
     const params = at < 0 ? void 0 : this.rustCalleeParams(call);
     return params !== void 0 && at < params.length && this.rustVenueStrListParam(params[at]);
+  }
+  /** A lent string-list parameter handed whole to a base reader that takes a slice: the `watchMultiple` hash lists
+   *  (`impl WsHashList`) or the `inArray` haystack (`impl ContainerArg`). */
+  rustStrListSliceUse(id) {
+    const call = id?.parent;
+    if (!isIdentifier4(id) || !isCallExpression7(call) || call.expression === id || !isPropertyAccessExpression4(call.expression))
+      return false;
+    if (call.expression.expression.kind !== SyntaxKind7.ThisKeyword || call.arguments.some((a) => a.kind === SyntaxKind7.SpreadElement))
+      return false;
+    const decl = this.rustDeclarationOfIdentifier(id);
+    if (decl === void 0 || !isParameterDeclaration3(decl) || decl.type?.kind !== SyntaxKind7.ArrayType)
+      return false;
+    const at = Array.from(call.arguments).indexOf(id);
+    const name = String(call.expression.name.text);
+    const slot = name === "watchMultiple" && (at === 1 || at === 3) && this.rustWsWatchSlot(call, 0) || name === "inArray" && at === 1 && call.arguments.length === 2;
+    return slot && this.rustCalleeIsRuntimeBase(call);
+  }
+  /** A number key of a lent string-list read: an `i64` / `Option<i64>` local, a `Value` number parameter, or `xs[N]` of a
+   *  held `Vec<Value>`. Int indexes the slice, anything else misses (Null), as `get_list_value` answers a number box. */
+  rustStrListNumberKeyText(key) {
+    const inner = this.rustSkipWrappers(key);
+    const type = inner === void 0 ? void 0 : this.getCheckedTypeOf(inner);
+    if (type === void 0 || !(type.flags & (TypeFlags6.Number | TypeFlags6.NumberLiteral)))
+      return void 0;
+    if (isIdentifier4(inner)) {
+      const kind = this.rustScalarIdentifierKind(inner);
+      const name = super.printIdentifier(inner);
+      if (kind === "int")
+        return `${name} as usize`;
+      if (kind === "oint")
+        return `${name}.unwrap_or(-1) as usize`;
+      const decl = this.rustDeclarationOfIdentifier(inner);
+      if (kind === void 0 && decl !== void 0 && isParameterDeclaration3(decl) && decl.initializer === void 0 && decl.questionToken === void 0 && this.rustParamType(decl) === "Value" && !this.rustLocalIsReassigned(decl, String(inner.text)))
+        return `${name}.as_i64().unwrap_or(-1) as usize`;
+      return void 0;
+    }
+    if (isElementAccessExpression5(inner) && isIdentifier4(inner.expression) && isNumericLiteral5(inner.argumentExpression) && /^\d+$/.test(String(inner.argumentExpression.text)) && (this.rustVecLocalDeclarationOf(inner.expression) !== void 0 || this.rustReadBearerKind(inner.expression) === "list")) {
+      return `${super.printIdentifier(inner.expression)}.get(${inner.argumentExpression.text}).and_then(Value::as_i64).unwrap_or(-1) as usize`;
+    }
+    return void 0;
+  }
+  /** A slice-slot use whose parameter itself prints as a lent `&[crate::Value]` slice. */
+  rustStrListSliceLent(id) {
+    if (!this.rustStrListSliceUse(id))
+      return false;
+    const decl = this.rustDeclarationOfIdentifier(id);
+    return decl !== void 0 && this.rustVenueStrListParam(decl);
+  }
+  rustStrListNumberKeyUse(id) {
+    const read = id.parent;
+    if (!isElementAccessExpression5(read) || read.expression !== id || this.isNativeWriteTargetBase(id) || !this.isNativeAccessPositionSafe(id))
+      return false;
+    return !this.isWriteBackBindRead(read) && this.rustStrListNumberKeyText(read.argumentExpression) !== void 0;
+  }
+  printStrListNumberKeyRead(name, key) {
+    const index = this.rustStrListNumberKeyText(key);
+    return index === void 0 ? void 0 : `${name}.get(${index}).cloned().unwrap_or(Value::Null)`;
   }
   /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
   rustVenueStrListArgText(arg) {
@@ -98042,6 +98464,9 @@ ${this.getIden(identation)}}`;
     if (decl !== void 0 && isVariableDeclaration3(decl) && this.rustClientHandleKeysAlias(this.unwrapParens(this.unwrapParens(decl.initializer)?.arguments?.[0])) !== void 0 && this.printClientHandleKeys(decl.initializer) !== void 0 && !this.rustLocalReassigned(decl))
       return `&${String(inner.text)}`;
     const text = this.printNode(arg, 0).trim();
+    const literal2 = isArrayLiteralExpression4(inner) ? /^Value::from\(vec!\[(.*)\]\)$/s.exec(text) : null;
+    if (literal2 !== null)
+      return `&[${literal2[1]}]`;
     const arr = /^Value::Arr\((\w+)(?:\.clone\(\))?\)$/.exec(text);
     if (arr !== null)
       return `&${arr[1]}`;
@@ -99035,7 +99460,9 @@ _RustTranspiler.RUST_BASE_TYPED_METHODS = {
   // a map or undefined on every path (`-> Option<Dict>`); a `Value` slot boxes it once, never a scalar local
   safeDictN: ["Dictionary<any> | undefined", "odict"],
   // a venue parser declared `NullableDict`: its parsed order map, or undefined on the early returns
-  parseWsOrderUpdate: ["NullableDict", "odict"]
+  parseWsOrderUpdate: ["NullableDict", "odict"],
+  // a pro lookup declared `NullableDict`: the matching subscription map, else undefined
+  findSubscription: ["NullableDict", "odict"]
 };
 _RustTranspiler.RUST_BASE_TYPED_RUNTIME = {
   milliseconds: "int",

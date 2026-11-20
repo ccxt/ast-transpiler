@@ -919,6 +919,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNativeMapLocalRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
     goAwaitedMapLocal(decl: any): boolean;
     goMarketCallReturnsDict(initializer: any): boolean;
+    goTypedRowFieldRead(node: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+    goTypedRowTable(base: any, firstKey: string): any;
+    goTypedRowFieldText(node: any, text: string, goType: string): {
+        text: string;
+        goType: string;
+    } | undefined;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];
     goMethodReturnsMapCache: Map<any, boolean>;
@@ -978,6 +987,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilInitStrLeftOperandIsRead(parent: any): boolean;
     goNilInitStrLiteralWriteOk(writes: any[], write: any): boolean;
     goNilInitStrDeclaredReadOk(n: any): boolean;
+    goNilInitStrLiteralTernaryArmRead(current: any, parent: any): boolean;
     goNilInitStrBalanceKeyRead(n: any, parent: any, current: any): boolean;
     goStringPointerStoreLocalName(node: any): string | undefined;
     goNilInitListLocalType(declaration: any): string | undefined;
@@ -994,6 +1004,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     goNilInitEnclosingStatement(node: any): any;
     goNilInitWriteDominates(writes: any[], read: any): boolean;
+    goNilInitWritesCoverRead(writes: any[], read: any): boolean;
+    goNilInitStringMethodArgRead(n: any): boolean;
+    goNilInitStatementAlwaysWrites(statement: any, writeStatements: Set<any>): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
@@ -1507,6 +1520,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgStrPtrGuardedNeedle(n: any, param: any): boolean;
     goStrParamCheckerNarrowed(n: any, param: any): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
+    h21g06GuardedIntNegation(n: any, goType: string): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
     goTupleSlotUnbox(element: any): {
@@ -1651,6 +1665,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         maxProblem: number;
     };
     goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
+    h21g06DeadNilTest(node: any): string | undefined;
     printBinaryExpression(node: any, identation: any): any;
     printTryStatement(node: any, identation: number): string;
     /**
@@ -1960,4 +1975,9 @@ export interface GoTranspiler {
         goType: string;
         text: string;
     } | undefined;
+}
+export interface GoTranspiler {
+    goH21g03BodyAppendWrite(node: any): any;
+    goH21g03BodyTextName(node: any): string;
+    goH21g03NativeBodyAppend(append: any): boolean;
 }
