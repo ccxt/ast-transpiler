@@ -14683,10 +14683,10 @@ describe ('ral-77g2 reader-result locals', () => {
         const body = '    f (raw: Dict): any {\n        const d = this.safeDict (raw, "outcome", {});\n        d["seen"] = true;\n        return this.extend (d, {});\n    }\n';
         expect(run(body, 'ts/src/prediction')).toContain('var d map[string]any = this.SafeDictMap(raw, "outcome", map[string]any{})');
         expect(run(body, 'ts/src/base', 'PredictionExchange.ts')).toContain('var d map[string]any = this.SafeDictMap(raw, "outcome", map[string]any{})');
-        // the ws container checks still hold, and the base Exchange stays boxed
+        // the ws container checks still hold, and the base Exchange takes the same typed local
         const field = '    f (raw: Dict): any {\n        const d = this.safeDict (this.markets, "x", {});\n        return this.extend (d, {});\n    }\n    markets: Dict;\n';
         expect(run(field, 'ts/src/prediction')).not.toContain('SafeDictMap');
-        expect(run(body, 'ts/src/base', 'Exchange.ts')).not.toContain('SafeDictMap');
+        expect(run(body, 'ts/src/base', 'Exchange.ts')).toContain('var d map[string]any = this.SafeDictMap(raw, "outcome", map[string]any{})');
     });
     test('R2: a statement-level this.extend rebinding keeps the typed map local', () => {
         const body = '    f (raw: Dict, params: Dict): any {\n        let d = this.safeDict (raw, "data", {});\n        d = this.extend (d, params);\n        return this.safeString (d, "id");\n    }\n';

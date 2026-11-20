@@ -45142,3 +45142,57 @@ GoTranspiler.prototype.h26g14FieldNonNilBefore = function (declaration, fieldNam
     });
 };
 // ===== h26-G14 (end) =====
+// ===== h26-H26-G16 =====
+// The safeDict / safeList local rules read ts/src/base/Exchange.ts like a ws source: the base holds
+// stream state too, so the stricter ws container checks apply. Every other goSourceTreeKind caller
+// keeps skipping the base tree.
+export interface GoTranspiler {
+    goBaseExchangeAsWs: boolean;
+}
+GoTranspiler.prototype.goBaseExchangeAsWs = false;
+{
+    const isBaseExchange = (node: any): boolean => /(^|\/)ts\/src\/base\/Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node?.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/'));
+    const sourceTreeKind = GoTranspiler.prototype.goSourceTreeKind;
+    GoTranspiler.prototype.goSourceTreeKind = function (node) {
+        const kind = sourceTreeKind.call(this, node);
+        return ((kind === 'skip') && this.goBaseExchangeAsWs && isBaseExchange(node)) ? 'ws' : kind;
+    };
+    for (const method of [ 'goSafeDictMapLocalUncached', 'goSafeListLocalUnbox' ]) {
+        const shipped = GoTranspiler.prototype[method];
+        GoTranspiler.prototype[method] = function (declaration) {
+            const outer = this.goBaseExchangeAsWs;
+            this.goBaseExchangeAsWs = true;
+            try {
+                const goType = shipped.call(this, declaration);
+                return ((goType !== undefined) && isBaseExchange(declaration) && this.goBaseLocalHasNullableKey(declaration)) ? undefined : goType;
+            } finally {
+                this.goBaseExchangeAsWs = outer;
+            }
+        };
+    }
+}
+export interface GoTranspiler {
+    goBaseLocalHasNullableKey(declaration): boolean;
+}
+// a base local read or tested with a key the checker types as possibly undefined (`Str`): the typed read
+// would print a nil-guard closure, so the local keeps its box
+GoTranspiler.prototype.goBaseLocalHasNullableKey = function (declaration): boolean {
+    const scope: any = this.goEnclosingFunction(declaration);
+    const checker: any = this.checkerOrUndefined();
+    const name = declaration.name?.text;
+    if ((scope === undefined) || (checker === undefined) || (name === undefined)) {
+        return true;
+    }
+    // a literal key, or a local the printer declares as a Go `string`: anything else may print as a pointer
+    const nullable = (key: any): boolean => {
+        const k: any = this.goUnwrapParenthesizedNode(key);
+        if ((k?.kind === SyntaxKind.StringLiteral) || (k?.kind === SyntaxKind.NumericLiteral)) {
+            return false;
+        }
+        return !((k?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(k) === 'string'));
+    };
+    return this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        && (((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && nullable(n.parent.argumentExpression))
+            || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword) && (n.parent.right === n) && nullable(n.parent.left))));
+};
+// ===== h26-H26-G16 (end) =====
