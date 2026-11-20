@@ -7584,6 +7584,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // the container locals the printer's own predicate leaves out: cast-wrapped initializers,
     // non-empty (kept) defaults, the two-key accessors and the Safe* read shapes of the list family
     installCcxtGoSafeCollectionUnbox (goTranspiler);
+    installH25g05UrlsViews (goTranspiler);
     installCcxtGoSafeListWrappedReads (goTranspiler);
     // name the async-receive locals whose element type the core's channel carries
     goTranspiler.goAwaitReceiveUnbox = function (awaitNode, printedInitializer) {
@@ -44166,3 +44167,84 @@ function h24n03Int64PtrCall(goTranspiler, right): boolean {
     return goTranspiler.goTypeOfInitializer(call, goTranspiler.printNode(call, 0)) === '*int64';
 }
 // ===== h24-n03 (end) =====
+// ===== h25-g05: urls api views for typed dict locals =====
+// `const x = this.safeDict (this.urls, 'api', {})` reads BaseExchange.UrlsApi, and a safeDict of a
+// string key on that (or on `this.urls['api']`) reads UrlsApiSections[k]: RefreshUrlsViews derives both
+// after every urls write, a missing or non-dict entry reads a nil map exactly as SafeMapTyped does.
+function h25g05UrlsSafeDictArgs (goTranspiler, call): any {
+    const node = goTranspiler.goUnwrapParenthesizedNode (call);
+    if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (node.expression.name?.text !== 'safeDict')) {
+        return undefined;
+    }
+    const args = node.arguments;
+    if ((args.length === 3) && ((args[2].kind !== SyntaxKind.ObjectLiteralExpression) || (args[2].properties.length !== 0))) {
+        return undefined;
+    }
+    return ((args.length === 2) || (args.length === 3)) ? { container: args[0], key: args[1] } : undefined;
+}
+
+// the expression reads urls["api"] as the UrlsApi view
+function h25g05IsUrlsApi (goTranspiler, expr, depth = 0): boolean {
+    const node = goTranspiler.goUnwrapParenthesizedNode (expr);
+    if ((node === undefined) || (depth > 4)) {
+        return false;
+    }
+    if (node.kind === SyntaxKind.ElementAccessExpression) {
+        const key = node.argumentExpression;
+        return goTranspiler.goIsUrlsField (node.expression) && (key?.kind === SyntaxKind.StringLiteral) && (key.text === 'api')
+            && goTranspiler.goUrlsApiIsDict (node);
+    }
+    if (node.kind === SyntaxKind.CallExpression) {
+        const args = h25g05UrlsSafeDictArgs (goTranspiler, node);
+        return (args !== undefined) && goTranspiler.goIsUrlsField (args.container)
+            && (args.key.kind === SyntaxKind.StringLiteral) && (args.key.text === 'api');
+    }
+    if (node.kind === SyntaxKind.Identifier) {
+        const declaration = goTranspiler.goDeclarationOfIdentifier (node);
+        if ((declaration === undefined) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+            || (goTranspiler.goSafeDictLocalUnbox (declaration) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+            return false;
+        }
+        // reading the view directly must leave the local another use, or Go rejects it as unused
+        const scope = goTranspiler.goEnclosingFunction (declaration);
+        let uses = 0;
+        goTranspiler.hasNodeWhere (scope, (n: any) => {
+            uses += ((n.kind === SyntaxKind.Identifier) && (n.text === node.text) && (n !== declaration.name)) ? 1 : 0;
+            return false;
+        });
+        if (uses < 2) {
+            return false;
+        }
+        return h25g05IsUrlsApi (goTranspiler, declaration.initializer, depth + 1);
+    }
+    return false;
+}
+
+function h25g05UrlsViewValue (goTranspiler, declaration): string | undefined {
+    const args = h25g05UrlsSafeDictArgs (goTranspiler, declaration?.initializer);
+    if (args === undefined) {
+        return undefined;
+    }
+    if (goTranspiler.goIsUrlsField (args.container) && (args.key.kind === SyntaxKind.StringLiteral) && (args.key.text === 'api')) {
+        return 'this.UrlsApi';
+    }
+    const printedKey = goTranspiler.printNode (args.key, 0);
+    if (h25g05IsUrlsApi (goTranspiler, args.container) && goTranspiler.goKeyIsString (args.key, printedKey)) {
+        return `this.UrlsApiSections[${printedKey}]`;
+    }
+    return undefined;
+}
+
+export function installH25g05UrlsViews (goTranspiler: any) {
+    if (!goInstallOnce (goTranspiler, 'h25g05UrlsViewsInstalled', 'goSafeDictUnboxValue')) { return; }
+    const shipped = goTranspiler.goSafeDictUnboxValue;
+    goTranspiler.goSafeDictUnboxValue = function (this: any, declaration: any, identation: number) {
+        const value = shipped.call (this, declaration, identation);
+        if ((value === undefined) || !value.startsWith ('SafeMapTyped(')) {
+            return value;
+        }
+        return h25g05UrlsViewValue (this, declaration) ?? value;
+    };
+}
+// ===== h25-g05 (end) =====
