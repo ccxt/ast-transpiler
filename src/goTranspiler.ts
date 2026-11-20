@@ -14755,8 +14755,8 @@ function goBalancedSliceArgs (text: string, open: number): string[] | undefined 
 // exchange overrides of sign/fetch2/request usually omit the base `api: any` annotation
 // string methods whose Go print (helper or nil-guarded native) reads a *string receiver as its value
 const GO_STRING_PTR_SAFE_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith' ];
-// methods whose every such read sits under a `marketId !== undefined` guard
-const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket' ];
+// methods whose every such read sits under a `!== undefined` guard of that parameter
+const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket', 'generateClientOrderId' ];
 
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'fetch2': [ 1, 3 ],
