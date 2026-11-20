@@ -63,8 +63,8 @@ describe ('go Add-chain assignment with one *string call leaf binds it first and
         expect (out).toMatch (/if messageHashPiece := this\.SafeString\(o, "s"\); messageHashPiece != nil \{\n\s*messageHash = "orders::" \+ \*messageHashPiece \+ ":x"\n\s*\} else \{\n\s*messageHash = nil\n\s*\}/);
     });
 
-    test ('negative: two call leaves keep Add', () => {
-        expect (out).toMatch (/hashC = Add\(/);
+    test ('two call leaves: both bound in source order, one combined nil test', () => {
+        expect (out).toMatch (/if hashCPiece, hashCPiece2 := this\.SafeString\(o, "a"\), this\.SafeString\(o, "b"\); hashCPiece != nil && hashCPiece2 != nil \{/);
     });
 
     test ('negative: an any leaf keeps Add', () => {

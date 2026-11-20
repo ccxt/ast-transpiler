@@ -2064,13 +2064,61 @@ function ccxtGoGuardedAddChainPointersText (goTranspiler, leaves, match) {
         + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
 }
 
+// `x = Add(.., call, .., p, ..)` into an `any` local: one or two `*string` call leaves plus unguarded `*string`
+// identifiers; bind the calls in source order in the if header, then one combined nil test (Add's nil answer)
+function ccxtGoGuardedAddChainCallPointersAssignment (goTranspiler, node, printed) {
+    const expression = node?.expression;
+    const match = (typeof printed === 'string') ? /^(\s*)([A-Za-z0-9_]+) = ((?:ccxt\.)?Add\([\s\S]*?)(\s*)$/.exec (printed) : null;
+    if ((match === null) || (expression?.kind !== ts.SyntaxKind.BinaryExpression) || (expression.operatorToken?.kind !== ts.SyntaxKind.EqualsToken)
+        || (expression.left?.kind !== ts.SyntaxKind.Identifier) || (match[2] !== goTranspiler.printNode (expression.left, 0))
+        || match[3].includes ('\n') || (ccxtGoWholeAddCallEnd (match[3].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const scope = goTranspiler.goEnclosingFunction?.(expression);
+    const targetType = goTranspiler.goDeclaredTypeOfIdentifier?.(expression.left);
+    const pieces = [ match[2] + 'Piece', match[2] + 'Piece2' ];
+    if (((targetType !== undefined) && (targetType !== 'any')) || (ccxtGoWriteSiteLocalGoType (goTranspiler, expression.left) ?? 'any') !== 'any'
+        || pieces.some ((piece) => ccxtGoScopeNamesIdentifier (scope, piece)) || ccxtGoScopeNilTestsIdentifier (scope, match[2])) {
+        return printed;
+    }
+    return ccxtGoGuardedAddChainCallPointersText (goTranspiler, ccxtGoAddChainLeaves (expression.right, []), match, pieces);
+}
+
+function ccxtGoGuardedAddChainCallPointersText (goTranspiler, leaves, match, pieces) {
+    const isPointer = (leaf) => (leaf?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string');
+    const derefable = (leaf) => isPointer (leaf) && goTranspiler.goConcatDerefableStringOperand (leaf);
+    const calls = leaves.filter ((leaf) => (leaf?.kind === ts.SyntaxKind.CallExpression) && !goStringOperand (goTranspiler, leaf));
+    const pointers = leaves.filter ((leaf) => isPointer (leaf) && !goStringOperand (goTranspiler, leaf) && !derefable (leaf));
+    const names = [ ...new Set (pointers.map ((leaf) => goTranspiler.printNode (leaf, 0))) ];
+    // a lone call with no pointer is the single-call rule's shape
+    if ((calls.length < 1) || (calls.length > 2) || ((calls.length + names.length) < 2)
+        || calls.some ((call) => goTranspiler.goTypeOfInitializer (call, goTranspiler.printNode (call, 0)) !== '*string')
+        || pointers.some ((leaf) => goTranspiler.goHasEnclosingNilGuard (leaf) || goTranspiler.goHasExitingNilGuard (leaf))
+        || !leaves.every ((leaf) => calls.includes (leaf) || pointers.includes (leaf) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return match.input;
+    }
+    const bound = calls.map ((call, i) => pieces[i]);
+    const texts = leaves.map ((leaf) => (calls.includes (leaf) ? ('*' + bound[calls.indexOf (leaf)])
+        : (((pointers.includes (leaf) || derefable (leaf)) ? '*' : '') + goTranspiler.printNode (leaf, 0))));
+    const callTexts = calls.map ((call) => goTranspiler.printNode (call, 0));
+    if (texts.concat (callTexts).some ((text) => text.includes ('\n'))) {
+        return match.input;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const name = match[2];
+    const test = bound.concat (names).map ((n) => n + ' != nil').join (' && ');
+    return lead + indent + 'if ' + bound.join (', ') + ' := ' + callTexts.join (', ') + '; ' + test + ' {\n' + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n'
+        + indent + '} else {\n' + indent + '\t' + name + ' = nil\n' + indent + '}' + match[4];
+}
+
 function installCcxtGoGuardedAddChainAssignmentPointers (goTranspiler) {
     if (!goInstallOnce (goTranspiler, '__ccxtGoGuardedAddChainAssignmentPointersInstalled', 'printExpressionStatement')) {
         return;
     }
     const upstream = goTranspiler.printExpressionStatement;
     goTranspiler.printExpressionStatement = function (node, identation) {
-        return ccxtGoGuardedAddChainAssignmentPointers (this, node, upstream.call (this, node, identation));
+        return ccxtGoGuardedAddChainCallPointersAssignment (this, node, ccxtGoGuardedAddChainAssignmentPointers (this, node, upstream.call (this, node, identation)));
     };
 }
 
