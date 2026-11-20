@@ -17924,6 +17924,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         if (this.goSelfIntStepWriteKeepsType(parent.right, varName, goType)) {
                             return false;
                         }
+                        if (this.goLiteralDefaultSafeBoolWrite(parent.right, goType)) {
+                            return false;
+                        }
                         // the nil-init string scan already proved every write prints a Go string
                         if (stringWriteProven && (goType === 'string')) {
                             return false;
@@ -17946,6 +17949,22 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         });
         return safe;
+    }
+
+    // `x = this.safeBool{,2,N} (.., true|false)` into a bool local: the Go method falls back to the
+    // literal default on every absent path, so the write is a never-nil bool (printed dereferenced)
+    goLiteralDefaultSafeBoolWrite(node, goType: string): boolean {
+        while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+            node = node.expression;
+        }
+        if ((goType !== 'bool') || (node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const arity = { 'safeBool': 3, 'safeBool2': 4, 'safeBoolN': 3 }[node.expression.name?.text];
+        const last = node.arguments?.[arity - 1];
+        return (arity !== undefined) && (node.arguments.length === arity)
+            && ((last?.kind === SyntaxKind.TrueKeyword) || (last?.kind === SyntaxKind.FalseKeyword));
     }
 
     // `x = x + N` / `x = x - N` on an int/int64 local, N an integer literal fitting int: the
@@ -18041,6 +18060,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const goType = this.goDeclaredTypeOfIdentifier(left);
         if ((goType === 'string') && this.goLiteralDefaultStringWrite(left, right)) {
+            return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
+        }
+        if (this.goLiteralDefaultSafeBoolWrite(right, goType)) {
             return `${this.printNode(left, 0)} = *${this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(right, identation)).trim()}`;
         }
         if ((goType === undefined) || (this.goPointerWriteConversion(right, goType) !== 'wrap')) {
