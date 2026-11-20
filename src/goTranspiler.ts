@@ -46579,3 +46579,63 @@ function h26g46VirtualDispatchCallType (goTranspiler, printedValue) {
     return ((known === 'map[string]any') || (known === '[]any')) ? known : undefined;
 }
 // ===== h26-G46 (end) =====
+
+// ===== h26-G48 =====
+// R1. `this.safeValue (client.subscriptions, k) === undefined` (or `!==`) used directly, k a Go string, in a pro /
+// prediction source: SubscriptionSafe answers an untyped nil exactly when the entry is absent or "" (as 84g3 R2), so
+// the test prints the native `== nil` / `!= nil`. R2. `k in client.futures` in the base frame (`client *Client`)
+// prints `client.FutureHas(k)`: it reads the store's snapshot and answers false for a nil or non-string key, like InOp.
+export interface GoTranspiler {
+    h26g48SubscriptionSafeKey(node): Node | undefined;
+    h26g48BaseClientFutures(node): boolean;
+}
+GoTranspiler.prototype.h26g48SubscriptionSafeKey = function (node) {
+    const call = this.goUnwrapParenthesizedNode(node);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeValue') || (clientSubscriptions(this, call.arguments[0]) === undefined)
+        || !clientIsInterfaceFrame(call)) {
+        return undefined;
+    }
+    const key = call.arguments[1];
+    return ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) ? key : undefined;
+};
+GoTranspiler.prototype.h26g48BaseClientFutures = function (node) {
+    if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || (node.name?.text !== 'futures') || (node.expression?.kind !== SyntaxKind.Identifier)
+        || (node.expression.text !== 'client') || clientIsInterfaceFrame(node)) {
+        return false;
+    }
+    const checker: Checker | undefined = this.checkerOrUndefined();
+    const param: any = checker?.getSymbolAtLocation(node.expression)?.valueDeclaration?.resolve?.();
+    // only the `client: any` parameter the ccxt base build prints as `client *Client`
+    return (param?.kind === SyntaxKind.Parameter) && (param.type?.kind === SyntaxKind.AnyKeyword)
+        && (checker.getSymbolAtLocation(node.name) === undefined);
+};
+{
+    const printBinaryExpression = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        const op = node?.operatorToken?.kind;
+        if ((op === SyntaxKind.InKeyword) && this.h26g48BaseClientFutures(node.right)) {
+            return `client.FutureHas(${this.printNode(node.left, 0)})`;
+        }
+        if ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            const read = ((node.right?.kind === SyntaxKind.Identifier) && (node.right.text === 'undefined')) ? this.goUnwrapParenthesizedNode(node.left) : undefined;
+            const key = (read !== undefined) ? this.h26g48SubscriptionSafeKey(read) : undefined;
+            if (key !== undefined) {
+                const absent = (op === SyntaxKind.EqualsEqualsEqualsToken) ? ' == nil' : ' != nil';
+                const owner = this.printNode(read.arguments[0].expression, 0);
+                return `${owner}.(ClientInterface).SubscriptionSafe(${this.printNode(key, 0)})${absent}`;
+            }
+        }
+        return printBinaryExpression.call(this, node, identation);
+    };
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+        const node = this.goUnwrapParenthesizedNode(initializer);
+        if ((node?.kind === SyntaxKind.BinaryExpression) && (node.operatorToken?.kind === SyntaxKind.InKeyword) && this.h26g48BaseClientFutures(node.right)) {
+            return 'bool';
+        }
+        return goTypeOfInitializer.call(this, initializer, printedValue);
+    };
+}
+// ===== h26-G48 (end) =====
