@@ -21284,6 +21284,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         }
 
+        const h26g49Clients = this.h26g49ClientsReadDeclaration(node, declaration, identation); if (h26g49Clients !== undefined) { return h26g49Clients; }
         const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
             () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
             () => this.goTypedRowBinderDeclaration(declaration, identation)]);
@@ -46639,3 +46640,65 @@ GoTranspiler.prototype.h26g48BaseClientFutures = function (node) {
     };
 }
 // ===== h26-G48 (end) =====
+
+// ===== h26-H26-G49 =====
+export interface GoTranspiler {
+    h26g49ClientsReadDeclaration(statement, declaration, identation: number): string | undefined;
+    h26g49ClientLocalUsesAreSafe(declaration): boolean;
+}
+// `const client = this.safeValue (this.clients, url)` in a pro source: Clients is the `map[string]*WSClient` registry
+// (go/v4/exchange.go), so the read is the map index; only a non-nil entry is stored, so a missing client stays a nil interface
+GoTranspiler.prototype.h26g49ClientsReadDeclaration = function (statement, declaration, identation: number) {
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    const callee: any = init?.expression;
+    if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.CallExpression) || ((init.arguments?.length ?? 0) !== 2)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeValue') || !goSourceIsWsTree(declaration)) {
+        return undefined;
+    }
+    const field: any = this.goUnwrapParenthesizedNode(init.arguments[0]);
+    if ((field?.kind !== SyntaxKind.PropertyAccessExpression) || (field.expression?.kind !== SyntaxKind.ThisKeyword) || (field.name?.text !== 'clients')) {
+        return undefined;
+    }
+    const key = this.goWsKey(init.arguments[1]);
+    if ((key === undefined) || !this.h26g49ClientLocalUsesAreSafe(declaration)) {
+        return undefined;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    if ((scope === undefined) || this.goLocalIsRebound(scope, declaration.name) || !typeNameIsUsable(this, declaration, 'ClientInterface')) {
+        return undefined;
+    }
+    const name = this.printNode(declaration.name, 0);
+    const iden = this.getIden(identation);
+    const read = `if entry := this.Clients[${key.index}]; entry != nil {\n${iden}\t${name} = entry\n${iden}}`;
+    const guarded = (key.pointer === undefined) ? read : `if ${key.pointer} != nil {\n${iden}\t${read.replace(/\n/g, '\n\t')}\n${iden}}`;
+    return `${iden}var ${name} ClientInterface = nil\n${iden}${guarded}`;
+};
+// every use is a member access on the client or a compare with undefined: no use observes the box or its identity
+GoTranspiler.prototype.h26g49ClientLocalUsesAreSafe = function (declaration) {
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === undefined) {
+        return false;
+    }
+    const name = declaration.name.text;
+    for (const n of this.goDescendantsOf(scope)) {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name) || (this.goDeclarationOfIdentifier(n) !== declaration)) {
+            continue;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            continue;
+        }
+        const isUndefined = (x: any) => (x?.kind === SyntaxKind.Identifier) && (x.text === 'undefined');
+        const op = parent?.operatorToken?.kind;
+        const nilCompare = (parent?.kind === SyntaxKind.BinaryExpression)
+            && ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken))
+            && isUndefined((parent.left === n) ? parent.right : parent.left);
+        if (!nilCompare) {
+            return false;
+        }
+    }
+    return true;
+};
+// ===== h26-H26-G49 (end) =====
