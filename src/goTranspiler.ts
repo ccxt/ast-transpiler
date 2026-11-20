@@ -15236,6 +15236,8 @@ const GO_NIL_INIT_ANY_ARG_CALLEES = new Set([
     'GetValue', 'SafeValue', 'ToString', 'EvalTruthy', 'IsEqual', 'IsString', 'IsNumber', 'IsBool',
     'Precise.StringAdd', 'Precise.StringSub', 'Precise.StringMul', 'Precise.StringDiv', 'Precise.StringAbs',
     'Precise.StringEq', 'Precise.StringGt', 'Precise.StringLt', 'Precise.StringGe', 'Precise.StringLe',
+    // date formatters derefScalar their timestamp and answer "" for nil or a nil pointer alike
+    'this.Yymmdd', 'this.Yyyymmdd', 'this.Ymd', 'this.Ymdhms',
 ]);
 
 function goNilInitIsAnyArgument (parent, current) {
@@ -43138,7 +43140,7 @@ function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writ
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (op === SyntaxKind.EqualsToken) && (parent.left === current)) {
                 if ((current !== n) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
                     unsafe = true;
-                } else if (!ral90g5IsNil(parent.right) && !h18g01WriteIsInt64Ptr(goTranspiler, parent.right, assumed)) {
+                } else if (!ral90g5IsNil(parent.right) && !h18g01WriteIsInt64Ptr(goTranspiler, parent.right, assumed) && !h24n03Int64PtrCall(goTranspiler, parent.right)) {
                     if (ral90g5WriteValueKind(goTranspiler, parent.right, 'int64') === undefined) {
                         unsafe = true;
                     } else {
@@ -43167,7 +43169,7 @@ function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writ
     } finally {
         h18g01Visiting.delete(key);
     }
-    const ok = !unsafe && ((nilTests > 0) || !goTranspiler.goNilInitInitializer(declaration.initializer));
+    const ok = !unsafe && ((nilTests > 0) || !goTranspiler.goNilInitInitializer(declaration.initializer) || h24n03DeclaredIntSeed(declaration));
     if (ok && (writesOut !== undefined)) {
         writesOut.push(...valueWrites);
     }
@@ -43941,3 +43943,38 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n` + lines.join('\n');
 };
 // ===== h23-x04 (end) =====
+
+// ===== h24-n03 (begin): nil-seeded locals declared `Int` join as *int64 without a nil test =====
+// the ts declaration names the type; every write and read is still vetted by the h18-g01 join, so a nil local
+// stays a nil *int64 (object-literal stores and deref-aware reads answer it as they did the box)
+function h24n03DeclaredIntSeed(declaration): boolean {
+    const declared = declaration?.type;
+    if ((declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.kind !== SyntaxKind.Identifier) || (declared.typeName.text !== 'Int')) {
+        return false;
+    }
+    // literal-only locals belong to the value join (a plain int64); this admits locals with a producer write
+    const name = declaration.name.text;
+    let producerWrite = false;
+    const visit = (n) => {
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken) && (n.left?.kind === SyntaxKind.Identifier)
+            && (n.left.text === name) && !ral90g5IsNil(n.right) && (ral90g5UnwrapNode(n.right)?.kind !== SyntaxKind.NumericLiteral)) {
+            producerWrite = true;
+        }
+        if (!producerWrite) {
+            n.forEachChild(visit);
+        }
+    };
+    declaration.parent?.parent?.parent?.forEachChild(visit);
+    return producerWrite;
+}
+// a `this.m (..)` call the printer already types *int64 (parse8601, safeIntegerProduct, safeTimestamp, ...):
+// stored as the pointer itself, so a nil result keeps the local nil exactly as the box held it
+function h24n03Int64PtrCall(goTranspiler, right): boolean {
+    const call = ral90g5UnwrapNode(right);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || goTranspiler.hasNodeWhere(call, (n) => n.kind === SyntaxKind.AwaitExpression)) {
+        return false;
+    }
+    return goTranspiler.goTypeOfInitializer(call, goTranspiler.printNode(call, 0)) === '*int64';
+}
+// ===== h24-n03 (end) =====

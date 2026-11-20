@@ -16293,7 +16293,7 @@ describe('90g1 nil-seed pointer joins', () => {
         expect(out).toContain('var expiry *int64 = nil');
         expect(out).toContain('if expiry != nil {');
     });
-    test('R1: without a nil test the date argument keeps the box', () => {
+    test('R1: a declared Int join handed to a date formatter types without a nil test', () => {
         const out = run('    f (market: Dict): any {\n'
             + '        let expiry: Int = undefined;\n'
             + "        if (market['future']) {\n"
@@ -16301,7 +16301,7 @@ describe('90g1 nil-seed pointer joins', () => {
             + '        }\n'
             + '        return this.yymmdd (expiry);\n'
             + '    }\n');
-        expect(out).toContain('var expiry any = nil');
+        expect(out).toContain('var expiry *int64 = nil');
     });
     test('R2: a *string join with a literal compare and a networkIdToCode argument prints the nil-guarded compare', () => {
         const out = run('    f (currency: Dict, chainId: Str): any {\n'
