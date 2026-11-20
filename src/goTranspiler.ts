@@ -38839,7 +38839,7 @@ function goElementReadHasDerefConsumer (goTranspiler, node, keyNode?): boolean {
         return GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee) || GO_DEREF_AT_ENTRY_METHOD_ARG0.has (callee) || goArgumentParameterIsDict (goTranspiler, parent, child);
     }
     if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
-        return ccxtGoScalarElementReadType (goTranspiler, child) !== undefined;
+        return (ccxtGoScalarElementReadType (goTranspiler, child) !== undefined) || goElementLocalHasDerefConsumers (goTranspiler, parent, child);
     }
     // `xs[i][k]`: GetValue derefs its collection (arg 0 of this.inArray: InArray derefs elem)
     if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === child)) {
@@ -38873,6 +38873,26 @@ function goArgumentParameterIsDict (goTranspiler, call, arg): boolean {
     if ((index < 0) || (parameter?.type?.kind !== SyntaxKind.TypeReference) || (parameter.type.typeName?.text !== 'Dict') || parameter.dotDotDotToken) {
         return false;
     }
+    return goListBoundOnceFromJson (list, listDeclaration);
+}
+// arg `arg` of `this.parseX (..)` lands on a parameter annotated `Dict` in the resolved ts declaration
+function goArgumentParameterIsDictType (goTranspiler, call, arg): boolean {
+    if (!/^parse[A-Z]\w*$/.test (`${call.expression?.name?.text ?? ''}`)) {
+        return false;
+    }
+    let declaration: any;
+    try {
+        const signature: any = goTranspiler.checkerOrUndefined ()?.getResolvedSignature (call)?.declaration;
+        declaration = signature?.resolve?.() ?? signature;
+    } catch (e) {
+        return false;
+    }
+    const index = call.arguments.indexOf (arg);
+    const parameter = declaration?.parameters?.[index];
+    return (index >= 0) && (parameter?.type?.kind === SyntaxKind.TypeReference) && (parameter.type.typeName?.text === 'Dict') && !parameter.dotDotDotToken;
+}
+// `xs` is a local bound once from `this.toArray (..)` / `this.safeList (..)`, never assigned, pushed or written
+function goListBoundOnceFromJson (list, listDeclaration): boolean {
     const init = listDeclaration?.initializer;
     if ((listDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (init?.kind !== SyntaxKind.CallExpression)
         || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)
@@ -38904,6 +38924,57 @@ function goArgumentParameterIsDict (goTranspiler, call, arg): boolean {
     };
     visit (scope);
     return !written;
+}
+// `const row = xs[i]` with `xs` bound once from JSON and `row` never reassigned, every read of `row` handed
+// to a deref-at-entry consumer (arg 0 of this.safe*, a Dict parse parameter): DerefScalar there is the identity
+function goElementLocalHasDerefConsumers (goTranspiler, declaration, access): boolean {
+    const list = access?.expression;
+    if ((declaration.name?.kind !== SyntaxKind.Identifier) || (list?.kind !== SyntaxKind.Identifier) || declaration.type) {
+        return false;
+    }
+    const checker: any = goTranspiler.checkerOrUndefined ();
+    let listDeclaration: any;
+    let rowSymbol: any;
+    try {
+        const symbol: any = checker?.getSymbolAtLocation (list)?.valueDeclaration;
+        listDeclaration = symbol?.resolve?.() ?? symbol;
+        rowSymbol = checker?.getSymbolAtLocation (declaration.name);
+    } catch (e) {
+        return false;
+    }
+    if ((rowSymbol === undefined) || !goListBoundOnceFromJson (list, listDeclaration)) {
+        return false;
+    }
+    const scope = declaration.parent?.parent?.parent;
+    const name = declaration.name.text;
+    let uses = 0;
+    let ok = true;
+    const visit = (n: any) => {
+        if (!ok || (n === undefined)) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
+            let same = false;
+            try {
+                same = checker.getSymbolAtLocation (n) === rowSymbol;
+            } catch (e) {
+                same = false;
+            }
+            if (same) {
+                uses += 1;
+                const call = n.parent;
+                const isCall = (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (call.expression.expression?.kind === SyntaxKind.ThisKeyword);
+                const callee = isCall ? `${call.expression.name?.text ?? ''}` : '';
+                const safeArg0 = isCall && (call.arguments[0] === n) && GO_DEREF_AT_ENTRY_SAFE_ARG0.test (callee);
+                const methodArg0 = isCall && (call.arguments[0] === n) && GO_DEREF_AT_ENTRY_METHOD_ARG0.has (callee);
+                ok = safeArg0 || methodArg0 || (isCall && goArgumentParameterIsDictType (goTranspiler, call, n));
+            }
+        }
+        n.forEachChild (visit);
+    };
+    visit (scope);
+    return ok && (uses > 0);
 }
 // a value read of `e`: not a write target, delete operand, or the base of a further write/call
 function goElementAccessIsPlainRead (e): boolean {

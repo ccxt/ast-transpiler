@@ -8615,18 +8615,18 @@ describe('go JSON-origin list element reads', () => {
             "        const response = await this.publicGetThing (params);\n" +
             "        const data = this.safeList (response, 'data', []);\n" + loop("        this.safeString (response, 'x');\n") +
             "        return response;\n");
-        expect(escapes).toContain("DerefScalar(data[i])");
+        expect(escapes).toContain("var entry any = data[i]\n");
         const written = run(
             "        const response = await this.publicGetThing (params);\n" +
             "        const data = this.safeList (response, 'data', []);\n" + loop("        response['x'] = 1;\n"));
-        expect(written).toContain("DerefScalar(data[i])");
+        expect(written).toContain("var entry any = data[i]\n");
         const own = transpiler.transpileGo(
             "class Test {\n" + head +
             "    async other (params = {}) { return this.safeDict (params, 'a', {}); }\n" +
             "    async f (params = {}) {\n" +
             "        const response = await this.other (params);\n" +
             "        const data = this.safeList (response, 'data', []);\n" + loop() + "    }\n}\n").content;
-        expect(own).toContain("DerefScalar(data[i])");
+        expect(own).toContain("var entry any = data[i]\n");
     });
     test('a list that is rebound, written through or handed out keeps the guarded read', () => {
         const base =
@@ -8644,7 +8644,7 @@ describe('go JSON-origin list element reads', () => {
         const output = run(
             "        const response = this.safeDict (params, 'a', {});\n" +
             "        const data = this.safeList (response, 'data', []);\n" + loop());
-        expect(output).toContain("DerefScalar(data[i])");
+        expect(output).toContain("var entry any = data[i]\n");
     });
 });
 
