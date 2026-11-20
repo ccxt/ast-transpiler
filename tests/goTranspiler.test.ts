@@ -3241,7 +3241,7 @@ describe('go native element assignment', () => {
         const output = transpiler.transpileGo(input).content;
         // D-06: the guarded native index answers the same nil GetValue answered for an
         // out-of-range index (and for a nil slice), where a bare subscript would panic
-        expect(output).toContain('if 0 >= 0 && 0 < len(a) {\n\t\t\treturn DerefScalar(a[0])\n\t\t}\n\t\treturn nil\n\t}()');
+        expect(output).toContain('if 0 >= 0 && 0 < len(a) {\n\t\t\treturn a[0]\n\t\t}\n\t\treturn nil\n\t}()');
         expect(output).not.toContain('GetValue(a, 0)');
     });
     test('a typed map assignment target assigns through the same native index', () => {
@@ -7171,7 +7171,7 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         "    }\n" +
         "}\n";
         const output = transpile(ts);
-        expect(output).toContain('if 0 >= 0 && 0 < len(list) { return DerefScalar(list[0]) } return nil }()');
+        expect(output).toContain('if 0 >= 0 && 0 < len(list) { return list[0] } return nil }()');
         expect(output).not.toContain('GetValue(list');
     });
 
@@ -7188,7 +7188,7 @@ describe('go GetValue(x, key) -> guarded native index on a declared []any', () =
         "    }\n" +
         "}\n";
         const output = transpile(ts);
-        expect(output).toContain('if i+1 >= 0 && i+1 < len(list) { return DerefScalar(list[i+1]) } return nil }()');
+        expect(output).toContain('if i+1 >= 0 && i+1 < len(list) { return list[i+1] } return nil }()');
         expect(output).not.toContain('GetValue(list');
     });
 

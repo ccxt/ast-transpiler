@@ -32924,7 +32924,49 @@ ${tryBodyBlock}
         }
         const level = this.goStatementLevel;
         const body = this.getIden(level + 1);
-        return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return DerefScalar(${containerStr}[${keyStr}])\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
+        return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return ${this.goGuardedListElementValue(readBase, containerStr, keyStr)}\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
+    }
+
+    // the in-range value of the guarded read: DerefScalar is the identity on a list whose every write
+    // holds no scalar pointer (the same proof the loop-bounded read uses); out of range stays nil
+    goGuardedListElementValue(readBase, containerStr: string, keyStr: string): string {
+        const bare = this.goListElementsArePointerFree(readBase) && this.goListWritesCarryNoAny(readBase);
+        return bare ? `${containerStr}[${keyStr}]` : `DerefScalar(${containerStr}[${keyStr}])`;
+    }
+
+    // a declared element type proves nothing for a value typed `any`: the initializer, every `=` write and
+    // every pushed value of the local must carry a checker type with no any/unknown part
+    goListWritesCarryNoAny(list): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const declaration: any = (list?.kind === SyntaxKind.Identifier) ? checker?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.() : undefined;
+        // a call result can be a tuple another pass destructures from the guarded read's text
+        if ((checker === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+            || (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind === SyntaxKind.CallExpression)) {
+            return false;
+        }
+        const typed = (e: any): boolean => {
+            try {
+                const type: any = checker.getTypeAtLocation(e);
+                const parts: any[] = ((typeof type?.isUnionType === 'function') && type.isUnionType()) ? type.getTypes().slice() : [type];
+                return (type !== undefined) && parts.every((t: any) => (t.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0);
+            } catch (err) {
+                return false;
+            }
+        };
+        if ((declaration.initializer !== undefined) && !typed(declaration.initializer)) {
+            return false;
+        }
+        return this.goNameWriteSites(this.goEnclosingFunction(declaration), list.text, declaration).every((site: any) => {
+            const parent: any = site.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === site)) {
+                return typed(parent.right);
+            }
+            const call: any = parent?.parent;
+            if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (call?.kind === SyntaxKind.CallExpression) && (call.expression === parent)) {
+                return call.arguments.every((a: any) => typed(a));
+            }
+            return true;
+        });
     }
 
     // host-declared `[]any` producers (config `generatedListCallees`) whose TS result is an array:
