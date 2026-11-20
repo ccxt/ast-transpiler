@@ -33117,6 +33117,62 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return goTernaryJoinUpstreamPrintDeclarationList.call(this, node, identation);
 };
 
+// an arm `this.omit (m, ..)` of a proven Go map m is a fresh map[string]any on every path (the OmitDict
+// form): the join types it as that map and stores the OmitDict call, so no nil or non-map can arrive
+function goTernaryJoinIsOmitOfMap(goTranspiler: GoTranspiler, node): boolean {
+    const call = ral84g6OmitCall(node);
+    return (call !== undefined) && ral84g6OmitArgIsMap(goTranspiler, call.arguments[0]);
+}
+const goTernaryJoinOmitUpstreamArmType = GoTranspiler.prototype.goTernaryJoinArmType;
+GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
+    const known = goTernaryJoinOmitUpstreamArmType.call(this, node);
+    if (known !== undefined) {
+        return known;
+    }
+    const arm: any = this.goUnwrapParenthesizedNode(node);
+    const omitPeer = (arm?.kind === SyntaxKind.Identifier) && [ arm.parent?.whenTrue, arm.parent?.whenFalse ].some((n) => goTernaryJoinIsOmitOfMap(this, n));
+    return (goTernaryJoinIsOmitOfMap(this, node) || (omitPeer && ral84g6OmitArgIsMap(this, arm))) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
+};
+// such a joined map local may be rebound only by `x = this.omit (x, ..)` of itself (a fresh map again)
+const goTernaryJoinOmitUpstreamSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
+GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
+    if (goTernaryJoinOmitUpstreamSafeToType.call(this, scope, declaration, varName, goType, stringWriteProven)) {
+        return true;
+    }
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((goType !== GO_SAFE_DICT_LOCAL_TYPE) || (ternary?.kind !== SyntaxKind.ConditionalExpression) || (goTernaryJoinOwner(ternary) !== declaration)
+        || ![ ternary.whenTrue, ternary.whenFalse ].some((n) => goTernaryJoinIsOmitOfMap(this, n))
+        || (this.goTernaryJoinParts(declaration)?.goType !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    return !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            return !tupleJoinIsSelfOmit(this.goUnwrapParenthesizedNode(parent.right));
+        }
+        return ccxtGoWriteSiteShippedVeto(this, n, parent, goType);
+    });
+};
+const goTernaryJoinOmitUpstreamDeclaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const printed = goTernaryJoinOmitUpstreamDeclaration.call(this, statement, declaration, identation);
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((printed === undefined) || (ternary?.kind !== SyntaxKind.ConditionalExpression)) {
+        return printed;
+    }
+    const lines = printed.split('\n');
+    const store = '\t' + this.printNode(declaration.name, 0) + ' = this.Omit(';
+    [ [ ternary.whenTrue, 2 ], [ ternary.whenFalse, 4 ] ].forEach(([ arm, at ]: [ any, number ]) => {
+        if (goTernaryJoinIsOmitOfMap(this, arm) && lines[at]?.includes(store)) {
+            lines[at] = lines[at].replace(store, store.slice(0, -'Omit('.length) + 'OmitDict(');
+        }
+    });
+    return lines.join('\n');
+};
+
 // ===== ral-84g2: reader-result locals =====
 // A. `(x as List).length` / `(x as List)[i]` and the parenthesized forms print as the bare local's read, so
 // the list-sink verdict of a wrapped list local is the verdict of the outermost type-only wrapper.
