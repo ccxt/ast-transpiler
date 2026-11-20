@@ -24974,7 +24974,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // dominating nil guard, or a Safe* accessor handed a literal default. A cast (`x as string`,
     // `x!`) is not a proof of the absent state, so it reads through to the value underneath.
     goNilProvenStringPtrArg(arg): boolean {
-        if (this.goNonNilStringOverloadArg(arg)) {
+        if (this.goNonNilStringOverloadArg(arg) || this.h25g17NonNilOptionSlotArg(arg)) {
             return true;
         }
         if (this.goPrintedArgType(arg) !== '*string') {
@@ -44395,3 +44395,33 @@ function h25g16BaseContainerSource(goTranspiler, expr): boolean {
     return goTranspiler.goIsBaseExchangeMethod(callee.name);
 }
 // ===== h25-g16 (end) =====
+
+// ===== h25-g17 =====
+export interface GoTranspiler {
+    h25g17NonNilOptionSlotArg(arg): boolean;
+    h25g17NonNilDefaultLocal(node): boolean;
+}
+// slot 0 of `const [ x, p ] = this.handleOptionStringAndParams[2] / handleMarginModeAndParams (..)` is never nil when its
+// default is a proven non-nil string local (CheckOptionString returns it or a present string option), or under a nil guard
+GoTranspiler.prototype.h25g17NonNilOptionSlotArg = function (arg) {
+    if ((arg?.kind !== SyntaxKind.Identifier) || !this.goGuardedTupleSlot0(arg) || !this.goCheckerTypeHasFlags(arg, TypeFlags.StringLike)) {
+        return false;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    const call: any = decl?.parent?.parent?.initializer;
+    const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4, 'handleMarginModeAndParams': 2 }[call?.expression?.name?.text];
+    if (at === undefined) {
+        return false;
+    }
+    return this.h25g17NonNilDefaultLocal(call.arguments?.[at]) || this.goHasExitingNilGuard(arg) || this.goHasEnclosingNilGuard(arg);
+};
+// a const local that is a Go `string`, or a `*string` every write of which is a literal-defaulted safeString
+GoTranspiler.prototype.h25g17NonNilDefaultLocal = function (node) {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    const constant = (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0);
+    return constant && ((this.goDeclaredTypeOfIdentifier(node) === 'string') || this.goDefaultedSafeStringLocal(node));
+};
+// ===== h25-g17 (end) =====
