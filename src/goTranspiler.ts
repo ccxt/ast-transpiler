@@ -4471,6 +4471,39 @@ function nilJoinOccurrenceKind (node) {
 // cannot model keep the flag they had on entry
 const CCXT_GO_NIL_JOIN_CACHE = new WeakMap ();
 
+// `x = y` where y is another local or parameter the printer already declares map[string]any: the store copies the
+// map reference (a nil map stays a nil map), so the join keeps one map type
+function goNilJoinDictLocalAliasWrite (goTranspiler, declaration, right) {
+    if ((right?.kind !== ts.SyntaxKind.Identifier) || (right.text === declaration.name?.text)) {
+        return false;
+    }
+    const source: any = goTranspiler.goDeclarationOfIdentifier (right);
+    const isLocal = (source?.kind === ts.SyntaxKind.Parameter) || ((source?.kind === ts.SyntaxKind.VariableDeclaration) && (source.name?.kind === ts.SyntaxKind.Identifier));
+    if (!isLocal || (source === declaration) || (goTranspiler.goEnclosingFunction (source) !== goTranspiler.goEnclosingFunction (declaration))) {
+        return false;
+    }
+    return goLocalDeclaredGoMap (goTranspiler, source, right);
+}
+
+// the declaration printer's own choice for a local: container type, typed safeDict seed, struct box, nil join, else getGoLocalType
+function goLocalDeclaredGoMap (goTranspiler, source, node) {
+    if ((source.kind === ts.SyntaxKind.Parameter) || (source.initializer === undefined)) {
+        return goTranspiler.goDeclaredTypeOfIdentifier (node) === 'map[string]any';
+    }
+    if (isNilDeclaredInitializer (source.initializer)) {
+        return ccxtGoNilJoinDeclarationType (goTranspiler, node) === 'map[string]any';
+    }
+    if ((source.parent?.declarations?.length !== 1) || (source.parent?.parent?.kind !== ts.SyntaxKind.VariableStatement)) {
+        return false;
+    }
+    const container = goTranspiler.goContainerLocalType (source);
+    if (container !== undefined) {
+        return container === 'map[string]any';
+    }
+    return (goTranspiler.goSafeDictMapValue (source, 0) !== undefined) || (goTranspiler.goStructBoxedLocal (source) !== undefined)
+        || (goTranspiler.getGoLocalType (source, goTranspiler.printNode (source.initializer, 0)) === 'map[string]any');
+}
+
 // `[.., x] = this.f (..)` on a `let x: NullableDict = undefined` local whose tuple slot is declared Dict (R2's proof)
 function goNilJoinDictSlotWriteType (goTranspiler, declaration, expression, name) {
     const left = expression?.left;
@@ -4842,6 +4875,10 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
             }
             if (ccxtGoNilJoinEmptyDefaultWrite (right, name)) { return 'map[string]any'; }
             const goType = goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
+            if ((goType === undefined) && goNilJoinDictLocalAliasWrite (goTranspiler, declaration, right)) {
+                state.mapCallWrites = true;                   // the walk proved every write and read itself
+                return 'map[string]any';
+            }
             // a base map producer the upstream veto cannot type: the walk already refused every other write shape
             if ((goType === undefined) && ccxtGoNilJoinBaseMapCall (goTranspiler, right)) {
                 state.mapCallWrites = true;
