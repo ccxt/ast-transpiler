@@ -20240,6 +20240,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
+    // `book.nonce = undefined` on a book proven non-nil clears the field through the book's exposed fields, as the
+    // helper's reflect write of a literal undefined does (zero value: nil for these any / pointer fields)
+    goOrderBookClearText(baseExpr, containerStr: string, keyNode, valueNode): string | undefined {
+        const cfg = this.goOrderBook;
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        if ((cfg?.clears === undefined) || (baseExpr?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.StringLiteral)
+            || !Object.prototype.hasOwnProperty.call(cfg.clears.fields, keyNode.text)
+            || (value?.kind !== SyntaxKind.Identifier) || (value.text !== 'undefined') || (this.goBookDeclaredType(baseExpr) !== cfg.type)
+            || (!this.goOrderBookLocalNeverNil(baseExpr) && !this.goOrderBookSideReadFollows(baseExpr))) {
+            return undefined;
+        }
+        return `${containerStr}.${cfg.clears.accessor}().${cfg.clears.fields[keyNode.text]} = nil`;
+    }
+
     // every value the book local ever holds is a constructor result or a cache entry its presence guard proves
     goOrderBookLocalNeverNil(id): boolean {
         const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve();
@@ -21086,7 +21100,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     ?? this.goNonNilMapLocalPointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
-                    ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs))
+                    ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs)
+                    ?? this.goOrderBookClearText(baseExpr, containerStr, keys[0], right))
                 : undefined);
             const cacheStore = (keyStrs.length === 1) ? this.goWsCacheStoreText(baseExpr, keys[0], this.goWsCacheValue(baseExpr, right, rhs), node, identation) : undefined;
             if (cacheStore !== undefined) {
@@ -21667,7 +21682,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // only when no nil reaches a read: every write is a constructor or a cache read proven present by a dominating
     // guard. A pro handler parameter is retyped when every call site hands it a typed book.
     goOrderBook: { classes: string[], constructors: string[], cacheReaders: string[], type: string, sideType: string, unbox: string, sides: { [side: string]: string },
-        setters?: { [field: string]: { method: string, value: string, type: string } } } | undefined;
+        setters?: { [field: string]: { method: string, value: string, type: string } },
+        clears?: { accessor: string, fields: { [field: string]: string } } } | undefined;
     goOrderBookLocalCache = new Map<any, string | undefined>();
     goOrderBookEntryProven = new Map<any, boolean>();
 
