@@ -41880,6 +41880,9 @@ function goIntSeedIntValue (goTranspiler, node, declaration): boolean {
         if (goIntSeedIsIntWrite (goTranspiler, node)) {
             return true;
         }
+        if ((node !== declaration.initializer) && h26g02NarrowedPointerWrite (goTranspiler, node, 'int64')) {
+            return true;
+        }
         return (goTranspiler.goDeclaredTypeOfIdentifier (node) === 'int64') || (goTranspiler.goDeclaredParamStaticType (node) === 'int64');
     }
     if (node?.kind === SyntaxKind.BinaryExpression) {
@@ -41995,6 +41998,7 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
         }
     }
     goIntSeedVerdicts.set (declaration, ok);
+    h26g02ForgetDeferredVerdict (declaration, ok);
     return ok;
 }
 {
@@ -42013,6 +42017,10 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
         if ((node.left?.kind === SyntaxKind.Identifier) && (node.right?.kind === SyntaxKind.Identifier) && goIntSeedIsIntWrite (this, node.right)
             && (this.goDeclaredTypeOfIdentifier (node.left) === 'int64')) {
             return this.printNode (node.left, 0).trim () + ' = int64(' + this.printNode (node.right, 0).trim () + ')';
+        }
+        const narrowed = h26g02NarrowedPointerWriteText (this, node);
+        if (narrowed !== undefined) {
+            return narrowed;
         }
         return printBinaryExpression.call (this, node, identation);
     };
@@ -44643,3 +44651,76 @@ GoTranspiler.prototype.h25g17NonNilDefaultLocal = function (node) {
     return constant && ((this.goDeclaredTypeOfIdentifier(node) === 'string') || this.goDefaultedSafeStringLocal(node));
 };
 // ===== h25-g17 (end) =====
+// ===== h26-g02 (begin): a numeric value local written from a guard-narrowed *int64 / *float64 =====
+// `x = limit` under `limit !== undefined` into an int64 / float64 local: the checker (or an enclosing guard)
+// proves the pointer non-nil at the write, so the local keeps its value type and the write prints `*limit`
+function h26g02NarrowedPointerWrite(goTranspiler, right, goType: string): boolean {
+    const value = ral90g5UnwrapNode(right);
+    if (((goType !== 'int64') && (goType !== 'float64')) || (value?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(value)?.valueDeclaration?.resolve?.();
+    if ((declaration?.kind !== SyntaxKind.Parameter) && (declaration?.kind !== SyntaxKind.VariableDeclaration)) {
+        return false;
+    }
+    if (goTranspiler.goGetArgTypeComputing?.has(declaration) === true) {
+        h26g02Deferred = true;
+        return false;
+    }
+    const declared = (declaration.kind === SyntaxKind.Parameter) ? goTranspiler.goGetArgParameterType(declaration) : goTranspiler.goDeclaredTypeOfIdentifier(value);
+    return (declared === '*' + goType) && goTranspiler.goPointerNumberIsNonNil(value);
+}
+// `x = p` into an int64 seed local from a pointer proven non-nil at the write prints `x = *p`
+function h26g02NarrowedPointerWriteText(goTranspiler, node): string | undefined {
+    if ((node.operatorToken?.kind !== SyntaxKind.EqualsToken) || (node.left?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const target = goTranspiler.goDeclarationOfIdentifier(node.left);
+    if (!h26g02NarrowedPointerWrite(goTranspiler, node.right, 'int64') || !goIntSeedInt64Local(goTranspiler, target)
+        || (goTranspiler.goDeclaredTypeOfIdentifier(node.left) !== 'int64')) {
+        return undefined;
+    }
+    return goTranspiler.printNode(node.left, 0).trim() + ' = *' + goTranspiler.printNode(ral90g5UnwrapNode(node.right), 0).trim();
+}
+// a verdict reached while the written parameter's own binding was still open is dropped from every local-type
+// cache, and decided again once (outside any binding computation) when the local is next asked
+let h26g02Deferred = false;
+const h26g02Retried = new WeakSet<object>();
+const h26g02Pending = new WeakSet<object>();
+function h26g02ForgetDeferredVerdict(declaration, ok: boolean): void {
+    if (h26g02Deferred && !ok && !h26g02Retried.has(declaration)) {
+        h26g02Retried.add(declaration);
+        h26g02Pending.add(declaration);
+    }
+    h26g02Deferred = false;
+}
+function h26g02RetryPending(goTranspiler, declaration): void {
+    if (h26g02Pending.has(declaration) && ((goTranspiler.goGetArgTypeComputing?.size ?? 0) === 0)) {
+        h26g02Pending.delete(declaration);
+        goIntSeedVerdicts.delete(declaration);
+        goTranspiler.goDeclaredTypeCache.delete(declaration);
+        goTranspiler.goLocalSafeVerdicts.delete(declaration);
+        goTranspiler.goLocalStaticTypeCache.delete(declaration);
+    }
+}
+{
+    const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        h26g02RetryPending(this, declaration);
+        const answer = getGoLocalType.call(this, declaration, parsedValue);
+        if (!h26g02Pending.has(declaration) || ((this.goGetArgTypeComputing?.size ?? 0) !== 0)) {
+            return answer;
+        }
+        h26g02RetryPending(this, declaration);
+        return getGoLocalType.call(this, declaration, parsedValue);
+    };
+    const goLocalStaticType = GoTranspiler.prototype.goLocalStaticType;
+    GoTranspiler.prototype.goLocalStaticType = function (node) {
+        const declaration = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
+        if (declaration !== undefined) {
+            h26g02RetryPending(this, declaration);
+        }
+        return goLocalStaticType.call(this, node);
+    };
+}
+// ===== h26-g02 (end) =====
