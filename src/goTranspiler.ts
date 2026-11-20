@@ -41900,3 +41900,52 @@ function h19g01OptionalIntArgument(goTranspiler, parent, current): boolean {
     return true;
 }
 // ===== h19-g01 (end) =====
+
+// ===== h19-g06: loop-bounded safeString reads of a []string local =====
+export interface GoTranspiler {
+    goH19g06BoundedStringListRead(node): string | undefined;
+}
+// `this.safeString (xs, i, 'lit')` with xs a `[]string` local inside `for (let i = 0; i < xs.length; i++)` (neither
+// written in the body): i is in range, so SafeString answers the element itself and the read is the string `xs[i]`
+GoTranspiler.prototype.goH19g06BoundedStringListRead = function (node): string | undefined {
+    const callee: any = node?.expression;
+    const args: any[] = node?.arguments ?? [];
+    const list: any = args[0];
+    const index: any = args[1];
+    const fallback: any = args[2];
+    if ((node?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeString') || (args.length !== 3) || (list?.kind !== SyntaxKind.Identifier) || (index?.kind !== SyntaxKind.Identifier)
+        || ((fallback.kind !== SyntaxKind.StringLiteral) && (fallback.kind !== SyntaxKind.NoSubstitutionTemplateLiteral))) {
+        return undefined;
+    }
+    if (this.goResolvedLocalGoType(list) !== GO_STRING_LIST_LOCAL_TYPE) {
+        return undefined;
+    }
+    return this.goLoopBoundedIndexRead(node, list, index, list.text, index.text);
+};
+const printCallExpressionH19g06 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    return this.goH19g06BoundedStringListRead(node) ?? printCallExpressionH19g06.call(this, node, identation);
+};
+const goTypeOfInitializerH19g06 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    return (this.goH19g06BoundedStringListRead(initializer) !== undefined) ? 'string' : goTypeOfInitializerH19g06.call(this, initializer, printedValue);
+};
+const goDerefableStringOperandH19g06 = GoTranspiler.prototype.goDerefableStringOperand;
+GoTranspiler.prototype.goDerefableStringOperand = function (node): boolean {
+    return (this.goH19g06BoundedStringListRead(node) === undefined) && goDerefableStringOperandH19g06.call(this, node);
+};
+// `xs.join ('lit')` of a list local reads it as strings: on a []string the printer joins natively
+const goStringListUseReadsAsH19g06 = GoTranspiler.prototype.goStringListUseReadsAs;
+GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
+    const access: any = node?.parent;
+    const call: any = access?.parent;
+    const sep: any = call?.arguments?.[0];
+    if ((access?.kind === SyntaxKind.PropertyAccessExpression) && (access.expression === node) && (access.name?.text === 'join')
+        && (call?.kind === SyntaxKind.CallExpression) && (call.expression === access) && (call.arguments.length === 1)
+        && ((sep.kind === SyntaxKind.StringLiteral) || (sep.kind === SyntaxKind.NoSubstitutionTemplateLiteral))) {
+        return true;
+    }
+    return goStringListUseReadsAsH19g06.call(this, node);
+};
+// ===== h19-g06 (end) =====

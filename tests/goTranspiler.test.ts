@@ -6086,12 +6086,12 @@ describe('go native string operations (strings.*)', () => {
         "    return [ joined, replaced ];\n" +
         "}\n";
         const output = transpiler.transpileGo(input).content;
-        // the helper ToStrings every element of a []any; the native call needs a []string
-        expect(output).toContain('var items []any = []any{"a", "b"}');
-        expect(output).toContain('= Join(items, "+")');
+        // a string-literal list read only by join is a []string, so the join is native
+        expect(output).toContain('var items []string = []string{"a", "b"}');
+        expect(output).toContain('= strings.Join(items, "+")');
         // a regex pattern is a pattern, never the Go string the helper's ToString would build
         expect(output).toMatch(/(?<![.\w])Replace\("a-b",/);
-        expect(output).not.toContain('import "strings"');
+        expect(output).toContain('import "strings"');
     });
     test('the strings package is not declared when no native call was emitted', () => {
         const output = transpiler.transpileGo("function f () { return 1; }\n").content;
