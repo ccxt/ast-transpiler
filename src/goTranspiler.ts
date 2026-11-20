@@ -22688,7 +22688,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
                     ?? this.goOrderBookSetterText(baseExpr, containerStr, keys[0], right, rhs)
-                    ?? this.goOrderBookClearText(baseExpr, containerStr, keys[0], right))
+                    ?? this.goOrderBookClearText(baseExpr, containerStr, keys[0], right)
+                    ?? this.goNonNilMapLocalScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation))
                 : undefined);
             const cacheStore = (keyStrs.length === 1) ? this.goWsCacheStoreText(baseExpr, keys[0], this.goWsCacheValue(baseExpr, right, rhs), node, identation) : undefined;
             if (cacheStore !== undefined) {
@@ -26988,6 +26989,77 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const ptr = this.printNode(value, 0).trim();
         const iden = this.getIden(identation);
         return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
+    // `m[k] = p` on a map local that is non-nil at the write (an object-literal local, or a never-rebound
+    // `safeDict (.., {})` local), `k` a Go string or nil-guarded *string, `p` a scalar pointer local or a
+    // *T base call: the helper's derefScalar stores *p, or an untyped nil for a nil p
+    goNonNilMapLocalScalarPointerStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
+        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        keyNode = this.goUnwrapPrintedAssertions(keyNode);
+        if ((containerNode?.kind !== SyntaxKind.Identifier) || !this.goScalarPointerStoreValue(value) || !this.goNonNilMapLocalAtWrite(containerNode)) {
+            return undefined;
+        }
+        const index = this.goScalarStoreIndex(keyNode, keyStr);
+        if (index === undefined) {
+            return undefined;
+        }
+        const iden = this.getIden(identation);
+        const store = (v: string) => `${containerStr}[${index}] = ${v}`;
+        if (value.kind === SyntaxKind.Identifier) {
+            const ptr = this.printNode(value, 0).trim();
+            if (this.goHasEnclosingNilGuard(value) || this.goHasExitingNilGuard(value)) {
+                return store('*' + ptr); // the value pointer is proven non-nil here, like a guarded key
+            }
+            return `if ${ptr} != nil {\n${iden}\t${store('*' + ptr)}\n${iden}} else {\n${iden}\t${store('nil')}\n${iden}}`;
+        }
+        const call = this.printNode(value, 0).trim();
+        if (call.includes('\n') || (GO_DEFAULTED_POINTER_ACCESSORS[value.expression?.name?.text ?? ''] === value.arguments?.length)) {
+            return undefined; // a defaulted accessor already prints its own `*call` store
+        }
+        let ptr = 'ptrValue';
+        while ((call + containerStr + keyStr).includes(ptr)) {
+            ptr += 'Value';
+        }
+        return `if ${ptr} := ${call}; ${ptr} != nil {\n${iden}\t${store('*' + ptr)}\n${iden}} else {\n${iden}\t${store('nil')}\n${iden}}`;
+    }
+
+    // a local declared *string/*int64/*float64/*bool, or a call whose Go signature returns one of them
+    goScalarPointerStoreValue(value): boolean {
+        const scalar = (t) => [ '*string', '*int64', '*float64', '*bool' ].includes(t ?? '');
+        if (value?.kind === SyntaxKind.Identifier) {
+            return scalar(this.goDeclaredTypeOfIdentifier(value));
+        }
+        const name = (value?.kind === SyntaxKind.CallExpression) ? this.goAstCalleeName(value) : undefined;
+        return (name !== undefined) && scalar(CCXT_GO_HELPER_RETURN_TYPES[name] ?? GO_HELPER_RETURN_TYPES[name]) && (!name.startsWith('this.') || this.goScalarAccessorIsBaseMethod(value));
+    }
+
+    goNonNilMapLocalAtWrite(containerNode): boolean {
+        if (this.goElementAssignmentContainerType(containerNode, '') !== 'map[string]any') {
+            return false;
+        }
+        if (this.goMapLocalIsNonNilUntilWrite(containerNode)) {
+            return true;
+        }
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode)?.valueDeclaration?.resolve();
+        return (decl?.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictCallArgs(decl.initializer)?.fallback?.kind === SyntaxKind.ObjectLiteralExpression)
+            && (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE) && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+    }
+
+    // the Go index of a scalar store: a string key as printed, a *string local proven non-nil here dereferenced
+    goScalarStoreIndex(keyNode, keyStr: string): string | undefined {
+        if (this.goIsStringKeyExpression(keyNode) || ((keyNode?.kind === SyntaxKind.BinaryExpression) && !keyStr.includes('\n')
+            && (this.goPrintedTypeOfExpression(keyNode, keyStr) === 'string'))) {
+            return keyStr;
+        }
+        if ((keyNode?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(keyNode) !== '*string')) {
+            return undefined;
+        }
+        const decl = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
+        if ((decl === undefined) || this.goLocalIsRebound(this.goEnclosingFunction(decl), keyNode)) {
+            return undefined;
+        }
+        return (this.goHasEnclosingNilGuard(keyNode) || this.goHasExitingNilGuard(keyNode)) ? `*${keyStr}` : undefined;
     }
 
     // `this.options[k] = p` with `p` a local declared *string/*int64/*float64/*bool: the plain-valued field stores

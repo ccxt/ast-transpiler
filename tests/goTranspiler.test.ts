@@ -2887,7 +2887,7 @@ describe('go native element assignment', () => {
         // the plain store now carries the helper's own nil-key test; a pointer value and a
         // map another holder can write keep the helper
         expect(output).toMatch(/if code != nil \{\s+result\[\*code\] = "x"\s+\}/);
-        expect(output).toContain("AddElementToObject(result, code, code)");
+        expect(output).toMatch(/if code != nil \{\s+result\[\*code\] = \*code\s+\}/);
         expect(output).toContain("AddElementToObject(other, code, \"y\")");
         expect(output).toContain("AddElementToObject(shared, code, \"z\")");
     });
