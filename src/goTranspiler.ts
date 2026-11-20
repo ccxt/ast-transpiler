@@ -20257,6 +20257,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goContainerLocalCache = new Map<any, string | undefined>();
 
     goContainerLocalType(declaration): string | undefined {
+        if (this.h26g27RowAccumulatorType(declaration) !== undefined) { return '[][]any'; }
         return this.goCachedLocalUnbox(this.goContainerLocalCache, declaration, () => {
             // the accessor families already name their own result more precisely (SafeMapTyped /
             // SafeListTyped read the member in one call); leave those declarations to them
@@ -22683,6 +22684,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
 
             if (op === SyntaxKind.EqualsToken) {
+                const rowWrite = this.h26g27RowWrite(node, identation); if (rowWrite !== undefined) { return rowWrite; }
                 const ohlcvsStore = this.goOhlcvsAssignment(node, baseExpr, keys, right, identation);
                 if (ohlcvsStore !== undefined) {
                     return ohlcvsStore;
@@ -31121,6 +31123,7 @@ ${this.getIden(identation)}${returnStatement}`;
         let returnValue = '';
         let returnRandName = name;
         parsedArg = this.goPrintCallArgument(node.arguments?.[0], parsedArg);
+        const rowPush = this.h26g27RowAccumulatorPush(node, parsedArg); if (rowPush !== undefined) { return rowPush; }
         // `book.cache.push (v)` appends through the interface's own *any accessor
         const bookCache = this.goOrderBookCacheAccessor((node.expression as any)?.expression);
         if (bookCache !== undefined) {
@@ -45673,3 +45676,203 @@ GoTranspiler.prototype.goH26g25JsonListUseIsReadOnly = function (node, name: str
         && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(?:String|Integer|Number|Float|Bool|Dict|List|Value|Timestamp)\d?$/.test(`${callee.name?.text ?? ''}`);
 };
 // ===== h26-g25 (end) =====
+// ===== h26-G27 =====
+export interface GoTranspiler {
+    h26g27RowAccumulatorType(declaration): string | undefined;
+    h26g27RowAccumulatorOf(node): any;
+    h26g27RowAccumulatorPush(node, parsedArg: string | undefined): string | undefined;
+    h26g27RowWrite(node, identation: number): string | undefined;
+}
+const h26g27Decisions = new WeakMap<object, number>();
+// `const xs: T[] = []` with T a tuple of N required slots, used only by `.length`, `return xs`, a push of an
+// N-element literal, `xs[r][c]` reads, `xs[r][c] = v` writes with c a literal below N, and this.safeList /
+// this.safeValue reads: every row is a pushed []any of N slots and never replaced, so the local is [][]any
+function h26g27Width(t: any, declaration: any): number {
+    const checker: any = t.checkerOrUndefined();
+    if ((checker === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type === undefined) || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0)) {
+        return 0;
+    }
+    const init: any = t.goUnwrapParenthesizedNode(declaration.initializer);
+    if ((init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length !== 0)) {
+        return 0;
+    }
+    const type: any = checker.getTypeAtLocation(declaration.type);
+    const row: any = ((type !== undefined) && checker.isArrayType(type)) ? checker.getTypeArguments(type)[0] : undefined;
+    if ((row === undefined) || !checker.isTupleType(row)) {
+        return 0;
+    }
+    const flags: any[] = ((typeof row.isTypeReference === 'function') && row.isTypeReference() ? row.getTarget().elementFlags : undefined) ?? row.elementFlags ?? [];
+    const width = checker.getTypeArguments(row).length;
+    return ((width > 0) && (flags.length === width) && flags.every((f: any) => f === 1)) ? width : 0;
+}
+// c is a numeric literal below the width, or a const local of one the printer declares `int` (the helper's key test)
+function h26g27ColumnBelow(t: any, node: any, width: number): boolean {
+    let key: any = t.goUnwrapParenthesizedNode(node);
+    if (key?.kind === SyntaxKind.Identifier) {
+        const d: any = t.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve?.();
+        if ((d?.kind !== SyntaxKind.VariableDeclaration) || (((d.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (t.goDeclaredTypeOfIdentifier(key) !== 'int')) {
+            return false;
+        }
+        key = t.goUnwrapParenthesizedNode(d.initializer);
+    }
+    return (key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.text}`) && (Number(key.text) < width);
+}
+function h26g27UseOk(t: any, use: any, width: number): boolean {
+    const parent: any = use.parent;
+    if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === use)) {
+        if (parent.name.text === 'length') {
+            return true;
+        }
+        const call: any = parent.parent;
+        const arg: any = call?.arguments?.[0];
+        return (parent.name.text === 'push') && (call?.kind === SyntaxKind.CallExpression) && (call.expression === parent)
+            && (call.parent?.kind === SyntaxKind.ExpressionStatement) && (call.arguments.length === 1)
+            && (arg.kind === SyntaxKind.ArrayLiteralExpression) && (arg.elements.length === width)
+            && arg.elements.every((e: any) => e.kind !== SyntaxKind.SpreadElement);
+    }
+    if (parent?.kind === SyntaxKind.ReturnStatement) {
+        return true;
+    }
+    if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === use)) {
+        const outer: any = parent.parent;
+        if ((outer?.kind !== SyntaxKind.ElementAccessExpression) || (outer.expression !== parent)) {
+            return false; // a bare row (replacement, alias, delete) is not proven
+        }
+        const write: any = outer.parent;
+        if ((write?.kind === SyntaxKind.BinaryExpression) && (write.left === outer)) {
+            return (write.operatorToken.kind === SyntaxKind.EqualsToken) && h26g27ColumnBelow(t, outer.argumentExpression, width);
+        }
+        return (write?.kind !== SyntaxKind.DeleteExpression) && !((write?.kind === SyntaxKind.PrefixUnaryExpression) || (write?.kind === SyntaxKind.PostfixUnaryExpression));
+    }
+    const callee: any = parent?.expression;
+    return (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === use) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && [ 'safeList', 'safeValue' ].includes(callee.name?.text);
+}
+function h26g27Width0(t: any, declaration: any): number {
+    if ((declaration === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)) {
+        return 0;
+    }
+    if (!h26g27Decisions.has(declaration)) {
+        let width = 0;
+        try {
+            width = h26g27Width(t, declaration);
+            const scope: any = t.goEnclosingFunction(declaration);
+            const checker: any = t.checkerOrUndefined();
+            const symbol: any = (width > 0) ? checker.getSymbolAtLocation(declaration.name) : undefined;
+            if ((symbol === undefined) || (scope === undefined)) {
+                width = 0;
+            }
+            const visit = (n: any) => {
+                if (width === 0) {
+                    return;
+                }
+                if ((n.kind === SyntaxKind.Identifier) && (n !== declaration.name) && (n.text === declaration.name.text) && (checker.getSymbolAtLocation(n) === symbol)) {
+                    if ((t.goEnclosingFunction(n) !== scope) || !h26g27UseOk(t, n, width)) {
+                        width = 0;
+                    }
+                    return;
+                }
+                n.forEachChild(visit);
+            };
+            if (width > 0) {
+                scope.body?.forEachChild(visit);
+            }
+        } catch (e) {
+            width = 0;
+        }
+        h26g27Decisions.set(declaration, width);
+    }
+    return h26g27Decisions.get(declaration) ?? 0;
+}
+GoTranspiler.prototype.h26g27RowAccumulatorType = function (declaration) {
+    if (h26g27Width0(this, declaration) === 0) {
+        return undefined;
+    }
+    this.goSliceLiteralTypes.set(this.goUnwrapParenthesizedNode(declaration.initializer), '[][]any');
+    return '[][]any';
+};
+GoTranspiler.prototype.h26g27RowAccumulatorOf = function (node) {
+    const n: any = this.goUnwrapParenthesizedNode(node);
+    if (n?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    const d: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+    return (h26g27Width0(this, d) > 0) ? d : undefined;
+};
+// a pushed row literal appends to the [][]any slice itself
+GoTranspiler.prototype.h26g27RowAccumulatorPush = function (node, parsedArg) {
+    const receiver: any = node?.expression?.expression;
+    if ((parsedArg === undefined) || (this.h26g27RowAccumulatorOf(receiver) === undefined) || !parsedArg.startsWith('[]any{')) {
+        return undefined;
+    }
+    const name = this.printNode(receiver, 0);
+    return `${name} = append(${name}, ${parsedArg})`;
+};
+// values that are never a scalar pointer and evaluate without side effects: mathMax / mathMin / Sum
+// return a derefScalar-ed float, number, string or nil (what AddElementToObject would store)
+function h26g27PureArg(t: any, node: any): boolean {
+    const n: any = t.goUnwrapParenthesizedNode(node);
+    switch (n?.kind) {
+    case SyntaxKind.Identifier:
+    case SyntaxKind.NumericLiteral:
+    case SyntaxKind.StringLiteral:
+        return true;
+    case SyntaxKind.ConditionalExpression:
+        return h26g27PureArg(t, n.condition) && h26g27PureArg(t, n.whenTrue) && h26g27PureArg(t, n.whenFalse);
+    case SyntaxKind.BinaryExpression:
+        return [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].includes(n.operatorToken.kind)
+            && h26g27PureArg(t, n.left) && h26g27PureArg(t, n.right);
+    case SyntaxKind.ElementAccessExpression:
+        return h26g27PureArg(t, n.expression) && h26g27PureArg(t, n.argumentExpression);
+    case SyntaxKind.CallExpression:
+        return h26g27PureCall(t, n, [ 'safeValue', 'sum' ]);
+    }
+    return false;
+}
+function h26g27PureCall(t: any, n: any, thisNames: string[]): boolean {
+    const callee: any = n?.expression;
+    if ((n?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (n.questionDotToken !== undefined)) {
+        return false;
+    }
+    const math = (callee.expression?.kind === SyntaxKind.Identifier) && (callee.expression.text === 'Math') && [ 'max', 'min' ].includes(callee.name?.text) && (n.arguments.length === 2);
+    const own = (callee.expression?.kind === SyntaxKind.ThisKeyword) && thisNames.includes(callee.name?.text);
+    return (math || own) && n.arguments.every((a: any) => h26g27PureArg(t, a));
+}
+// `xs[r][c] = v` on a row accumulator: the row is a []any of N slots and c < N, so GetValue's only nil answer is
+// r out of range, where the helper write is a no-op; r is a Go int/int64 local, v a non-pointer pure value
+GoTranspiler.prototype.h26g27RowWrite = function (node, identation) {
+    const left: any = node?.left;
+    const row: any = left?.expression;
+    if ((node.operatorToken?.kind !== SyntaxKind.EqualsToken) || (node.parent?.kind !== SyntaxKind.ExpressionStatement)
+        || (left?.kind !== SyntaxKind.ElementAccessExpression) || (row?.kind !== SyntaxKind.ElementAccessExpression)
+        || (this.h26g27RowAccumulatorOf(row.expression) === undefined)) {
+        return undefined;
+    }
+    const index: any = this.goUnwrapParenthesizedNode(row.argumentExpression);
+    const indexType = (index?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(index) : undefined;
+    // mathMax / mathMin / Sum answer a plain value; a boxed local may hold a pointer the helper would deref
+    const value: any = this.goUnwrapParenthesizedNode(node.right);
+    const valueType = (value?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(value) : undefined;
+    const plain = h26g27PureCall(this, value, [ 'sum' ]) || ((valueType !== undefined) && /^(?:int|int64|float64|string|bool)$/.test(valueType));
+    if (((indexType !== 'int') && (indexType !== 'int64')) || !plain) {
+        return undefined;
+    }
+    const list = this.printNode(row.expression, 0);
+    const r = this.printNode(index, 0);
+    const c = this.printNode(left.argumentExpression, 0);
+    if (![ list, r, c ].every((s) => /^\w+$/.test(s))) {
+        return undefined;
+    }
+    const previous = this.goStatementLevel;
+    this.goStatementLevel = identation + 1;
+    let rhs: string;
+    try {
+        rhs = this.goWithExprDepth(1, () => this.printNode(node.right, identation + 1)).trimStart();
+    } finally {
+        this.goStatementLevel = previous;
+    }
+    const bound = (indexType === 'int') ? `len(${list})` : `int64(len(${list}))`;
+    return `if ${r} >= 0 && ${r} < ${bound} {\n${this.getIden(identation + 1)}${list}[${r}][${c}] = ${rhs}\n${this.getIden(identation)}}`;
+};
+// ===== h26-G27 (end) =====
