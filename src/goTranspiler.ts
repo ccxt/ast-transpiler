@@ -19974,7 +19974,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // helper. With a default the typed read answers nil where the box held it, so only the length read
             // and the all-`any` helpers may stay.
             const defaulted = (declaration.initializer?.arguments?.length !== 2);
-            return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goListLocalSinkReadsAsList(n, !defaulted));
+            return this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => this.goListLocalSinkReadsAsList(n, !defaulted))
+                ?? (this.h26g51PushStoreBackList(declaration) ? GO_SAFE_LIST_LOCAL_TYPE : undefined);
         });
     }
 
@@ -20039,6 +20040,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE) {
             return undefined;
         }
+        if (this.h26g51PushStoreBackList(declaration)) { return this.h26g51PushStoreBackValue(declaration, identation); }
         const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList');
         const container = this.printNode(args.container, identation);
         const key = this.printNode(args.key, 0);
@@ -31157,7 +31159,7 @@ ${this.getIden(identation)}${returnStatement}`;
             returnRandName = "retRes" + this.getLineBasedSuffix(node);
             returnValue = `${returnRandName} := ${name}\n${this.getIden(identation)}`;
         }
-        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})`;
+        return  `${returnValue}AppendToArray(&${returnRandName}, ${parsedArg})` + this.h26g51SlotAliasWriteBack(node, identation);
         // works with:
         //  func AppendToArray(slicePtr *any, element any)
         //  func AppendToArrayValue(slice any, element any) any
@@ -46702,3 +46704,85 @@ GoTranspiler.prototype.h26g49ClientLocalUsesAreSafe = function (declaration) {
     return true;
 };
 // ===== h26-H26-G49 (end) =====
+
+// ===== h26-G51 =====
+export interface GoTranspiler {
+    h26g51PushStoreBackList(declaration): boolean;
+    h26g51PushStoreBackValue(declaration, identation: number): string;
+    h26g51SlotAliasWriteBack(pushNode, identation: number): string;
+    h26g51StoreBackOf(node): boolean;
+}
+// `const xs = this.safeList (c, k, [])` used only by statement pushes `xs.push (v)` and the store-back
+// `c[k2] = xs`: SafeListSlice reads the same member list (or a fresh []any{} for the literal default), so
+// the local is a []any, each push the native append, and every store hands on the very slice the box held.
+GoTranspiler.prototype.h26g51PushStoreBackList = function (declaration) {
+    const call: any = declaration?.initializer;
+    if ((call?.arguments?.length !== 3) || (this.goSafeAccessorLocalArgs(call, 'safeList') === undefined)) {
+        return false;
+    }
+    let pushes = 0;
+    let stores = 0;
+    const safe = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => {
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'push')
+            && this.goIsNativeAppendShape(n, parent.parent)) {
+            pushes++;
+            return true;
+        }
+        stores += this.h26g51StoreBackOf(n) ? 1 : 0;
+        return this.h26g51StoreBackOf(n);
+    });
+    return (safe !== undefined) && (pushes > 0) && (stores > 0) && !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name);
+};
+// the local as the whole right side of a statement `c[k] = xs`
+GoTranspiler.prototype.h26g51StoreBackOf = function (node) {
+    const parent: any = node.parent;
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === node) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (parent.left?.kind === SyntaxKind.ElementAccessExpression) && (parent.parent?.kind === SyntaxKind.ExpressionStatement);
+};
+GoTranspiler.prototype.h26g51PushStoreBackValue = function (declaration, identation) {
+    const args = declaration.initializer.arguments;
+    return `this.SafeListSlice(${this.printNode(args[0], identation).trim()}, ${this.printNode(args[1], 0).trim()}, []any{})`;
+};
+// `const xs = m[k]; xs.push (v)` with m a never-rebound map[string]any local whose slot k the function seeds
+// with `m[k] = []`: AppendToArray grows only the copy (a fresh []any{} has no spare capacity), so the grown
+// slice is stored back into the slot, which then holds what the JS shared array holds after the push.
+GoTranspiler.prototype.h26g51SlotAliasWriteBack = function (pushNode, identation) {
+    const receiver: any = pushNode?.expression?.expression;
+    if ((receiver?.kind !== SyntaxKind.Identifier) || (pushNode.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return '';
+    }
+    const decl: any = this.goDeclarationOfIdentifier(receiver);
+    const access: any = decl?.initializer;
+    if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (access.expression?.kind !== SyntaxKind.Identifier)
+        || (access.argumentExpression?.kind !== SyntaxKind.Identifier) || (this.goResolvedLocalGoType(receiver) !== 'any')) {
+        return '';
+    }
+    const scope = this.goEnclosingFunction(decl);
+    const map = access.expression;
+    const key = access.argumentExpression;
+    // a never-rebound local born as an object literal: the map is non-nil, so the store cannot panic
+    const mapDecl: any = this.goDeclarationOfIdentifier(map);
+    if ((mapDecl?.initializer?.kind !== SyntaxKind.ObjectLiteralExpression) || (this.goEnclosingFunction(mapDecl) !== scope)
+        || (this.goDeclaredTypeOfIdentifier(map) !== 'map[string]any') || this.goLocalIsRebound(scope, map) || this.goLocalIsRebound(scope, key)
+        || this.goLocalIsRebound(scope, decl.name)) {
+        return '';
+    }
+    const seeded = this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (n.left?.kind === SyntaxKind.ElementAccessExpression) && (n.left.expression?.kind === SyntaxKind.Identifier)
+        && (n.left.expression.text === map.text) && (n.left.argumentExpression?.kind === SyntaxKind.Identifier)
+        && (n.left.argumentExpression.text === key.text) && (n.right?.kind === SyntaxKind.ArrayLiteralExpression) && (n.right.elements.length === 0));
+    // a source that already stores the local back (`m[k] = xs`) needs no second store
+    const storedBack = this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
+        && (n !== decl.name) && this.h26g51StoreBackOf(n));
+    if (!seeded || storedBack) {
+        return '';
+    }
+    // the slot read the declaration printed natively (its key proof included) is the write target
+    const slot = this.printNode(access, 0).trim();
+    if (!new RegExp('^' + this.printNode(map, 0) + '\\[\\*?\\w+\\]$').test(slot)) {
+        return '';
+    }
+    return `\n${this.getIden(identation)}${slot} = ${this.printNode(receiver, 0)}`;
+};
+// ===== h26-G51 (end) =====
