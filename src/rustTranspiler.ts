@@ -33615,7 +33615,7 @@ export class RustTranspiler extends BaseTranspiler {
         // D11: a list that is only handed on is held too (the handle box replaces the Value box).
         if (!safe || (nil && (writes === 0 || natives === 0)) || (split && isArrayTests === 0) || ((declaredList || listTernary) && natives === 0)) return false;
         // a list ternary takes no box back (a `Value::Arr` hand-off would only move the conversion)
-        if (listTernary && boxes.some(([, form]) => form !== 'lend')) return false;
+        if (listTernary && boxes.some(([n, form]) => form !== 'lend' && !this.rustH26r01LentStrListArg(n))) return false;
         // stack-90r: a split local that takes a ral-90rf R1 map box or R2 rejoin is typed only when it needs at most ONE box in
         // all (map boxes, rejoins and list-arm clone / move boxes; a `&x` lend is no box): one needing more stays the `Value` it was (alpaca cancelAllOrders,
         // tokocrypto fetchTickers, whitebit fetchMyTrades)
@@ -40595,6 +40595,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (first !== undefined && this.rustClientHandleKeysAliasPrintsKeys(first)) return '';
         return super.printVariableStatement(node, identation);
     }
+
+    // ===== h26-R01
+    /** A list-ternary local handed whole to a lent `&[crate::Value]` slot of a `this.` method: the slot views the held
+     *  list in place (`as_deref` slice, None reads as the empty list, as the boxed Null did), so no box is taken. */
+    rustH26r01LentStrListArg(n: Node): boolean {
+        const call: Node | undefined = n.parent;
+        return call !== undefined && isCallExpression(call) && call.expression !== n && this.rustVenueStrListSlotOf(call, n);
+    }
+    // ===== end h26-R01
 
 }
 
