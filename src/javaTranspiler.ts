@@ -6482,7 +6482,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
             const arithmetic = this.printInlineHelperArithmetic(left, right, leftText, rightText, op)
                 ?? this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op)
-                ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op);
+                ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op)
+                ?? this.printParseToIntDoubleProduct(node, left, right, leftText, rightText, op);
             if (arithmetic !== undefined) {
                 return arithmetic;
             }
@@ -10484,6 +10485,39 @@ export class JavaTranspiler extends BaseTranspiler {
             }
         }
         return parts;
+    }
+
+    // ===== h26-J08
+    // `this.parseToInt (a * b)` (base) with a double operand: parseToInt reads its argument through
+    // numberToString, so Helpers.multiply's Long re-box of an integral product prints the same digits
+    // as the native double; a null box keeps the helper's null (parseToInt(null) throws either way)
+    printParseToIntDoubleProduct(node, left, right, leftText: string, rightText: string, op): string | undefined {
+        if (op !== SyntaxKind.AsteriskToken || !this.javaProductFeedsBaseParseToInt(node)) {
+            return undefined;
+        }
+        const kindOf = (operand, text: string) => this.javaDeclaredBoxOperandKind(operand, text)
+            ?? (isCallExpression(operand) && this.javaNativeParseKind(operand) === 'double' ? 'doubleprim' : undefined);
+        const kinds = [kindOf(left, leftText), kindOf(right, rightText)];
+        if (kinds.some((kind) => kind === undefined) || !kinds.some((kind) => kind === 'doublebox' || kind === 'doubleprim')) {
+            return undefined;
+        }
+        const texts = [leftText.trim(), rightText.trim()];
+        const asDouble = (i: number) => (kinds[i].startsWith('double') ? texts[i] : `((double) ${texts[i]})`);
+        const expression = `(${asDouble(0)} * ${asDouble(1)})`;
+        const boxes = kinds.map((kind, i) => (kind.endsWith('box') ? texts[i] : undefined))
+            .filter((text, i, all) => text !== undefined && all.indexOf(text) === i);
+        return boxes.length === 0 ? expression : `((${boxes.map((box) => `${box} == null`).join(' || ')}) ? null : ${expression})`;
+    }
+
+    javaProductFeedsBaseParseToInt(node): boolean {
+        let child = node;
+        let parent = node?.parent;
+        while (parent !== undefined && isParenthesizedExpression(parent)) {
+            child = parent;
+            parent = parent.parent;
+        }
+        return parent?.kind === SyntaxKind.CallExpression && parent.arguments?.length === 1
+            && parent.arguments[0] === child && this.javaBaseParseToIntCall(parent);
     }
 }
 
