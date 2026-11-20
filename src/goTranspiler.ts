@@ -7643,7 +7643,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             return arithmeticType;
         }
         const wsTree = goSourceIsWsTree (initializer);
-        const goType = ccxtGoTypeOfPrintedCall (this, printedValue, wsTree, initializer);
+        const goType = ccxtGoTypeOfPrintedCall (this, printedValue, wsTree, initializer) ?? h26g46VirtualDispatchCallType (this, printedValue);
         if (goType === undefined) {
             return ccxtGoTypeOfUrlsInitializer (this, initializer, printedValue)
                 ?? ccxtGoTypeOfCopiedLocal (this, initializer, printedValue);
@@ -46565,3 +46565,17 @@ GoTranspiler.prototype.goNativeAppendReceiver = function (pushNode): string | un
     return goNativeAppendReceiverG45.call(this, pushNode);
 };
 // ===== h26-H26-G45 (end) =====
+// ===== h26-G46 (begin): virtual-dispatch parse results bound to locals =====
+// `<-this.callInternal("parseX", ..)` is a sync virtual base call the ccxt build rewrites to
+// `this.DerivedExchange.ParseX(..)`; a container return proven on the base, every override and the interface types the local.
+function h26g46VirtualDispatchCallType (goTranspiler, printedValue) {
+    const text = (printedValue ?? '').trim ();
+    const head = /^<-this\.callInternal\("(\w+)"/.exec (text);
+    const open = '<-this.callInternal'.length;
+    if ((head === null) || !goTranspiler.isWholePrintedCall (text, open)) {
+        return undefined;
+    }
+    const known = CCXT_GO_HELPER_RETURN_TYPES['this.DerivedExchange.' + head[1].charAt (0).toUpperCase () + head[1].slice (1)];
+    return ((known === 'map[string]any') || (known === '[]any')) ? known : undefined;
+}
+// ===== h26-G46 (end) =====
