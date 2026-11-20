@@ -5355,6 +5355,8 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     'ParseBorrowRateHistory': {'1': 'deref', '2': 'deref', '3': 'deref'},
     // every override reads since/limit only through FilterBy*SinceLimit (bitget ignores them)
     'ParseFundingHistories': {'2': 'deref', '3': 'deref'},
+    // SafeValue (exchange_safe.go) derefScalars the container, every key and the default
+    'SafeValue': '*',
 };
 
 // Typed async receive: `x := <-this.FooAsync(..)` + PanicOnError(x) becomes
@@ -27480,7 +27482,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             // `_ = x` and other inert statements
             if ((parent?.kind === SyntaxKind.ExpressionStatement)
-                || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)))) {
+                || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n)))
+                || ((goType === '*string') && this.goGetArgPointerIsBalanceKey(n))) {
                 return true;
             }
             // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would
@@ -27507,6 +27510,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         body.forEachChild(visit);
         return safe;
+    }
+
+    // `this.balance[x]` with a nil-guarded `*string` x: the native Balance store/step indexes `[*x]`,
+    // which reads the same key the helper's derefScalar read; an unguarded key keeps the box
+    goGetArgPointerIsBalanceKey(n: any): boolean {
+        const parent: any = n.parent;
+        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.argumentExpression !== n) || !this.goBalanceIndexable(parent.expression)) {
+            return false;
+        }
+        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n);
     }
 
     // `x / 1000`, `x - 1`, `x > 0`: printed through Divide/Subtract/…/IsGreaterThan, which
