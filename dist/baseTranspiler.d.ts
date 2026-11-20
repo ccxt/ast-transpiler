@@ -239,6 +239,7 @@ declare class BaseTranspiler {
     printCallExpression(node: any, identation: any): any;
     /** `callee(args)` of a plain call; a language may name the callee's path from the node. */
     printCallHead(node: any, parsedExpression: string, parsedArgs: string): string;
+    isOverloadSignature(member: any): boolean;
     printClassBody(node: any, identation: any): any;
     getCustomClassName(node: any): any;
     getClassModifier(node: any): string;

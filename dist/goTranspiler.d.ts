@@ -31,6 +31,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.SafeMarket': string;
     'this.Symbol': string;
     'this.GetSupportedMapping': string;
+    'this.ConvertTypeToAccount': string;
     'this.Outcome': string;
     'this.SafeOutcome': string;
     'this.ParseSearchQueries': string;
@@ -887,6 +888,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGuardsNonNil(condition: any, name: string): boolean;
     goInsideNonNilBlock(use: any, name: string): boolean;
     goMapLocalUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
+    goMapArgCalleeTakesNilMap(call: any, arg: any, depth: number): boolean;
     goSafeDictSiblingsResolve(scope: any, name: string, bindings: any[]): boolean;
     goSafeDictMapLocal(declaration: any): string | undefined;
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
@@ -1075,6 +1077,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         index: string;
     } | undefined;
     goBalancePlainValue(valueNode: any): boolean;
+    goBalanceSafeValueRead(valueNode: any): boolean;
     goIsWholeGetValueText(rhs: string): boolean;
     goBalanceIndexable(field: any): boolean;
     goBalanceStoreText(node: any, baseExpr: any, keys: any[], valueNode: any, rhs: string, identation: number): string | undefined;
@@ -1486,6 +1489,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
     goGetArgPointerIsBalanceKey(n: any): boolean;
     goGetArgStrPtrGuardedStringCall(n: any, param: any): boolean;
+    goGetArgStrPtrGuardedNeedle(n: any, param: any): boolean;
+    goStrParamCheckerNarrowed(n: any, param: any): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
@@ -1842,6 +1847,7 @@ export interface GoTranspiler {
         derefFalse: boolean;
     } | undefined;
     goTernaryJoinNilMapReadOk(n: any): boolean;
+    goTernaryJoinNilMapInferred(declaration: any): boolean;
 }
 export interface GoTranspiler {
     goClientFuturesTable(node: any): boolean;
@@ -1866,6 +1872,8 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     goTernaryJoinR87HasNativeRead(declaration: any, kind: string): boolean;
+    goTernaryJoinStrPtrArgReads(declaration: any): boolean;
+    goTernaryJoinStrPtrArgSlot(call: any, index: number): boolean;
 }
 export interface GoTranspiler {
     go90g3SideKeys(key: any): string[] | undefined;
@@ -1919,4 +1927,8 @@ export interface GoTranspiler {
     goTernaryStatementArms(ternary: any): string | undefined;
     goTernaryStatementIfElse(target: string, ternary: any, identation: number): string | undefined;
     goTernaryStatementNilSeededBox(decl: any, declared: string | undefined, armType: string | undefined): boolean;
+    goTernaryStatementStrPtrArm(left: any, ternary: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    goH19g06BoundedStringListRead(node: any): string | undefined;
 }

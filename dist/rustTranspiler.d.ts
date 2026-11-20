@@ -3867,6 +3867,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCacheRowDynamicWrite(n: any, init: any): boolean;
     /** `c.append (x)` (statement, sole argument) on a local ws cache (`CacheSlot::append` takes the item as a `Value`). */
     rustLocalCacheAppendArg(n: any): boolean;
+    /** `bucket[k] = row` (statement, the row whole) back into the cache bucket the `safeDict*` row was read from: the bucket
+     *  write keeps its helper (tag hooks run), the row boxes once (`None` to the `Null` the boxed row held). */
+    rustCacheRowStoreBack(n: any, init: any): boolean;
     private rustCacheRowNestedUses;
     /** `row['k'][..] = v` (statement, first key a plain literal, value and keys not reading `row`) or `row['k'].push (v)`
      *  (statement, one argument) on a `safeDict*` row of a cache bucket. */
