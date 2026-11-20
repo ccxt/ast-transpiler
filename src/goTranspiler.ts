@@ -1091,7 +1091,8 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 // omitZero / currencyToPrecision / networkCodeToId / handleTimeInForce answer a string or
 // undefined on every path; the hand-written Go twins and interface lines are *string too
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
-    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol', 'OmitZero' ];
+    'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
+    'CommonCurrencyCode', 'OmitZero' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -14317,6 +14318,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'orderbookChecksumMessage': [ 0 ],
     // every caller passes the handleNetworkCodeAndParams `*string` slot
     'selectNetworkKeyFromNetworks': [ 1 ],
+    // returns its input or a commonCurrencies string, so nil stays nil
+    'commonCurrencyCode': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
