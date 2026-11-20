@@ -2574,7 +2574,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) : undefined) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -5113,6 +5113,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static readonly RUST_SCALAR_TYPES: { [kind: string]: string } = {
         ostr: 'Option<String>', oint: 'Option<i64>', onum: 'Option<f64>', obool: 'Option<bool>', str: 'String', int: 'i64', num: 'f64', bool: 'bool',
+        odict: 'Option<crate::value::Dict>',
     };
 
     private rustScalarDecisions = new Map<any, string | null>();
@@ -6339,6 +6340,8 @@ export class RustTranspiler extends BaseTranspiler {
         // pg: the precision formatters answer `Str` (overrides may spell `string`); every return is a string or undefined
         amountToPrecision: [ 'Str|string', 'ostr' ], priceToPrecision: [ 'Str|string', 'ostr' ], costToPrecision: [ 'Str|string', 'ostr' ],
         feeToPrecision: [ 'Str|string', 'ostr' ], currencyToPrecision: [ 'Str|string', 'ostr' ],
+        // a map or undefined on every path (`-> Option<Dict>`); a `Value` slot boxes it once, never a scalar local
+        safeDictN: [ 'Dictionary<any> | undefined', 'odict' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -6359,12 +6362,19 @@ export class RustTranspiler extends BaseTranspiler {
     rustMethodTypedReturnKind(node): string | undefined {
         if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || this.isAsyncFunction(node) || !isIdentifier(node.name)) return undefined;
         const entry = RustTranspiler.RUST_BASE_TYPED_METHODS[String(node.name.text)];
-        if (!Array.isArray(entry) || !entry[0].split('|').includes(String(node.type?.getText?.() ?? '').trim())) return undefined;
+        const declared = String(node.type?.getText?.() ?? '').trim();
+        if (!Array.isArray(entry) || !(entry[0] === declared || entry[0].split('|').includes(declared))) return undefined;
         return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? entry[1] : undefined;
     }
 
-    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
     rustBaseTypedReturnKind(expr): string | undefined {
+        const kind = this.rustBaseTypedReturnKindAll(expr);
+        return kind === 'odict' ? undefined : kind;
+    }
+
+    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    rustBaseTypedReturnKindAll(expr): string | undefined {
         const node: any = this.unwrapParens(expr);
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || this.checkerOrUndefined() === undefined) return undefined;
         const name = String(node.expression.name.text);
@@ -6377,6 +6387,8 @@ export class RustTranspiler extends BaseTranspiler {
         }
         member = member?.resolve?.() ?? member;
         if (member === undefined) return undefined;
+        // an overload signature resolves to the implementation it declares (the one printed method)
+        if (member.kind === SyntaxKind.MethodDeclaration && member.body === undefined) member = Array.from(member.parent?.members ?? []).find((d: any) => d.kind === SyntaxKind.MethodDeclaration && d.body !== undefined && isIdentifier(d.name) && d.name.text === name) ?? member;
         const base = RustTranspiler.RUST_BASE_TIER_FILE.test(String(member.getSourceFile?.()?.fileName ?? ''));
         // a base method the runtime implements by hand (no venue redeclares it, or the member would resolve there)
         if (member.kind === SyntaxKind.MethodDeclaration) return this.rustMethodTypedReturnKind(member) ?? (base && RustTranspiler.RUST_BASE_TYPED_HAND_METHODS.has(name) ? RustTranspiler.RUST_BASE_TYPED_RUNTIME[name] : undefined);
@@ -6517,10 +6529,28 @@ export class RustTranspiler extends BaseTranspiler {
     /** Call hook: a `Value` position takes the native result boxed once. */
     printRustBaseTypedReturnCall(node): string | undefined {
         if (this.rustBaseTypedBare.has(node)) return undefined;
-        const kind = this.rustBaseTypedReturnKind(node);
+        const kind = this.rustBaseTypedReturnKindAll(node);
         if (kind === undefined) return undefined;
         const text = this.rustBaseTypedBareText(node);
+        if (kind === 'odict') return `${text}.map_or(Value::Null, Value::Dict)`;
         return kind === 'ostr' ? `Value::from(${text})` : this.rustScalarBoxText(kind, text, node);
+    }
+
+    /** The bare `Option<Dict>` call text of an `odict` table call (safeDictN), else undefined. */
+    rustOdictCallText(expr): string | undefined {
+        const node: any = this.rustSkipWrappers(expr);
+        return node !== undefined && this.rustBaseTypedReturnKindAll(node) === 'odict' ? this.rustBaseTypedBareText(node) : undefined;
+    }
+
+    /** A Dict local from an `odict` call: the empty map for `None`, as `.into_dict()` answered for Null. */
+    rustOdictDefaultText(expr): string | undefined {
+        const text = this.rustOdictCallText(expr);
+        return text === undefined ? undefined : `${text}.unwrap_or_default()`;
+    }
+
+    /** `return x` of an `-> Option<Dict>` method: the map a `Value` holds is moved out, anything else is `None`. */
+    rustOdictReturnText(exp): string {
+        return this.rustOdictCallText(exp) ?? `if let Value::Dict(__m) = ${this.printNode(exp, 0).trim()} { Some(__m) } else { None }`;
     }
 
     /** `return x` in a typed method: the native value, converting a `Value` once. */
@@ -6529,6 +6559,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === undefined) return undefined;
         const inner: any = this.unwrapParens(exp);
         if (this.literalKindOfNode(inner) === 'null') return kind.startsWith('o') ? 'None' : undefined;
+        if (kind === 'odict') return this.rustOdictReturnText(exp);
         const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         if (local === kind) return super.printIdentifier(inner);
         if (local !== undefined && `o${local}` === kind) return `Some(${super.printIdentifier(inner)})`;
@@ -24582,6 +24613,7 @@ export class RustTranspiler extends BaseTranspiler {
         let castLengths = 0;
         const joinUses: Node[] = [];
         let nullWrites = 0;
+        let odictRewrites = 0;
         let endpointBoxes = 0;
         let literal76bWrites = 0;
         let plainReads = 0;
@@ -24661,6 +24693,7 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-65i: a declaration-initialised optional-map alias (45f / 61i source) rewritten from a declared `Promise<Dict>`
                 // endpoint holds that endpoint's map or None (`.into_opt_dict()` at the write, the ral-ua conversion)
                 if (optAliasInit && from === 'dict' && this.rust65iDeclaredDictEndpointWrite(rhs)) return String(rhs.getText()).split('\n')[0].length <= 240;
+                if (from === 'dict' && this.rustCacheRowOdictRewrite(rhs, init)) return ++odictRewrites > 0 && String(rhs.getText()).split('\n')[0].length <= 240;
                 const aliasKind = nilDeclared ? this.rustOptAliasSourceKind(rhs, fn) : undefined;
                 if (aliasKind !== undefined) {
                     if (from !== undefined && from !== aliasKind) mixed = true;
@@ -24935,7 +24968,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
         if (endpointBoxes > 0 && endpointBoxes !== boxedElementUses.length) return undefined;
         // a nullable reader result boxed whole keeps Null apart from the map: only the optional form prints that box
-        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || (writes > 0 && !optAliasInit) || from !== 'dict')) return undefined;
+        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || (writes > 0 && !optAliasInit && writes !== odictRewrites) || from !== 'dict')) return undefined;
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
         if (paramsBoxes > 0 && (optional || from !== 'dict')) return undefined;
         const onlySafeDictWrites = keyWrites > 0 && safeDictKeyWrites === keyWrites && keySets === 0;
@@ -24955,7 +24988,8 @@ export class RustTranspiler extends BaseTranspiler {
         // the plain form turns a Null source into the empty map, where the boxed write was skipped: only a never-null source
         if (aeoWriteUses.length > 0 && !optional && !extendReuse && !(init !== undefined && (this.rustLentContainerSource(init)
             || (isCallExpression(init) && this.rustBuiltReturnSourceKind(init) === 'dict')))) return undefined;
-        if (keyWrites > 0 && aeoWriteUses.length === 0) this.rustMutableBuiltLocals.add(declaration);
+        // a cache row's dynamic-key helper writes (`impl AddTarget for Option<Dict>`) sit beside its native literal-key inserts
+        if (keyWrites > 0 && (aeoWriteUses.length === 0 || odictRewrites > 0 && aeoWriteUses.every((u: any) => this.rustCacheRowDynamicWrite(u, init)))) this.rustMutableBuiltLocals.add(declaration);
         // ral-50b: index writes need a list on every path (a never-null list source, the plain form)
         if (listIndexWrites > 0 && (from !== 'list' || optional || init === undefined || !this.rustContainerInitNeverNull(init, 'list'))) return undefined;
         for (const n of aeoWriteUses) this.rustAeoWrites.add(n.parent.parent);
@@ -26190,6 +26224,16 @@ export class RustTranspiler extends BaseTranspiler {
         return src !== undefined && isPropertyAccessExpression(src) && String(src.name.text) === 'hashmap';
     }
 
+    /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
+     *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
+    rustCacheRowOdictRewrite(rhs: any, init: any): boolean {
+        if (!isCallExpression(rhs) || rhs.arguments.length !== 2 || this.rustBaseTypedReturnKindAll(rhs) !== 'odict') return false;
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || !/^safeDict[2N]?$/.test(String(init.expression.name.text))) return false;
+        const head: any = this.rustSkipWrappers(init.arguments[0]);
+        const bucket: any = this.rustSkipWrappers(rhs.arguments[0]);
+        return isIdentifier(head) && isIdentifier(bucket) && this.rustCacheBucketRow(head) && this.rustDeclarationOfIdentifier(head) === this.rustDeclarationOfIdentifier(bucket);
+    }
+
     /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
      *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
     rustCacheRowDynamicWrite(n: any, init: any): boolean {
@@ -27301,7 +27345,7 @@ export class RustTranspiler extends BaseTranspiler {
         const field = /^(\w+)\.get\(("\w+")\)\.cloned\(\)\.unwrap_or_default\(\)$/.exec(this.rustWsFieldGetText(init, true) ?? '');
         if (field !== null && !RUST_BOOK_META_KEYS.has(field[2].slice(1, -1))) return `${indent}let mut ${varName}: Option<${type}> = self.safe_${kind}_k_o(&${field[1]}, ${field[2]})`;
         const printed = this.printNode(declaration.initializer, 0).trim();
-        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOptDictNativeInit(init, printed) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOdictCallText(init) ?? this.rustOptDictNativeInit(init, printed) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
     }
 
     /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
@@ -27332,7 +27376,7 @@ export class RustTranspiler extends BaseTranspiler {
             const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
             return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
         }
-        return `${name} = ${(local.kind === 'list' ? this.rustOptListLiteralSome(right) : undefined) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
+        return `${name} = ${(local.kind === 'list' ? this.rustOptListLiteralSome(right) : this.rustOdictCallText(right)) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
     }
 
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
