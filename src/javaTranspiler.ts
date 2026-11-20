@@ -1675,6 +1675,34 @@ export class JavaTranspiler extends BaseTranspiler {
         return parameters === undefined ? undefined : this.javaArgumentNativeTypes(node, parameters, 1);
     }
 
+    // a statement `this.spawn(this.m, a..)` into a printed async method is `this.m(a..)`: the method
+    // already hands its body to the async supplier and returns at once, so the spawn lambda adds nothing
+    javaSpawnAsyncDirectCall(node, identation): string | undefined {
+        const callee = node.expression;
+        if (!isExpressionStatement(node.parent) || callee?.kind !== SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== SyntaxKind.ThisKeyword || callee.name?.text !== 'spawn') {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        const reference = args[0];
+        if (reference?.kind !== SyntaxKind.PropertyAccessExpression || reference.expression?.kind !== SyntaxKind.ThisKeyword
+            || args.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+            return undefined;
+        }
+        const method = this.javaMethodImplementation(this.javaReferencedDeclaration(reference));
+        // base-tier targets are excluded: the build layer swaps some for hand-written sync bodies
+        if (method === undefined || !this.javaIsPrintedMethod(method) || !this.hasAsyncModifier(method)
+            || /(^|\/)ts\/src\/base\//.test(method.getSourceFile().fileName.replace(/\\/g, '/'))
+            || ((method as any).modifiers ?? []).some((m) => m.kind === SyntaxKind.StaticKeyword)) {
+            return undefined;
+        }
+        const rest = args.slice(1);
+        const types = this.javaSpawnCallParameterTypes(node) ?? [];
+        const forwarded = this.javaFullArityArguments(method, rest, identation)
+            ?? rest.map((a, i) => this.javaCheckcastArgument(a, this.printNode(a, identation).trim(), types[i + 1])).join(', ');
+        return `this.${this.transformMethodNameIfNeeded(reference.name.text)}(${forwarded})`;
+    }
+
     // the declaration a `this.m` reference names (value declaration first)
     javaReferencedDeclaration(reference) {
         return this.javaTry(() => {
@@ -1754,7 +1782,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printCallExpression(node, identation) {
-        return javaFeeTierLiteral(node) ?? this.printJavaWsReceiverCall(node, identation) ?? super.printCallExpression(node, identation);
+        return javaFeeTierLiteral(node) ?? this.printJavaWsReceiverCall(node, identation) ?? this.javaSpawnAsyncDirectCall(node, identation) ?? super.printCallExpression(node, identation);
     }
 
     printDynamicCall(node, identation) {
