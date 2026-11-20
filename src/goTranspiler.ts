@@ -22735,6 +22735,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     ?? this.printNativeElementAssignment(baseExpr, containerStr, keys[0], lastKey, nativeRhs, false, right)
                     ?? this.printNativeMapWriteOnProvenLocal(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goNonNilMapLocalPointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
+                    ?? this.goNonNilMapLocalDictValuePointerKeyStore(baseExpr, containerStr, keys[0], lastKey, nativeRhs, right, identation)
                     ?? this.goSafeDictLocalScalarPointerStore(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.printOptionDictFieldWrite(baseExpr, containerStr, keys[0], lastKey, right, identation)
                     ?? this.goWsFieldWrite(baseExpr, containerStr, keys[0], right, identation)
@@ -34200,6 +34201,52 @@ ${tryBodyBlock}
         return undefined;
     }
 
+
+    // ===== h26-G34: pointer-key store of a ts-declared dict value =====
+    // `m[k] = v` with `v` declared Dict / Dict[] in ts (printed `any`): derefScalar leaves a map or
+    // slice unchanged, so on a non-nil map local with a *string key the store is native
+    goNonNilMapLocalDictValuePointerKeyStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode, identation: number): string | undefined {
+        // an awaited value lowers to a channel receive plus error check the plain store would skip;
+        // a leading callInternal receive is the sync derived-method dispatch the ccxt build rewrites
+        if ((valueNode === undefined) || (valueStr.replace(/^<-this\.callInternal\(/, '').includes('<-')) || this.goContainsAwait(valueNode) || this.goMapWriteValueIsNotPointer(valueNode) || !this.goTsValueIsDictOrList(valueNode)) {
+            return undefined;
+        }
+        const key = this.goUnwrapPrintedAssertions(keyNode);
+        if ((key?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(key) !== '*string')
+            || (this.goElementAssignmentContainerType(containerNode, containerStr) !== 'map[string]any') || !this.goMapLocalIsNonNilUntilWrite(containerNode)) {
+            return undefined;
+        }
+        const keyDeclaration = this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve();
+        const stable = (keyDeclaration !== undefined) && !this.goLocalIsRebound(this.goEnclosingFunction(keyDeclaration), key);
+        if (stable && (this.goHasEnclosingNilGuard(key) || this.goHasExitingNilGuard(key))) {
+            return `${containerStr}[*${keyStr}] = ${valueStr}`;
+        }
+        return this.goNilGuardedKeyWrite(containerStr, keyStr, valueStr, identation);
+    }
+
+    // every non-nullish part of the value's checker type is a string-indexed dict or an array: never a scalar pointer
+    goTsValueIsDictOrList(valueNode): boolean {
+        const checker: any = this.checkerOrUndefined();
+        const inner = this.goUnwrapParenthesizedNode(valueNode);
+        const type = (inner === undefined) ? undefined : checker?.getTypeAtLocation(inner);
+        if ((type === undefined) || ((type.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0)) {
+            return false;
+        }
+        const parts = goNonNullishParts(type);
+        return (parts.length > 0) && parts.every((p) => ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0)
+            && (this.goParameterTypeIsDict(p) || ((typeof checker.isArrayType === 'function') && checker.isArrayType(p))));
+    }
+    goContainsAwait(node): boolean {
+        if ((node === undefined) || (node.kind === SyntaxKind.AwaitExpression)) {
+            return node !== undefined;
+        }
+        let found = false;
+        node.forEachChild((c) => {
+            found = found || (!isFunctionLike(c) && this.goContainsAwait(c));
+        });
+        return found;
+    }
+    // ===== h26-G34 (end) =====
 }
 
 
