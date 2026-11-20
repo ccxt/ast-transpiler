@@ -7721,6 +7721,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installB02SafeBalanceLocals (goTranspiler); // safeBalance map locals
     installCcxtGoNestedSafeDictRead (goTranspiler);
     installCcxtGoTypedTernaryDeclaration (goTranspiler);
+    installH26G23StringTernaryHoist (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
@@ -45361,3 +45362,169 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n` + lines.join('\n');
 };
 // ===== h26-G22 (end) =====
+// ===== h26-G23 (begin): string-literal ternaries in an expression hoisted to a typed local =====
+// `c ? 'a' : 'b'` nested in a statement (a map entry, a call argument) prints `var t string = "b"` plus
+// `if c { t = "a" }` before the statement and `t` in place: the same string the `func() string` literal
+// returned. Only side-effect-free conditions move (locals, fields, literals, safe readers, Precise compares).
+const H26G23_PURE_CALLS = new Set ([ 'safeString', 'safeStringLower', 'safeStringUpper', 'safeBool', 'safeInteger', 'safeNumber', 'safeValue' ]);
+function h26g23IsStringLiteral (node: any): boolean {
+    const n = ral90g5UnwrapNode (node);
+    return (n?.kind === SyntaxKind.StringLiteral) || (n?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+}
+// the value position of a map entry or a call argument: a Go `string` is what both the entry and the
+// `any` parameter receive (an assignment target may be a `*string`, so assignments are not touched)
+function h26g23InEntryOrArgument (node: any): boolean {
+    let child: any = node;
+    let parent: any = node.parent;
+    while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        child = parent;
+        parent = parent.parent;
+    }
+    if (parent?.kind === SyntaxKind.PropertyAssignment) {
+        return parent.initializer === child;
+    }
+    return (parent?.kind === SyntaxKind.CallExpression) && parent.arguments.some ((a) => a === child);
+}
+function h26g23PureCondition (node: any): boolean {
+    const n: any = node;
+    switch (n?.kind) {
+    case SyntaxKind.ParenthesizedExpression:
+        return h26g23PureCondition (n.expression);
+    case SyntaxKind.Identifier:
+    case SyntaxKind.StringLiteral:
+    case SyntaxKind.NumericLiteral:
+    case SyntaxKind.NoSubstitutionTemplateLiteral:
+    case SyntaxKind.TrueKeyword:
+    case SyntaxKind.FalseKeyword:
+    case SyntaxKind.NullKeyword:
+        return true;
+    case SyntaxKind.PrefixUnaryExpression:
+        return (n.operator === SyntaxKind.ExclamationToken) && h26g23PureCondition (n.operand);
+    case SyntaxKind.PropertyAccessExpression:
+        return ((n.expression?.kind === SyntaxKind.ThisKeyword) || (n.expression?.kind === SyntaxKind.Identifier)) && (n.name?.kind === SyntaxKind.Identifier);
+    case SyntaxKind.BinaryExpression: {
+        const op = n.operatorToken?.kind;
+        const ok = [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.EqualsEqualsToken,
+            SyntaxKind.ExclamationEqualsToken, SyntaxKind.AmpersandAmpersandToken, SyntaxKind.BarBarToken ].includes (op);
+        return ok && h26g23PureCondition (n.left) && h26g23PureCondition (n.right);
+    }
+    case SyntaxKind.CallExpression: {
+        const callee: any = n.expression;
+        if (callee?.kind !== SyntaxKind.PropertyAccessExpression) {
+            return false;
+        }
+        const pureCallee = ((callee.expression?.kind === SyntaxKind.ThisKeyword) && H26G23_PURE_CALLS.has (callee.name?.text))
+            || ((callee.expression?.kind === SyntaxKind.Identifier) && (callee.expression.text === 'Precise') && /^string(Gt|Ge|Lt|Le|Eq)$/.test (callee.name?.text ?? ''));
+        return pureCallee && n.arguments.every ((a) => h26g23PureCondition (a));
+    }
+    default:
+        return false;
+    }
+}
+// a ternary whose eager evaluation before the statement is unobservable: no enclosing function literal,
+// short circuit or other ternary between it and the statement, which sits directly in a block
+function h26g23Candidates (statement: any): any[] {
+    const parentKind = statement?.parent?.kind;
+    if ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause)) {
+        return [];
+    }
+    const found: any[] = [];
+    const visit = (n: any, top: boolean) => {
+        if (n === undefined) {
+            return;
+        }
+        switch (n.kind) {
+        case SyntaxKind.ArrowFunction:
+        case SyntaxKind.FunctionExpression:
+        case SyntaxKind.ClassExpression:
+            return;
+        case SyntaxKind.BinaryExpression:
+            if ([ SyntaxKind.AmpersandAmpersandToken, SyntaxKind.BarBarToken, SyntaxKind.QuestionQuestionToken ].includes (n.operatorToken?.kind)) {
+                return;
+            }
+            break;
+        case SyntaxKind.ConditionalExpression:
+            if (!top && h26g23InEntryOrArgument (n) && h26g23IsStringLiteral (n.whenTrue) && h26g23IsStringLiteral (n.whenFalse) && h26g23PureCondition (n.condition)) {
+                found.push (n);
+            }
+            return;
+        default:
+            break;
+        }
+        n.forEachChild ((c: any) => { visit (c, false); });
+    };
+    if (statement.kind === SyntaxKind.VariableStatement) {
+        // the declaration's own initialiser ternary is the declaration rules' shape
+        for (const d of statement.declarationList?.declarations ?? []) {
+            visit (d.initializer, true);
+        }
+    } else {
+        visit (statement.expression, (statement.kind === SyntaxKind.ExpressionStatement) ? false : true);
+    }
+    return found;
+}
+function h26g23PrintStatement (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const candidates = (goTranspiler.h26g23Hoists?.size === 0) ? h26g23Candidates (node) : [];
+    if (candidates.length === 0) {
+        return print ();
+    }
+    // only where the printer still leaves the string func literal (other rules lower the rest)
+    const base = print ();
+    if ((typeof base !== 'string') || !base.includes ('func() string {')) {
+        return base;
+    }
+    const hoists = new Map<any, string> ();
+    for (const c of candidates) {
+        hoists.set (c, `ternaryStr${goTranspiler.getLineBasedSuffix (c)}`);
+    }
+    for (const [ c, name ] of hoists) {
+        goTranspiler.h26g23Hoists.set (c, name);
+    }
+    let printed: string;
+    try {
+        printed = print ();
+    } finally {
+        for (const c of hoists.keys ()) {
+            goTranspiler.h26g23Hoists.delete (c);
+        }
+    }
+    const iden = goTranspiler.getIden (identation);
+    let lead = '';
+    for (const [ c, name ] of hoists) {
+        if (!new RegExp (`\\b${name}\\b`).test (printed)) {
+            return base;
+        }
+        const condition = goTranspiler.goStripControlClauseParens (goTranspiler.goWithExprDepth (1, () => goTranspiler.printCondition (c.condition, 0)));
+        if (condition.includes ('\n')) {
+            return base;
+        }
+        const whenTrue = goTranspiler.printNode (ral90g5UnwrapNode (c.whenTrue), 0);
+        const whenFalse = goTranspiler.printNode (ral90g5UnwrapNode (c.whenFalse), 0);
+        lead += `${iden}var ${name} string = ${whenFalse}\n${iden}if ${condition} {\n${iden}\t${name} = ${whenTrue}\n${iden}}\n`;
+    }
+    // leading comment lines stay directly above the statement
+    const lines = printed.replace (/^\n+/, '').split ('\n');
+    let at = 0;
+    while ((at < lines.length - 1) && lines[at].trim ().startsWith ('//')) {
+        at++;
+    }
+    return [ ...lines.slice (0, at), lead + lines.slice (at).join ('\n') ].join ('\n');
+}
+function installH26G23StringTernaryHoist (goTranspiler: any) {
+    if (!goInstallOnce (goTranspiler, '__h26g23Installed', 'printConditionalExpression')) {
+        return;
+    }
+    goTranspiler.h26g23Hoists = new Map<any, string> ();
+    const conditional = goTranspiler.printConditionalExpression;
+    goTranspiler.printConditionalExpression = function (node, identation) {
+        const name = this.h26g23Hoists.get (node);
+        return (name !== undefined) ? name : conditional.call (this, node, identation);
+    };
+    for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'printReturnStatement' ]) {
+        const original = goTranspiler[method];
+        goTranspiler[method] = function (node, identation) {
+            return h26g23PrintStatement (this, node, identation, () => original.call (this, node, identation));
+        };
+    }
+}
+// ===== h26-G23 (end) =====
