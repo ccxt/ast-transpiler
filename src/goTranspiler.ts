@@ -23092,7 +23092,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (expr === undefined) {
             return true; // `var x any` never written holds nil
         }
-        if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr)) {
+        if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr) || h26g30GetArgParameterSource(this, expr)) {
             return true;
         }
         switch (expr.kind) {
@@ -45971,3 +45971,37 @@ GoTranspiler.prototype.h26g29NilSliceIndexRead = function (callee, argIndex: num
         && ['safeString', 'safeValue'].includes(callee.name?.text);
 };
 // ===== h26-G29 (end) =====
+
+// ===== h26-g30 =====
+// a plain `any` parameter bound by `x := GetArg(optionalArgs, i, def)`: GetArg returns def or derefScalar(v) with
+// nil maps/slices folded to def, so the box never holds a nil *T; every later write must be a non-pointer source too
+const h26g30Visiting = new Set<any>();
+function h26g30GetArgParameterSource(goTranspiler, expr): boolean {
+    const decl: any = (expr?.kind === SyntaxKind.Identifier) ? goTranspiler.goAnyBoxLocalDeclaration(expr) : undefined;
+    if ((decl?.kind !== SyntaxKind.Parameter) || h26g30Visiting.has(decl) || (decl.name?.kind !== SyntaxKind.Identifier) || !goTranspiler.goGetArgBoundParameter(expr)
+        || (goTranspiler.goDeclaredTypeOfIdentifier(expr) !== undefined) || !goTranspiler.goIsNonPointerValueSource(decl.initializer)) {
+        return false;
+    }
+    const scope = goTranspiler.goEnclosingFunction(decl);
+    let unproven = (scope === undefined);
+    const visit = (n) => {
+        if (unproven) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
+            && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && goTranspiler.goAssignmentWritesName(n.left, decl.name.text)
+            && ((n.operatorToken.kind !== SyntaxKind.EqualsToken) || !goTranspiler.goIsNonPointerValueSource(n.right))) {
+            unproven = true;
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    h26g30Visiting.add(decl);
+    try {
+        scope?.forEachChild(visit);
+    } finally {
+        h26g30Visiting.delete(decl);
+    }
+    return !unproven;
+}
+// ===== h26-g30 (end) =====
