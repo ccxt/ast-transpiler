@@ -4246,6 +4246,38 @@ function ccxtGoNilJoinMemberRead (parent, child) {
         && isAssignmentOperator (above.operatorToken.kind));
 }
 
+// a read inside `if (x !== undefined) { .. }` with no rebind of x in that block: x holds a non-nil
+// value of the joined type there, so the typed local answers every read as the box did
+function ccxtGoNilJoinGuardedRead (node) {
+    const name = node.text;
+    let child = node;
+    let parent = node.parent;
+    while ((parent !== undefined) && !((parent.kind === ts.SyntaxKind.IfStatement) && (parent.thenStatement === child))) {
+        if (ts.isFunctionLike (parent) || (parent.kind === ts.SyntaxKind.CatchClause)) {
+            return false;
+        }
+        child = parent;
+        parent = parent.parent;
+    }
+    const test = parent?.expression;
+    const nilTest = (test?.kind === ts.SyntaxKind.BinaryExpression) && (test.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken)
+        && (test.left?.kind === ts.SyntaxKind.Identifier) && (test.left.text === name) && isUndefinedLiteral (test.right);
+    if (!nilTest) {
+        return false;
+    }
+    let rebound = false;
+    const visit = (n) => {
+        if ((n.kind === ts.SyntaxKind.BinaryExpression) && isAssignmentOperator (n.operatorToken.kind)
+            && (n.left?.kind === ts.SyntaxKind.Identifier) && (n.left.text === name)) {
+            rebound = true;
+        }
+        rebound = rebound || ts.isFunctionLike (n);
+        n.forEachChild (visit);
+    };
+    visit (child);
+    return !rebound;
+}
+
 const CCXT_GO_NIL_JOIN_TRANSPILED_BASE = /^(?:parse|handle|fetch|create|edit|cancel|filter|prepare|build|format)[A-Z]/;
 const CCXT_GO_NIL_JOIN_HAND_WRITTEN = [ 'parseNumber', 'parseJson', 'handleMessage', 'handleHttpStatusCode' ];
 
@@ -4305,7 +4337,7 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration) 
                 if (ccxtGoNilJoinIsPush (node)) {
                     fail ();                              // AppendToArray(&x) needs an `any` box
                 } else if (!assigned) {
-                    if (!goReadRuleAccepts (CCXT_GO_NIL_JOIN_READ_RULE, goTranspiler, node)) {
+                    if (!goReadRuleAccepts (CCXT_GO_NIL_JOIN_READ_RULE, goTranspiler, node) && !ccxtGoNilJoinGuardedRead (node)) {
                         fail ();
                     }
                 }
@@ -40165,4 +40197,21 @@ GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
         }
     }
     return goStringListUseReadsAsReader.call(this, node);
+};
+
+// a nil-declared local the container join typed `map[string]any`, written by a literal key inside its own
+// `if (x !== undefined)` block: the map is non-nil there, so `x[k] = v` is the helper's map branch
+const g15ProvenLocalMapWrite = GoTranspiler.prototype.printNativeMapWriteOnProvenLocal;
+GoTranspiler.prototype.printNativeMapWriteOnProvenLocal = function (containerNode, containerStr, keyNode, keyStr, valueStr, valueNode?, identation = 0) {
+    const shipped = g15ProvenLocalMapWrite.call(this, containerNode, containerStr, keyNode, keyStr, valueStr, valueNode, identation);
+    if ((shipped !== undefined) || (containerNode?.kind !== SyntaxKind.Identifier) || (valueNode === undefined)) {
+        return shipped;
+    }
+    const declaration: any = this.goDeclarationOfIdentifier(containerNode);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || !this.goNilInitInitializer(declaration.initializer)
+        || !this.goIsStringKeyExpression(this.goUnwrapPrintedAssertions(keyNode)) || !this.goMapWriteValueIsNotPointer(valueNode)
+        || !ccxtGoNilJoinGuardedRead(containerNode) || (ccxtGoNilDeclaredContainerJoinType(this, declaration) !== 'map[string]any')) {
+        return shipped;
+    }
+    return `${containerStr}[${keyStr}] = ${valueStr}`;
 };
