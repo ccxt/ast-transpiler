@@ -9617,7 +9617,7 @@ export class RustTranspiler extends BaseTranspiler {
         const write = this.isNativeWriteTargetBase(node);
         const first = plan.firstWrite.get(key);
         // `live`: the use prints a handle key method (`has_|get_|*_keys`), which reads the registry, not the snapshot
-        if (!write && !(live && !this.rustClientHandleWholeWrite(node, key)) && first !== undefined && this.rustClientHandleLine(node) >= first && !this.rust90bHandleSyncedInTest(node, plan)) return undefined;
+        if (!write && !(live && !this.rustClientHandleWholeWrite(node, key)) && first !== undefined && this.rustClientHandleLine(node) >= first && !this.rust90bHandleSyncedInTest(node, plan) && !this.rustHandleSyncedSafeRead(node, plan)) return undefined;
         return { plan, key, write };
     }
 
@@ -9652,6 +9652,49 @@ export class RustTranspiler extends BaseTranspiler {
             const p: Node = r.parent;
             // the client handed whole to a call may have its live subscriptions changed behind the snapshot
             if (r.kind === SyntaxKind.Identifier && (isCallExpression(p) || isNewExpression(p)) && (p.arguments ?? []).some((a) => a === r)) return false;
+            if (r.kind !== SyntaxKind.Identifier || r.pos < plan.bindPos || !isPropertyAccessExpression(p) || p.expression !== r
+                || String(p.name.text) !== 'subscriptions' || !this.isNativeWriteTargetBase(p)) return true;
+            const access: Node = p.parent;
+            if (!isElementAccessExpression(access) || access.expression !== p) return false;
+            const up: Node = access.parent;
+            const statement = up?.parent?.kind === SyntaxKind.ExpressionStatement;
+            return statement && (isDeleteExpression(up) || (isBinaryExpression(up) && up.left === access && up.operatorToken.kind === SyntaxKind.EqualsToken));
+        });
+    }
+
+    /** `this.safeX (client.subscriptions, k, ..)` after a write reads the handle's snapshot when every write of the field
+     *  is a whole `client.subscriptions[k] = v` / `delete` statement (both update the snapshot with the live client) and no
+     *  await or whole hand-off of `client` can run before the read (earlier in the method, or in a loop around it). */
+    rustHandleSyncedSafeRead(node: Node, plan: { bindPos: number }): boolean {
+        if (!isPropertyAccessExpression(node) || String(node.name.text) !== 'subscriptions') return false;
+        const call: any = this.rustSkipWrappersUp(node.parent);
+        if (!isCallExpression(call) || this.unwrapParens(call.arguments[0]) !== node || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || !RUST_PARAM_SHADOWS.SAFE_READS.has(String(call.expression.name.text))
+            || !this.rustCalleeIsRuntimeBase(call)) return false;
+        const method: Node | undefined = findAncestor(node, (n) => isMethodDeclaration(n));
+        if (method === undefined) return false;
+        const loops: Node[] = [];
+        for (let a: Node | undefined = node.parent; a !== undefined && a !== method; a = a.parent) {
+            if (isForStatement(a) || isForOfStatement(a) || isForInStatement(a) || a.kind === SyntaxKind.WhileStatement || a.kind === SyntaxKind.DoStatement) loops.push(a);
+        }
+        // a node in the other branch of an `if` around the read never runs before it; nothing before the bind can stale it
+        const otherBranch = (m: Node) => {
+            for (let a: Node | undefined = node.parent; a !== undefined && a !== method; a = a.parent) {
+                if (!isIfStatement(a) || a.elseStatement === undefined) continue;
+                const inThen = (x: Node) => x.pos >= a.thenStatement.pos && x.end <= a.thenStatement.end;
+                const inElse = (x: Node) => x.pos >= a.elseStatement!.pos && x.end <= a.elseStatement!.end;
+                if ((inThen(node) && inElse(m)) || (inElse(node) && inThen(m))) return true;
+            }
+            return false;
+        };
+        const reaches = (m: Node) => m.pos >= plan.bindPos && !otherBranch(m) && (m.pos < node.pos || loops.some((l) => m.pos >= l.pos && m.end <= l.end));
+        let blocked = false;
+        const visit = (m: Node) => { if (blocked) return; if (m.kind === SyntaxKind.AwaitExpression && reaches(m)) { blocked = true; return; } m.forEachChild?.(visit); };
+        visit(method);
+        if (blocked) return false;
+        return this.rustScopeNameNodes(method, 'client').every((r) => {
+            const p: Node = r.parent;
+            if (r.kind === SyntaxKind.Identifier && (isCallExpression(p) || isNewExpression(p)) && (p.arguments ?? []).some((a) => a === r)) return !reaches(r);
             if (r.kind !== SyntaxKind.Identifier || r.pos < plan.bindPos || !isPropertyAccessExpression(p) || p.expression !== r
                 || String(p.name.text) !== 'subscriptions' || !this.isNativeWriteTargetBase(p)) return true;
             const access: Node = p.parent;
