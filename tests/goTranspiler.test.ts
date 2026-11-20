@@ -9073,7 +9073,7 @@ describe ('goWsCaches', () => {
             for (const want of [
                 'var orders WsArrayCache = this.Orders', 'var myTrades WsArrayCache = this.MyTrades', 'if myTrades == nil {',
                 'var liq WsArrayCache = this.Liquidations', 'if liq == nil {',
-                'var stored WsArrayCache = func() WsArrayCache {',
+                'var stored WsArrayCache\n',
             ]) {
                 expect (out).toContain (want);
             }
@@ -9114,7 +9114,7 @@ describe ('goWsCaches', () => {
         });
         test ('a nil arm joins a cache arm of a ternary', () => {
             const nil = print ('tmp-fmcache-c', NIL_ARM_TERNARY);
-            expect (nil).toContain ('var tradesArray WsArrayCache = func() WsArrayCache {');
+            expect (nil).toContain ('var tradesArray WsArrayCache\n');
             expect (nil).toContain ('\ttradesArray.Append(message)');
             expect (nil).toContain ('this.Trades[*symbol] = tradesArray');
         });
@@ -12317,7 +12317,7 @@ describe ('goStringCallPointerLocal', () => {
                 + '    }\n'
                 + '}\n').content;
             expect (out).toContain ('cancelOrderBody(ch chan any, id string');
-            expect (out).toContain ('return &id');
+            expect (out).toContain ('orderId = &id\n');
             expect (out).not.toContain ('SafeStringPtr(id)');
         });
         test('the address names the printed (renamed) parameter', () => {
@@ -12330,7 +12330,7 @@ describe ('goStringCallPointerLocal', () => {
                 + '        return { \'id\': orderId };\n'
                 + '    }\n'
                 + '}\n').content;
-            expect (out).toContain ('return &typeVar');
+            expect (out).toContain ('orderId = &typeVar\n');
             expect (out).not.toMatch (/&type\b/);
         });
         test('a call typed string | undefined keeps the SafeStringPtr box', () => {

@@ -5182,6 +5182,51 @@ function installCcxtGoClosureDefaultValue (goTranspiler) {
     });
 }
 
+// `var x T = func() T { if c { return a }; return b }()` from `const x = c ? a : b`, once a join rule
+// typed the literal: the same arms become `var x T` + if/else stores (T is the literal's own
+// return type, so every store and nil holds what the return held; only the taken arm runs)
+const CCXT_GO_TYPED_TERNARY_HEAD = /^([ \t]*)var ([A-Za-z_]\w*) ([^\s=]+) = func\(\) ([^\s{]+) \{$/;
+
+function installCcxtGoTypedTernaryDeclaration (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__ccxtGoTypedTernaryDeclarationInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    ccxtGoWrapSingleDeclaration (goTranspiler, (printed, declaration) => {
+        const ternary = ccxtGoUnwrapParens (declaration?.initializer);
+        const lead = printed.length - printed.replace (/^\n+/, '').length;
+        const lines = printed.substring (lead).split ('\n');
+        const head = (lines.length === 6) ? CCXT_GO_TYPED_TERNARY_HEAD.exec (lines[0]) : null;
+        if ((ternary?.kind !== ts.SyntaxKind.ConditionalExpression) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)
+            || (head === null) || (head[3] !== head[4]) || (head[3] === 'any') || (head[3] === 'interface{}')
+            || (head[2] !== declaration.name.text)) {
+            return printed;
+        }
+        const [ , indent, name, goType ] = head;
+        // a numeric pointer local written twice loses the build's guarded-arithmetic proof
+        if ((goType === '*float64') || (goType === '*int64')) {
+            return printed;
+        }
+        const body = indent + '\t';
+        if (!lines[1].startsWith (body + 'if ') || !lines[1].endsWith (' {')
+            || !lines[2].startsWith (body + '\treturn ') || (lines[3] !== body + '}')
+            || !lines[4].startsWith (body + 'return ') || (lines[5] !== indent + '}()')) {
+            return printed;
+        }
+        const whenTrue = lines[2].substring (body.length + 8);
+        const whenFalse = lines[4].substring (body.length + 7);
+        // the literal's own scope saw any outer `name`; the store form would not
+        if (new RegExp ('\\b' + name + '\\b').test (lines[1] + '\n' + whenTrue + '\n' + whenFalse)) {
+            return printed;
+        }
+        // a wrapped arm is rewritten by the build's literal passes; a store would keep the wrap
+        if ([ whenTrue, whenFalse ].some ((arm) => /\b(?:SafeStringPtr|StringPtr|StringArg|MapTyped|SafeMapTyped|SafeListTyped)\(/.test (arm))) {
+            return printed;
+        }
+        return printed.substring (0, lead) + [ indent + 'var ' + name + ' ' + goType, indent + lines[1].substring (body.length),
+            body + name + ' = ' + whenTrue, indent + '} else {', body + name + ' = ' + whenFalse, indent + '}' ].join ('\n');
+    });
+}
+
 // declared TypeScript type of a nil-defaulted parameter -> the Go type of its typed GetArg twin
 export const CCXT_GO_GETARG_DECLARED_TYPES = {
     'Str': '*string',
@@ -6838,6 +6883,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installSelfMapWrites (goTranspiler);
     installB02SafeBalanceLocals (goTranspiler); // safeBalance map locals
     installCcxtGoNestedSafeDictRead (goTranspiler);
+    installCcxtGoTypedTernaryDeclaration (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
