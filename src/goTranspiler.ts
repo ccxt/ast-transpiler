@@ -32346,7 +32346,7 @@ ${tryBodyBlock}
         const row: any = keyNodes[0]?.parent;
         return (keyStrs.length > 1) && (baseExpr?.kind === SyntaxKind.Identifier) && (row?.kind === SyntaxKind.ElementAccessExpression)
             && (row.expression === baseExpr) && (row.argumentExpression === keyNodes[0]) && !containerStr.includes('\n')
-            && this.goDeclaredListIdentifier(baseExpr) && this.goBoundedLoopListRead(row) && this.goListElementsArePointerFree(baseExpr);
+            && this.goDeclaredListIdentifier(baseExpr) && ((this.goBoundedLoopListRead(row) && this.goListElementsArePointerFree(baseExpr)) || this.h26g24GuardedLiteralRead(row, true));
     }
 
     // true when the printed key is a Go string, so `m[key]` reads the map with the
@@ -32936,6 +32936,7 @@ ${tryBodyBlock}
             // the enclosing loop bounds the read: no guard, and no DerefScalar on a pointer-free element
             return this.goListElementsArePointerFree(readBase) ? `${containerStr}[${keyStr}]` : `DerefScalar(${containerStr}[${keyStr}])`;
         }
+        if (this.h26g24GuardedLiteralRead(node)) { return `${containerStr}[${keyStr}]`; }
         const level = this.goStatementLevel;
         const body = this.getIden(level + 1);
         return `func() any {\n${body}if ${keyStr} >= 0 && ${keyStr} < len(${containerStr}) {\n${this.getIden(level + 2)}return ${this.goGuardedListElementValue(readBase, containerStr, keyStr)}\n${body}}\n${body}return nil\n${this.getIden(level)}}()`;
@@ -45528,3 +45529,131 @@ function installH26G23StringTernaryHoist (goTranspiler: any) {
     }
 }
 // ===== h26-G23 (end) =====
+
+// ===== h26-G24 =====
+export interface GoTranspiler {
+    h26g24GuardedLiteralRead(node, writeContainer?: boolean): boolean;
+    h26g24GuardProves(condition, list, index: number, boundNames: Set<string>, thenSide: boolean): boolean;
+}
+// `xs[K]` (K an integer literal) on a never-rebound local whose elements are never scalar pointers, under an
+// enclosing `xs.length > K` / `n > K` (`const n = xs.length`) / `this.safeDict (xs, K) !== undefined` test, or after an
+// exiting `if (xs.length === 0) return` style guard: K is in range, so the plain slice index equals GetValue's answer.
+// As an AddElementToObject container a scalar (pointer or not) is a no-op either way, so no pointer-free proof is needed there
+GoTranspiler.prototype.h26g24GuardedLiteralRead = function (node, writeContainer = false) {
+    const list: any = node?.expression;
+    const key: any = node?.argumentExpression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const declaration: any = checker?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    const scope: any = this.goEnclosingFunction(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)
+        || (!writeContainer && !this.goListElementsArePointerFree(list))) {
+        return false;
+    }
+    const index = Number(key.text);
+    // const names bound to xs.length / this.safeDict (xs, K), all declared before the read
+    const lengths = new Set<string>();
+    const rows = new Set<string>();
+    let anchor = node.pos;
+    const bind = (n: any): void => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.end < node.pos)
+            && ((n.parent?.flags ?? 0) & ts.NodeFlags.Const) && (this.goEnclosingFunction(n) === scope)) {
+            const init: any = this.goUnwrapParenthesizedNode(n.initializer);
+            if ((init?.kind === SyntaxKind.PropertyAccessExpression) && (init.name?.text === 'length') && (init.expression?.kind === SyntaxKind.Identifier)
+                && (init.expression.text === list.text)) {
+                lengths.add(n.name.text);
+                anchor = Math.min(anchor, n.pos);
+            } else if ((init?.kind === SyntaxKind.CallExpression) && (init.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (init.expression.expression?.kind === SyntaxKind.ThisKeyword) && (init.expression.name?.text === 'safeDict')
+                && (init.arguments?.length === 2) && (init.arguments[0]?.kind === SyntaxKind.Identifier) && (init.arguments[0].text === list.text)
+                && (init.arguments[1]?.kind === SyntaxKind.NumericLiteral) && (Number(init.arguments[1].text) === index)) {
+                rows.add(n.name.text);
+                anchor = Math.min(anchor, n.pos);
+            }
+        }
+        n.forEachChild(bind);
+    };
+    scope.forEachChild(bind);
+    const names = new Set<string>([ ...[ ...lengths ].map((n) => 'L:' + n), ...[ ...rows ].map((n) => 'R:' + n) ]);
+    let proven = false;
+    let child: any = node;
+    for (let up: any = node.parent; (up !== undefined) && (up !== scope); child = up, up = up.parent) {
+        if (isFunctionLike(up) || GO_ITERATION_STATEMENT_KINDS.has(up.kind)) {
+            return false; // a closure or a loop body may run after the list changed
+        }
+        if ((up.kind === SyntaxKind.IfStatement) && (child === up.thenStatement) && this.h26g24GuardProves(up.expression, list, index, names, true)) {
+            proven = true;
+            anchor = Math.min(anchor, up.pos);
+            break;
+        }
+        if (up.kind === SyntaxKind.Block) {
+            const statements: any[] = up.statements ?? [];
+            const at = statements.indexOf(child);
+            for (let i = at - 1; (i >= 0) && !proven; i--) {
+                const s: any = statements[i];
+                if ((s?.kind !== SyntaxKind.IfStatement) || (s.elseStatement !== undefined)) {
+                    continue;
+                }
+                const body: any[] = (s.thenStatement?.kind === SyntaxKind.Block) ? (s.thenStatement.statements ?? []) : [ s.thenStatement ];
+                const last: any = body[body.length - 1];
+                if ([ SyntaxKind.ReturnStatement, SyntaxKind.ThrowStatement ].includes(last?.kind) && this.h26g24GuardProves(s.expression, list, index, names, false)) {
+                    proven = true;
+                    anchor = Math.min(anchor, s.pos);
+                }
+            }
+            if (proven) {
+                break;
+            }
+        }
+    }
+    // the list is never written from the first proof binding on, nor after the read
+    return proven && this.goNameWriteSites(scope, list.text, declaration).every((w: any) => w.end < anchor);
+};
+// thenSide: the condition being true proves `index` in range; otherwise its being false does (an exiting guard)
+GoTranspiler.prototype.h26g24GuardProves = function (condition, list, index: number, names: Set<string>, thenSide: boolean) {
+    const c: any = this.goUnwrapParenthesizedNode(condition);
+    if (c?.kind !== SyntaxKind.BinaryExpression) {
+        return false;
+    }
+    const op = c.operatorToken?.kind;
+    if (op === (thenSide ? SyntaxKind.AmpersandAmpersandToken : SyntaxKind.BarBarToken)) {
+        return this.h26g24GuardProves(c.left, list, index, names, thenSide) || this.h26g24GuardProves(c.right, list, index, names, thenSide);
+    }
+    const isLength = (n: any): boolean => {
+        const e: any = this.goUnwrapParenthesizedNode(n);
+        return ((e?.kind === SyntaxKind.PropertyAccessExpression) && (e.name?.text === 'length') && (e.expression?.kind === SyntaxKind.Identifier)
+            && (e.expression.text === list.text)) || ((e?.kind === SyntaxKind.Identifier) && names.has('L:' + e.text));
+    };
+    const num = (n: any): number | undefined => {
+        const e: any = this.goUnwrapParenthesizedNode(n);
+        return ((e?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${e.text}`)) ? Number(e.text) : undefined;
+    };
+    const isUndefined = (n: any): boolean => (n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined');
+    const row = (n: any): boolean => (n?.kind === SyntaxKind.Identifier) && names.has('R:' + n.text);
+    if (thenSide && (op === SyntaxKind.ExclamationEqualsEqualsToken) && ((row(c.left) && isUndefined(c.right)) || (row(c.right) && isUndefined(c.left)))) {
+        return true;
+    }
+    // normalise to `length OP k`
+    let o = op;
+    let k: number | undefined;
+    if (isLength(c.left)) {
+        k = num(c.right);
+    } else if (isLength(c.right)) {
+        k = num(c.left);
+        const flip = { [SyntaxKind.LessThanToken]: SyntaxKind.GreaterThanToken, [SyntaxKind.GreaterThanToken]: SyntaxKind.LessThanToken,
+            [SyntaxKind.LessThanEqualsToken]: SyntaxKind.GreaterThanEqualsToken, [SyntaxKind.GreaterThanEqualsToken]: SyntaxKind.LessThanEqualsToken };
+        o = flip[op] ?? op;
+    }
+    if (k === undefined) {
+        return false;
+    }
+    if (thenSide) {
+        return ((o === SyntaxKind.GreaterThanToken) && (k >= index)) || ((o === SyntaxKind.GreaterThanEqualsToken) && (k > index))
+            || (((o === SyntaxKind.ExclamationEqualsEqualsToken) || (o === SyntaxKind.ExclamationEqualsToken)) && (k === 0) && (index === 0));
+    }
+    return ((o === SyntaxKind.LessThanEqualsToken) && (k >= index)) || ((o === SyntaxKind.LessThanToken) && (k > index))
+        || (((o === SyntaxKind.EqualsEqualsEqualsToken) || (o === SyntaxKind.EqualsEqualsToken)) && (k === 0) && (index === 0));
+};
+// ===== h26-G24 (end) =====
