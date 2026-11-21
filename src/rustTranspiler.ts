@@ -2437,6 +2437,7 @@ export class RustTranspiler extends BaseTranspiler {
                 ? `{ let __be_tmp = ${rhs.trim()}; add_element_to_object(${acc}, &${counterKeyText ?? keyStrs[keyStrs.length - 1]}, ${this.rustDictHoistHosts.has(node) ? '' : '\u0004'}__be_tmp); }` : helperCall;
             const boundedRow = keyStrs.length === 2 ? this.printBoundedListRowInsert(left, keyStrs[0], RustTranspiler.cloneIfBareLocal(rhs.trim())) : undefined; if (boundedRow !== undefined) return boundedRow;
             const guardedRow = keyStrs.length === 2 ? this.printGuardedFirstRowInsert(left, keyStrs[0], RustTranspiler.cloneIfBareLocal(rhs.trim())) : undefined; if (guardedRow !== undefined) return guardedRow;
+            const h27r05 = keyStrs.length === 2 ? this.h27r05ArrayRowInsert(left, keyStrs[0], RustTranspiler.cloneIfBareLocal(rhs.trim())) : undefined; if (h27r05 !== undefined) return h27r05;
             const nestedInsert = keyStrs.length === 2
                 ? (this.rustNestedBearerInsert(baseExpr, keys[0], keyStrs[0], keys[1], keyStrs[1], rhs)
                     ?? this.nestedDictWrite(baseExpr, keys, keyStrs, rhs, helperWrite))
@@ -40820,4 +40821,79 @@ export class RustTranspiler extends BaseTranspiler {
         return init !== undefined && this.rustIntToStringShape(init) && this.rustScalarStrMethod(init, false, true)?.method === 'toString';
     }
     // ===== end h27-R02
+    // ===== h27-R05
+    /** `xs[i]['k'] = v` (statement, REST tier) inside `for (let i = 0; i < xs.length; i++)` on a boxed list local whose every
+     *  binding is `[]` or a base `this.toArray (..)` (always a `Value::Arr`): the slot is in bounds, so the helper's padding is
+     *  dead; the hop through a non-map row is skipped as the helper skipped it; a fresh REST row carries no tag. */
+    h27r05ArrayRowInsert(left: any, keyText: string, valueText: string): string | undefined {
+        const row: any = left.expression;
+        const list: any = this.rustSkipWrappers(row?.expression);
+        const index: any = this.rustSkipWrappers(row?.argumentExpression);
+        if (!isStringLiteral(left.argumentExpression) || !isElementAccessExpression(row) || list === undefined || !isIdentifier(list)
+            || index === undefined || !isIdentifier(index) || keyText !== `Value::Int(${String(index.text)})`
+            || !/\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(left)) || this.rustHelperWriteReadsRoot(row, (left.parent as any).right)) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(list);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || this.rustLentListLocal(declaration)) return undefined;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        if (fn === undefined || fn !== this.rustEnclosingFunction(left)) return undefined;
+        const listSym = this.rustSymbolOf(list);
+        const arraySource = (e: any): boolean => {
+            e = this.rustSkipWrappers(e);
+            if (e === undefined) return false;
+            if (isArrayLiteralExpression(e)) return e.elements.length === 0;
+            if (!isCallExpression(e) || !isPropertyAccessExpression(e.expression) || e.expression.expression.kind !== SyntaxKind.ThisKeyword
+                || String(e.expression.name.text) !== 'toArray' || e.arguments.length !== 1) return false;
+            const callee: any = this.rustScalarCallee(e);
+            return callee !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName));
+        };
+        if (declaration.initializer !== undefined && !arraySource(declaration.initializer)) return undefined;
+        // every rebinding of xs in the function is itself an array source
+        let bound = true;
+        const scan = (n: any): void => {
+            if (!bound) return;
+            if (isBinaryExpression(n) && rustIsAssignmentOperator(n.operatorToken.kind) && isIdentifier(this.rustSkipWrappers(n.left))
+                && this.rustSymbolOf(this.rustSkipWrappers(n.left)) === listSym
+                && (n.operatorToken.kind !== SyntaxKind.EqualsToken || !arraySource(n.right))) bound = false;
+            n.forEachChild(scan);
+        };
+        scan(fn);
+        if (!bound) return undefined;
+        const indexSym = this.rustSymbolOf(index);
+        const same = (n: any, sym: any): boolean => n !== undefined && isIdentifier(n) && sym !== undefined && this.rustSymbolOf(n) === sym;
+        let loop: any = left;
+        while (loop !== undefined && !(isForStatement(loop) && same((loop as any).condition?.left, indexSym))) loop = loop.parent;
+        if (loop === undefined || this.rustEnclosingFunction(loop) !== fn) return undefined;
+        const init: any = loop.initializer;
+        const first: any = init !== undefined && isVariableDeclarationList(init) && init.declarations.length === 1 ? init.declarations[0] : undefined;
+        const cond: any = loop.condition;
+        const step: any = loop.incrementor;
+        if (first === undefined || first !== this.rustDeclaredNode(index) || !isNumericLiteral(first.initializer) || Number(first.initializer.text) !== 0
+            || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken || !isPropertyAccessExpression(cond.right)
+            || String(cond.right.name.text) !== 'length' || !same(cond.right.expression, listSym)
+            || !((isPostfixUnaryExpression(step) || isPrefixUnaryExpression(step)) && step.operator === SyntaxKind.PlusPlusToken && same(step.operand, indexSym))) return undefined;
+        // the body only indexes `xs` / reads `xs.length` and never writes `i`
+        let sound = true;
+        const visit = (n: any): void => {
+            if (!sound) return;
+            if (same(n, listSym)) {
+                let at: any = n;
+                while ((isParenthesizedExpression(at.parent) || isAsExpression(at.parent)) && at.parent.expression === at) at = at.parent;
+                const up: any = at.parent;
+                const lengthRead = isPropertyAccessExpression(up) && up.expression === at && String(up.name.text) === 'length'
+                    && !(isBinaryExpression(up.parent) && up.parent.left === up) && !isPrefixUnaryExpression(up.parent) && !isPostfixUnaryExpression(up.parent);
+                if (!lengthRead && !(isElementAccessExpression(up) && up.expression === at)) sound = false;
+            } else if (same(n, indexSym)) {
+                const up: any = n.parent;
+                if ((isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind)) || isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) sound = false;
+            }
+            n.forEachChild(visit);
+        };
+        visit(loop.statement);
+        if (!sound) return undefined;
+        const name = this.printNode(list, 0).trim();
+        const value = valueText.startsWith('Value::') ? valueText : `Value::from(${valueText})`;
+        const out = `if let Value::Arr(__a) = &mut ${name} { if let Some(Value::Dict(__d)) = std::sync::Arc::make_mut(__a).get_mut(${String(index.text)} as usize) { std::sync::Arc::make_mut(__d).insert(${this.quotedStringLiteral(String(left.argumentExpression.text))}.into(), ${value}); } }`;
+        return out.length + 40 > 400 ? undefined : out;
+    }
+    // ===== end h27-R05
 }
