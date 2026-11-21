@@ -55153,3 +55153,81 @@ GoTranspiler.prototype.h29g28AsCastLoopRead = function (node, baseExpr, keys, co
     return this.goLoopBoundedSliceRead(node, inner, keys[0], containerStr, keyStrs[0]);
 };
 // ===== end h29-H29-G28
+// ===== h29-H29-G29
+// `const x = this.m (..)` where m prints a `[]any` / `map[string]any` return and every return path is a
+// local seeded by a base safeList* / safeDict* read with an empty literal default (never nil) and never
+// rebound: the local takes the container type (no typed nil can reach an `any` box)
+const H29G29_READERS: { [name: string]: string } = { 'safeList': '[]any', 'safeList2': '[]any', 'safeListN': '[]any', 'safeDict': 'map[string]any', 'safeDict2': 'map[string]any', 'safeDictN': 'map[string]any' };
+const goTypeOfInitializerBaseH29G29 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTypeOfInitializerBaseH29G29.call(this, initializer, printedValue);
+    if (known !== undefined) {
+        return known;
+    }
+    return (this.__ccxtGoLocalTypesInstalled === true) ? h29g29DefaultedContainerCallType(this, initializer, printedValue) : undefined;
+};
+function h29g29DefaultedContainerCallType (goTranspiler, initializer, printedValue: string): string | undefined {
+    const declaration: any = initializer?.parent;
+    const callee: any = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer !== initializer) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const name = callee.name.text;
+    if (!(printedValue ?? '').trim().startsWith('this.' + name.charAt(0).toUpperCase() + name.slice(1) + '(')) {
+        return undefined;
+    }
+    let method: any;
+    try {
+        method = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body?.kind !== SyntaxKind.Block)
+        || !/(^|[\\/])ts[\\/]src[\\/]/.test(String(method.getSourceFile?.()?.fileName ?? ''))) {
+        return undefined;
+    }
+    // the printed signature: the annotated family, else the `: Dict[]` / `: any[]` List mapping
+    const goType = ccxtGoFamilyMethodReturnType(goTranspiler, method)
+        ?? (goTranspiler.goMethodKeepsBaseSignature(method) ? undefined : goArrayAnnotatedReturnTypes(goTranspiler, method, name)?.[0]);
+    if ((goType !== '[]any') && (goType !== 'map[string]any')) {
+        return undefined;
+    }
+    const returns = collectReturnStatements(method.body);
+    return ((returns.length > 0) && returns.every((r) => h29g29DefaultedReaderLocal(goTranspiler, method, r.expression, goType))) ? goType : undefined;
+}
+function h29g29DefaultedReaderLocal (goTranspiler, method, expression, goType: string): boolean {
+    if (expression?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration: any = ccxtGoParamDeclarationOf(goTranspiler, expression);
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.CallExpression) || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (H29G29_READERS[init.expression.name?.text] !== goType)) {
+        return false;
+    }
+    const args = init.arguments ?? [];
+    const dflt: any = args[args.length - 1];
+    const want = (goType === '[]any') ? SyntaxKind.ArrayLiteralExpression : SyntaxKind.ObjectLiteralExpression;
+    if ((args.length < 3) || (dflt?.kind !== want)) {
+        return false;
+    }
+    let reader: any;
+    try {
+        reader = goTranspiler.getChecker().getResolvedSignature(init)?.declaration?.resolve();
+    } catch (e) {
+        return false;
+    }
+    if (!/(^|[\\/])base[\\/](Exchange[^\\/]*|functions[\\/][^\\/]*)\.ts$/.test(String(reader?.getSourceFile?.()?.fileName ?? ''))) {
+        return false; // a venue override of the reader could answer nil
+    }
+    // the local is never rebound (element writes `x[i] = v` keep the same container)
+    const local = declaration.name.text;
+    return !goTranspiler.goDescendantsOf(method).some((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === local) && (n !== declaration.name)
+        && (((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+            && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment))
+            || isDestructuringTarget(n) || ((n.parent?.kind === SyntaxKind.VariableDeclaration) && (n.parent.name === n))));
+}
+// ===== end h29-H29-G29
