@@ -57605,3 +57605,67 @@ GoTranspiler.prototype.h30g31RowFieldStore = function (node, baseExpr, keys, key
     return `if ${row}, ok := ${containerStr}[${keyStrs[0]}].(map[string]any); ok && (${row} != nil) {\n${iden}\t${store}\n${iden}}`;
 };
 // ===== end h30-H30-G31 =====
+// ===== h30-M03
+export interface GoTranspiler {
+    h30m03DefaultedRead(declaration: any): { name: string, base: any, field: string, fallback: string, value?: boolean } | undefined;
+    h30m03IsPlainString(node: any): boolean;
+}
+// `const x = this.safeString (row, 'f', 'lit')` on a typed row binder, the local declared Go `string`: the
+// accessor answers the row's `*string` field when set (both read SafeString with a nil default), else the literal
+GoTranspiler.prototype.h30m03DefaultedRead = function (declaration: any) {
+    const call: any = declaration?.initializer;
+    const callee: any = call?.expression;
+    if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.declarations?.length !== 1) || (call?.kind !== SyntaxKind.CallExpression)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeString') || (call.arguments?.length !== 3)) {
+        return undefined;
+    }
+    const [ base, key, fallback ] = call.arguments;
+    if ((base?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral) || (fallback?.kind !== SyntaxKind.StringLiteral)) {
+        return undefined;
+    }
+    const table = this.goTypedRowTable(base, key.text);
+    const entry = ((table !== undefined) && Object.prototype.hasOwnProperty.call(table, key.text)) ? table[key.text] : undefined;
+    // symbol / base / quote are plain strings filled "" when absent: only the "" default equals the field
+    const valueField = (table === GO_TYPED_ROW_FIELDS['MarketInterface']) ? GO_H27M02_STRING_ROW_FIELDS[key.text] : undefined;
+    if (valueField !== undefined) {
+        return ((fallback.text === '') && this.h30m03IsPlainString(declaration.name) && (this.getGoLocalType(declaration, this.printNode(call, 0).trim()) === 'string'))
+            ? { name: this.printNode(declaration.name, 0).trim(), base, field: `${base.text}.${valueField}`, fallback: '', value: true } : undefined;
+    }
+    if (!Array.isArray(entry) || (entry[1] !== '*string') || !this.h30m03IsPlainString(declaration.name)
+        || (this.getGoLocalType(declaration, this.printNode(call, 0).trim()) !== 'string')) {
+        return undefined;
+    }
+    return { name: this.printNode(declaration.name, 0).trim(), base, field: `${base.text}.${entry[0]}`, fallback: this.printNode(fallback, 0).trim() };
+};
+// the checker resolves the local to plain `string` (the overload with a string default), never undefined
+GoTranspiler.prototype.h30m03IsPlainString = function (node: any): boolean {
+    const type: any = this.checkerOrUndefined()?.getTypeAtLocation(node);
+    return (type !== undefined) && ((type.flags & ts.TypeFlags.String) !== 0);
+};
+{
+    // binder proof: the defaulted read above is a native field read of the binder
+    const fieldReadH30m03 = GoTranspiler.prototype.h27m01BinderUseIsFieldRead;
+    GoTranspiler.prototype.h27m01BinderUseIsFieldRead = function (n: any): boolean {
+        if (fieldReadH30m03.call(this, n)) {
+            return true;
+        }
+        const call: any = n.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && (call.arguments?.[0] === n) && (call.parent?.kind === SyntaxKind.VariableDeclaration)
+            && (call.parent.initializer === call) && (this.h30m03DefaultedRead(call.parent) !== undefined);
+    };
+    const printVariableDeclarationListH30m03 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const read = (node?.declarations?.length === 1) ? this.h30m03DefaultedRead(node.declarations[0]) : undefined;
+        if ((read === undefined) || !this.h27m01RowBaseIsStruct(read.base)) {
+            return printVariableDeclarationListH30m03.call(this, node, identation);
+        }
+        const iden = this.getIden(identation);
+        if (read.value === true) {
+            return `${iden}var ${read.name} string = ${read.field}`;
+        }
+        return `${iden}var ${read.name} string = ${read.fallback}\n${iden}if ${read.field} != nil {\n${this.getIden(identation + 1)}${read.name} = *${read.field}\n${iden}}`;
+    };
+}
+// ===== end h30-M03
