@@ -50004,3 +50004,41 @@ GoTranspiler.prototype.h28a05SelfDefaultSite = function (node) {
     };
 }
 // ===== end h28-H28-A05
+// ===== h28-A06 =====
+// `const x = this.safeDict (this.options, k, {})` kept as SafeDictMap (a local written into): the typed Options
+// map holds only JSON-shaped values, so the comma-ok read plus a fresh `{}` where it is nil answers exactly as
+// SafeDict's default does; declared first so the ccxt map-write passes see `var x map[string]any`
+export interface GoTranspiler {
+    h28a06OptionsDefaultedDictRead(node, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h28a06OptionsDefaultedDictRead = function (node, printed) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
+        || (call.arguments.length !== 3) || (call.arguments[2].kind !== SyntaxKind.ObjectLiteralExpression) || (call.arguments[2].properties.length !== 0)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (baseMemberDecl (this, call.arguments[0], 'options') === undefined)) {
+        return undefined;
+    }
+    const keyNode = call.arguments[1];
+    const key = this.printNode (keyNode, 0).trim ();
+    const isLiteral = (keyNode.kind === SyntaxKind.StringLiteral) && /^"[\w.-]*"$/.test (key);
+    if (!isLiteral && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
+        return undefined;
+    }
+    const name = declaration.name.text;
+    const kept = /^(\n*)(\t*)var (\w+) map\[string\]any = this\.SafeDictMap\(this\.Options, (.*), map\[string\]any\{\}\)$/.exec (printed);
+    if ((kept === null) || (kept[3] !== name) || (kept[4] !== key)) {
+        return undefined;
+    }
+    const ind = kept[2];
+    return kept[1] + ind + 'var ' + name + ' map[string]any\n' + ind + name + ', _ = this.Options[' + key + '].(map[string]any)\n'
+        + ind + 'if ' + name + ' == nil {\n' + ind + '\t' + name + ' = map[string]any{}\n' + ind + '}';
+};
+const printVariableDeclarationListH28a06 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = printVariableDeclarationListH28a06.call (this, node, identation);
+    const h = this.h28a06OptionsDefaultedDictRead (node, printed); if (h !== undefined) return h;
+    return printed;
+};
+// ===== end h28-A06 =====
