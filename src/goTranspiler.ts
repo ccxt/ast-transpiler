@@ -32026,6 +32026,7 @@ ${this.getIden(identation)}${returnStatement}`;
 
         const {left, right, operatorToken} = node;
 
+        const h28m01 = this.h28m01RowFieldBinary(node, identation); if (h28m01 !== undefined) return h28m01;
         const deadNilTest = this.h21g06DeadNilTest(node);
         if (deadNilTest !== undefined) {
             return this.getIden(identation) + deadNilTest;
@@ -52325,3 +52326,83 @@ function h28g37MethodCallType (goTranspiler, initializer, printedValue: string):
     return undefined;
 }
 // ===== end h28-H28-G37
+// ===== h28-M01
+export interface GoTranspiler {
+    h28m01RowPointerUse(n: any): { field: string, goType: string, kind: 'compare' | 'store', literal: any } | undefined;
+    h28m01RowFieldBinary(node: any, identation: number): string | undefined;
+}
+// a typed-binder pointer field (`m['k']`, one literal key) compared with a literal of its type, or stored by
+// statement into a `map[string]any` under a literal key: both print natively with the map read's nil answer
+GoTranspiler.prototype.h28m01RowPointerUse = function (n: any) {
+    const access: any = n?.parent;
+    if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (access.expression !== n) || (n.kind !== SyntaxKind.Identifier)
+        || (access.argumentExpression?.kind !== SyntaxKind.StringLiteral)) {
+        return undefined;
+    }
+    const key = access.argumentExpression.text;
+    const table = this.goTypedRowTable(n, key);
+    const entry = (table !== undefined) && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+    if (!Array.isArray(entry) || ((entry[1] !== '*string') && (entry[1] !== '*bool'))) {
+        return undefined;
+    }
+    let outer: any = access;
+    while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        outer = outer.parent;
+    }
+    const parent: any = outer.parent;
+    if (parent?.kind !== SyntaxKind.BinaryExpression) {
+        return undefined;
+    }
+    const op = parent.operatorToken.kind;
+    if ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+        const literal: any = this.goUnwrapParenthesizedNode((parent.left === outer) ? parent.right : parent.left);
+        const fits = (entry[1] === '*string') ? (literal?.kind === SyntaxKind.StringLiteral)
+            : ((literal?.kind === SyntaxKind.TrueKeyword) || (literal?.kind === SyntaxKind.FalseKeyword));
+        return fits ? { field: entry[0], goType: entry[1], kind: 'compare', literal } : undefined;
+    }
+    const target: any = parent.left;
+    if ((op !== SyntaxKind.EqualsToken) || (parent.right !== outer) || (entry[1] !== '*string')
+        || (parent.parent?.kind !== SyntaxKind.ExpressionStatement) || (target?.kind !== SyntaxKind.ElementAccessExpression)
+        || (target.argumentExpression?.kind !== SyntaxKind.StringLiteral) || (target.expression?.kind !== SyntaxKind.Identifier)
+        || (this.goDeclarationOfIdentifier(target.expression)?.initializer?.kind !== SyntaxKind.ObjectLiteralExpression)) {
+        return undefined;
+    }
+    return { field: entry[0], goType: entry[1], kind: 'store', literal: undefined };
+};
+{
+    const fieldRead = GoTranspiler.prototype.h27m01BinderUseIsFieldRead;
+    GoTranspiler.prototype.h27m01BinderUseIsFieldRead = function (n: any): boolean {
+        return fieldRead.call(this, n) || (this.h28m01RowPointerUse(n) !== undefined);
+    };
+}
+GoTranspiler.prototype.h28m01RowFieldBinary = function (node: any, identation: number): string | undefined {
+    if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (node?.kind !== SyntaxKind.BinaryExpression)) {
+        return undefined;
+    }
+    const op = node.operatorToken.kind;
+    const store = op === SyntaxKind.EqualsToken;
+    const operand: any = this.goUnwrapParenthesizedNode(store ? node.right : ((this.goUnwrapParenthesizedNode(node.left)?.kind === SyntaxKind.ElementAccessExpression) ? node.left : node.right));
+    const base: any = (operand?.kind === SyntaxKind.ElementAccessExpression) ? operand.expression : undefined;
+    const declaration = (base?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(base) : undefined;
+    if ((declaration === undefined) || (this.goTypedRowBinder(declaration) === undefined)) {
+        return undefined;
+    }
+    const use = this.h28m01RowPointerUse(base);
+    if ((use === undefined) || ((use.kind === 'store') !== store)) {
+        return undefined;
+    }
+    const field = `${base.text}.${use.field}`;
+    if (store) {
+        const target = `${this.printNode(node.left.expression, 0).trim()}[${this.printNode(node.left.argumentExpression, 0).trim()}]`;
+        const iden = this.getIden(identation);
+        return `${target} = nil\n${iden}if ${field} != nil {\n${this.getIden(identation + 1)}${target} = *${field}\n${iden}}`;
+    }
+    const equal = op === SyntaxKind.EqualsEqualsEqualsToken;
+    if (use.goType === '*string') {
+        const literal = this.printNode(use.literal, 0).trim();
+        return equal ? `(${field} != nil && *${field} == ${literal})` : `(${field} == nil || *${field} != ${literal})`;
+    }
+    const wantTrue = (use.literal.kind === SyntaxKind.TrueKeyword) === equal;
+    return equal ? `(${field} != nil && ${wantTrue ? '' : '!'}*${field})` : `(${field} == nil || ${wantTrue ? '' : '!'}*${field})`;
+};
+// ===== end h28-M01
