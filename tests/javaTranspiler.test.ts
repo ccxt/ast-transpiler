@@ -5392,7 +5392,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
             "        const results = await Promise.all (tasks);\n" +
             "    }\n");
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.promiseAll(tasks)');
+        expect(output).toContain('java.util.concurrent.CompletableFuture.allOf(tasks.toArray(new java.util.concurrent.CompletableFuture<?>[0])).thenApply((promiseAllDone) -> new java.util.ArrayList<Object>(tasks.stream().<Object>map(java.util.concurrent.CompletableFuture::join).toList()))');
     });
 
     test('a Promise.all with non-promise elements keeps the helper', () => {
@@ -10427,7 +10427,7 @@ describe('Promise.all over a list in the ts/src tiers', () => {
     });
 
     test('an exchange-tier Promise.all inlines the helper steps', () => {
-        expect(venue).toContain('((java.util.List<?>)(tasks)).stream().filter(java.util.concurrent.CompletableFuture.class::isInstance).map((promiseAllItem) -> (java.util.concurrent.CompletableFuture<?>) promiseAllItem)');
+        expect(venue).toContain('java.util.concurrent.CompletableFuture.allOf(tasks.toArray(new java.util.concurrent.CompletableFuture<?>[0])).thenApply((promiseAllDone) -> new java.util.ArrayList<Object>(tasks.stream().<Object>map(java.util.concurrent.CompletableFuture::join).toList()))');
         expect(venue).not.toContain('Helpers.promiseAll');
     });
 
