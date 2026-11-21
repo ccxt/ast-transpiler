@@ -52483,3 +52483,55 @@ GoTranspiler.prototype.h28m03BinderAccessorUse = function (n: any): boolean | un
     };
 }
 // ===== end h28-M03
+// ===== h28-H28-T03
+export interface GoTranspiler {
+    h28t03ConstNilTest(node: any): boolean | undefined;
+    h28t03NeverNilInt(node: any): boolean;
+}
+// `x === undefined` on a never-reassigned local initialised by parseInt (..) / this.parseToInt (..) that the
+// printer types int64: those Go helpers return int64 and never nil, so the test is constant false (`!==`: true)
+// and an else-less `if` on it prints nothing.
+GoTranspiler.prototype.h28t03ConstNilTest = function (node: any): boolean | undefined {
+    if ((node?.kind !== SyntaxKind.BinaryExpression)) {
+        return undefined;
+    }
+    const op = node.operatorToken.kind;
+    const isEq = (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsToken);
+    if (!isEq && (op !== SyntaxKind.ExclamationEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsToken)) {
+        return undefined;
+    }
+    const local = ccxtGoIsNilLiteral(node.right) ? node.left : (ccxtGoIsNilLiteral(node.left) ? node.right : undefined);
+    return ((local !== undefined) && this.h28t03NeverNilInt(local)) ? !isEq : undefined;
+};
+GoTranspiler.prototype.h28t03NeverNilInt = function (node: any): boolean {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    const list: any = decl?.parent;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (list?.kind !== SyntaxKind.VariableDeclarationList)
+        || ((list.flags & ts.NodeFlags.Const) === 0) || (decl.type !== undefined)) {
+        return false;
+    }
+    const init: any = decl.initializer;
+    const callee: any = init?.kind === SyntaxKind.CallExpression ? init.expression : undefined;
+    const named = ((callee?.kind === SyntaxKind.Identifier) && (callee.text === 'parseInt'))
+        || ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'parseToInt'));
+    return named && (init.arguments.length === 1) && (this.goDeclaredTypeOfIdentifier(node) === 'int64');
+};
+const h28t03ShippedEquality = GoTranspiler.prototype.printInlineEquality;
+GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+    const local = ccxtGoIsNilLiteral(right) ? left : (ccxtGoIsNilLiteral(left) ? right : undefined);
+    if ((local !== undefined) && this.h28t03NeverNilInt(local)) {
+        return isEq ? 'false' : 'true';
+    }
+    return h28t03ShippedEquality.call(this, left, right, leftText, rightText, isEq);
+};
+const h28t03ShippedIf = GoTranspiler.prototype.printIfStatement;
+GoTranspiler.prototype.printIfStatement = function (node, identation) {
+    if ((node?.elseStatement === undefined) && (node?.parent?.kind === SyntaxKind.Block) && (this.h28t03ConstNilTest(node.expression) === false)) {
+        return '';
+    }
+    return h28t03ShippedIf.call(this, node, identation);
+};
+// ===== end h28-H28-T03
