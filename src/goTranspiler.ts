@@ -50497,3 +50497,56 @@ GoTranspiler.prototype.h28a14RowRead = function (node, printed: string): string 
     };
 }
 // ===== end h28-H28-A14 =====
+// ===== h28-A15 =====
+// `const info = this.safeDict (O, 'info' | 'precision')` where O is a const local bound once to `this.outcome (..)` (the
+// PredictionExchange cache accessor, printed map[string]any) and never written or rebound: the cache holds maps built by
+// parse code from decoded JSON, never a *sync.Map, so the comma-ok read answers exactly what SafeMapTyped did (nil when absent)
+export interface GoTranspiler {
+    h28a15OutcomeMemberRead(declaration, printed: string): string | undefined;
+    h28a15OutcomeCacheLocal(container): boolean;
+}
+GoTranspiler.prototype.h28a15OutcomeCacheLocal = function (container): boolean {
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const callee: any = init?.expression;
+    if ((init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'outcome')) {
+        return false;
+    }
+    const decls: any[] = (this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.declarations ?? []).map((d) => d.resolve());
+    if ((decls.length === 0) || decls.some((d) => (d?.kind !== SyntaxKind.MethodDeclaration) || (d.parent?.name?.text !== 'PredictionExchange'))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => !this.goWritesOrRebindsName(n, name, [])
+        && !((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.isGoElementAccessAssignmentTarget(n.parent)));
+};
+GoTranspiler.prototype.h28a15OutcomeMemberRead = function (declaration, printed: string): string | undefined {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string')) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeDict');
+    const container: any = args?.container;
+    if ((container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral)
+        || ((args.key.text !== 'info') && (args.key.text !== 'precision')) || !this.h28a15OutcomeCacheLocal(container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const shipped = `var ${name} map[string]any = SafeMapTyped(${container.text}, "${args.key.text}")`;
+    if ((printed.split(shipped).length !== 2) || !printed.endsWith(shipped)) {
+        return undefined;
+    }
+    return printed.replace(shipped, `var ${name}, _ = ${container.text}["${args.key.text}"].(map[string]any)`);
+};
+{
+    const printVariableDeclarationListH28a15 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH28a15.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h28a15OutcomeMemberRead(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h28-A15 =====
