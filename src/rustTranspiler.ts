@@ -3882,6 +3882,7 @@ export class RustTranspiler extends BaseTranspiler {
         // the test tier): a line the `Value` operand already took over the budget is split by the same build/ pass
         const nilStr = declaration !== undefined && isVariableDeclaration(declaration) && !this.rustTestTierSource(declaration) && this.rust90rcNilStrDecl(declaration);
         const lines = this.printNode(statement, 0).split('\n');
+        const h29r07 = this.h29R07NilStrConcatSplits(nilStr, lines, column, width); if (h29r07 !== undefined) return h29r07;
         return lines.every((l: string) => column + width(l) <= 400 || ((slot || nilStr) && column + l.trim().length > 400));
     }
 
@@ -41645,4 +41646,12 @@ export class RustTranspiler extends BaseTranspiler {
         return ok && calls > 0;
     }
     // ===== end h29-R06
+    // ===== h29-H29-R07
+    /** A nil-declared `Str` local's in-place concat read may take a `format!` line past 400 chars: ccxt build/
+     *  `splitLongRustLines` breaks such a line at its `, ` separators, so only a line too long to split in two keeps the box. */
+    h29R07NilStrConcatSplits(nilStr: boolean, lines: string[], column: number, width: (l: string) => number): boolean | undefined {
+        if (!nilStr) return undefined;
+        return lines.every((l: string) => column + width(l) <= 400 || (column + width(l) <= 720 && l.includes(', '))) ? true : undefined;
+    }
+    // ===== end h29-H29-R07
 }
