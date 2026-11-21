@@ -33708,6 +33708,7 @@ ${tryBodyBlock}
     }
 
     printElementAccessExpression(node, identation) {
+        const h27g23 = this.h27g23SideRowRead(node); if (h27g23 !== undefined) return h27g23;
         const cacheText = this.goFirstDefinedArm([() => this.goWsCacheReadText(node), () => this.goOrderBookSideRead(node), () => this.goOrderBookFieldNilTestRead(node), () => this.goTypedRowFieldRead(node)?.text]);
         if (cacheText !== undefined) {
             return cacheText;
@@ -49132,3 +49133,63 @@ GoTranspiler.prototype.h27g22NumberRowSliceParameterType = function (fn, param, 
     return '[][]any';
 };
 // ===== h27-G22 (end) =====
+// ===== h27-G23 =====
+// `side[i]` on a local the printer declares as the order-book side, with an int index: the row GetValue answers
+// (`obs.GetData()[i]`, unchecked there too); the side is proven non-nil by an earlier `side.length` statement
+export interface GoTranspiler {
+    h27g23SideRowRead(node): string | undefined;
+    h27g23SideLengthBefore(node, decl): boolean;
+    h27g23IsIntLoopCounter(key): boolean;
+}
+GoTranspiler.prototype.h27g23SideRowRead = function (node) {
+    const cfg = this.goOrderBook;
+    const side: any = node?.expression;
+    const key: any = node?.argumentExpression;
+    if ((cfg === undefined) || (node?.kind !== SyntaxKind.ElementAccessExpression) || (side?.kind !== SyntaxKind.Identifier)
+        || (key?.kind !== SyntaxKind.Identifier) || this.isGoElementAccessAssignmentTarget(node)
+        || (this.goDeclaredTypeOfIdentifier(side) !== cfg.sideType) || !this.h27g23IsIntLoopCounter(key)) {
+        return undefined;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(side)?.valueDeclaration?.resolve();
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || !this.h27g23SideLengthBefore(node, decl)) {
+        return undefined;
+    }
+    return `${side.text}.GetData()[${key.text}]`;
+};
+GoTranspiler.prototype.h27g23SideLengthBefore = function (node, decl) {
+    for (let cur: any = node; (cur !== undefined) && (cur.kind !== SyntaxKind.MethodDeclaration) && (cur.kind !== SyntaxKind.FunctionDeclaration); cur = cur.parent) {
+        const block: any = cur.parent;
+        if ((block?.kind !== SyntaxKind.Block) && (block?.kind !== SyntaxKind.SourceFile)) {
+            continue;
+        }
+        for (const st of block.statements) {
+            if (st === cur) {
+                break;
+            }
+            const init: any = (st.kind === SyntaxKind.VariableStatement) ? st.declarationList?.declarations?.[0]?.initializer : undefined;
+            if ((init?.kind === SyntaxKind.PropertyAccessExpression) && (init.name?.text === 'length') && (init.expression?.kind === SyntaxKind.Identifier)
+                && (init.expression.text === decl.name.text) && this.goIdentifierRefersToDeclaration(init.expression, decl)) {
+                return true;
+            }
+        }
+    }
+    return false;
+};
+// `for (let i = 0; ..; i++)` prints `i := 0` (a Go int); the counter is written nowhere else
+GoTranspiler.prototype.h27g23IsIntLoopCounter = function (key) {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve();
+    const loop: any = decl?.parent?.parent;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (loop?.kind !== SyntaxKind.ForStatement) || (loop.initializer !== decl.parent)
+        || (decl.parent.declarations.length !== 1) || (decl.initializer?.kind !== SyntaxKind.NumericLiteral) || (decl.initializer.text.indexOf('.') >= 0)) {
+        return false;
+    }
+    const inc: any = loop.incrementor;
+    if ((inc?.kind !== SyntaxKind.PostfixUnaryExpression) || (inc.operand?.kind !== SyntaxKind.Identifier) || (inc.operand.text !== decl.name.text)) {
+        return false;
+    }
+    return !this.goDescendantsOf(loop.statement).some((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
+        && this.goIdentifierRefersToDeclaration(n, decl) && (((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+        && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment))
+        || (n.parent?.kind === SyntaxKind.PostfixUnaryExpression) || (n.parent?.kind === SyntaxKind.PrefixUnaryExpression)));
+};
+// ===== h27-G23 (end) =====
