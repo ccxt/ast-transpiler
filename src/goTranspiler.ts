@@ -57882,3 +57882,10 @@ GoTranspiler.prototype.h30p05OrderRow = function (declaration): boolean {
     };
 }
 // ===== end h30-H30-P05 =====
+// ===== h30-H30-P09 =====
+// trade loop rows: `const row = xs[i]` over a JSON-origin list, read only by safe readers and handed to the trade row
+// parsers, takes the h29-P03 comma-ok map read (ruling 9a: a non-map element reaches them as a nil map)
+for (const name of [ 'parseTrade', 'parseWsTrade', 'parseWsMyTrade' ]) {
+    H29P03_ROW_PARSERS.add (name);
+}
+// ===== end h30-H30-P09 =====
