@@ -85,7 +85,7 @@ describe ('h27a04 JSON-origin safeList with an empty-list default', () => {
     test ('negative: a rewritten response keeps the wrap', () => {
         expect (out).not.toMatch (/other, _ = /);
     });
-    test ('negative: no default (nil answer tested) keeps its form', () => {
-        expect (out).not.toMatch (/maybe, _ = /);
+    test ('no default (nil answer tested) reads the comma-ok list without the empty default', () => {
+        expect (out).toMatch (/var maybe \[\]any\n\s*maybe, _ = response\["data"\]\.\(\[\]any\)\n\s*if maybe == nil/);
     });
 });

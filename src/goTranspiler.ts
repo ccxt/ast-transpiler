@@ -52079,3 +52079,77 @@ GoTranspiler.prototype.h28g27ClientIdentityCompare = function (left, right, left
     };
 }
 // ===== end h28-H28-G27 =====
+// ===== h28-H28-G30 =====
+// `const xs = this.safeList (R, 'lit')` typed []any (SafeListTyped), with R a map[string]any local holding decoded JSON at the
+// read: R is an awaited `Promise<Dict>` endpoint or a typed safeDict of one, and every use that can run before the read leaves it
+// untouched (a later `{ 'info': R }` cannot). The member is []any, another JSON value or absent: the comma-ok answers the same.
+export interface GoTranspiler {
+    h28g30JsonListRead(node, identation: number, printed: string): string | undefined;
+    h28g30OriginAtRead(container, read, depth: number): boolean;
+}
+GoTranspiler.prototype.h28g30OriginAtRead = function (container, read, depth: number): boolean {
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    const scope: any = this.goEnclosingFunction(read);
+    if ((depth > 5) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    let fromJson = false;
+    if (init?.kind === SyntaxKind.AwaitExpression) {
+        fromJson = (depth > 0) ? (this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression))
+            : (this.h27a04DictEndpointResponse(container) && this.goJsonOriginBindingIsReadOnly(declaration,
+                (n, name) => this.goJsonOriginUseIsReadOnly(n, name) || (!this.goWritesOrRebindsName(n, name, []) && this.h27a02ScalarReaderUse(n))));
+        // an endpoint result that escapes anywhere is bound from its raw `any` by the ccxt pass: not indexable
+    } else {
+        const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && (args.container?.kind === SyntaxKind.Identifier)
+            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE) && this.h28g30OriginAtRead(args.container, read, depth + 1);
+    }
+    const after = read.end;
+    return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => !this.goWritesOrRebindsName(n, name, [])
+        && ((n.pos >= after) || this.goJsonOriginUseIsReadOnly(n, name) || this.h27a02ScalarReaderUse(n)));
+};
+GoTranspiler.prototype.h28g30JsonListRead = function (node, identation: number, printed: string): string | undefined {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((typeof printed !== 'string') || (node.parent?.kind !== SyntaxKind.VariableStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(call, 'safeList');
+    if ((args?.container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test(args.key.text)) {
+        return undefined;
+    }
+    for (let up: any = declaration.parent; (up !== undefined) && (up.kind !== SyntaxKind.MethodDeclaration); up = up.parent) {
+        if ((up.kind === SyntaxKind.ForStatement) || (up.kind === SyntaxKind.ForOfStatement) || (up.kind === SyntaxKind.ForInStatement)
+            || (up.kind === SyntaxKind.WhileStatement) || (up.kind === SyntaxKind.DoStatement)
+            || (up.kind === SyntaxKind.ArrowFunction) || (up.kind === SyntaxKind.FunctionExpression)) {
+            return undefined;
+        }
+    }
+    const container: string = args.container.text;
+    const isMap = (this.goResolvedLocalGoType(args.container) === GO_SAFE_DICT_LOCAL_TYPE) || this.h27a04DictEndpointResponse(args.container);
+    if (!isMap || !this.h28g30OriginAtRead(args.container, declaration, 0)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const iden = this.getIden(identation);
+    const lead = /^\n*/.exec(printed)[0];
+    const body = printed.substring(lead.length);
+    const typed = `var ${name} ${GO_SAFE_LIST_LOCAL_TYPE} = `;
+    const reads = [ `SafeListTyped(${container}, "${args.key.text}")`, `ccxt.SafeListTyped(${container}, "${args.key.text}")` ];
+    if (!reads.some((r) => body === iden + typed + r)) {
+        return undefined;
+    }
+    return `${lead}${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${GO_SAFE_LIST_LOCAL_TYPE})`;
+};
+{
+    const h28g30Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h28g30Upstream.call(this, node, identation);
+        const h = this.h28g30JsonListRead(node, identation, printed); if (h !== undefined) return h;
+        return printed;
+    };
+}
+// ===== end h28-H28-G30
