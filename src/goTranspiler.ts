@@ -57451,3 +57451,42 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${lead}${read}${iden}if ${site.name} == nil {\n${inner}${site.name} = map[string]any{}\n${iden}}`;
 };
 // ===== end h30-H30-G24
+// ===== h30-H30-G25 =====
+// `const xs = this.safeList (frame, K, [])` on a proven list frame: the h27-A08 guarded comma-ok read plus the `[]`
+// fallback SafeListSlice gave for a missing or non-list element.
+const h27a08RowReadH30g25 = GoTranspiler.prototype.h27a08RowRead;
+GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: string, varName: string, identation: number, declaredValue: string) {
+    const done = h27a08RowReadH30g25.call(this, declaration, declaredType, varName, identation, declaredValue);
+    if ((done !== undefined) || (declaredType !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return done;
+    }
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.NonNullExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    if ((init?.expression?.name?.text !== 'safeList') || (init.arguments?.length !== 3)) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
+    const list: any = args?.container;
+    const key: any = args?.key;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)
+        || !this.goDeclaredListIdentifier(list) || !this.h27a08JsonList(list)) {
+        return undefined;
+    }
+    const xs = this.printNode(list, 0);
+    const k = `${key.text}`;
+    if (![ `this.SafeListSlice(${xs}, ${k}, []any{})`, `SafeListTypedDefault(${xs}, ${k}, []any{})` ].includes(declaredValue.trim())) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const inner = this.getIden(identation + 1);
+    // SafeList answers the `[]` default for a missing, nil or non-list element; a json list element is []any
+    const fallback = `\n${iden}if ${varName} == nil {\n${inner}${varName} = []any{}\n${iden}}`;
+    const read = { kind: SyntaxKind.ElementAccessExpression, expression: list, argumentExpression: key, pos: init.pos, end: init.end, parent: init.parent };
+    if (this.h26g24GuardedLiteralRead(read, true)) {
+        return `${iden}var ${varName}, _ = ${xs}[${k}].([]any)${fallback}`;
+    }
+    return `${iden}var ${varName} []any\n${iden}if ${k} < len(${xs}) {\n${inner}${varName}, _ = ${xs}[${k}].([]any)\n${iden}}${fallback}`;
+};
+// ===== end h30-H30-G25 =====
