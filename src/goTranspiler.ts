@@ -56400,3 +56400,20 @@ GoTranspiler.prototype.h30a16ToArrayList = function (baseExpr: any): boolean {
     };
 }
 // ===== end h30-H30-A16 =====
+// ===== h30-H30-A17
+// the safeList-write receiver may also be a local the printer declares map[string]any from its awaited endpoint
+// seed or its nil-seeded endpoint join (h27a01ReceiverType), when goJsonOriginContainer proves it decoded JSON
+export interface GoTranspiler {
+    h30A17JsonMap(container): boolean;
+}
+GoTranspiler.prototype.h30A17JsonMap = function (container): boolean {
+    return (container?.kind === SyntaxKind.Identifier) && (this.h27a01ReceiverType(container) === GO_SAFE_DICT_LOCAL_TYPE)
+        && this.goJsonOriginContainer(container);
+};
+{
+    const h30A17UpstreamJsonMap = GoTranspiler.prototype.h29a20JsonMap;
+    GoTranspiler.prototype.h29a20JsonMap = function (container): boolean {
+        return h30A17UpstreamJsonMap.call(this, container) || this.h30A17JsonMap(container);
+    };
+}
+// ===== end h30-H30-A17
