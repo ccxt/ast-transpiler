@@ -21399,6 +21399,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 return cacheKeys;
             }
             const h27a08 = this.h27a08RowRead(declaration, declaredType, varName, identation, declaredValue); if (h27a08 !== undefined) { return h27a08; }
+            const h30a12 = this.h30a12ListSliceRead(declaration, declaredType, varName, identation, declaredValue); if (h30a12 !== undefined) { return h30a12; }
             const h29g06 = this.h29g06SubscriptionDictRead(declaration, declaredType, varName, identation, declaredValue); if (h29g06 !== undefined) { return h29g06; }
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
@@ -56272,3 +56273,47 @@ GoTranspiler.prototype.h30a11FrameDefaultedRead = function (declaration, printed
     };
 }
 // ===== end h30-H30-A11
+// ===== h30-H30-A12
+// `const xs2 = this.safeList (xs, K, [])` (K an integer literal) on a read-only JSON-origin []any list: an element is
+// only a map, list, scalar or nil, so SafeListSlice answers the element when it is a []any and a fresh `[]any{}`
+// otherwise; the comma-ok read plus the empty default gives the same answer without the wrap
+export interface GoTranspiler {
+    h30a12ListSliceRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+}
+GoTranspiler.prototype.h30a12ListSliceRead = function (declaration, declaredType: string, varName: string, identation: number, declaredValue: string) {
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((declaredType !== GO_SAFE_LIST_LOCAL_TYPE) || (init?.kind !== SyntaxKind.CallExpression) || (init.expression?.name?.text !== 'safeList')
+        || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (init.arguments?.length !== 3)) {
+        return undefined;
+    }
+    const [ list, key, fallback ] = init.arguments;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)
+        || (fallback?.kind !== SyntaxKind.ArrayLiteralExpression) || (fallback.elements.length !== 0)) {
+        return undefined;
+    }
+    const xs = this.printNode(list, 0);
+    const k = `${key.text}`;
+    const forms = [ `this.SafeListSlice(${xs}, ${k}, []any{})`, `SafeListTypedDefault(${xs}, ${k}, []any{})`, `ListTyped(this.SafeList(${xs}, ${k}, []any{}))` ];
+    if (!forms.includes(declaredValue.trim())) {
+        return undefined;
+    }
+    h29a09InRowRead++;
+    let proven = false;
+    try {
+        proven = this.goDeclaredListIdentifier(list) && (this.h27a08JsonList(list) || this.h27a09JsonOriginList(list));
+    } finally {
+        h29a09InRowRead--;
+    }
+    if (!proven) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const inner = this.getIden(identation + 1);
+    const empty = `\n${iden}if ${varName} == nil {\n${inner}${varName} = []any{}\n${iden}}`;
+    const read = { kind: SyntaxKind.ElementAccessExpression, expression: list, argumentExpression: key, pos: init.pos, end: init.end, parent: init.parent };
+    if (this.h26g24GuardedLiteralRead(read, true)) {
+        return `${iden}var ${varName}, _ = ${xs}[${k}].([]any)${empty}`;
+    }
+    return `${iden}var ${varName} []any\n${iden}if ${k} < len(${xs}) {\n${inner}${varName}, _ = ${xs}[${k}].([]any)\n${iden}}${empty}`;
+};
+// ===== end h30-H30-A12
