@@ -57288,3 +57288,76 @@ GoTranspiler.prototype.h30g15NoWriteReaches = function (decl, use) {
     return true;
 };
 // ===== end h30-G15 =====
+// ===== h30-H30-G16
+// `const xs = [ p, .. ]` with p a `*string` local and every other element proven pointer-free: the slot
+// prints `nil` and `if p != nil { xs[k] = *p }` follows, so a nil p leaves the untyped nil DerefScalar gave.
+export interface GoTranspiler {
+    h30G16PointerSlots(declaration): number[] | undefined;
+    h30G16Nil: Set<any> | undefined;
+}
+GoTranspiler.prototype.h30G16PointerSlots = function (declaration): number[] | undefined {
+    const literal: any = ral90g5UnwrapNode (declaration?.initializer);
+    const list: any = declaration?.parent;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (literal?.kind !== SyntaxKind.ArrayLiteralExpression) || (list?.kind !== SyntaxKind.VariableDeclarationList)
+        || ((list.flags & ts.NodeFlags.Const) === 0) || (list.declarations.length !== 1) || (list.parent?.kind !== SyntaxKind.VariableStatement)
+        || (literal.elements.length === 0) || (literal.elements.length > 8)) {
+        return undefined;
+    }
+    const scope = this.goEnclosingFunction (declaration);
+    if ((scope === undefined) || (this.goNameWriteSites (scope, declaration.name.text, declaration).length !== 0)) {
+        return undefined;
+    }
+    const slots: number[] = [];
+    for (let k = 0; k < literal.elements.length; k++) {
+        const element: any = ral90g5UnwrapNode (literal.elements[k]);
+        if ((element?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier (element) === '*string')) {
+            slots.push (k);
+        } else if (!((element?.kind === SyntaxKind.StringLiteral) || (element?.kind === SyntaxKind.NumericLiteral)
+            || this.goStringValueNodeIsProven (element) || goListElementIsPlainValue (this, element))) {
+            return undefined;
+        }
+    }
+    return (slots.length > 0) ? slots : undefined;
+};
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        if (list?.kind === SyntaxKind.Identifier) {
+            const declaration: any = this.checkerOrUndefined ()?.getSymbolAtLocation (list)?.valueDeclaration?.resolve?.();
+            if (this.h30G16PointerSlots (declaration) !== undefined) {
+                return true;
+            }
+        }
+        return pointerFree.call (this, list, depth);
+    };
+    const identifier = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        if ((this.h30G16Nil !== undefined) && this.h30G16Nil.has (node)) {
+            return 'nil';
+        }
+        return identifier.call (this, node);
+    };
+    const statement = GoTranspiler.prototype.printVariableStatement;
+    GoTranspiler.prototype.printVariableStatement = function (node, identation) {
+        const declaration: any = node?.declarationList?.declarations?.[0];
+        const slots = this.h30G16PointerSlots (declaration);
+        if (slots === undefined) {
+            return statement.call (this, node, identation);
+        }
+        const elements: any[] = ral90g5UnwrapNode (declaration.initializer).elements.map ((e: any) => ral90g5UnwrapNode (e));
+        const previous = this.h30G16Nil;
+        this.h30G16Nil = new Set ([ ...(previous ?? []), ...slots.map ((k) => elements[k]) ]);
+        let printed: string;
+        try {
+            printed = statement.call (this, node, identation);
+        } finally {
+            this.h30G16Nil = previous;
+        }
+        const name: string = declaration.name.text;
+        const iden = this.getIden (identation);
+        const stores = slots.map ((k) => `${iden}if ${elements[k].text} != nil {\n${this.getIden (identation + 1)}${name}[${k}] = *${elements[k].text}\n${iden}}`);
+        return printed.trimEnd () + '\n' + stores.join ('\n');
+    };
+}
+// ===== end h30-H30-G16
