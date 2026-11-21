@@ -50550,3 +50550,57 @@ GoTranspiler.prototype.h28a15OutcomeMemberRead = function (declaration, printed:
     };
 }
 // ===== end h28-A15 =====
+// ===== h28-H28-A16
+// `this.handleDeltas (side, this.safeList (C, 'k', []))` with C a decoded JSON map the printer declares
+// `map[string]any` (an existing JSON-origin proof): the member is []any, another JSON value or absent, so the
+// comma-ok read plus the empty default, hoisted before the call, answers exactly what SafeListSlice did
+export interface GoTranspiler {
+    h28a16DeltasArgument(node, identation: number, printed: string): string | undefined;
+    h28a16JsonMap(container): boolean;
+}
+GoTranspiler.prototype.h28a16JsonMap = function (container): boolean {
+    if (container?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(container);
+    const goType = (decl?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType(decl) : this.goResolvedLocalGoType(container);
+    if (goType !== GO_SAFE_DICT_LOCAL_TYPE) {
+        return false;
+    }
+    return this.goJsonOriginContainer(container) || this.h27a05JsonOriginContainer(container) || this.h27a11JsonContainer(container);
+};
+GoTranspiler.prototype.h28a16DeltasArgument = function (node, identation: number, printed: string): string | undefined {
+    const call: any = this.goUnwrapParenthesizedNode(node?.expression);
+    const callee: any = call?.expression;
+    if ((typeof printed !== 'string') || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'handleDeltas') || (call.arguments.length !== 2)) {
+        return undefined;
+    }
+    const read: any = this.goUnwrapParenthesizedNode(call.arguments[1]);
+    const args: any = this.goSafeAccessorLocalArgs(read, 'safeList');
+    if ((args === undefined) || (read.arguments.length !== 3) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.h28a16JsonMap(args.container)) {
+        return undefined;
+    }
+    const recv: string = args.container.text;
+    const key: string = JSON.stringify(args.key.text);
+    const ind = this.getIden(identation);
+    // the printer's SafeList form, or the SafeListSlice form a ccxt pass gives it
+    const wrapped = [ 'this.SafeListSlice(', 'this.SafeList(' ].map((f) => f + recv + ', ' + key + ', []any{})').find((w) => printed.indexOf(w) >= 0) ?? '';
+    const at = (wrapped === '') ? -1 : printed.indexOf(wrapped);
+    if ((at < 0) || (printed.indexOf(wrapped, at + 1) >= 0) || (printed.trim().indexOf('\n') >= 0) || !printed.startsWith(ind + 'this.HandleDeltas(')) {
+        return undefined;
+    }
+    const name = 'deltas' + this.getLineBasedSuffix(node);
+    return ind + 'var ' + name + ' []any\n' + ind + name + ', _ = ' + recv + '[' + key + '].([]any)\n' + ind + 'if ' + name + ' == nil {\n'
+        + ind + '\t' + name + ' = []any{}\n' + ind + '}\n' + printed.substring(0, at) + name + printed.substring(at + wrapped.length);
+};
+{
+    const h28a16UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        const upstream = h28a16UpstreamExpressionStatement.call(this, node, identation);
+        const h = this.h28a16DeltasArgument(node, identation, upstream);
+        if (h !== undefined) return h;
+        return upstream;
+    };
+}
+// ===== end h28-H28-A16
