@@ -1774,6 +1774,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printExpressionStatement(node, identation) {
+        const h30j04 = this.h30J04FieldStoreStatement(node, identation); if (h30j04 !== undefined) return h30j04;
         const handlerDispatch = this.printJavaHandlerDispatch(node.expression, identation);
         if (handlerDispatch !== undefined) {
             return this.printNodeCommentsIfAny(node, identation, handlerDispatch);
@@ -10799,6 +10800,7 @@ export class JavaTranspiler extends BaseTranspiler {
 
     h29J04ContainerUseOk(node): boolean {
         const parent: any = node.parent;
+        const h30j04 = this.h30J04FieldStoreUse(node); if (h30j04 !== undefined) return h30j04;
         if (isBinaryExpression(parent) && parent.right === node && parent.operatorToken.kind === SyntaxKind.InKeyword) {
             return true;
         }
@@ -10983,6 +10985,68 @@ export class JavaTranspiler extends BaseTranspiler {
             + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
     }
     // ===== end h29-J06
+    // ===== h30-J04
+    // `this.f = c;` with f declared `Dict` / `Dictionary<any>`, as the last use of a row container c, in the
+    // block that declares c: the field takes a fresh `Map<String, Object>` holding the same row maps,
+    // and nothing observes the container afterwards, so the copy answers as the alias did
+    h30J04FieldStore(statement): any {
+        if (statement === undefined || !isExpressionStatement(statement)) {
+            return undefined;
+        }
+        const assign: any = statement.expression;
+        if (!isBinaryExpression(assign) || assign.operatorToken.kind !== SyntaxKind.EqualsToken
+            || !isPropertyAccessExpression(assign.left) || assign.left.expression.kind !== SyntaxKind.ThisKeyword
+            || !isIdentifier(assign.right)) {
+            return undefined;
+        }
+        const checker: any = this.getChecker();
+        const field = checker.getSymbolAtLocation(assign.left.name);
+        const fieldDeclaration: any = field?.valueDeclaration?.resolve() ?? field?.declarations?.[0]?.resolve();
+        if (!this.h30J04DictTypeNode(fieldDeclaration?.type)) {
+            return undefined;
+        }
+        const symbol = checker.getSymbolAtLocation(assign.right);
+        const declaration: any = symbol?.valueDeclaration?.resolve();
+        if (declaration === undefined || !isVariableDeclaration(declaration)
+            || declaration.parent?.parent?.parent !== statement.parent) {
+            return undefined;
+        }
+        const scope = this.javaFunctionOrFile(declaration);
+        const later = this.javaTreeSome(scope, (current) => (isIdentifier(current) && current.pos >= statement.end
+            && checker.getSymbolAtLocation(current) === symbol) || undefined);
+        return later ? undefined : { assign, declaration };
+    }
+
+    h30J04DictTypeNode(type): boolean {
+        if (type?.kind === SyntaxKind.UnionType) {
+            const kept = type.types.filter((t) => t.kind !== SyntaxKind.UndefinedKeyword
+                && !(t.kind === SyntaxKind.LiteralType && t.literal?.kind === SyntaxKind.NullKeyword));
+            return kept.length === 1 && this.h30J04DictTypeNode(kept[0]);
+        }
+        if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName)) {
+            return false;
+        }
+        const args = type.typeArguments ?? [];
+        return (type.typeName.text === 'Dict' && args.length === 0)
+            || (type.typeName.text === 'Dictionary' && args.length === 1 && args[0].kind === SyntaxKind.AnyKeyword);
+    }
+
+    h30J04FieldStoreUse(node): boolean | undefined {
+        const store = this.h30J04FieldStore(node.parent?.parent);
+        return store !== undefined && store.assign.right === node ? true : undefined;
+    }
+
+    h30J04FieldStoreStatement(node, identation): string | undefined {
+        const store = this.h30J04FieldStore(node);
+        if (store === undefined || !this.h29J04RowContainer(store.declaration)) {
+            return undefined;
+        }
+        const left = this.printNode(store.assign.left, 0).trim();
+        const right = this.printNode(store.assign.right, 0).trim();
+        return this.printNodeCommentsIfAny(node, identation,
+            `${this.getIden(identation)}${left} = new java.util.HashMap<String, Object>(${right})${this.LINE_TERMINATOR}`);
+    }
+    // ===== end h30-J04
 }
 
 // `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
