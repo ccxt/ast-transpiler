@@ -24784,6 +24784,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if (!this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
                     continue; // a same-named method of another exchange
                 }
+                if (this.h27g01ForeignNamesake(tree, site.file, myFile)) { continue; }
                 let arg = site.args[index];
                 // the tree's splitter ignores brackets, so a nested array literal
                 // reads as several arguments; re-split the call for a slice slot
@@ -48163,3 +48164,43 @@ GoTranspiler.prototype.printArrayPushCall = function (node: CallExpression, iden
     return storedBack ? printed : `${printed}\n${this.getIden(identation)}${slot} = ${this.printNode(receiver, 0)}`;
 };
 // ===== end h27-H27-A16 =====
+// ===== h27-G01 =====
+// a sibling file whose class only shares the name (prediction/x.ts vs x.ts) is another Go type: its
+// `extends` chain, resolved through the import paths, never reaches the method's own file
+export interface GoTranspiler {
+    h27g01ForeignNamesake(tree, siteFile: string, myFile: string | undefined): boolean;
+    h27g01BaseFile(tree, file: string): string | undefined;
+}
+GoTranspiler.prototype.h27g01BaseFile = function (tree, file: string): string | undefined {
+    const text: string | undefined = tree.fileText.get (file);
+    const cls = (text === undefined) ? null : /\bclass\s+[A-Za-z_$][\w$]*\s+extends\s+([A-Za-z_$][\w$]*)/.exec (text);
+    if (cls === null) {
+        return undefined;
+    }
+    const escaped = cls[1].replace (/\$/g, '\\$');
+    const imp = new RegExp ('import\\s+(?:' + escaped + '|\\{[^}]*\\b' + escaped + '\\b[^}]*\\})\\s+from\\s+[\'"]([^\'"]+)\\.js[\'"]').exec (text);
+    if (imp === null) {
+        return undefined;
+    }
+    const resolved = path.posix.normalize (path.posix.join (path.posix.dirname (file), imp[1] + '.ts'));
+    return tree.fileText.has (resolved) ? resolved : undefined;
+};
+GoTranspiler.prototype.h27g01ForeignNamesake = function (tree, siteFile: string, myFile: string | undefined): boolean {
+    if ((myFile === undefined) || !tree.fileText.has (myFile) || myFile.startsWith ('base/') || myFile.startsWith ('abstract/')) {
+        return false; // base methods are reached by every tree
+    }
+    let current: string | undefined = siteFile;
+    for (let hops = 0; hops < 12; hops++) {
+        if (current === myFile) {
+            return false;
+        }
+        const next = this.h27g01BaseFile (tree, current);
+        if (next === undefined) {
+            // the chain ended at a file with no resolvable base: foreign only when that is a base/ root
+            return current.startsWith ('base/');
+        }
+        current = next;
+    }
+    return false;
+};
+// ===== end h27-G01 =====
