@@ -55969,3 +55969,72 @@ GoTranspiler.prototype.h30a06ReturnedInfoUse = function (node, name: string): bo
     };
 }
 // ===== end h30-H30-A06
+// ===== h30-H30-A08 =====
+// `const d = this.safeDict (R, k)` / `safeList (R, k)` (optionally with a `{}` / `[]` default) on a decoded-JSON map
+// local R whose key k prints `*string` with no enclosing nil guard: SafeValue skips a nil key (answer nil / default),
+// so the read runs under `if k != nil` and keeps the empty default where the wrap gave it
+export interface GoTranspiler {
+    h30a08PointerKeyRead(node, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h30a08PointerKeyRead = function (node, printed) {
+    if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
+        return undefined;
+    }
+    const decl: any = node.declarations[0];
+    const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    const callee: any = call?.expression;
+    if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    const isDict = callee.name?.text === 'safeDict';
+    const isList = callee.name?.text === 'safeList';
+    const defaulted = (fallback !== undefined);
+    if ((!isDict && !isList) || (defaulted && !(isDict ? ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0))
+        : ((fallback.kind === SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0))))) {
+        return undefined;
+    }
+    if ((container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (key.text === container.text)
+        || (this.goDeclaredTypeOfIdentifier(key) !== '*string') || this.goIsNilGuardedStringPointerKey(key)
+        || !this.h29a05JsonOrigin(container) || !this.h29a05MapReceiver(container)) {
+        return undefined;
+    }
+    const name: string = decl.name.text;
+    const c = container.text;
+    const k = this.printNode(key, 0).trim();
+    if ((k !== key.text) || !/^\w+$/.test(name)) {
+        return undefined;
+    }
+    if (isList) {
+        // an element write (`xs[i][k] = v`) is printed from the wrap declaration line: keep that form
+        const scope: any = this.goEnclosingFunction(decl);
+        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+            && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+            return undefined;
+        }
+    }
+    const goType = isDict ? GO_SAFE_DICT_LOCAL_TYPE : GO_SAFE_LIST_LOCAL_TYPE;
+    const shipped = defaulted
+        ? (isDict ? [ `var ${name} map[string]any = this.SafeDictMap(${c}, ${k}, map[string]any{})`, `var ${name} map[string]any = MapTyped(this.SafeDict(${c}, ${k}, map[string]any{}))` ]
+            : [ `var ${name} []any = this.SafeListSlice(${c}, ${k}, []any{})`, `var ${name} []any = SafeListTypedDefault(${c}, ${k}, []any{})`, `var ${name} []any = ListTyped(this.SafeList(${c}, ${k}, []any{}))` ])
+        : (isDict ? [ `var ${name} map[string]any = SafeMapTyped(${c}, ${k})`, `var ${name} map[string]any = ccxt.SafeMapTyped(${c}, ${k})`, `var ${name} map[string]any = this.SafeDictMap(${c}, ${k})` ]
+            : [ `var ${name} []any = SafeListTyped(${c}, ${k})`, `var ${name} []any = ccxt.SafeListTyped(${c}, ${k})` ]);
+    const lead = /^\n*/.exec(printed)[0];
+    const m = /^(\t*)(.*)$/.exec(printed.substring(lead.length));
+    if ((m === null) || (shipped.indexOf(m[2]) < 0)) {
+        return undefined;
+    }
+    const ind = m[1];
+    const out = `${lead}${ind}var ${name} ${goType}\n${ind}if ${k} != nil {\n${ind}\t${name}, _ = ${c}[*${k}].(${goType})\n${ind}}`;
+    return defaulted ? `${out}\n${ind}if ${name} == nil {\n${ind}\t${name} = ${isDict ? 'map[string]any{}' : '[]any{}'}\n${ind}}` : out;
+};
+{
+    const h30a08Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h30a08Upstream.call(this, node, identation);
+        const h = this.h30a08PointerKeyRead(node, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h30-H30-A08 =====
