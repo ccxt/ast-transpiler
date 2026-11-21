@@ -51987,3 +51987,95 @@ GoTranspiler.prototype.h28g24StringParamLiteralRead = function (node, baseExpr, 
     };
 }
 // ===== end h28-H28-G24
+// ===== h28-H28-G27 =====
+// `const c = this.safeValue (this.clients, client.url); if (c !== client)` with `client: Client`: the registry read
+// prints the typed `ClientInterface` local (h26g49) and the compare is the native interface identity compare
+export interface GoTranspiler {
+    h28g27ClientIdentityOperand(node): boolean;
+    h28g27ClientIdentityCompare(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined;
+}
+// `n` sits in `n === p` / `n !== p` where p is a `client: Client` parameter
+GoTranspiler.prototype.h28g27ClientIdentityOperand = function (n) {
+    const parent: any = n?.parent;
+    const op = parent?.operatorToken?.kind;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression)
+        || ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsEqualsToken))) {
+        return false;
+    }
+    return this.goIsClientParameter(this.goUnwrapParenthesizedNode((parent.left === n) ? parent.right : parent.left));
+};
+{
+    const usesAreSafe = GoTranspiler.prototype.h26g49ClientLocalUsesAreSafe;
+    GoTranspiler.prototype.h26g49ClientLocalUsesAreSafe = function (declaration) {
+        if (usesAreSafe.call(this, declaration)) {
+            return true;
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        const name = declaration.name.text;
+        for (const n of this.goDescendantsOf(scope)) {
+            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name) || (this.goDeclarationOfIdentifier(n) !== declaration)) {
+                continue;
+            }
+            const parent: any = n.parent;
+            if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+                continue;
+            }
+            const op = parent?.operatorToken?.kind;
+            const other = (parent?.left === n) ? parent?.right : parent?.left;
+            const nilCompare = (parent?.kind === SyntaxKind.BinaryExpression)
+                && ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken))
+                && (other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined');
+            if (!nilCompare && !this.h28g27ClientIdentityOperand(n)) {
+                return false;
+            }
+        }
+        return true;
+    };
+}
+// the registry key may be `client.url` of a `client: Client` parameter: Url is a Go string (goIsClientUrl)
+{
+    const clientsRead = GoTranspiler.prototype.h26g49ClientsReadDeclaration;
+    GoTranspiler.prototype.h26g49ClientsReadDeclaration = function (statement, declaration, identation: number) {
+        const h = clientsRead.call(this, statement, declaration, identation);
+        const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        const keyNode: any = this.goUnwrapParenthesizedNode(init?.arguments?.[1]);
+        if ((h !== undefined) || !this.goIsClientUrl(keyNode)) {
+            return h;
+        }
+        const goWsKey = this.goWsKey;
+        this.goWsKey = (node) => ((node === init.arguments[1]) ? { 'index': this.printNode(keyNode, 0) } : goWsKey.call(this, node));
+        try {
+            return clientsRead.call(this, statement, declaration, identation);
+        } finally {
+            delete this.goWsKey;
+        }
+    };
+}
+// both sides are interfaces holding the client pointer (or nil): `==` is pointer identity and never panics
+GoTranspiler.prototype.h28g27ClientIdentityCompare = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+    const sides: [any, any][] = [[left, right], [right, left]];
+    for (const [localNode, clientNode] of sides) {
+        const local = this.goUnwrapParenthesizedNode(localNode);
+        if ((local?.kind !== SyntaxKind.Identifier) || !this.goIsClientParameter(this.goUnwrapParenthesizedNode(clientNode))) {
+            continue;
+        }
+        const declaration: any = this.goDeclarationOfIdentifier(local);
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration)
+            || (this.h26g49ClientsReadDeclaration(declaration.parent, declaration, 0) === undefined)) {
+            continue;
+        }
+        return `(${leftText} ${isEq ? '==' : '!='} ${rightText})`;
+    }
+    return undefined;
+};
+{
+    const printInlineEquality = GoTranspiler.prototype.printInlineEquality;
+    GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+        const h = this.h28g27ClientIdentityCompare(left, right, leftText, rightText, isEq); if (h !== undefined) return h;
+        return printInlineEquality.call(this, left, right, leftText, rightText, isEq);
+    };
+}
+// ===== end h28-H28-G27 =====
