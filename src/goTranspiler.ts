@@ -16271,6 +16271,9 @@ function retypeGoProvenFamily (content: string, names: string[], type: string, p
                 continue;
             }
             const local = /^\w+$/.test (expr) ? expr : undefined;
+            if ((local !== undefined) && h30p15ParamHasFamilyType (m[3], local, type, newBody)) {
+                continue;
+            }
             if ((local !== undefined) && params.includes (local) && !new RegExp ('\\n\\t+(?:var ' + local + '\\b|' + local + ' :?=)').test (newBody)) {
                 newBody = newBody.replace (new RegExp ('\\n(\\t+)return ' + local + '\\n', 'g'), '\n$1return ' + paramWrap + '(' + local + ')\n');
                 continue;
@@ -57963,3 +57966,10 @@ GoTranspiler.prototype.h30p10TickerRow = function (declaration): boolean {
     };
 }
 // ===== end h30-H30-P10 =====
+// ===== h30-H30-P15
+// a returned parameter already declared with the family type (and never re-declared) needs no wrap
+export function h30p15ParamHasFamilyType (paramList: string, local: string, type: string, body: string): boolean {
+    const declared = paramList.split (',').map ((p) => p.trim ()).some ((p) => p === local + ' ' + type);
+    return declared && !new RegExp ('\\n\\t+(?:var ' + local + '\\b|' + local + ' :=)').test (body);
+}
+// ===== end h30-H30-P15
