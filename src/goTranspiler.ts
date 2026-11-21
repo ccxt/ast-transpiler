@@ -32954,6 +32954,7 @@ ${tryBodyBlock}
         if (this.isGoElementAccessAssignmentTarget(node) || !this.goIntIndexExpression(keyNode)) {
             return undefined;
         }
+        const h27g11 = this.h27g11GuardedParamRead(node, containerStr, keyStr); if (h27g11 !== undefined) return h27g11;
         const readBase: any = node?.expression;
         if ((readBase?.kind === SyntaxKind.Identifier)
             && this.goSliceParamKeepsGetValue(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
@@ -48621,3 +48622,61 @@ GoTranspiler.prototype.h27g10OnlyDirectCalls = function (fn) {
     return true;
 };
 // ===== end h27-g10 =====
+// ===== h27-G11 =====
+export interface GoTranspiler {
+    h27g11GuardedParamRead(node, containerStr: string, keyStr: string): string | undefined;
+}
+const H27G11_DEREF_READERS = new Set ([ 'safeFloat', 'safeInteger', 'safeString', 'safeValue', 'safeNumber', 'safeBool', 'safeDict', 'safeList' ]);
+// `xs[0]` / `xs[n - 1]` on a never-written `[]any` parameter under an enclosing `n > 0` (`const n = xs.length`) test is in
+// range; as the object argument of a this.safeX reader (which dereferences it first) the plain index answers what GetValue did
+GoTranspiler.prototype.h27g11GuardedParamRead = function (node, containerStr: string, keyStr: string) {
+    const list: any = node?.expression;
+    const key: any = this.goUnwrapParenthesizedNode(node?.argumentExpression);
+    const call: any = node?.parent;
+    const callee: any = call?.expression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.[0] !== node)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !H27G11_DEREF_READERS.has(callee.name?.text)) {
+        return undefined;
+    }
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    const scope: any = this.goEnclosingFunction(node);
+    if ((declaration?.kind !== SyntaxKind.Parameter) || (declaration.parent !== scope) || (this.goNativeParameterType(declaration) !== '[]any')
+        || (this.goNameWriteSites(scope, list.text, declaration).length > 0)) {
+        return undefined;
+    }
+    // const names bound to xs.length in this function, never written
+    const lengths = new Set<string>();
+    const bind = (n: any): void => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.end < node.pos)
+            && (this.goEnclosingFunction(n) === scope) && (this.goNameWriteSites(scope, n.name.text, n).length === 0)) {
+            const init: any = this.goUnwrapParenthesizedNode(n.initializer);
+            if ((init?.kind === SyntaxKind.PropertyAccessExpression) && (init.name?.text === 'length') && (init.expression?.kind === SyntaxKind.Identifier)
+                && (init.expression.text === list.text)) {
+                lengths.add(n.name.text);
+            }
+        }
+        n.forEachChild(bind);
+    };
+    scope.forEachChild(bind);
+    const lastIndex = (key?.kind === SyntaxKind.BinaryExpression) && (key.operatorToken?.kind === SyntaxKind.MinusToken)
+        && (key.left?.kind === SyntaxKind.Identifier) && lengths.has(key.left.text)
+        && (key.right?.kind === SyntaxKind.NumericLiteral) && (key.right.text === '1');
+    const zeroIndex = (key?.kind === SyntaxKind.NumericLiteral) && (key.text === '0');
+    if (!lastIndex && !zeroIndex) {
+        return undefined;
+    }
+    const names = new Set<string>([ ...lengths ].map((n) => 'L:' + n));
+    let child: any = node;
+    for (let up: any = node.parent; (up !== undefined) && (up !== scope); child = up, up = up.parent) {
+        if (isFunctionLike(up) || GO_ITERATION_STATEMENT_KINDS.has(up.kind)) {
+            return undefined;
+        }
+        // index 0 in range means the list is non-empty, so `n - 1` is in range too
+        if ((up.kind === SyntaxKind.IfStatement) && (child === up.thenStatement) && this.h26g24GuardProves(up.expression, list, 0, names, true)) {
+            return `${containerStr}[${keyStr}]`;
+        }
+    }
+    return undefined;
+};
+// ===== end h27-G11 =====
