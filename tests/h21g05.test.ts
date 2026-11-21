@@ -73,6 +73,10 @@ describe ('h21-g05: Str local declared from a string literal / nil-seeded Str te
     });
     test ('the arm local also stored into a map keeps the box (typed nil is not an absent value)', () => {
         const out = print (fn ('const account: Str = uu ? \'unified\' : accountParsed;', '        const r = { \'p\': accountParsed };\n'));
-        expect (out).toMatch (/var accountParsed any = nil\n/);
+        // H29-G02 (ruling 10): the slot holds an untyped nil and the value is stored under a nil guard, so no typed nil reaches the map
+        expect (out).toMatch (/var accountParsed \*string = nil\n/);
+        expect (out).toContain ('"p": nil,');
+        expect (out).toContain ('if accountParsed != nil {\n\t\tr["p"] = *accountParsed\n\t}');
+        expect (out).not.toContain ('"p": accountParsed');
     });
 });

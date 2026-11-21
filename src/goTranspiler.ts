@@ -17939,7 +17939,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!this.goIsNativeAppendShape(receiver, pushNode)) {
             return false;
         }
-        if (this.h29G04PushedStrPtrIsNonNil(pushNode)) { return true; }
         return this.goStringValueNodeIsProven(pushNode.arguments[0]);
     }
 
@@ -20193,7 +20192,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const h28g05 = this.h28G05StringListUse(node, goType); if (h28g05 !== undefined) return h28g05;
-        const h29g04 = this.h29G04StringListDefaultedArg(node, goType); if (h29g04 !== undefined) return h29g04;
         if (parent.kind === SyntaxKind.BinaryExpression && parent.left === node) {
             return (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
                 && (this.goContainerWriteConversion(parent.right, goType) !== undefined);
@@ -29692,7 +29690,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         // the verdict on one use of the parameter's symbol
         const useIsSafe = (n: any): boolean => {
-            const h29g04 = this.h29G04StringSliceCopyFill(n, param, goType, nilable, boxed); if (h29g04 !== undefined) return h29g04;
             const h28g05 = this.h28G05StringSliceCopyUse(n, param, goType, nilable, boxed, seen); if (h28g05 !== undefined) return h28g05;
             if ((goType === '*string') && h28g08StrParamDerefArg (n)) { return true; }
             const parent: any = n.parent;
@@ -54197,6 +54194,7 @@ GoTranspiler.prototype.h29g03NestedInt64Operand = function (operand, index: numb
     return (this.goOperandStaticType(operand, printed) === 'int64') ? { 'pointer': false, 'text': this.go92g7OperandText(operand, index) } : undefined;
 };
 // ===== end h29-H29-G03 =====
+<<<<<<< HEAD
 // ===== h29-G04 =====
 export interface GoTranspiler {
     h29G04PushedStrPtrIsNonNil(pushNode): boolean;
@@ -55730,3 +55728,5 @@ GoTranspiler.prototype.h29m05MapTupleSlot = function (id: any): boolean {
     return (name === 'handleUntilOption') && Array.isArray(slots) && slots.includes(pattern.elements.indexOf(decl));
 };
 // ===== end h29-M05
+=======
+>>>>>>> parent of bd858572 (hx12 H29-G04: merge unit (6c505ca411ee9f94e49fbc1afbe87752241c1110))
