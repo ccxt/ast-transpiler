@@ -21394,6 +21394,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 return cacheKeys;
             }
             const h27a08 = this.h27a08RowRead(declaration, declaredType, varName, identation, declaredValue); if (h27a08 !== undefined) { return h27a08; }
+            const h29g06 = this.h29g06SubscriptionDictRead(declaration, declaredType, varName, identation, declaredValue); if (h29g06 !== undefined) { return h29g06; }
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
             const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
@@ -54373,3 +54374,52 @@ GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: s
     return goNativeListElementReadH29g05.call(this, node, containerStr, keyNode, keyStr);
 };
 // ===== end h29-H29-G05 =====
+// ===== h29-G06 =====
+// `const x = this.safeDict (R.subscriptions, k[, {}])` with a string key reads the entry through the owner:
+// SubscriptionDict answers what SafeDictMap on the snapshot does (missing, nil, "" or non-map entry -> nil map,
+// a nil `*string` key -> nil); the `{}` default becomes a fresh empty map exactly where that answer is nil
+export interface GoTranspiler {
+    h29g06SubscriptionDictRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h29g06StringKey(key): boolean;
+}
+GoTranspiler.prototype.h29g06SubscriptionDictRead = function (declaration, declaredType: string, varName: string, identation: number, declaredValue: string) {
+    if ((declaredType !== GO_SAFE_DICT_LOCAL_TYPE) || (declaration?.type !== undefined)) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeDict');
+    const table: any = (args !== undefined) ? clientSubscriptions(this, args.container) : undefined;
+    if ((table === undefined) || !this.h29g06StringKey(this.goUnwrapParenthesizedNode(args.key))) {
+        return undefined;
+    }
+    const snapshot = this.printNode(args.container, 0);
+    const printed = declaredValue.trim();
+    const defaulted = (declaration.initializer.arguments.length === 3);
+    const head = `this.SafeDictMap(${snapshot}, `;
+    const tail = defaulted ? ', map[string]any{})' : ')';
+    // the key as the declaration printed it (a concatenation prints without spaces in an argument)
+    const key = (printed.startsWith(head) && printed.endsWith(tail)) ? printed.slice(head.length, printed.length - tail.length) : '';
+    if (!snapshot.endsWith('.SubscriptionsSnapshot()') || (key === '') || key.includes('map[string]any{')) {
+        return undefined;
+    }
+    const owner = snapshot.slice(0, -'.SubscriptionsSnapshot()'.length);
+    const iden = this.getIden(identation);
+    const fallback = defaulted ? `\n${iden}if ${varName} == nil {\n${this.getIden(identation + 1)}${varName} = map[string]any{}\n${iden}}` : '';
+    return `${iden}var ${varName} map[string]any = ${owner}.SubscriptionDict(${key})${fallback}`;
+};
+// a string literal, a `string` / `*string` local, or a string concatenation (Go `+` on strings only compiles as one)
+GoTranspiler.prototype.h29g06StringKey = function (key): boolean {
+    if ((key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
+        return true;
+    }
+    if (key?.kind === SyntaxKind.Identifier) {
+        const goType = this.goDeclaredTypeOfIdentifier(key);
+        return (goType === 'string') || (goType === '*string');
+    }
+    if ((key?.kind === SyntaxKind.BinaryExpression) && (key.operatorToken?.kind === SyntaxKind.PlusToken)) {
+        const type: any = this.checkerOrUndefined()?.getTypeAtLocation(key);
+        return (type !== undefined) && ((type.flags & TypeFlags.StringLike) !== 0) && ((type.flags & TypeFlags.Union) === 0)
+            && (this.h29g06StringKey(this.goUnwrapParenthesizedNode(key.left)) || this.h29g06StringKey(this.goUnwrapParenthesizedNode(key.right)));
+    }
+    return false;
+};
+// ===== end h29-G06 =====
