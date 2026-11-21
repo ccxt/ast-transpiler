@@ -5456,6 +5456,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-61p: an `any` handleOption local whose kind its literal default argument names (rustHandleOptionLiteralKind)
         const optionDefault = checked === undefined && this.rustHandleOptionLiteralKind(declaration.initializer) === kind;
         if (checked !== expected && !boolTested && !anyLength && !optionDefault && !(kind === 'ostr' && this.rustOptDictStrKeyTernary(declaration.initializer)) && !(kind === 'ostr' && this.rustAnyStrPushElem(this.unwrapParens(declaration.initializer)) && this.rustAnyStrPlaceRead(declaration)) && !(combinatorKind !== undefined && combinatorKind === kind && (kind === 'int' || checked === undefined))
+            && !this.h27r02IntToStringSeed(declaration, kind, checked)
             && !(kind === 'int' && checked === undefined && this.rustSafeDictKeyOnlyLocal(declaration))) return undefined;
         const seeded = kind;
         kind = this.rustScalarWidenedKind(declaration, kind);
@@ -40810,4 +40811,13 @@ export class RustTranspiler extends BaseTranspiler {
         return name === 'resolve' && isIdentifier(recv) && String(recv.text) === 'client' && call.arguments.length === 2;
     }
     // ===== end h26-R14
+    // ===== h27-R02
+    /** `n.toString ()` of an `i64` scalar local whose checker type is `any` (an all-int `sum`): the `String` `format!` makes,
+     *  whatever the `any` the checker gives the call. */
+    h27r02IntToStringSeed(declaration, kind: string | undefined, checked: string | undefined): boolean {
+        if (kind !== 'str' || checked !== undefined) return false;
+        const init: any = this.unwrapParens(declaration.initializer);
+        return init !== undefined && this.rustIntToStringShape(init) && this.rustScalarStrMethod(init, false, true)?.method === 'toString';
+    }
+    // ===== end h27-R02
 }
