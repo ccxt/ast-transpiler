@@ -21731,12 +21731,14 @@ export class RustTranspiler extends BaseTranspiler {
     printObjectKeysCall(node, identation, parsedArg = undefined) {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
+        const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'keys'); if (h29 !== undefined) return h29;
         return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'values'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'values'); if (h28 !== undefined) return h28;
+        const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'values'); if (h29 !== undefined) return h29;
         return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
@@ -41375,4 +41377,122 @@ export class RustTranspiler extends BaseTranspiler {
         return callee !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName));
     }
     // ===== end h29-R04
+
+    // ===== h29-R05: `Object.keys/values (x)` where const `x` is a ternary of an untagged dict field / `{}` and an optional
+    /** method parameter that every ts/src caller omits or fills with a dict cut from `this.options` (never a ws-tagged
+     *  snapshot): the map's own insertion-order iterators list what the helper listed; a non-map (Null) lists nothing. */
+    private h29r05Decisions = new Map<string, boolean>();
+    h29r05OptionsDictEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const text = parsedArg?.trim();
+        if (arg === undefined || text === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== undefined) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        const list: any = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList
+            || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1) return undefined;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || !isConditionalExpression(init)) return undefined;
+        let sawParam = false;
+        for (const armNode of [ init.whenTrue, init.whenFalse ]) {
+            const arm: any = this.rustSkipWrappers(armNode);
+            if (arm !== undefined && ((isObjectLiteralExpression(arm) && arm.properties.length === 0) || this.untaggedDictField(arm))) continue;
+            if (arm === undefined || !isIdentifier(arm) || !this.h29r05OptionsParam(arm)) return undefined;
+            sawParam = true;
+        }
+        if (!sawParam) return undefined;
+        const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
+        return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+
+    /** `p` is an optional, never reassigned `Dict` / `NullableDict` parameter of a method whose ts/src callers are proven. */
+    h29r05OptionsParam(id: any): boolean {
+        const param: any = this.rustDeclarationOfIdentifier(id);
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.dotDotDotToken !== undefined) return false;
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name)) return false;
+        const type: any = param.type;
+        if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || !/^(?:Nullable)?Dict$/.test(String(type.typeName.text))) return false;
+        if (this.rustLocalIsReassigned(param, String(param.name.text)) || this.rustMethodReferencedAsValue(method)) return false;
+        const name = String(method.name.text);
+        const at = method.parameters.indexOf(param);
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const cut = file.search(/\/ts\/src\//);
+        if (cut < 0) return false;
+        const root = file.slice(0, cut) + '/ts/src';
+        const key = `${root}|${name}|${at}`;
+        let ok = this.h29r05Decisions.get(key);
+        if (ok === undefined) {
+            this.h29r05Decisions.set(key, false);
+            try { ok = this.h29r05CallersProven(root, name, at); } catch (e) { ok = false; }
+            this.h29r05Decisions.set(key, ok);
+        }
+        return ok;
+    }
+
+    /** Every `.name (..)` in ts/src is `this.name (..)` (no quoted use) and omits argument `at` or passes an options dict. */
+    h29r05CallersProven(root: string, name: string, at: number): boolean {
+        const api: any = (RustTranspiler.rustSignProofApi ??= new (tsSync as any).API({ cwd: process.cwd() }));
+        let total = 0;
+        for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(root + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+            for (const f of entries) {
+                if (dir === '/base' && f !== 'Exchange.ts') continue;
+                const text = readRustTsIndexSource(`${root}${dir}/${f}`) ?? '';
+                if (!text.includes(name)) continue;
+                if (new RegExp('[\'"`]' + name + '[\'"`]').test(text)) return false;
+                const textCalls = (text.match(new RegExp('\\.' + name + '\\s*\\(', 'g')) ?? []).length;
+                if (textCalls === 0) continue;
+                const sf: any = api.createSourceFile(`${root}${dir}/${f}`, text);
+                const found: any[] = [];
+                const visit = (n: any) => {
+                    if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && String((n.expression.name as any).text) === name) found.push(n);
+                    n.forEachChild(visit);
+                };
+                sf.forEachChild(visit);
+                if (found.length !== textCalls) return false;
+                for (const call of found) {
+                    if (call.expression.expression.kind !== SyntaxKind.ThisKeyword && call.expression.expression.kind !== SyntaxKind.SuperKeyword) return false;
+                    const a: any = call.arguments?.[at];
+                    if (a !== undefined && !this.h29r05OptionsValue(a, call, 3)) return false;
+                }
+                total += found.length;
+            }
+        }
+        return total > 0;
+    }
+
+    /** `this.options[k]`, `this.safeDict (O, k[, {}])` with `O` such a value, or a const of the caller's function bound to one. */
+    h29r05OptionsValue(node: any, site: any, hops: number): boolean {
+        const a: any = this.rustSkipWrappers(node);
+        if (a === undefined) return false;
+        const isOptions = (n: any) => isPropertyAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword && String(n.name.text) === 'options';
+        if (isOptions(a)) return true;
+        if (isElementAccessExpression(a)) return isOptions(this.rustSkipWrappers(a.expression));
+        if (isCallExpression(a) && isPropertyAccessExpression(a.expression) && a.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(a.expression.name.text) === 'safeDict' && (a.arguments.length === 2 || a.arguments.length === 3)) {
+            const dflt: any = a.arguments.length === 3 ? this.rustSkipWrappers(a.arguments[2]) : undefined;
+            if (dflt !== undefined && !(isObjectLiteralExpression(dflt) && dflt.properties.length === 0)) return false;
+            return this.h29r05OptionsValue(a.arguments[0], site, hops);
+        }
+        if (!isIdentifier(a) || hops <= 0) return false;
+        let fn: any = site;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        if (fn === undefined) return false;
+        const decls: any[] = [];
+        let writes = 0;
+        const visit = (n: any) => {
+            if (isVariableDeclaration(n) && isIdentifier(n.name) && n.name.text === a.text) decls.push(n);
+            if (isBinaryExpression(n) && isIdentifier(n.left) && n.left.text === a.text && rustIsAssignmentOperator(n.operatorToken.kind)) writes++;
+            if (isParameterDeclaration(n) && isIdentifier(n.name) && n.name.text === a.text) writes++;
+            n.forEachChild(visit);
+        };
+        fn.forEachChild(visit);
+        if (decls.length !== 1 || writes !== 0) return false;
+        const d: any = decls[0];
+        const list: any = d.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos) return false;
+        return this.h29r05OptionsValue(d.initializer, d, hops - 1);
+    }
+    // ===== end h29-R05
 }
