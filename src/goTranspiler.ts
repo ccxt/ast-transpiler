@@ -55668,3 +55668,65 @@ GoTranspiler.prototype.h29m01EntryUse = function (n: any) {
     };
 }
 // ===== end h29-M01
+// ===== h29-M05
+// a typed-row `*string` field stored by statement into a local (not a parameter) that the printer already
+// declares `map[string]any`: the same nil-guarded native store as the literal-map case of h28-M01
+{
+    const previous = GoTranspiler.prototype.h28m01RowPointerUse;
+    GoTranspiler.prototype.h28m01RowPointerUse = function (n: any) {
+        const use = previous.call(this, n);
+        if (use !== undefined) {
+            return use;
+        }
+        return this.h29m05TypedMapStore(n);
+    };
+}
+export interface GoTranspiler {
+    h29m05TypedMapStore(n: any): { field: string, goType: string, kind: 'compare' | 'store', literal: any } | undefined;
+    h29m05MapTupleSlot(id: any): boolean;
+}
+GoTranspiler.prototype.h29m05TypedMapStore = function (n: any) {
+    const access: any = n?.parent;
+    if ((n?.kind !== SyntaxKind.Identifier) || (access?.kind !== SyntaxKind.ElementAccessExpression) || (access.expression !== n)
+        || (access.argumentExpression?.kind !== SyntaxKind.StringLiteral)) {
+        return undefined;
+    }
+    const key = access.argumentExpression.text;
+    const table = this.goTypedRowTable(n, key);
+    const entry = (table !== undefined) && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+    if (!Array.isArray(entry) || (entry[1] !== '*string')) {
+        return undefined;
+    }
+    const parent: any = access.parent;
+    const target: any = parent?.left;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.operatorToken.kind !== SyntaxKind.EqualsToken) || (parent.right !== access)
+        || (parent.parent?.kind !== SyntaxKind.ExpressionStatement) || (target?.kind !== SyntaxKind.ElementAccessExpression)
+        || (target.argumentExpression?.kind !== SyntaxKind.StringLiteral) || (target.expression?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    if (this.h29m05MapTupleSlot(target.expression)) {
+        return { field: entry[0], goType: entry[1], kind: 'store', literal: undefined };
+    }
+    const declaration: any = this.goDeclarationOfIdentifier(target.expression);
+    if ((declaration === undefined) || (declaration.kind === SyntaxKind.Parameter)
+        || (this.goDeclaredTypeOfIdentifier(target.expression) !== 'map[string]any')) {
+        return undefined;
+    }
+    return { field: entry[0], goType: entry[1], kind: 'store', literal: undefined };
+};
+// `const [ a, b ] = this.handleUntilOption (..)`: both slots of the Go twin are `map[string]any` results
+GoTranspiler.prototype.h29m05MapTupleSlot = function (id: any): boolean {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve();
+    const pattern: any = decl?.parent;
+    const holder: any = pattern?.parent;
+    const call: any = holder?.initializer;
+    if ((decl?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern)
+        || (holder?.kind !== SyntaxKind.VariableDeclaration) || (call?.kind !== SyntaxKind.CallExpression)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const name = call.expression.name?.text;
+    const slots = Object.prototype.hasOwnProperty.call(GO_TUPLE_JOIN_MAP_SLOTS, name) ? GO_TUPLE_JOIN_MAP_SLOTS[name] : undefined;
+    return (name === 'handleUntilOption') && Array.isArray(slots) && slots.includes(pattern.elements.indexOf(decl));
+};
+// ===== end h29-M05
