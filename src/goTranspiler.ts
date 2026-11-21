@@ -42013,6 +42013,7 @@ function goIntSeedSumOfInts (goTranspiler, call, declaration): boolean {
             && (goTranspiler.goDeclaredTypeOfIdentifier (inner) === '*int64')) {
             return goTranspiler.goPointerNumberIsNonNil (inner);
         }
+        const h = h27g06Int64CallOperand (goTranspiler, inner); if (h !== undefined) return h;
         return (inner?.kind !== SyntaxKind.CallExpression) && goIntSeedIntValue (goTranspiler, inner, declaration);
     });
 }
@@ -48419,3 +48420,16 @@ function h27g05NilJoinVerdict(goTranspiler, declaration): string | undefined {
     return ok ? '*float64' : undefined;
 }
 // ===== h27-H27-G05 (end) =====
+// ===== h27-G06 =====
+// a no-argument base call (`this.milliseconds ()`) the printer already types Go int64 is an int64 operand
+// of a sum / min / max write: it can never be nil, so the written local keeps its int64 declaration
+function h27g06Int64CallOperand (goTranspiler, operand): boolean | undefined {
+    const callee = operand?.expression;
+    if ((operand?.kind !== SyntaxKind.CallExpression) || (operand.arguments?.length !== 0) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    const printed = goTranspiler.goWithExprDepth (goTranspiler.goExprDepth + 1, () => goTranspiler.printNode (operand, 0));
+    return (goTranspiler.goOperandStaticType (operand, printed) === 'int64') ? true : undefined;
+}
+// ===== end h27-G06 =====
