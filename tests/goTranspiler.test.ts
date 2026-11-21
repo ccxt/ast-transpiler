@@ -19737,3 +19737,38 @@ describe('a nil-guarded *string tuple slot passed to a unified string param is d
         expect(out).not.toContain('ConvertTypeToAccount(*marketType)');
     });
 });
+
+describe('a declared string method returning a nil-tested *string local prints string', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-r04narrow');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('a nil test that throws narrows the local: the method returns string and derefs', () => {
+        const out = run("    pick (o: any, k: string): string {\n        const v = this.safeString (o, k);\n        if (v === undefined) {\n            throw new Error ('missing');\n        }\n        return v;\n    }\n");
+        expect(out).toContain(') string {');
+        expect(out).toContain('return *v');
+    });
+    test('negative: no nil test keeps the any signature (a missing key answers nil)', () => {
+        const out = run("    pick (o: any, k: string): string {\n        const v = this.safeString (o, k) as string;\n        return v;\n    }\n");
+        expect(out).not.toContain('return *v');
+        expect(out).toMatch(/Pick\([^)]*\) any \{/);
+    });
+    test('negative: a nullable declared return keeps the box', () => {
+        const out = run("    pick (o: any, k: string): string | undefined {\n        const v = this.safeString (o, k);\n        if (v === undefined) {\n            return undefined;\n        }\n        return v;\n    }\n");
+        expect(out).not.toContain('return *v');
+    });
+});

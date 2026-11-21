@@ -4197,7 +4197,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     try {
         result = ccxtGoProveReturnPaths (goTranspiler, node, allowed);
         if ((result === undefined) && allowed.includes ('string')) {
-            result = goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed);
+            result = goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) ?? goNarrowedStringReturnPaths (goTranspiler, node);
         }
         if ((result !== undefined) && !CCXT_GO_PARSE_METHOD.test (name) && !goGeneralReturnKeepsAbsence (goTranspiler, node, result)) {
             result = undefined;
@@ -4233,6 +4233,46 @@ function goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) {
         }
     }
     derefs.forEach ((r) => GO_DEREF_SAFE_STRING_RETURNS.add (r));
+    return 'string';
+}
+// a declared `string` method: each path is a Go string, or a `*string` local the checker has narrowed
+// to non-nullable `string` at the return (nil tested or written from a string), which prints dereferenced
+const GO_NARROWED_STRING_RETURNS = new WeakSet ();
+function goNarrowedStringReturnPaths (goTranspiler, node) {
+    const returns = collectReturnStatements (node.body);
+    const derefs = [];
+    for (const r of returns) {
+        const e = ccxtGoUnwrapParens (r.expression);
+        if ((e === undefined) || isAbsentExpression (e)) {
+            return undefined;
+        }
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        const goType = ccxtGoReturnExpressionType (goTranspiler, e);
+        if (goType === 'string') {
+            continue;
+        }
+        if ((goType !== '*string') || (e.kind !== ts.SyntaxKind.Identifier)) {
+            return undefined;
+        }
+        let type;
+        try {
+            type = goTranspiler.getChecker ().getTypeAtLocation (e);
+        } catch (err) {
+            return undefined;
+        }
+        if ((type === undefined) || ((type.flags & ts.TypeFlags.String) === 0) || !goTranspiler.goHasExitingNilGuard (e)) {
+            return undefined; // a declared `string` producer may still answer nil: only a nil test proves it
+        }
+        derefs.push (r);
+    }
+    if (derefs.length === 0) {
+        return undefined;
+    }
+    derefs.forEach ((r) => GO_NARROWED_STRING_RETURNS.add (r));
     return 'string';
 }
 // ---------------------------------------------------------------------------
@@ -40646,6 +40686,14 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     const value = this.printNode (node.expression, 0).trim ();
     const deref = /^(?:this\.)?SafeString\w*\(/.test (value) ? '*' + value : value;
     return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return ' + deref);
+};
+
+const printReturnStatementNarrowedString = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    if (!GO_NARROWED_STRING_RETURNS.has (node)) {
+        return printReturnStatementNarrowedString.call (this, node, identation);
+    }
+    return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return *' + this.printNode (node.expression, 0).trim ());
 };
 
 // ===== nil-seeded scalar pointers joined through plain copies (begin) =====
