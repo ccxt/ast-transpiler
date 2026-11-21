@@ -53420,3 +53420,137 @@ GoTranspiler.prototype.h29a11LoopRow = function (node, depth: number): boolean {
     };
 }
 // ===== end h29-H29-A11
+// ===== h29-A12 =====
+// a handler reached through an intermediate dispatcher that hands it a read-only map local cut from its own
+// proven frame (`const r = this.safeDict2 (message, 'a', 'b', {})`) still receives only decoded JSON values
+export interface GoTranspiler {
+    h29a12FrameCut(arg, holderFrame): boolean;
+}
+{
+    const h27a11FrameParamH29a12 = GoTranspiler.prototype.h27a11FrameParam;
+    GoTranspiler.prototype.h27a11FrameParam = function (param) {
+        if (h27a11FrameParamH29a12.call(this, param)) {
+            return true;
+        }
+        this.h29a12Cache = this.h29a12Cache ?? new Map();
+        this.h29a12Active = this.h29a12Active ?? new Set();
+        if (this.h29a12Cache.has(param)) {
+            return this.h29a12Cache.get(param);
+        }
+        if (this.h29a12Active.has(param)) {
+            return false;
+        }
+        const outermost = (this.h29a12Active.size === 0);
+        this.h29a12Active.add(param);
+        let result = false;
+        try {
+            result = h29a12ProveFrameParam(this, param);
+        } finally {
+            this.h29a12Active.delete(param);
+        }
+        if (outermost || result) {
+            this.h29a12Cache.set(param, result);
+        }
+        return result;
+    };
+}
+// `const x = this.safeDict (F, 'k'[, {}])` / `this.safeDict2 (F, 'k1', 'k2'[, {}])` on a proven frame, never written
+GoTranspiler.prototype.h29a12FrameCut = function (arg, holderFrame) {
+    const decl: any = (arg?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(arg) : undefined;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & 2) === 0)) {
+        return false; // a const declaration only
+    }
+    const init: any = decl.initializer;
+    const callee: any = init?.kind === SyntaxKind.CallExpression ? init.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const keys = (callee.name?.text === 'safeDict2') ? 2 : ((callee.name?.text === 'safeDict') ? 1 : 0);
+    const args: any[] = init.arguments ?? [];
+    if ((keys === 0) || ((args.length !== keys + 1) && (args.length !== keys + 2))) {
+        return false;
+    }
+    if (!args.slice(1, keys + 1).every((k) => k.kind === SyntaxKind.StringLiteral)) {
+        return false;
+    }
+    const fallback: any = args[keys + 1];
+    if ((fallback !== undefined) && ((fallback.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0))) {
+        return false;
+    }
+    const container: any = args[0];
+    const fromFrame = (container?.kind === SyntaxKind.Identifier) && ((this.goAnyBoxLocalDeclaration(container) === holderFrame) || this.h27a11JsonContainer(container));
+    return fromFrame && (this.goResolvedLocalGoType(arg) === GO_SAFE_DICT_LOCAL_TYPE)
+        && !h27a11WritesInto(this, this.goEnclosingFunction(decl), decl.name.text, decl);
+};
+function h29a12ProveFrameParam (go: any, param: any): boolean {
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.parameters.indexOf(param) !== 1) || !go.goIsProHandlerMethod(fn)
+        || (fn.name.text === 'handleMessage') || (go.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    const methodName: string = fn.name.text;
+    if (h27a11WritesInto(go, fn.body, param.name.text, param) || goHasDynamicCall(fn, methodName) || h27a11NamedElsewhere(go, fn, methodName)) {
+        return false;
+    }
+    // every argument is the caller's proven frame or a frame cut from it, and at least one is a cut
+    let cuts = 0;
+    const frameOrCut = (arg: any, holder: any): boolean => {
+        const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
+        if ((frame === undefined) || !go.h27a11FrameParam(frame)) {
+            return false;
+        }
+        if ((arg?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(arg) === frame)) {
+            return true;
+        }
+        if (go.h29a12FrameCut(arg, frame)) {
+            cuts++;
+            return true;
+        }
+        return false;
+    };
+    let uses = 0;
+    for (const call of go.goSameFileCallsOf(fn, methodName)) {
+        if ((call.runner !== undefined) || !frameOrCut(call.arguments?.[1], go.goEnclosingFunction(call))) {
+            return false;
+        }
+        uses++;
+    }
+    const valueRefsOk = !go.hasNodeWhere(fn.getSourceFile(), (n: any) => {
+        if ((n.kind !== SyntaxKind.PropertyAccessExpression) || (n.name?.text !== methodName) || (n.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        if ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression === n)) {
+            return false;
+        }
+        uses++;
+        let up: any = n.parent;
+        while ((up !== undefined) && ((up.kind === SyntaxKind.PropertyAssignment) || (up.kind === SyntaxKind.ObjectLiteralExpression) || (up.kind === SyntaxKind.ParenthesizedExpression))) {
+            up = up.parent;
+        }
+        if ((up?.kind !== SyntaxKind.VariableDeclaration) || (up.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return true;
+        }
+        const holder: any = go.goEnclosingFunction(n);
+        if (holder?.kind !== SyntaxKind.MethodDeclaration) {
+            return true;
+        }
+        // every dynamic call in the holder passes its frame or a cut of it
+        return go.hasNodeWhere(holder.body, (c: any) => {
+            if (c.kind !== SyntaxKind.CallExpression) {
+                return false;
+            }
+            const callee: any = c.expression;
+            if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply')) && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+                return (callee.name.text === 'apply') || !frameOrCut(c.arguments?.[2], holder);
+            }
+            if ((callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration)) {
+                return !frameOrCut(c.arguments?.[1], holder);
+            }
+            return false;
+        });
+    });
+    return valueRefsOk && (uses > 0) && (cuts > 0);
+}
+// ===== end h29-A12 =====
