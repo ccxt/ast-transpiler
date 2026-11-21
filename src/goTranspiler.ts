@@ -55231,3 +55231,73 @@ function h29g29DefaultedReaderLocal (goTranspiler, method, expression, goType: s
             || isDestructuringTarget(n) || ((n.parent?.kind === SyntaxKind.VariableDeclaration) && (n.parent.name === n))));
 }
 // ===== end h29-H29-G29
+// ===== h29-H29-P03 =====
+// `const row = xs[i]` inside `for (let i = 0; i < xs.length; i++)` over a JSON-origin list, where every use of row is a
+// `this.safe*` read or the row argument of `this.parsePosition`: the comma-ok map read gives a non-map element as a nil
+// map, which those readers answer as undefined exactly as before (ruling 9a)
+export interface GoTranspiler {
+    h29p03PositionRow(declaration): boolean;
+}
+const H29P03_ROW_PARSERS = new Set<string> ([ 'parsePosition' ]);
+const h29p03Visiting = new Set<any> ();
+GoTranspiler.prototype.h29p03PositionRow = function (declaration): boolean {
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.ElementAccessExpression) || h29p03Visiting.has (declaration)) {
+        return false;
+    }
+    const list: any = init.expression;
+    const key: any = init.argumentExpression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (list.text === key.text)) {
+        return false;
+    }
+    h29p03Visiting.add (declaration);
+    try {
+        let parsed = false;
+        const ok = this.goDeclaredListIdentifier (list) && this.h27a09JsonOriginList (list)
+            && (this.goLoopBoundedIndexRead (init, list, key, list.text, key.text) !== undefined)
+            && this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+                if (this.h27a09SafeReaderArg (n, name)) {
+                    return true;
+                }
+                const call: any = n.parent;
+                const callee: any = call?.expression;
+                const row = (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29P03_ROW_PARSERS.has (callee.name?.text ?? '') && !this.goWritesOrRebindsName (n, name, []);
+                parsed = parsed || row;
+                return row;
+            });
+        return ok && parsed;
+    } finally {
+        h29p03Visiting.delete (declaration);
+    }
+};
+{
+    const declaredTypeH29p03 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+    GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | undefined {
+        const shipped = declaredTypeH29p03.call (this, node);
+        if ((shipped !== undefined) || (node?.kind !== SyntaxKind.Identifier)) {
+            return shipped;
+        }
+        const declaration: any = this.goAnyBoxLocalDeclaration (node);
+        return this.h29p03PositionRow (declaration) ? 'map[string]any' : shipped;
+    };
+    const printVariableDeclarationListH29p03 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed: string = printVariableDeclarationListH29p03.call (this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || !this.h29p03PositionRow (declaration)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const xs = declaration.initializer.expression.text;
+        const k = declaration.initializer.argumentExpression.text;
+        const m = /^(\s*)var (\w+) any = (\w+)\[(\w+)\]$/.exec (printed);
+        if ((m === null) || (m[2] !== name) || (m[3] !== xs) || (m[4] !== k)) {
+            return printed;
+        }
+        return `${m[1]}var ${name}, _ = ${xs}[${k}].(map[string]any)`;
+    };
+}
+// ===== end h29-H29-P03 =====
