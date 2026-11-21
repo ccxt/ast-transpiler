@@ -56038,3 +56038,53 @@ GoTranspiler.prototype.h30a08PointerKeyRead = function (node, printed) {
     };
 }
 // ===== end h30-H30-A08 =====
+// ===== h30-H30-A09
+// a dispatcher that hands its handlers a value derived from its own proven frame (a self-defaulted member read
+// `this.safeDict (F, 'k', F)`, a defaulted cut, or a ternary between such values) still hands only decoded JSON maps
+export interface GoTranspiler {
+    h30a09FrameDerived(node, holderFrame, depth: number): boolean;
+}
+GoTranspiler.prototype.h30a09FrameDerived = function (node, holderFrame, depth: number): boolean {
+    const expr: any = this.goUnwrapParenthesizedNode(node);
+    if ((depth > 12) || (expr === undefined)) {
+        return false;
+    }
+    if (expr.kind === SyntaxKind.ConditionalExpression) {
+        return this.h30a09FrameDerived(expr.whenTrue, holderFrame, depth + 1) && this.h30a09FrameDerived(expr.whenFalse, holderFrame, depth + 1);
+    }
+    if (expr.kind === SyntaxKind.CallExpression) {
+        const callee: any = expr.expression;
+        const args: any[] = expr.arguments ?? [];
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')
+            || (args.length < 2) || (args.length > 3) || (args[1]?.kind !== SyntaxKind.StringLiteral) || !this.h30a09FrameDerived(args[0], holderFrame, depth + 1)) {
+            return false;
+        }
+        const fallback: any = args[2];
+        return (fallback === undefined) || ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0))
+            || this.h30a09FrameDerived(fallback, holderFrame, depth + 1);
+    }
+    if (expr.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(expr);
+    if (decl === holderFrame) {
+        return true;
+    }
+    // a const local of the holder, never rebound or written through
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0) || (this.goEnclosingFunction(decl) !== holderFrame?.parent)) {
+        return false;
+    }
+    return this.h30a09FrameDerived(decl.initializer, holderFrame, depth + 1) && !h27a11WritesInto(this, this.goEnclosingFunction(decl), decl.name.text, decl);
+};
+{
+    const h29a12FrameCutH30a09 = GoTranspiler.prototype.h29a12FrameCut;
+    GoTranspiler.prototype.h29a12FrameCut = function (arg, holderFrame) {
+        if (h29a12FrameCutH30a09.call(this, arg, holderFrame)) {
+            return true;
+        }
+        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(arg) : undefined;
+        return (decl !== holderFrame) && (decl?.kind === SyntaxKind.VariableDeclaration) && this.h30a09FrameDerived(arg, holderFrame, 0);
+    };
+}
+// ===== end h30-H30-A09
