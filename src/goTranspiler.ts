@@ -36291,6 +36291,7 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
             if (ral87g6PairMapWrite(n)) {
                 return ral87g6ForeignOmitWrite(goTranspiler, scope, declaration); // 87g6: the joined pair's map slot
             }
+            if (h27g07ExtendWrite(goTranspiler, n)) { return false; }
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
                 const write = ral84g6OmitCall(parent.right);
                 // `x = this.omit (x, ..)` re-omits the local itself, a map by this very proof
@@ -36324,6 +36325,7 @@ function h25s01OmitLocalOnlyHandedOn(goTranspiler: GoTranspiler, scope, declarat
             return false;
         }
         uses++;
+        if (h27g07ExtendWrite(goTranspiler, n)) { return false; }
         const parent = n.parent;
         return !((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && parent.arguments.includes(n));
     });
@@ -36431,6 +36433,7 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
         if (ral87g6PairMapWrite(n) && ral87g6ForeignOmitWrite(this, scope, declaration)) {
             return true;
         }
+        if (h27g07ExtendWrite(this, n)) { rebinds += 1; return false; }
         if (ral84g6MapWriteIsMap(this, declaration, n, parent)) {
             rebinds += 1;
             return false;
@@ -48433,3 +48436,31 @@ function h27g06Int64CallOperand (goTranspiler, operand): boolean | undefined {
     return (goTranspiler.goOperandStaticType (operand, printed) === 'int64') ? true : undefined;
 }
 // ===== end h27-G06 =====
+
+// ===== h27-G07
+// `x = this.extend (..)` / `x = this.deepExtend (..)` of the base Exchange: the hand-written Go twins return a fresh
+// non-nil map[string]any for every input, so a map local may take the write with no conversion.
+function h27g07ExtendWrite(goTranspiler: GoTranspiler, n): boolean {
+    const parent = n?.parent;
+    if ((n?.kind !== SyntaxKind.Identifier) || (parent?.kind !== SyntaxKind.BinaryExpression) || (parent.left !== n)
+        || (parent.operatorToken?.kind !== SyntaxKind.EqualsToken) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return false;
+    }
+    let call = parent.right;
+    while (call?.kind === SyntaxKind.ParenthesizedExpression) {
+        call = call.expression;
+    }
+    const callee = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.questionDotToken !== undefined) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !['extend', 'deepExtend'].includes(callee.name?.text)
+        || (call.arguments?.length < 1) || call.arguments.some((a: Node) => a.kind === SyntaxKind.SpreadElement)) {
+        return false;
+    }
+    try {
+        const member = goTranspiler.getChecker().getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+        return (member?.parent?.kind === SyntaxKind.ClassDeclaration) && ['Exchange', 'BaseExchange'].includes((member.parent as any).name?.text);
+    } catch (e) {
+        return false;
+    }
+}
+// ===== end h27-G07
