@@ -57812,3 +57812,73 @@ function h30p02OmitIntoParserRead (node: any): boolean {
     return awaited && ok && (uses > 0);
 }
 // ===== end h30-H30-P02 =====
+// ===== h30-H30-P05 =====
+// `const row = xs[i]` in a bounded loop over a JSON-origin list (response chain or ws frame), where every use of row is
+// a `this.safe*` read or the row argument of `this.parseOrder`: the comma-ok map read hands a non-map element over as a
+// nil map, which those readers answer as undefined exactly as before (ruling 9a)
+export interface GoTranspiler {
+    h30p05OrderRow(declaration): boolean;
+}
+const H30P05_ROW_PARSERS = new Set<string> ([ 'parseOrder' ]);
+const h30p05Visiting = new Set<any> ();
+GoTranspiler.prototype.h30p05OrderRow = function (declaration): boolean {
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.ElementAccessExpression) || h30p05Visiting.has (declaration)) {
+        return false;
+    }
+    const list: any = init.expression;
+    const key: any = init.argumentExpression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (list.text === key.text)) {
+        return false;
+    }
+    h30p05Visiting.add (declaration);
+    try {
+        let parsed = false;
+        const ok = this.goDeclaredListIdentifier (list) && this.h27a09JsonOriginList (list)
+            && (this.goLoopBoundedIndexRead (init, list, key, list.text, key.text) !== undefined)
+            && this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+                if (this.h27a09SafeReaderArg (n, name)) {
+                    return true;
+                }
+                const call: any = n.parent;
+                const callee: any = call?.expression;
+                const row = (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H30P05_ROW_PARSERS.has (callee.name?.text ?? '') && !this.goWritesOrRebindsName (n, name, []);
+                parsed = parsed || row;
+                return row;
+            });
+        return ok && parsed;
+    } finally {
+        h30p05Visiting.delete (declaration);
+    }
+};
+{
+    const declaredTypeH30p05 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+    GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | undefined {
+        const shipped = declaredTypeH30p05.call (this, node);
+        if ((shipped !== undefined) || (node?.kind !== SyntaxKind.Identifier)) {
+            return shipped;
+        }
+        const declaration: any = this.goAnyBoxLocalDeclaration (node);
+        return this.h30p05OrderRow (declaration) ? 'map[string]any' : shipped;
+    };
+    const printVariableDeclarationListH30p05 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed: string = printVariableDeclarationListH30p05.call (this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || !this.h30p05OrderRow (declaration)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const xs = declaration.initializer.expression.text;
+        const k = declaration.initializer.argumentExpression.text;
+        const m = /^(\s*)var (\w+) any = (\w+)\[(\w+)\]$/.exec (printed);
+        if ((m === null) || (m[2] !== name) || (m[3] !== xs) || (m[4] !== k)) {
+            return printed;
+        }
+        return `${m[1]}var ${name}, _ = ${xs}[${k}].(map[string]any)`;
+    };
+}
+// ===== end h30-H30-P05 =====
