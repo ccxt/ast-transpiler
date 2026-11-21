@@ -58001,3 +58001,45 @@ GoTranspiler.prototype.h29t05FrameListNilTested = function (list) {
     };
 }
 // ===== end h30-T03 =====
+// ===== h30-H30-T06
+// a `const x: Dict = this.safeDict (C, 'k', C)` on a frame map C that the base printer leaves `var x any = this.SafeDict(..)`
+// is the h29a13 self-default read: the member map or the frame itself, never written through, rebound or nil-tested
+export interface GoTranspiler {
+    h30t06FrameSelfDefault(declaration, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h30t06FrameSelfDefault = function (declaration, printed: string): string | undefined {
+    const init: any = declaration?.initializer;
+    const typeText = declaration?.type?.getText?.();
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string') || (typeText !== 'Dict')
+        || ((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0 || (init?.kind !== SyntaxKind.CallExpression) || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    if ((container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral) || (fallback?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const lit = `"${key.text}"`;
+    const m = /^(\n*)(\t*)var (\w+) any = this\.SafeDict\((\w+), ("[^"\\\n]*"), (\w+)\)( \/\/[^\n]*)?$/s.exec(printed);
+    if ((m === null) || (m[3] !== name) || (m[4] !== container.text) || (m[5] !== lit) || (m[6] !== container.text) || (fallback.text !== container.text)) {
+        return undefined;
+    }
+    const scope: any = this.goEnclosingFunction(declaration);
+    const shipped = `var ${name} map[string]any = this.SafeDictMap(${container.text}, ${lit}, ${container.text})`;
+    const nilTest = (n: any) => (n.parent?.kind === SyntaxKind.BinaryExpression) && this.goIsNilComparisonOperand(n, n.parent);
+    if ((scope === undefined) || !this.h29a13FrameMap(container) || h27a11WritesInto(this, scope, name, declaration)
+        || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && nilTest(n))) {
+        return undefined;
+    }
+    const read = this.h29a13FrameDictRead(declaration, m[1] + m[2] + shipped);
+    return (read === undefined) ? undefined : read + (m[7] ?? '');
+};
+{
+    const printVariableDeclarationListH30t06 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH30t06.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h30t06FrameSelfDefault(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h30-H30-T06
