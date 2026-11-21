@@ -53706,3 +53706,147 @@ GoTranspiler.prototype.h29A16JsonOrigin = function (node, depth: number): boolea
     };
 }
 // ===== end h29-H29-A16
+// ===== h29-H29-A17
+// `const d = this.safeDict (R, 'lit', R)` declared map[string]any where R is (1) a one-line typed Dict endpoint receive
+// (bound through the h28a17 holder, R = holder.Value) or (2) a nil-seeded local whose every write is such a receive:
+// R holds only decoded JSON, so the comma-ok read with R as the nil fallback answers what SafeDictMap(Raw, k, Raw) did
+export interface GoTranspiler {
+    h29a17SelfDefault(n: any): boolean;
+    h29a17Site(node: any): { name: any, container: any, key: any } | undefined;
+    h29a17Receive(declaration: any): boolean;
+    h29a17Joined(declaration: any): boolean;
+}
+const h29a17Proven = new WeakMap<any, boolean>();
+const h29a17JoinedProven = new WeakMap<any, boolean>();
+// `this.safeDict (R, 'lit', R)` with n either R, the result declared map[string]any by a single const
+GoTranspiler.prototype.h29a17SelfDefault = function (n: any): boolean {
+    const call: any = n?.parent;
+    if ((n?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 3)
+        || ((call.arguments[0] !== n) && (call.arguments[2] !== n))) {
+        return false;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    const callee: any = call.expression;
+    if ((container?.kind !== SyntaxKind.Identifier) || (fallback?.kind !== SyntaxKind.Identifier) || (container.text !== fallback.text)
+        || (key?.kind !== SyntaxKind.StringLiteral) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')) {
+        return false;
+    }
+    const decl: any = call.parent;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer !== call) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || (decl.parent?.declarations?.length !== 1) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0) || (this.goSafeDictLocalUnbox(decl) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    // the result aliases R: nothing may write through it or rebind it
+    const scope: any = this.goEnclosingFunction(decl);
+    return (scope !== undefined) && !this.hasNodeWhere(scope, (m: any) => (m.kind === SyntaxKind.Identifier) && (m.text === decl.name.text)
+        && (m !== decl.name) && ((m.parent?.kind === SyntaxKind.ElementAccessExpression) && (m.parent.expression === m) && this.h27a04WrittenThrough(m.parent)
+            || this.goWritesOrRebindsName(m, m.text, [])));
+};
+// (1) the typed Dict endpoint receive whose uses are reads the shipped typed-receive scanner accepts or self-default reads
+GoTranspiler.prototype.h29a17Receive = function (declaration: any): boolean {
+    if (h29a17Proven.has(declaration)) {
+        return h29a17Proven.get(declaration) === true;
+    }
+    h29a17Proven.set(declaration, false);
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.AwaitExpression) || (declaration.parent?.declarations?.length !== 1)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || this.h28a17InfoReceive(declaration)) {
+        return false;
+    }
+    let element = undefined;
+    try {
+        element = ccxtGoEndpointElement(this, init.expression);
+    } catch (e) {
+        return false;
+    }
+    const printed = (element === GO_SAFE_DICT_LOCAL_TYPE) ? this.printNode(init, 0).trim() : '';
+    if (!printed.startsWith('(<-this.') || !printed.endsWith(').Raw') || printed.includes('\n')) {
+        return false;
+    }
+    let selfDefaults = 0;
+    const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
+        if (this.h29a17SelfDefault(n)) {
+            selfDefaults += 1;
+            return true;
+        }
+        return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
+    }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
+    const readOnly = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (selfDefaults > 0)
+        && this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name));
+    h29a17Proven.set(declaration, readOnly);
+    return readOnly;
+};
+// (2) the endpoint join's nil-seeded map local: every write an awaited Dict endpoint, every other use a read
+GoTranspiler.prototype.h29a17Joined = function (declaration: any): boolean {
+    if (h29a17JoinedProven.has(declaration)) {
+        return h29a17JoinedProven.get(declaration) === true;
+    }
+    h29a17JoinedProven.set(declaration, false);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !goAwaitedMapWritesOnlyLocal(this, declaration)) {
+        return false;
+    }
+    let writes = 0;
+    const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
+        if (this.h28a03EndpointWrite(n, name)) {
+            writes += 1;
+            return true;
+        }
+        return this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name);
+    });
+    h29a17JoinedProven.set(declaration, readOnly && (writes > 0));
+    return readOnly && (writes > 0);
+};
+GoTranspiler.prototype.h29a17Site = function (node: any) {
+    const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = decl?.initializer;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 3) || !this.h29a17SelfDefault(call.arguments[0])) {
+        return undefined;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(call.arguments[0]);
+    if ((source === undefined) || !(this.h29a17Receive(source) || this.h29a17Joined(source))) {
+        return undefined;
+    }
+    return { name: decl.name, container: call.arguments[0], key: call.arguments[1] };
+};
+{
+    const printVariableDeclarationListH29a17 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const iden = this.getIden(identation);
+        if ((declaration !== undefined) && this.h29a17Receive(declaration)) {
+            const holder = this.h28a17HolderName(declaration);
+            const recv = this.printNode(declaration.initializer, identation).trim().slice(0, -'.Raw'.length);
+            return `\n${iden}${holder} := ${recv}\n${iden}PanicOnError(${holder}.Raw)\n${iden}var ${declaration.name.text} map[string]any = ${holder}.Value`;
+        }
+        const printed: string = printVariableDeclarationListH29a17.call(this, node, identation);
+        const site = (typeof printed === 'string') ? this.h29a17Site(node) : undefined;
+        if (site === undefined) {
+            return printed;
+        }
+        const name = this.printNode(site.name, 0);
+        const container = this.printNode(site.container, 0);
+        const key = this.printNode(site.key, 0);
+        if (printed.replace(/^\n+/, '') !== `${iden}var ${name} map[string]any = this.SafeDictMap(${container}, ${key}, ${container})`) {
+            return printed;
+        }
+        return `${/^\n*/.exec(printed)[0]}${iden}var ${name} map[string]any\n${iden}${name}, _ = ${container}[${key}].(map[string]any)\n${iden}if ${name} == nil {\n${iden}\t${name} = ${container}\n${iden}}`;
+    };
+    const receiverTypeH29a17 = GoTranspiler.prototype.h27a01ReceiverType;
+    GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+        const declaration: any = this.goAnyBoxLocalDeclaration(container);
+        return ((declaration !== undefined) && this.h29a17Receive(declaration)) ? GO_SAFE_DICT_LOCAL_TYPE : receiverTypeH29a17.call(this, container);
+    };
+    const jsonOriginH29a17 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        if (jsonOriginH29a17.call(this, node, depth)) {
+            return true;
+        }
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+        return (declaration !== undefined) && this.h29a17Receive(declaration);
+    };
+}
+// ===== end h29-H29-A17
