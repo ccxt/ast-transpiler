@@ -23176,6 +23176,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const h27g19 = this.h27g19RequestStubAwait(expr); if (h27g19 !== undefined) { return h27g19; }
         const h28g13 = this.h28g13ProvenDefaultSafeRead(expr); if (h28g13 !== undefined) { return h28g13; }
         const h29g11 = this.h29g11CopyOrFreshMapSource(expr); if (h29g11 !== undefined) { return h29g11; }
+        const h30g07 = this.h30g07DerefStoredAccessorWrite(expr); if (h30g07 !== undefined) { return h30g07; }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -56939,3 +56940,57 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
         + iden + 'retStrVal := *retStrPtr + ' + tail + '\n' + iden + 'return &retStrVal');
 };
 // ===== end h30-H30-G05
+// ===== h30-H30-G07
+// `x = this.safeInteger|safeString|safeNumber|safeFloat|safeBool[2|N] (..)` into an untyped venue local: the ccxt
+// build stores DerefScalar(call) there (the guarded `*derefPtr` / nil store), so the box holds the pointee or an
+// untyped nil, never a scalar pointer. Requires the printed call to be the shape that pass matches, and no shadowing.
+export interface GoTranspiler {
+    h30g07DerefStoredAccessorWrite(expr): boolean | undefined;
+}
+const H30G07_ACCESSOR = /^safe(?:String|Integer|Number|Float|Bool)(?:2|N)?$/;
+const H30G07_PRINTED = /^this\.Safe(?:String|Integer|Number|Float|Bool)[N2-9]*\((?:[^()]|\([^()]*\))*\)$/;
+GoTranspiler.prototype.h30g07DerefStoredAccessorWrite = function (expr) {
+    const callee: any = expr?.expression;
+    if ((expr?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !H30G07_ACCESSOR.test(String(callee.name?.text ?? ''))
+        || !this.goIsBaseExchangeMethod(callee.name)) {
+        return undefined;
+    }
+    // the base tier, and a printer without the ccxt hooks, do not run the venue DerefScalar pass
+    if (!this.__ccxtGoLocalTypesInstalled) {
+        return undefined;
+    }
+    const file = String(expr.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+    if ((file === '') || /(^|\/)ts\/src\/base\//.test(file)) {
+        return undefined;
+    }
+    const write: any = expr.parent;
+    if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken) || (write.right !== expr)
+        || (write.left?.kind !== SyntaxKind.Identifier) || (write.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return undefined;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(write.left);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || (decl.parent?.kind !== SyntaxKind.VariableDeclarationList) || (decl.parent.parent?.kind !== SyntaxKind.VariableStatement)
+        || (this.goDeclaredTypeOfIdentifier(write.left) !== undefined) || (this.goDeclaredTypeOfIdentifier(decl.name) !== undefined)) {
+        return undefined;
+    }
+    const scope: any = this.goEnclosingFunction(decl);
+    if ((scope === undefined) || (this.goEnclosingFunction(write) !== scope)) {
+        return undefined;
+    }
+    const name = decl.name.text;
+    const same = this.goDescendantsOf(scope).filter((n: any) => ((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)
+        || (n.kind === SyntaxKind.BindingElement)) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name));
+    if (same.length !== 1) {
+        return undefined;
+    }
+    let printed: string;
+    try {
+        printed = this.printNode(expr, 0).trim();
+    } catch (e) {
+        return undefined;
+    }
+    return H30G07_PRINTED.test(printed) ? true : undefined;
+};
+// ===== end h30-H30-G07
