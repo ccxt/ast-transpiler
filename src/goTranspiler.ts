@@ -54423,3 +54423,78 @@ GoTranspiler.prototype.h29g06StringKey = function (key): boolean {
     return false;
 };
 // ===== end h29-G06 =====
+// ===== h29-H29-G08
+// `const o = this.safeDict (R, k)` where R is a const local read from an ArrayCache `hashmap` row
+// (`this.safeDict (c.hashmap, s[, {}])`): the hand-written cache only stores map[string]any items in a row
+// (go/v4/exchange_cache.go appendOwned), so the comma-ok read answers what SafeMapTyped did; nil key -> nil.
+export interface GoTranspiler {
+    h29g08HashmapRowEntryRead(node): { name: string, row: string, key: string, pointer: boolean } | undefined;
+    h29g08HashmapRow(row): boolean;
+}
+const H29G08_CACHE_TYPES = [ 'ArrayCache', 'ArrayCacheBySymbolById', 'ArrayCacheByOutcomeById', 'ArrayCacheBySymbolBySide' ];
+GoTranspiler.prototype.h29g08HashmapRow = function (row) {
+    const declaration: any = (row?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(row)?.valueDeclaration?.resolve() : undefined;
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.CallExpression) || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (init.expression.name?.text !== 'safeDict')
+        || (init.arguments.length < 2) || (init.arguments.length > 3)) {
+        return false;
+    }
+    const fallback: any = init.arguments[2];
+    if ((fallback !== undefined) && !((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0))) {
+        return false;
+    }
+    const rows: any = init.arguments[0];
+    if ((rows?.kind !== SyntaxKind.PropertyAccessExpression) || (rows.name?.text !== 'hashmap')) {
+        return false;
+    }
+    let typeText = '';
+    try {
+        const checker: any = this.getChecker();
+        typeText = checker.typeToString(checker.getNonNullableType(checker.getTypeAtLocation(rows.expression)));
+    } catch (e) {
+        return false;
+    }
+    const method: any = this.goEnclosingFunction(declaration);
+    return H29G08_CACHE_TYPES.includes(typeText) && (method !== undefined)
+        && !this.hasNodeWhere(method, (n: any) => (n !== declaration.name) && this.goWritesOrRebindsName(n, row.text, [])
+            || ((n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === row.text)
+                && (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)));
+};
+GoTranspiler.prototype.h29g08HashmapRowEntryRead = function (node) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments[1].kind !== SyntaxKind.Identifier)
+        || !this.h29g08HashmapRow(call.arguments[0])) {
+        return undefined;
+    }
+    const keyNode: any = call.arguments[1];
+    const keyType = this.goLocalStaticType(keyNode) ?? this.goDeclaredParamStaticType(keyNode);
+    if ((keyType !== 'string') && (keyType !== '*string')) {
+        return undefined;
+    }
+    return { name: declaration.name.text, row: call.arguments[0].text, key: keyNode.text, pointer: keyType === '*string' };
+};
+const h29g08ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = h29g08ShippedPrintDeclarationList.call(this, node, identation);
+    const site = (typeof printed === 'string') ? this.h29g08HashmapRowEntryRead(node) : undefined;
+    const shipped = (site === undefined) ? [] : [ 'SafeMapTyped', 'ccxt.SafeMapTyped', 'this.SafeDictMap' ].map((f) => `var ${site.name} map[string]any = ${f}(${site.row}, ${site.key})`);
+    if ((site === undefined) || !shipped.includes(printed.trim())) {
+        return printed;
+    }
+    const iden = this.getIden(identation);
+    const lead = printed.startsWith('\n') ? '\n' : '';
+    if (!site.pointer) {
+        return `${lead}${iden}var ${site.name}, _ = ${site.row}[${site.key}].(map[string]any)`;
+    }
+    return `${lead}${iden}var ${site.name} map[string]any\n`
+        + `${iden}if ${site.key} != nil {\n`
+        + `${iden}\t${site.name}, _ = ${site.row}[*${site.key}].(map[string]any)\n`
+        + `${iden}}`;
+};
+// ===== end h29-H29-G08
