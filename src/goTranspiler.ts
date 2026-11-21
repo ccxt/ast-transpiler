@@ -49578,3 +49578,78 @@ GoTranspiler.prototype.h27g37SpawnArgDeref = function (node, printed: string) {
     return ((this.goPrintedArgType(node) === '*string') && this.h27g37SpawnArgIsString(node)) ? ('*' + printed) : undefined;
 };
 // ===== end h27-G37 =====
+// ===== h27-G38 =====
+// an `any[]` parameter of a venue method that no override, base declaration or by-name dispatch reaches, never
+// written in the body, and handed by every call site (all in the method's own file) a list the pointer-free
+// proof accepts: its elements are JSON values or maps, so DerefScalar on them is the identity, nil included.
+function goH27g38ParamListPointerFree (goTranspiler: GoTranspiler, list, depth: number): boolean {
+    if ((list?.kind !== SyntaxKind.Identifier) || (depth > 2)) {
+        return false;
+    }
+    let param: any;
+    try {
+        const symbol: any = goTranspiler.checkerOrUndefined ()?.getSymbolAtLocation (list);
+        param = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+    } catch (e) {
+        return false;
+    }
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (param.dotDotDotToken !== undefined)
+        || (fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || (param.type?.kind !== SyntaxKind.ArrayType) || (param.type.elementType?.kind !== SyntaxKind.AnyKeyword)
+        || goTranspiler.goMethodKeepsBaseSignature (fn) || (goTranspiler.goNameWriteSites (fn.body, param.name.text, param).length > 0)
+        || goTranspiler.hasNodeWhere (fn.body, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === param.name.text)
+            && !goTranspiler.goH26g25JsonListUseIsReadOnly (n, param.name.text))) {
+        return false;
+    }
+    const name: string = fn.name.text;
+    const index: number = fn.parameters.indexOf (param);
+    const tree: any = goTranspiler.goTsSrcTree (fn.getSourceFile ());
+    if (tree === undefined) {
+        return false;
+    }
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    const myClass = goTranspiler.goEnclosingClassName (fn);
+    if ((tree.callIndex.get (name) ?? []).some ((site: any) => (site.file !== myFile) && goTranspiler.goTsSrcFileDerivesFrom (tree, site.file, myClass))) {
+        return false;
+    }
+    for (const text of tree.fileText.values ()) {
+        if (text.includes (`'${name}'`) || text.includes (`"${name}"`)) {
+            return false;
+        }
+    }
+    const calls: any[] = goTranspiler.goSameFileCallsOf (fn, name).filter ((c: any) => c.expression?.expression?.kind === SyntaxKind.ThisKeyword);
+    if ((calls.length === 0) || (calls.length !== goTranspiler.goSameFileCallsOf (fn, name).length)) {
+        return false;
+    }
+    return calls.every ((call: any) => {
+        const arg: any = goTranspiler.goUnwrapParenthesizedNode (call.arguments?.[index]);
+        return (arg?.kind === SyntaxKind.Identifier) && (goTranspiler.goListElementsArePointerFree (arg, depth + 1) || goH27g38JsonListArg (goTranspiler, arg, name, index));
+    });
+}
+// `const xs = this.safeList (doc, k, ..)` of a decoded JSON document, only read or handed to `this.<name>` at `index`
+function goH27g38JsonListArg (goTranspiler: GoTranspiler, arg, name: string, index: number): boolean {
+    const declaration: any = goTranspiler.goDeclarationOfIdentifier (arg);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const args: any = goTranspiler.goSafeAccessorLocalArgs (goTranspiler.goUnwrapParenthesizedNode (declaration.initializer), 'safeList');
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier) || !goTranspiler.goJsonOriginContainer (args.container)) {
+        return false;
+    }
+    return goTranspiler.goJsonOriginBindingIsReadOnly (declaration, (n: any, local: string) => {
+        const call: any = n.parent;
+        if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[index] === n) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === name)) {
+            return true;
+        }
+        return goTranspiler.goH26g25JsonListUseIsReadOnly (n, local);
+    });
+}
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFree.call (this, list, depth) || goH27g38ParamListPointerFree (this, list, depth);
+    };
+}
+// ===== end h27-G38 =====
