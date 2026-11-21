@@ -11078,7 +11078,8 @@ function ccxtGoJoinedParamsLocal (goTranspiler, node) {
 // tuple-result family: it prints `(*string|map[string]any, map[string]any)`, destructuring callers bind `a, b := call`.
 const CCXT_GO_VENUE_PAIR_STATE = { 'go': undefined, 'methods': new WeakMap () };
 const CCXT_GO_VENUE_PAIR_SLOT_0 = { 'Str': { 'type': '*string', 'first': 'SafeStringPtr' }, 'Dict': { 'type': 'map[string]any', 'first': 'MapTyped' },
-    'int': { 'type': 'int64', 'first': 'Int64Value' } };
+    'int': { 'type': 'int64', 'first': 'Int64Value' },
+    'Int': { 'type': 'int64', 'first': 'Int64Value' } };
 
 function ccxtGoVenuePairOf (method) {
     const cache = CCXT_GO_VENUE_PAIR_STATE.methods;
@@ -11124,6 +11125,7 @@ function ccxtGoVenuePairOf (method) {
 // an `int` slot 0 is provably a non-nil integer: `this.parseToInt (..)` (int64), an integer literal, or a never-rebound
 // const local initialised with one (printed `int`, so it converts); the printed slot text, undefined otherwise
 function ccxtGoVenueIntSlot (e, printed = undefined) {
+    const h27 = h27g16ParseToIntConstSlot (e, printed); if (h27 !== undefined) return h27;
     const lit = (n) => (n?.kind === ts.SyntaxKind.NumericLiteral) && /^\d+$/.test (n.text);
     if (lit (e) || ((e?.kind === ts.SyntaxKind.CallExpression) && (e.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
         && (e.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'parseToInt') && (e.arguments.length === 1))) {
@@ -48793,3 +48795,21 @@ function installH27g15AddChainCallLeafArgument (goTranspiler) {
     };
 }
 // ===== end h27-H27-G15
+
+// ===== h27-G16
+// an `Int` venue pair slot 0 that is a never-rebound const local initialised with `this.parseToInt (x)` (printed int64)
+function h27g16ParseToIntConstSlot (e, printed = undefined) {
+    let decl;
+    try {
+        decl = (e?.kind === ts.SyntaxKind.Identifier) ? CCXT_GO_VENUE_PAIR_STATE.go?.getChecker ()?.getSymbolAtLocation (e)?.valueDeclaration?.resolve () : undefined;
+    } catch (err) {
+        decl = undefined;
+    }
+    const init = decl?.initializer;
+    const isConst = (decl?.kind === ts.SyntaxKind.VariableDeclaration) && ((decl.parent?.flags & ts.NodeFlags.Const) !== 0) && (decl.type === undefined);
+    const parsed = (init?.kind === ts.SyntaxKind.CallExpression) && (init.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (init.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (init.expression.name?.text === 'parseToInt') && (init.arguments.length === 1);
+    return (isConst && parsed) ? (printed ?? '') : undefined;
+}
+
+// ===== end h27-G16
