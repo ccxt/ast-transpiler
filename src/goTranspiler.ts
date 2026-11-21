@@ -57973,3 +57973,31 @@ export function h30p15ParamHasFamilyType (paramList: string, local: string, type
     return declared && !new RegExp ('\\n\\t+(?:var ' + local + '\\b|' + local + ' :=)').test (body);
 }
 // ===== end h30-H30-P15
+// ===== h30-T03 =====
+// a list cut by `safeList (frame, 'lit')` from a proven ws frame, used only read-only (h28a13FrameList) or in a
+// nil test, holds decoded JSON elements (maps, []any, strings, numbers, bools, nil): no Go scalar pointer for DerefScalar
+export interface GoTranspiler {
+    h29t05FrameListNilTested(list): boolean;
+}
+GoTranspiler.prototype.h29t05FrameListNilTested = function (list) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.initializer?.arguments?.length !== 2)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeList');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.h27a11JsonContainer(this.goUnwrapParenthesizedNode(args.container))) {
+        return false;
+    }
+    const nilTest = (n: any): boolean => (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.left === n)
+        && ((n.parent.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken) || (n.parent.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken))
+        && isNilLiteralExpression(n.parent.right);
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => nilTest(n) || this.goJsonOriginListUseIsReadOnly(n, name) || this.h27a09SafeReaderArg(n, name));
+};
+{
+    const pointerFreeH29t05 = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFreeH29t05.call(this, list, depth) || ((list?.kind === SyntaxKind.Identifier) && this.h29t05FrameListNilTested(list));
+    };
+}
+// ===== end h30-T03 =====
