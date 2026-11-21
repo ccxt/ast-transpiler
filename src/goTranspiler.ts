@@ -4225,6 +4225,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
         }
         result = result ?? h22g05IntPtrReturn (goTranspiler, node, allowed);
         result = result ?? h26g09MixedStrReturn (goTranspiler, node, allowed);
+        result = result ?? h30g05PtrConcatStrReturn (goTranspiler, node, allowed);
     } finally {
         CCXT_GO_RETURN_TYPE_IN_PROGRESS.delete (node);
     }
@@ -12274,6 +12275,7 @@ function goStrReturnCallersKeepNil (fileName, name, seen) {
 }
 
 function goStrCallBindsNilSafeLocal (id, fileName, seen) {
+    const h30g05 = h30g05LetBindsNilSafeLocal (id, fileName, seen); if (h30g05 !== undefined) return h30g05;
     const access = id.parent;
     const call = access?.parent;
     const decl = call?.parent;
@@ -56803,3 +56805,137 @@ GoTranspiler.prototype.h29G04StringListDefaultedArg = function (node, goType: st
     return (this.goGetArgParameterType(target) === GO_STRING_LIST_LOCAL_TYPE) ? true : undefined;
 };
 // ===== end h30-G04 =====
+
+// ===== h30-H30-G05
+// `let x: Str = undefined` whose every write is nil or a call of a `: Str` method under the caller proof, and whose
+// reads are nil tests or deref-safe callee arguments (h27g13LocalReadDerefs): the *string never reaches an any box
+function h30g05LetBindsNilSafeLocal (id, fileName, seen) {
+    const access = id.parent;
+    const call = access?.parent;
+    const assign = call?.parent;
+    if ((access?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (access.name !== id) || (access.expression.kind !== ts.SyntaxKind.ThisKeyword)
+        || (call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression !== access) || (assign?.kind !== ts.SyntaxKind.BinaryExpression)
+        || (assign.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || (assign.right !== call) || (assign.left.kind !== ts.SyntaxKind.Identifier)
+        || (assign.parent?.kind !== ts.SyntaxKind.ExpressionStatement)) {
+        return undefined;
+    }
+    let method = assign.parent;
+    while ((method !== undefined) && (method.kind !== ts.SyntaxKind.MethodDeclaration)) {
+        method = method.parent;
+    }
+    if (method?.body === undefined) {
+        return false;
+    }
+    const local = assign.left.text;
+    const isNil = (e) => (e !== undefined) && isAbsentExpression (e);
+    const provenCall = (e) => (e?.kind === ts.SyntaxKind.CallExpression) && (e.expression.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) && seen.has (e.expression.name.text);
+    let decls = 0;
+    let ok = true;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n !== method.body) && ts.isFunctionLike (n)) {
+            ok = !n.getText ().includes (local);
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.VariableDeclaration) && (n.name.kind === ts.SyntaxKind.Identifier) && (n.name.text === local)) {
+            decls += 1;
+            const type = n.type?.getText ();
+            ok = ((n.parent.flags & ts.NodeFlags.Let) !== 0) && ((type === undefined) || (type === 'Str')) && ((n.initializer === undefined) || isNil (n.initializer));
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === local)) {
+            const p = n.parent;
+            const binary = (p?.kind === ts.SyntaxKind.BinaryExpression) ? p : undefined;
+            const op = binary?.operatorToken.kind;
+            if ((op === ts.SyntaxKind.EqualsToken) && (binary.left === n)) {
+                ok = (binary.parent?.kind === ts.SyntaxKind.ExpressionStatement) && (isNil (binary.right) || provenCall (binary.right));
+                if (ok) {
+                    binary.right.forEachChild (visit);
+                }
+                return;
+            }
+            if (h27g13LocalReadDerefs (n)) {
+                return;
+            }
+            const compare = (op === ts.SyntaxKind.EqualsEqualsEqualsToken) || (op === ts.SyntaxKind.ExclamationEqualsEqualsToken);
+            ok = compare && isNil ((binary.left === n) ? binary.right : binary.left);
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    visit (method.body);
+    return ok && (decls === 1);
+}
+
+// a `: Str` method whose value returns are `*string`, native `string`, or `p + 'lit' [+ 'lit'..]` with p a `*string`:
+// the concat prints `retStrPtr := p; if retStrPtr == nil { return nil }; retStrVal := *retStrPtr + ..`, the nil answer Add gave
+const H30G05_PTR_CONCAT_RETURNS = new WeakMap ();
+function h30g05PtrConcatParts (goTranspiler, expression) {
+    const parts = [];
+    let e = ccxtGoUnwrapParens (expression);
+    while ((e?.kind === ts.SyntaxKind.BinaryExpression) && (e.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+        const right = ccxtGoUnwrapParens (e.right);
+        if ((right.kind !== ts.SyntaxKind.StringLiteral) && (right.kind !== ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+            return undefined;
+        }
+        parts.unshift (right);
+        e = ccxtGoUnwrapParens (e.left);
+    }
+    if ((parts.length === 0) || (e?.kind !== ts.SyntaxKind.CallExpression) || (ccxtGoReturnExpressionType (goTranspiler, e) !== '*string')) {
+        return undefined;
+    }
+    return { head: e, parts };
+}
+function h30g05PtrConcatStrReturn (goTranspiler, node, allowed) {
+    if (!allowed.includes ('*string') || /\bretStr(Val|Ptr)\b/.test (node.body?.getText () ?? 'retStrVal')) {
+        return undefined;
+    }
+    const values = [];
+    const concats = [];
+    for (const r of collectReturnStatements (node.body)) {
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        if (r.expression === undefined) {
+            return undefined;
+        }
+        if (isAbsentExpression (r.expression)) {
+            continue;
+        }
+        const concat = h30g05PtrConcatParts (goTranspiler, r.expression);
+        if (concat !== undefined) {
+            concats.push ([ r, concat ]);
+            continue;
+        }
+        const goType = ccxtGoReturnExpressionType (goTranspiler, r.expression);
+        if (goType === 'string') {
+            values.push (r);
+        } else if (goType !== '*string') {
+            return undefined;
+        }
+    }
+    if ((concats.length === 0) || !goGeneralReturnKeepsAbsence (goTranspiler, node, '*string')) {
+        return undefined;
+    }
+    values.forEach ((r) => H26G09_ADDRESSED_RETURNS.add (r));
+    concats.forEach (([ r, concat ]) => H30G05_PTR_CONCAT_RETURNS.set (r, concat));
+    return '*string';
+}
+const printReturnStatementH30g05 = GoTranspiler.prototype.printReturnStatement;
+GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+    const concat = H30G05_PTR_CONCAT_RETURNS.get (node);
+    if (concat === undefined) {
+        return printReturnStatementH30g05.call (this, node, identation);
+    }
+    const iden = this.getIden (identation);
+    const tail = concat.parts.map ((x) => this.printNode (x, 0).trim ()).join (' + ');
+    return this.printNodeCommentsIfAny (node, identation, iden + 'retStrPtr := ' + this.printNode (concat.head, 0).trim () + '\n'
+        + iden + 'if retStrPtr == nil {\n' + this.getIden (identation + 1) + 'return nil\n' + iden + '}\n'
+        + iden + 'retStrVal := *retStrPtr + ' + tail + '\n' + iden + 'return &retStrVal');
+};
+// ===== end h30-H30-G05
