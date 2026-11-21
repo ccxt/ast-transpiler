@@ -5964,5 +5964,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Hooked from printOptionalArgsSliceCall: the by-value arguments of such a returned call (fixed ones and `&[x]`
      *  elements) move instead of cloning; the clone text becomes the owned mark. */
     h28t01ReturnedSliceMoves(node: any, cloned: string[]): void;
+    /** `row['fee']['k'] = v` / `row['fees'][i]['k'] = v` on a typed cache row (`printCacheRowNestedWrite`'s receivers): the first
+     *  hop is the same `entry(..).or_insert(Value::Null)`; the write is a native insert on a map, skipped on anything else as the
+     *  helper skipped it. The `[i]` hop needs `i` in bounds: a loop over a copy of `row['fees']` with the row unwritten since. */
+    h30r06CacheRowFeeWrite(baseExpr: any, keys: any[], right: any, rhs: string, identation: number): string | undefined;
+    /** `i` of `row[k][i]`: the index of `for (let i = 0; i < xs.length; i++)` (i never written) where `const xs` is a
+     *  `this.safeList (row, k[, []])` copy of the same row's list, and nothing writes `row` between that read and the write. */
+    h30r06BoundedRowIndex(row: any, key: string, indexNode: any): string | undefined;
+    /** maps (h29-R06 proof: features / markets / markets_by_id through safeDict / omit / extend / deepExtend, literal
+     *  non-marker keyed writes only): no ws tag can sit in it, so the map's own iterators list what the helper listed. */
+    h30r07ConfigDictEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `xs[i]` read inside the value of a statement-level write into the same list local (`xs[i] = f (xs[i])`,
+     *  `xs[j]['k'] = g (xs[j])`): that write binds its value first (`let __be_tmp = ..`), so the read runs before `&mut xs`. */
+    h30r08ListRowRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
 }
 export {};

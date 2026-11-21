@@ -2625,3 +2625,117 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     h29a14DefaultedFrameRead(node: any, printed: string): string | undefined;
 }
+export interface GoTranspiler {
+    h30a02TypedReadReceiverDefaultedRead(node: any, identation: number, printed: string): string | undefined;
+    h30a02WrittenThroughElement(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h30a03Receiver(container: any, read: any): boolean;
+    h30a03Site(call: any, name: string, identation: number, printed: string, prefix: string, declaration?: any): string | undefined;
+    h30a03DeclRead(node: any, identation: number, printed: string): string | undefined;
+    h30a03AssignRead(node: any, identation: number, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h30a06ReturnedInfoUse(node: any, name: string): boolean;
+}
+export interface GoTranspiler {
+    h30a08PointerKeyRead(node: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h30a09FrameDerived(node: any, holderFrame: any, depth: number): boolean;
+}
+export interface GoTranspiler {
+    h30a10FrameAlias(node: any, frame: any, depth?: number): boolean;
+}
+export interface GoTranspiler {
+    h30a11FrameDefaultedRead(declaration: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h30a12ListSliceRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+}
+export interface GoTranspiler {
+    h30a15IndexByMap(node: any): boolean;
+}
+export interface GoTranspiler {
+    h30a16ToArrayList(baseExpr: any): boolean;
+    h30a16ToArrayCall(n: any): any;
+}
+export interface GoTranspiler {
+    h30A17JsonMap(container: any): boolean;
+}
+export interface GoTranspiler {
+    h30a19AnyResult(n: any): boolean;
+    h30a19HandedOn(n: any): boolean;
+}
+export interface GoTranspiler {
+    h30g01DefaultArg(node: any): any;
+}
+export interface GoTranspiler {
+    h30G02SlotRead(n: any): boolean | undefined;
+    h30g02Hoist: Map<any, string> | undefined;
+}
+export interface GoTranspiler {
+    h29G04PushedStrPtrIsNonNil(pushNode: any): boolean;
+    h29G04StringSliceCopyFill(n: any, param: any, goType: string, nilable: boolean, boxed: boolean): boolean | undefined;
+}
+export interface GoTranspiler {
+    h29G04StringListDefaultedArg(node: any, goType: string): boolean | undefined;
+}
+export interface GoTranspiler {
+    h30g07DerefStoredAccessorWrite(expr: any): boolean | undefined;
+}
+export interface GoTranspiler {
+    h30g15SafeReadNilCompare(left: any, rFam: string | undefined, nilText: string): string | undefined;
+    h30g15BaseSafeReadInit(init: any): boolean;
+    h30g15NoWriteReaches(decl: any, use: any): boolean;
+}
+export interface GoTranspiler {
+    h30G16PointerSlots(declaration: any): number[] | undefined;
+    h30G16Nil: Set<any> | undefined;
+}
+export interface GoTranspiler {
+    h30g24DefaultedRowEntryRead(node: any): {
+        name: string;
+        row: string;
+        key: string;
+        pointer: boolean;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h30g27IndexOfCompare(node: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h30g29ForCounterKind(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    h30g31RowFieldStore(node: any, baseExpr: any, keys: any[], keyStrs: string[], valueNode: any, rhs: string, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h30m03DefaultedRead(declaration: any): {
+        name: string;
+        base: any;
+        field: string;
+        fallback: string;
+        value?: boolean;
+    } | undefined;
+    h30m03IsPlainString(node: any): boolean;
+}
+export interface GoTranspiler {
+    h30M04SymbolArgRead(node: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h30p05OrderRow(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h30p10TickerRow(declaration: any): boolean;
+}
+export declare function h30p15ParamHasFamilyType(paramList: string, local: string, type: string, body: string): boolean;
+export interface GoTranspiler {
+    h29t05FrameListNilTested(list: any): boolean;
+}
+export interface GoTranspiler {
+    h30t06FrameSelfDefault(declaration: any, printed: string): string | undefined;
+}

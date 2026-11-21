@@ -635,4 +635,18 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsPlainRead(node: any): boolean;
     csharpDeclaredKeyType(key: any): string | undefined;
     csharpInt64ListLiteralRead(expression: any, argumentExpression: any): string | undefined;
+    h30t01GuardedIf(listName: Node, call: any): any;
+    h30t01BindingCall(ifStatement: any): any;
+    h30t01BindingName(name: string): string;
+    h30t01BoundListArg(call: any, argument: any): string | undefined;
+    h30t01IsArrayBinding(node: any, parsedArg: any): string | undefined;
+    h30c05BoundListTest(call: any): string | undefined;
+    h30c05GuardingIf(call: any): any;
+    h30c05Name(ifStatement: any): string;
+    h30c05BoundListName(expression: any): string | undefined;
+    h30c05BoundListLoopRead(expression: any, argumentExpression: any): string | undefined;
+    h30c05JsonValueLocal(x: any): boolean;
+    h30c05JsonOrigin(receiver: any): boolean;
+    h30c05WritesAll(scope: any, declaration: any, accept: any): boolean;
+    h30c05AssignedBeforeUse(scope: any, declaration: any): boolean;
 }

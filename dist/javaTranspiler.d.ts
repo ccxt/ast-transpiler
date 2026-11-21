@@ -618,5 +618,19 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h29J06LiteralCall(declaration: any): import("typescript/unstable/ast").CallExpression;
     h29J06LiteralJoinDeclaration(node: any, declaration: any, identation: any, indent: string): string | undefined;
     h29J06LiteralJoin(node: any): string | undefined;
+    h30J04FieldStore(statement: any): any;
+    h30J04DictTypeNode(type: any): boolean;
+    h30J04FieldStoreUse(node: any): boolean | undefined;
+    h30J04FieldStoreStatement(node: any, identation: any): string | undefined;
+    h30J06Cache: WeakMap<any, boolean>;
+    h30J06List(declaration: any): boolean;
+    h30J06FutureCall(element: any): boolean;
+    h30J06SeedLocal(element: any, list: any): boolean;
+    h30J06ListProof(declaration: any): boolean;
+    h30J06ListDeclarationOf(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h30J06Declaration(declaration: any, indent: string): string | undefined;
+    h30J06SeedListOf(declaration: any): import("typescript/unstable/ast").VariableDeclaration;
+    h30J06ListPush(node: any, name: any, parsedArg: any): string | undefined;
+    h30J06ListJoin(node: any): string | undefined;
 }
 export {};
