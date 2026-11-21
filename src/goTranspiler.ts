@@ -22772,6 +22772,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (cacheStore !== undefined) {
                 return cacheStore;
             }
+            const h27g20 = (op === SyntaxKind.EqualsToken) ? this.h27g20BalanceStore(node, baseExpr, keys, right, rhs, identation) : undefined; if (h27g20 !== undefined) return h27g20;
             const balanceStore = (op === SyntaxKind.EqualsToken) ? this.goBalanceStoreText(node, baseExpr, keys, right, rhs, identation) : undefined;
             if (balanceStore !== undefined) {
                 return balanceStore;
@@ -48874,3 +48875,66 @@ GoTranspiler.prototype.h27g19RequestStubAwait = function (expr) {
     return true;
 };
 // ===== end h27-G19 =====
+// ===== h27-G20 =====
+export interface GoTranspiler {
+    h27g20BalanceStore(node, baseExpr, keys: any[], valueNode, rhs: string, identation: number): string | undefined;
+    h27g20BalanceNeverNil(field): boolean;
+}
+// `this.balance[k] = v` with one proven key and a plain (never scalar-pointer) value: the native map store, also for a
+// multi-line value and for a file that seeds the field from a never-rebound `{}` local; a nil `*string` key is a no-op
+GoTranspiler.prototype.h27g20BalanceStore = function (node, baseExpr, keys, valueNode, rhs, identation) {
+    if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (keys.length !== 1) || (this.goBaseCacheField(baseExpr) !== 'Balance')
+        || (!rhs.includes('\n') && this.goBalanceIndexable(baseExpr)) || !this.h27g20BalanceNeverNil(baseExpr)
+        || this.goBalanceScalarPointerValue(valueNode) || !this.goBalancePlainValue(valueNode)) {
+        return undefined;
+    }
+    const key = this.goBalanceKey(keys[0]);
+    if (key === undefined) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const field = this.printNode(baseExpr, 0);
+    if (key.pointer === undefined) {
+        return `${field}[${key.index}] = ${rhs}`;
+    }
+    const inner = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(valueNode, identation + 1)).trimStart();
+    return `if ${key.pointer} != nil {\n${iden}\t${field}[${key.index}] = ${inner}\n${iden}}`;
+};
+// every write of the field in the file is a map literal, a fresh-map call, a self safeBalance, or a never-rebound
+// local initialised with a map literal
+GoTranspiler.prototype.h27g20BalanceNeverNil = function (field) {
+    const table = this.nativeStoreFields?.['balance'];
+    if (table === undefined) {
+        return false;
+    }
+    if (this.goStoreFieldNeverNil(field.getSourceFile(), field.name.text, table)) {
+        return true;
+    }
+    const name = field.name.text;
+    let ok = true;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (n.left?.kind === SyntaxKind.PropertyAccessExpression) && (n.left.expression?.kind === SyntaxKind.ThisKeyword) && (n.left.name?.text === name)) {
+            const right = this.goUnwrapParenthesizedNode(n.right);
+            if (right?.kind === SyntaxKind.Identifier) {
+                const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(right)?.valueDeclaration?.resolve?.();
+                const init = this.goUnwrapParenthesizedNode(decl?.initializer);
+                ok = (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.name?.kind === SyntaxKind.Identifier)
+                    && (init?.kind === SyntaxKind.ObjectLiteralExpression) && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+            } else {
+                const callName = this.goThisCallName(right);
+                const selfWrite = (callName !== undefined) && (table.selfCalls ?? []).includes(callName) && (right.arguments.length === 1)
+                    && (right.arguments[0]?.kind === SyntaxKind.PropertyAccessExpression) && (right.arguments[0].expression?.kind === SyntaxKind.ThisKeyword)
+                    && (right.arguments[0].name?.text === name);
+                ok = (right?.kind === SyntaxKind.ObjectLiteralExpression) || ((callName !== undefined) && (table.freshMapCalls ?? []).includes(callName)) || selfWrite;
+            }
+        }
+        n.forEachChild(visit);
+    };
+    visit(field.getSourceFile());
+    return ok;
+};
+// ===== h27-G20 (end) =====
