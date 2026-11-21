@@ -21313,6 +21313,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
 
         const h26g49Clients = this.h26g49ClientsReadDeclaration(node, declaration, identation); if (h26g49Clients !== undefined) { return h26g49Clients; }
         const h27a11 = this.h27a11FrameReadDeclaration(node, declaration, identation); if (h27a11 !== undefined) { return h27a11; }
+        const h28a11 = this.h28a11DefaultedFrameList(node, declaration, identation); if (h28a11 !== undefined) { return h28a11; }
         const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
             () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
             () => this.goTypedRowBinderDeclaration(declaration, identation)]);
@@ -50281,3 +50282,26 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return this.h28a10RowRead(declaration, printed, identation) ?? printed;
 };
 // ===== end h28-H28-A10 =====
+// ===== h28-A11 =====
+// `safeList (frame, 'k', [])` whose `[]` default the printer already drops (it prints SafeListTyped) reads
+// the decoded frame member with the comma-ok assertion: both answer nil for a missing key or another type.
+export interface GoTranspiler {
+    h28a11DefaultedFrameList(node, declaration, identation: number): string | undefined;
+}
+GoTranspiler.prototype.h28a11DefaultedFrameList = function (node, declaration, identation: number) {
+    if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.initializer?.arguments?.length !== 3)) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE)
+        || this.h26g51PushStoreBackList(declaration) || !this.h27a11JsonContainer(args.container)) {
+        return undefined;
+    }
+    const standard = this.goSafeListUnboxValue(declaration, 0);
+    if ((typeof standard !== 'string') || !standard.startsWith('SafeListTyped(')) {
+        return undefined;
+    }
+    return this.getIden(identation) + 'var ' + this.printNode(declaration.name, 0) + ', _ = ' + this.printNode(args.container, 0) + '[' + this.printNode(args.key, 0) + '].([]any)';
+};
+// ===== end h28-A11 =====
