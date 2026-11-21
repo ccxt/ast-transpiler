@@ -54252,3 +54252,124 @@ GoTranspiler.prototype.h29G04StringListDefaultedArg = function (node, goType: st
     return ((declared === 'Strings') || (declared === 'string[]')) ? true : undefined;
 };
 // ===== end h29-G04 =====
+// ===== h29-H29-G05 =====
+// A list frame: parameter 1 of a pro `handleListMessage` override (the ws dispatch hands it the decoded json array) or of a
+// pro handler every caller hands such a frame (direct calls, or `.call (this, client, frame)` from a local table in a frame
+// holder), printed []any and never written. Its elements are decoded json (maps, lists, scalars, nil), never pointers.
+export interface GoTranspiler {
+    h29g05ListFrameParam(param): boolean;
+    h29g05ListFrameCache: Map<any, boolean>;
+    h29g05Active: Set<any>;
+}
+GoTranspiler.prototype.h29g05ListFrameParam = function (param) {
+    if (this.h29g05ListFrameCache === undefined) {
+        this.h29g05ListFrameCache = new Map();
+        this.h29g05Active = new Set();
+    }
+    if (this.h29g05ListFrameCache.has(param)) {
+        return this.h29g05ListFrameCache.get(param);
+    }
+    if (this.h29g05Active.has(param)) {
+        return false; // a cycle proves nothing
+    }
+    const outermost = (this.h29g05Active.size === 0);
+    this.h29g05Active.add(param);
+    let result = false;
+    try {
+        result = h29g05ProveListFrame(this, param);
+    } finally {
+        this.h29g05Active.delete(param);
+    }
+    if (outermost || result) {
+        this.h29g05ListFrameCache.set(param, result);
+    }
+    return result;
+};
+function h29g05ProveListFrame (go: any, param: any): boolean {
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.parameters.indexOf(param) !== 1) || !go.goIsProHandlerMethod(fn)) {
+        return false;
+    }
+    if ((go.goNativeParameterType(param) !== GO_SAFE_LIST_LOCAL_TYPE) || h27a11WritesInto(go, fn.body, param.name.text, param)) {
+        return false;
+    }
+    const methodName: string = fn.name.text;
+    if (goHasDynamicCall(fn, methodName)) {
+        return false;
+    }
+    if (methodName === 'handleListMessage') {
+        const isOverride = (fn.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword);
+        return isOverride && (go.goSameFileCallsOf(fn, methodName).length === 0);
+    }
+    if (go.h27a11ElsewhereCache === undefined) {
+        go.h27a11ElsewhereCache = new Map();
+    }
+    if (h27a11NamedElsewhere(go, fn, methodName)) {
+        return false;
+    }
+    const isFrame = (arg: any): boolean => {
+        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.goAnyBoxLocalDeclaration(arg) : undefined;
+        return (decl?.kind === SyntaxKind.Parameter) && go.h29g05ListFrameParam(decl);
+    };
+    let count = 0;
+    for (const call of go.goSameFileCallsOf(fn, methodName)) {
+        if ((call.runner !== undefined) || !isFrame(call.arguments?.[1])) {
+            return false;
+        }
+        count++;
+    }
+    // `this.handleX` held as a value: only in a local table of a frame holder that hands its own frame to every dynamic call
+    const refsOk = !go.hasNodeWhere(fn.getSourceFile(), (n: any) => {
+        if ((n.kind !== SyntaxKind.PropertyAccessExpression) || (n.name?.text !== methodName) || (n.expression?.kind !== SyntaxKind.ThisKeyword)
+            || ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression === n))) {
+            return false;
+        }
+        count++;
+        let up: any = n.parent;
+        while ((up !== undefined) && ((up.kind === SyntaxKind.PropertyAssignment) || (up.kind === SyntaxKind.ObjectLiteralExpression))) {
+            up = up.parent;
+        }
+        if ((up?.kind !== SyntaxKind.VariableDeclaration) || (up.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return true;
+        }
+        const holder: any = go.goEnclosingFunction(n);
+        const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
+        if ((frame === undefined) || !go.h29g05ListFrameParam(frame)) {
+            return true;
+        }
+        return go.hasNodeWhere(holder.body, (c: any) => {
+            const callee: any = (c.kind === SyntaxKind.CallExpression) ? c.expression : undefined;
+            if (callee === undefined) {
+                return false;
+            }
+            if ((callee.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply'))
+                && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+                return (callee.name.text === 'apply') || (go.goAnyBoxLocalDeclaration(c.arguments?.[2]) !== frame);
+            }
+            return (callee.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration);
+        });
+    });
+    return refsOk && (count > 0);
+}
+// a literal-index row read `this.safeList/safeDict (frame, K)` takes the h27-A08 comma-ok form
+const h27a08JsonListH29g05 = GoTranspiler.prototype.h27a08JsonList;
+GoTranspiler.prototype.h27a08JsonList = function (list) {
+    if (h27a08JsonListH29g05.call(this, list)) {
+        return true;
+    }
+    const decl: any = (list?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(list) : undefined;
+    return (decl?.kind === SyntaxKind.Parameter) && this.h29g05ListFrameParam(decl);
+};
+// `frame[i]` in a counting loop over the frame's own length is the plain index: no pointer element to deref
+const goNativeListElementReadH29g05 = GoTranspiler.prototype.goNativeListElementRead;
+GoTranspiler.prototype.goNativeListElementRead = function (node, containerStr: string, keyNode, keyStr: string): string | undefined {
+    const list: any = node?.expression;
+    const decl: any = (list?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(list) : undefined;
+    if ((decl?.kind === SyntaxKind.Parameter) && !containerStr.includes('\n') && !keyStr.includes('\n') && !this.isGoElementAccessAssignmentTarget(node)
+        && this.goBoundedLoopListRead(node) && this.h29g05ListFrameParam(decl)) {
+        return `${containerStr}[${keyStr}]`;
+    }
+    return goNativeListElementReadH29g05.call(this, node, containerStr, keyNode, keyStr);
+};
+// ===== end h29-H29-G05 =====
