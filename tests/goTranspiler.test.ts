@@ -7020,7 +7020,7 @@ describe('a list read bounded by its own counting loop is the plain index', () =
         const loop = "        for (let i = 0; i < rows.length; i++) {\n            const v = rows[i];\n            a += v;\n        }\n";
         const thrown = transpile(cls("        const rows: string[] = [];\n        for (let j = 0; j < xs.length; j++) {\n            const id = this.safeString (xs[j], 'id');\n            if (id === undefined) {\n                throw new Error ('x');\n            }\n            rows.push (id);\n        }\n" + loop));
         expect(thrown).toContain('rows = append(rows, *id)');
-        expect(thrown).toContain('SafeStringPtr(rows[i])');
+        expect(thrown).toContain('var v string = rows[i]');
         expect(thrown).not.toContain('DerefScalar(rows[i])');
         const guarded = transpile(cls("        const rows: string[] = [];\n        const id = this.safeString (a, 'id');\n        if (id !== undefined) {\n            rows.push (id);\n        }\n" + loop));
         expect(guarded).toContain('rows = append(rows, *id)');

@@ -48554,3 +48554,29 @@ function h27g08StructRowListLocalUncached (goTranspiler: GoTranspiler, declarati
     };
 }
 // ===== end h27-H27-G08 =====
+// ===== h27-g09
+// `xs.push (id)` on a `string[]` local, id a `*string` safeString local that a nil test proves non-nil at the push:
+// printArrayPushCall already prints `append(xs, *id)` there (goPushedStringPointerIsNonNil), so the slot holds a string.
+const h27g09AppendsAString = GoTranspiler.prototype.goStringListAppendsAString;
+GoTranspiler.prototype.goStringListAppendsAString = function (pushNode): boolean {
+    return h27g09AppendsAString.call(this, pushNode) || this.h27g09GuardedPointerPush(pushNode);
+};
+GoTranspiler.prototype.h27g09GuardedPointerPush = function (pushNode): boolean {
+    const receiver = pushNode?.expression?.expression;
+    const arg: any = pushNode?.arguments?.[0];
+    if (!this.goIsNativeAppendShape(receiver, pushNode) || (arg?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    // the same syntactic pre-filter goPushedStringPointerIsNonNil applies before it dereferences
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
+        || ((init?.kind !== SyntaxKind.Identifier) && !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`)))) {
+        return false;
+    }
+    return this.goInOpPointerKeyProvenNonNil(pushNode.parent, arg);
+};
+export interface GoTranspiler {
+    h27g09GuardedPointerPush(pushNode): boolean;
+}
+// ===== end h27-g09
