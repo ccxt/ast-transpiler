@@ -49261,3 +49261,41 @@ GoTranspiler.prototype.printArrayLiteralExpression = function (node, identation 
     return printArrayLiteralExpressionH27g27.call(this, node, identation);
 };
 // ===== end h27-H27-G27 =====
+// ===== h27-H27-G28
+export interface GoTranspiler {
+    h27g28ElementReadOfMap(n): boolean;
+}
+// `const x = this.<map field>` (h26g14) also takes a plain element read `x[k]` with a string key as a map read:
+// a Go map index answers nil for a missing key or a nil map, as GetValue does; writes and deletes stay refused
+GoTranspiler.prototype.h27g28ElementReadOfMap = function (n) {
+    const parent: any = n?.parent;
+    if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== n)) {
+        return false;
+    }
+    const outer: any = parent.parent;
+    if ((outer?.kind === SyntaxKind.BinaryExpression) && (outer.left === parent) && (outer.operatorToken.kind >= SyntaxKind.FirstAssignment) && (outer.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+        return false;
+    }
+    if ([ SyntaxKind.DeleteExpression, SyntaxKind.PrefixUnaryExpression, SyntaxKind.PostfixUnaryExpression ].includes(outer?.kind)) {
+        return false;
+    }
+    const keyType = this.checkerOrUndefined()?.getTypeAtLocation(parent.argumentExpression);
+    return (keyType !== undefined) && ((keyType.flags & ts.TypeFlags.StringLike) !== 0);
+};
+{
+    const mapFieldLocalType = GoTranspiler.prototype.h26g14MapFieldLocalType;
+    GoTranspiler.prototype.h26g14MapFieldLocalType = function (declaration) {
+        const base = mapFieldLocalType.call(this, declaration);
+        if (base !== undefined) {
+            return base;
+        }
+        const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+            || (init?.kind !== SyntaxKind.PropertyAccessExpression) || (init.expression?.kind !== SyntaxKind.ThisKeyword) || (typeof init.name?.text !== 'string')
+            || !H26G14_BASE_MAP_FIELDS.includes(this.transformPropertyAccessExpressionName(init.name.text, init.name))) {
+            return undefined;
+        }
+        return this.goDeclaredLocalTypeIfSafe(declaration, 'map[string]any', (n) => this.goSafeDictUseReadsTheMap(n) || this.h27g28ElementReadOfMap(n));
+    };
+}
+// ===== end h27-H27-G28
