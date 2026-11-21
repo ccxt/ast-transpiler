@@ -4092,6 +4092,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // declarations it retypes itself, and a parameter the printer retypes
     // (javaNativeParameterType) answers for itself, so its element reads go native too
     javaDeclaredTypeOfDeclaration(declaration): string | undefined {
+        const h29j04 = this.h29J04RowLocal(declaration) || this.h29J04RowContainer(declaration) ? JAVA_ELEMENT_WRITE_MAP_TYPE : undefined; if (h29j04 !== undefined) return h29j04;
         if (this.javaLongLimitLiteralLocalCached(declaration)) {
             return 'Long';
         }
@@ -4441,6 +4442,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const indent = this.getIden(identation);
         const h28j06 = this.h28J06SeededListDeclaration(declaration, indent); if (h28j06 !== undefined) return h28j06;
+        const h29j04 = this.h29J04RowMapDeclaration(declaration, indent); if (h29j04 !== undefined) return h29j04;
         const h27j06 = this.h27J06FutureListDeclaration(declaration, indent); if (h27j06 !== undefined) return h27j06;
         // array destructuring in variable declaration
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
@@ -10755,6 +10757,162 @@ export class JavaTranspiler extends BaseTranspiler {
             + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
     }
     // ===== end h28-J06
+
+    // ===== h29-J04
+    // `const c: Dict = {}` whose only uses are `k in c`, `c[k] = { .. }` (a fresh non-null map),
+    // `const e = c[k]` row locals, `Object.keys (c)` and plain call arguments: every value is a row
+    // map, so c prints `Map<String, Map<String, Object>>` and its row reads need no cast
+    h29J04RowContainer(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !declaration.initializer || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const init = this.unwrapPrintTransparentExpression(declaration.initializer);
+        if (!isObjectLiteralExpression(init) || init.properties.length !== 0) {
+            return false;
+        }
+        return this.javaMemo(this.h29J04ContainerCache, declaration, () => this.javaTry(() => this.h29J04ContainerUsesOk(declaration), false));
+    }
+
+    h29J04ContainerCache: WeakMap<Node, boolean | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
+
+    h29J04ContainerUsesOk(declaration): boolean {
+        const checker: any = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || !scope) {
+            return false;
+        }
+        let uses = 0;
+        const bad = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            uses++;
+            return !this.h29J04ContainerUseOk(current);
+        });
+        return !bad && uses > 0;
+    }
+
+    h29J04ContainerUseOk(node): boolean {
+        const parent: any = node.parent;
+        if (isBinaryExpression(parent) && parent.right === node && parent.operatorToken.kind === SyntaxKind.InKeyword) {
+            return true;
+        }
+        if (isCallExpression(parent) && parent.arguments.includes(node)) {
+            // Object.keys (c) or a `this.m (c, ..)` call taking it as an Object argument
+            const callee = parent.expression;
+            return isPropertyAccessExpression(callee)
+                && ((isIdentifier(callee.expression) && callee.expression.text === 'Object' && callee.name.text === 'keys')
+                    || (callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeDict'));
+        }
+        if (!isElementAccessExpression(parent) || parent.expression !== node) {
+            return false;
+        }
+        const grand: any = parent.parent;
+        if (isBinaryExpression(grand) && grand.left === parent) {
+            return grand.operatorToken.kind === SyntaxKind.EqualsToken
+                && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(grand.right));
+        }
+        // any other read hands out the stored row map (or null) as an Object value
+        return grand?.kind !== SyntaxKind.DeleteExpression && !(isBinaryExpression(grand) && grand.left === parent)
+            && !isPostfixUnaryExpression(grand) && !isPrefixUnaryExpression(grand);
+    }
+
+    // `const e = c[k]` right after `if (!(k in c)) { c[k] = { .. }; }`: e is the stored non-null
+    // row map (k is the same name, nothing runs in between), and e is only read or written by key
+    h29J04RowLocal(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !declaration.initializer || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const read = declaration.initializer;
+        if (!isElementAccessExpression(read) || !isIdentifier(read.expression) || !isIdentifier(read.argumentExpression)) {
+            return false;
+        }
+        const statement = declaration.parent.parent;
+        const block = statement?.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || !block || !isBlock(block)) {
+            return false;
+        }
+        const index = (block.statements as readonly any[]).indexOf(statement);
+        const guard: any = index > 0 ? block.statements[index - 1] : undefined;
+        if (!this.h29J04SeedGuard(guard, read.expression.text, read.argumentExpression.text)) {
+            return false;
+        }
+        const container = this.javaDeclarationOfIdentifier(read.expression);
+        if (container === undefined || !isVariableDeclaration(container) || this.javaFunctionOrFile(container) !== this.javaFunctionOrFile(declaration)) {
+            return false;
+        }
+        const init = container.initializer ? this.unwrapPrintTransparentExpression(container.initializer) : undefined;
+        if (!init || !isObjectLiteralExpression(init) || init.properties.length !== 0
+            || (container.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        return this.javaLocalUsesKeepContainerType(declaration.name) && this.h29J04RowUsesByKey(declaration.name)
+            && this.h29J04RowContainer(container);
+    }
+
+    // `if (!(k in c)) { c[k] = { .. }; }` with no else
+    h29J04SeedGuard(guard, containerName: string, keyName: string): boolean {
+        if (!guard || !isIfStatement(guard) || guard.elseStatement !== undefined) {
+            return false;
+        }
+        let test: any = guard.expression;
+        if (!isPrefixUnaryExpression(test) || test.operator !== SyntaxKind.ExclamationToken) {
+            return false;
+        }
+        test = this.unwrapParenthesized(test.operand);
+        if (!isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.InKeyword
+            || !isIdentifier(test.left) || test.left.text !== keyName || !isIdentifier(test.right) || test.right.text !== containerName) {
+            return false;
+        }
+        const body: any = guard.thenStatement;
+        const only: any = isBlock(body) ? (body.statements.length === 1 ? body.statements[0] : undefined) : body;
+        const write: any = only && isExpressionStatement(only) ? only.expression : undefined;
+        return !!write && isBinaryExpression(write) && write.operatorToken.kind === SyntaxKind.EqualsToken
+            && isElementAccessExpression(write.left) && isIdentifier(write.left.expression) && write.left.expression.text === containerName
+            && isIdentifier(write.left.argumentExpression) && write.left.argumentExpression.text === keyName
+            && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(write.right));
+    }
+
+    // every mention of the row local is `e['lit']` (read or plain write) or a call argument
+    h29J04RowUsesByKey(name): boolean {
+        const checker: any = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(name);
+        const scope = this.javaFunctionOrFile(name);
+        return !!symbol && !!scope && !this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            const parent: any = current.parent;
+            if (isCallExpression(parent) && parent.arguments.includes(current)) {
+                return false;
+            }
+            if (!isElementAccessExpression(parent) || parent.expression !== current || !isStringLiteralLikeNode(parent.argumentExpression)) {
+                return true;
+            }
+            const grand: any = parent.parent;
+            if (grand?.kind === SyntaxKind.DeleteExpression) {
+                return true;
+            }
+            return isBinaryExpression(grand) && grand.left === parent && grand.operatorToken.kind !== SyntaxKind.EqualsToken;
+        });
+    }
+
+    h29J04RowMapDeclaration(declaration, indent: string): string | undefined {
+        const row = 'Map<String, Object>';
+        if (this.h29J04RowLocal(declaration)) {
+            return `${indent}${row} ${this.printNode(declaration.name, 0)} = ${this.printNode(declaration.initializer, 0).trim()}`;
+        }
+        if (!this.h29J04RowContainer(declaration)) {
+            return undefined;
+        }
+        return `${indent}java.util.Map<String, ${row}> ${this.printNode(declaration.name, 0)} = new java.util.HashMap<String, ${row}>()`;
+    }
+    // ===== end h29-J04
 }
 
 // `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
