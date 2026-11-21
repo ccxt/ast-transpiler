@@ -50176,3 +50176,45 @@ GoTranspiler.prototype.h27a08JsonList = function (list) {
     return h27a08JsonListH28a08.call(this, list) || this.h28a08JsonList(list);
 };
 // ===== end h28-H28-A08 =====
+// ===== h28-H28-A09 =====
+// `const row = this.safeDict (xs, i, {})` at the loop counter over a JSON-origin list (the h27-A09 proof)
+// reads the element with the comma-ok assertion and restores the `{}` default where SafeDictMap gave it
+export interface GoTranspiler {
+    h28a09JsonRowReadDefault(declaration, identation: number): string | undefined;
+}
+GoTranspiler.prototype.h28a09JsonRowReadDefault = function (declaration, identation: number) {
+    const init: any = declaration?.initializer;
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    const key: any = args?.key;
+    if ((args === undefined) || (init.arguments.length !== 3) || (container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+        || (container.text === key.text) || !this.goDeclaredListIdentifier(container) || !this.h27a09JsonOriginList(container)) {
+        return undefined;
+    }
+    const containerStr = this.printNode(container, identation);
+    const keyStr = this.printNode(key, 0);
+    if (this.goLoopBoundedIndexRead(init, container, key, containerStr, keyStr) === undefined) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStr}].(map[string]any)`;
+};
+const printVariableDeclarationListH28a09 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH28a09.call(this, node, identation);
+    const declaration: any = node?.declarations?.[0];
+    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return printed;
+    }
+    const value = this.h28a09JsonRowReadDefault(declaration, identation);
+    const name = this.printNode(declaration.name, 0);
+    const m = (value === undefined) ? null : /^(\s*)var (\w+) map\[string\]any = (?:(?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\)|this\.SafeDictMap\((\w+), (\w+), map\[string\]any\{\}\))$/.exec(printed);
+    if ((m === null) || (m[2] !== name) || (`${m[3] ?? m[5]}[${m[4] ?? m[6]}].(map[string]any)` !== value)) {
+        return printed;
+    }
+    if (m[3] !== undefined) {
+        return `${m[1]}var ${name}, _ = ${value}`; // every consumer reads nil as {} (goSafeDictLocalUnboxStandard)
+    }
+    const iden = this.getIden(identation);
+    return `${m[1]}var ${name}, _ = ${value}\n${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = map[string]any{}\n${iden}}`;
+};
+// ===== end h28-H28-A09 =====
