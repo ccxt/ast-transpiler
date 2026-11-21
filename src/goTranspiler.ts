@@ -54640,3 +54640,51 @@ GoTranspiler.prototype.h29g14RowParamCellRead = function (node, baseExpr, keys: 
     return `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${containerStr}[${keyStrs[0]}], ${keyStrs[1]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
 };
 // ===== end h29-G14 =====
+// ===== h29-H29-G15
+export interface GoTranspiler {
+    h29g15RebindGuardProves(id): boolean;
+}
+// `let b = <cache read>; if (b === undefined) { ...; b = <book> } [else {..}]` before the use: after the if `b` holds a
+// book on every path, provided every other write of `b` in the function is that last then-statement
+const h26g28BookDerefBeforeBaseH29g15 = GoTranspiler.prototype.h26g28BookDerefBefore;
+GoTranspiler.prototype.h26g28BookDerefBefore = function (id) {
+    return h26g28BookDerefBeforeBaseH29g15.call(this, id) || this.h29g15RebindGuardProves(id);
+};
+GoTranspiler.prototype.h29g15RebindGuardProves = function (id) {
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve?.();
+    const scope: any = (decl?.kind === SyntaxKind.VariableDeclaration) ? this.goEnclosingFunction(decl) : undefined;
+    const read = (scope === undefined) ? undefined : this.goOrderBookCacheRead(decl.initializer);
+    if (read === undefined) {
+        return false;
+    }
+    const name: string = decl.name.text;
+    const isLocal = (n: any): boolean => (n?.kind === SyntaxKind.Identifier) && (n.text === name) && this.goIdentifierRefersToDeclaration(n, decl);
+    const writes = this.goDescendantsOf(scope).filter((n: any) => (n !== decl.name) && isLocal(n) && (n.parent?.kind === SyntaxKind.BinaryExpression)
+        && (n.parent.left === n) && (n.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.parent.operatorToken.kind <= SyntaxKind.LastAssignment));
+    if ((writes.length !== 1) || this.goDescendantsOf(scope).some((n: any) => n.kind === SyntaxKind.DeleteExpression)) {
+        return false;
+    }
+    const w: any = writes[0].parent;
+    const nilTest = (c: any): boolean => {
+        c = this.goUnwrapParenthesizedNode(c);
+        return (c?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.EqualsEqualsToken ].includes(c.operatorToken?.kind)
+            && isLocal(c.left) && ((c.right?.kind === SyntaxKind.NullKeyword) || ((c.right?.kind === SyntaxKind.Identifier) && (c.right.text === 'undefined')));
+    };
+    return this.goEnclosingBlocksProve(id, [ SyntaxKind.Block, SyntaxKind.CaseClause, SyntaxKind.DefaultClause ], (st) => {
+        if ((st.kind !== SyntaxKind.IfStatement) || (st.pos < decl.end) || !nilTest(st.expression)) {
+            return false;
+        }
+        const body = this.goBlockStatements(st.thenStatement);
+        const last: any = body[body.length - 1];
+        if ((last?.kind !== SyntaxKind.ExpressionStatement) || (last.expression !== w) || (w.operatorToken.kind !== SyntaxKind.EqualsToken)) {
+            return false;
+        }
+        if (this.goIsOrderBookProducer(w.right)) {
+            return true;
+        }
+        const r = this.goOrderBookCacheRead(w.right);
+        return (r !== undefined) && (body.length >= 2) && this.goSameExpressionText(r.obj, read.obj) && this.goSameExpressionText(r.key, read.key)
+            && this.goStoresBookInCache([ body[body.length - 2] ], r);
+    }, () => false);
+};
+// ===== end h29-H29-G15
