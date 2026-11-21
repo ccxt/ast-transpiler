@@ -49875,3 +49875,53 @@ GoTranspiler.prototype.h28a02EndpointListPrint = function (declaration, args, id
     };
 }
 // ===== end h28-H28-A02
+// ===== h28-A03
+// ruling 6(c): a `let` / nil-seeded / branch-assigned local whose seed is nothing, `undefined` or `{}` and whose
+// every write is an awaited endpoint receive unboxed to map[string]any holds only a decoded JSON document (or an
+// empty or nil map, which every comma-ok read answers nil for exactly as SafeMapTyped does)
+export interface GoTranspiler {
+    h28a03EndpointWrite(n: any, name: string): boolean;
+    h28a03JoinedEndpointLocal(node: any): boolean;
+}
+GoTranspiler.prototype.h28a03EndpointWrite = function (n: any, name: string): boolean {
+    const parent: any = n.parent;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.left !== n) || (parent.operatorToken.kind !== SyntaxKind.EqualsToken)
+        || (parent.parent?.kind !== SyntaxKind.ExpressionStatement) || (n.text !== name)) {
+        return false;
+    }
+    return goAwaitsMapEndpoint(this, this.goUnwrapParenthesizedNode(parent.right));
+};
+GoTranspiler.prototype.h28a03JoinedEndpointLocal = function (node: any): boolean {
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    // the endpoint join declares a nil-seeded local map[string]any; an awaited-map seed is one more such write
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    if (!(goAwaitedMapWritesOnlyLocal(this, declaration) || goAwaitsMapEndpoint(this, init))) {
+        return false;
+    }
+    let writes = 0;
+    const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
+        if (this.h28a03EndpointWrite(n, name)) {
+            writes += 1;
+            return true;
+        }
+        return this.goJsonOriginUseIsReadOnly(n, name);
+    });
+    return readOnly && (writes > 0);
+};
+{
+    const jsonOriginH28a03 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        return jsonOriginH28a03.call(this, node, depth) || ((depth <= 5) && this.h28a03JoinedEndpointLocal(node));
+    };
+    // the endpoint join prints such a local `var x map[string]any = nil`
+    const receiverTypeH28a03 = GoTranspiler.prototype.h27a01ReceiverType;
+    GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+        const t = receiverTypeH28a03.call(this, container);
+        return ((t === undefined || t === 'any') && this.h28a03JoinedEndpointLocal(container)) ? GO_SAFE_DICT_LOCAL_TYPE : t;
+    };
+}
+// ===== end h28-A03
