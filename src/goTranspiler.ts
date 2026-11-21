@@ -6397,6 +6397,7 @@ const CCXT_GO_ASYNC_READ_HELPERS = /^(?:this\.)?(?:Safe[A-Z]\w*|ToArray|FilterBy
 // the same qualify, since MapTyped/ListTyped turn absent into a nil map/slice
 function ccxtGoAsyncReceiveReadsTheValue (goTranspiler, node, goType) {
     const parent = node.parent;
+    if (h28g20ObjectKeysLocalRead (node, goType)) { return true; }
     if (parent === undefined) {
         return false;
     }
@@ -51628,3 +51629,46 @@ GoTranspiler.prototype.h28g19RowLiteralLocal = function (declaration): boolean {
     };
 }
 // ===== end h28-H28-G19
+
+// ===== h28-H28-G20
+// `const ks = Object.keys (x)` / `Object.values (x)` on an awaited typed-map receive: with x a `map[string]any` the
+// declaration prints the nil-guarded range collect (goMapRangeLocalDeclaration), nil for a nil map as the helper
+// answered for the untyped nil box
+function h28g20ObjectKeysLocalRead (node, goType) {
+    const call = node?.parent;
+    const callee = call?.expression;
+    if ((goType !== 'map[string]any') || (call?.kind !== ts.SyntaxKind.CallExpression) || (call.arguments?.length !== 1)
+        || (call.arguments[0] !== node) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== ts.SyntaxKind.Identifier) || (callee.expression.text !== 'Object')
+        || ((callee.name?.text !== 'keys') && (callee.name?.text !== 'values'))) {
+        return false;
+    }
+    const declaration = call.parent;
+    return (declaration?.kind === ts.SyntaxKind.VariableDeclaration) && (declaration.initializer === call)
+        && (declaration.name?.kind === ts.SyntaxKind.Identifier) && (declaration.parent?.parent?.kind === ts.SyntaxKind.FirstStatement)
+        && !h28g20ElementReadStoredBack (node);
+}
+
+// `this.f[k] = x[k]` with a typed x prints a counted AddElementToObject store: such a receiver keeps the helper
+function h28g20ElementReadStoredBack (node) {
+    let scope = node.parent;
+    while ((scope !== undefined) && (scope.kind !== ts.SyntaxKind.MethodDeclaration) && (scope.kind !== ts.SyntaxKind.FunctionDeclaration)) {
+        scope = scope.parent;
+    }
+    let found = false;
+    const visit = (n) => {
+        if (found || (n === undefined)) {
+            return;
+        }
+        if ((n.kind === ts.SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === ts.SyntaxKind.EqualsToken)
+            && (n.left?.kind === ts.SyntaxKind.ElementAccessExpression) && (n.right?.kind === ts.SyntaxKind.ElementAccessExpression)
+            && (n.right.expression?.kind === ts.SyntaxKind.Identifier) && (n.right.expression.text === node.text)) {
+            found = true;
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    visit (scope);
+    return found;
+}
+// ===== end h28-H28-G20
