@@ -1279,6 +1279,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.FilterEventsByStatus': '[]any',
     'this.FilterEventsByTags': '[]any',
     'this.FilterEventsBySearchIn': '[]any',
+    // exchange_generated.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
+    'this.OrderbookChecksumMessage': 'string',
 };
 
 // ---------------------------------------------------------------------------
@@ -23856,6 +23858,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (cacheParameter !== undefined) {
             return cacheParameter;
         }
+        const h27g37 = this.h27g37SpawnedParamType(fn, param, index); if (h27g37 !== undefined) return h27g37;
         if (!parseParam && !handlerParam) {
             // any other exchange-local method: only a non-nullable TS `string` becomes a Go `string`
             // at least one proven caller: an uncalled method's signature is outside API only by accident
@@ -30879,6 +30882,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return this.printNode(init, 0);
         }
         const printed = super.printIdentifier(node);
+        const h27g37Arg = this.h27g37SpawnArgDeref(node, printed); if (h27g37Arg !== undefined) return h27g37Arg;
         const parent: any = node.parent;
         if ((parent?.kind !== SyntaxKind.CallExpression) || !(parent.arguments ?? []).includes(node)) {
             return printed;
@@ -49504,3 +49508,73 @@ GoTranspiler.prototype.h27g36ClientUrlPointerCompare = function (left, right, le
     };
 }
 // ===== end h27-H27-G36 =====
+// ===== h27-G37 =====
+// a required `string` parameter of an exchange-local async method whose every call is `this.spawn (this.m, ..)`
+// in its own file: CallDynamically passes each argument by reflection, so each one must print a Go `string`
+// (or a `*string` local that can never be nil, printed dereferenced at the spawn)
+export interface GoTranspiler {
+    h27g37SpawnedParamType(fn, param, index: number): string | undefined;
+    h27g37SpawnArgIsString(arg): boolean;
+    h27g37SpawnArgDeref(node, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h27g37SpawnedParamType = function (fn, param, index: number) {
+    if (!this.isAsyncFunction(fn) || (this.goRequiredStringParameterType(param) !== 'string')) {
+        return undefined;
+    }
+    const calls = this.goSameFileCallsOf(fn, fn.name.text);
+    if ((calls.length === 0) || calls.some((c) => (c.runner === undefined) || (this.goThisCallName(c.runner) !== 'spawn'))) {
+        return undefined;
+    }
+    // every reference to the method is one of those spawns: no bare value, no quoted-name dispatch
+    const text = String(fn.getSourceFile().text ?? '');
+    const refs = text.split(new RegExp('this\\s*\\.\\s*' + fn.name.text + '\\b')).length - 1;
+    if ((refs !== calls.length) || text.includes("'" + fn.name.text + "'") || text.includes('"' + fn.name.text + '"')) {
+        return undefined;
+    }
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    if (tree !== undefined) {
+        const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        const myClass = this.goEnclosingClassName(fn);
+        if ((tree.callIndex.get(fn.name.text) ?? []).some((site) => (site.file !== myFile) && this.goTsSrcFileDerivesFrom(tree, site.file, myClass))) {
+            return undefined;
+        }
+    }
+    if (!calls.every((c) => (c.arguments[index] !== undefined) && this.h27g37SpawnArgIsString(c.arguments[index]))) {
+        return undefined;
+    }
+    return this.goParameterBodyTakes(fn, param, 'string') ? 'string' : undefined;
+};
+GoTranspiler.prototype.h27g37SpawnArgIsString = function (arg) {
+    if (arg.kind === SyntaxKind.SpreadElement) {
+        return false;
+    }
+    const printed = this.goPrintedArgType(arg);
+    if (printed === 'string') {
+        return true;
+    }
+    return (printed === '*string') && (arg.kind === SyntaxKind.Identifier)
+        && (this.goDefaultedSafeStringLocal(arg) || this.goHasEnclosingNilGuard(arg) || this.goHasExitingNilGuard(arg));
+};
+GoTranspiler.prototype.h27g37SpawnArgDeref = function (node, printed: string) {
+    const call: any = node?.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (this.goThisCallName(call) !== 'spawn')) {
+        return undefined;
+    }
+    const index = (call.arguments ?? []).indexOf(node);
+    const ref: any = call.arguments[0];
+    if ((index < 1) || (ref?.kind !== SyntaxKind.PropertyAccessExpression) || (ref.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    let declaration;
+    try {
+        declaration = this.getChecker().getSymbolAtLocation(ref.name)?.valueDeclaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    const param = (declaration?.kind === SyntaxKind.MethodDeclaration) ? declaration.parameters?.[index - 1] : undefined;
+    if ((param === undefined) || (param.dotDotDotToken !== undefined) || (this.goNativeParameterType(param) !== 'string')) {
+        return undefined;
+    }
+    return ((this.goPrintedArgType(node) === '*string') && this.h27g37SpawnArgIsString(node)) ? ('*' + printed) : undefined;
+};
+// ===== end h27-G37 =====
