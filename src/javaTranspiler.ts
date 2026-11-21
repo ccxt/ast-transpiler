@@ -4441,6 +4441,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.printNode(declaration.initializer, identation).trimEnd();
         }
         const indent = this.getIden(identation);
+        const h29j06 = this.h29J06LiteralJoinDeclaration(node, declaration, identation, indent); if (h29j06 !== undefined) return h29j06;
         const h28j06 = this.h28J06SeededListDeclaration(declaration, indent); if (h28j06 !== undefined) return h28j06;
         const h29j04 = this.h29J04RowMapDeclaration(declaration, indent); if (h29j04 !== undefined) return h29j04;
         const h27j06 = this.h27J06FutureListDeclaration(declaration, indent); if (h27j06 !== undefined) return h27j06;
@@ -9000,6 +9001,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
+        const h29j06 = this.h29J06LiteralJoin(node); if (h29j06 !== undefined) return h29j06;
         const h28j06 = this.h28J06SeededListJoin(node); if (h28j06 !== undefined) return h28j06;
         const h27j06 = this.h27J06FutureListJoin(node); if (h27j06 !== undefined) return h27j06;
         return this.printNativePromiseAllCall(node) ?? this.printJavaPromiseAllStream(node, parsedArg) ?? `Helpers.promiseAll(${parsedArg})`;
@@ -10913,6 +10915,74 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${indent}java.util.Map<String, ${row}> ${this.printNode(declaration.name, 0)} = new java.util.HashMap<String, ${row}>()`;
     }
     // ===== end h29-J04
+    // ===== h29-J06
+    h29J06Lists: WeakMap<any, string>;
+    h29J06Busy: boolean;
+
+    // `const x = await Promise.all ([c1, .., cn])` with every element a call the checker types Promise:
+    // the calls go into a typed future list statement first (each runs once, in order), then the join
+    h29J06LiteralCall(declaration) {
+        const awaited = declaration?.initializer;
+        const call = awaited?.kind === SyntaxKind.AwaitExpression ? awaited.expression : undefined;
+        const literal = call?.arguments?.[0];
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || call.expression.name.text !== 'all'
+            || !isArrayLiteralExpression(literal) || literal.elements.length === 0) {
+            return undefined;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (!/(^|\/)ts\/src\//.test(fileName) || JAVA_TEST_TIER_FILES.test(fileName)) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        const ok = (literal.elements as unknown as Expression[]).every((e) => isCallExpression(e) && this.isPromiseType(checker.getTypeAtLocation(e)));
+        return ok ? call : undefined;
+    }
+
+    h29J06LiteralJoinDeclaration(node, declaration, identation, indent: string): string | undefined {
+        if (this.h29J06Busy || node.declarations.length !== 1) {
+            return undefined;
+        }
+        let call;
+        try {
+            call = this.h29J06LiteralCall(declaration);
+        } catch (e) {
+            call = undefined;
+        }
+        if (call === undefined) {
+            return undefined;
+        }
+        const base = isIdentifier(declaration.name) ? declaration.name.text
+            : declaration.name.kind === SyntaxKind.ArrayBindingPattern ? declaration.name.elements.map((e: any) => e.name?.text ?? '').join('') : undefined;
+        const name = `${base}Futures`;
+        if (base === undefined || base === '' || new RegExp(`\\b${name}\\b`).test(declaration.getSourceFile().text)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const calls = call.arguments[0].elements.map((e) => this.printNode(e, 0).trim());
+        const statement = `${indent}java.util.List<${future}<?>> ${name} = `
+            + `new java.util.ArrayList<${future}<?>>(java.util.Arrays.<${future}<?>>asList(${calls.join(', ')}));\n`;
+        this.h29J06Lists ??= new WeakMap<any, string>();
+        this.h29J06Lists.set(call, name);
+        this.h29J06Busy = true;
+        try {
+            return statement + this.printVariableDeclarationList(node, identation);
+        } finally {
+            this.h29J06Busy = false;
+        }
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h29J06LiteralJoin(node): string | undefined {
+        const list = this.h29J06Lists?.get(node);
+        if (list === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h29-J06
 }
 
 // `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
