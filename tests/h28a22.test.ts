@@ -43,7 +43,8 @@ describe('h28a22: indexBy / groupBy of a JSON-origin list is a JSON-origin conta
     });
     test('an index written through is not JSON-origin', () => {
         const out = print ('async handle ()', BODY.replace ('PRODUCER', 'indexBy').replace ('EXTRA', "byId['BTC'] = 1;"));
-        expect (out).not.toContain ('byId["BTC"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('byId["BTC"].(map[string]any)');
     });
     test('an index of a parameter list holds only map rows (h30a15: IndexBy copies map elements only)', () => {
         const out = print ('async handle (rows: List)', "const byId = this.indexBy (rows, 'id');\nconst entry = this.safeDict (byId, 'BTC');\nreturn this.safeString (entry, 'x');");

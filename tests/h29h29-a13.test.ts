@@ -57,11 +57,13 @@ describe ('h29 A13 frame dict reads', () => {
     test ('negative: a handler also called with a built dict keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        const data = this.safeDict (message, \'feed\');\n        return this.parseRow (data);')
             + '\n    other (client: Client) {\n        const m: Dict = { \'feed\': {} };\n        this.handleTrade (client, m);\n    }');
-        expect (out).not.toContain ('message["feed"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('message["feed"].(map[string]any)');
     });
     test ('negative: a frame written into keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        message[\'x\'] = 1;\n        const data = this.safeDict (message, \'feed\');\n        return this.parseRow (data);'));
-        expect (out).not.toContain ('message["feed"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('message["feed"].(map[string]any)');
     });
     test ('negative: a computed key keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        const k = this.safeString (message, \'k\');\n        const data = this.safeDict (message, k);\n        return this.parseRow (data);'));

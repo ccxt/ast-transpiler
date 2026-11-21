@@ -41,11 +41,13 @@ describe('h30a15: string-key indexBy result is a JSON-shaped container', () => {
     });
     test('negative: a result written through prints no assertion', () => {
         const out = print (BODY.replace ('EXTRA', "byType['X'] = market;"));
-        expect (out).not.toContain ('byType["PRICE_FILTER"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('byType["PRICE_FILTER"].(');
     });
     test('negative: a result handed to a callee that may write it prints no assertion', () => {
         const out = print (BODY.replace ('EXTRA', 'this.keep (byType);'));
-        expect (out).not.toContain ('byType["PRICE_FILTER"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('byType["PRICE_FILTER"].(');
     });
     test('negative: a variable key read keeps the wrap', () => {
         const out = print (BODY.replace ("this.safeDict (byType, 'PRICE_FILTER')", "this.safeDict (byType, this.safeString (market, 'k'))").replace ('EXTRA', ''));
@@ -53,6 +55,7 @@ describe('h30a15: string-key indexBy result is a JSON-shaped container', () => {
     });
     test('negative: an index-keyed indexBy (list rows stored) prints no assertion', () => {
         const out = print (BODY.replace ("this.indexBy (filters, 'filterType')", 'this.indexBy (filters, 0)').replace ('EXTRA', ''));
-        expect (out).not.toContain ('byType["PRICE_FILTER"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('byType["PRICE_FILTER"].(');
     });
 });

@@ -74,6 +74,7 @@ describe ('h28a01: JSON-origin proof through an internal method parameter', () =
         expect (fn ('TwoOf')).not.toContain ('fee["data"].(');
     });
     test ('negative: a parameter written through prints no assertion', () => {
-        expect (fn ('WrOf')).not.toContain ('fee["data"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (fn ('WrOf')).toContain ('fee["data"].(');
     });
 });

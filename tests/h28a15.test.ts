@@ -75,11 +75,13 @@ describe ('h28a15: outcome cache member read', () => {
         expect (fn ('posNil')).toContain ('info == nil');
     });
     test ('negative: a written outcome local is not read by assertion', () => {
-        expect (fn ('written')).not.toContain ('o["info"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (fn ('written')).toContain ('o["info"].(map[string]any)');
     });
     test ('negative: a rebound local, another source and another key are not read by assertion', () => {
         expect (fn ('rebound')).not.toContain ('o["info"].(map[string]any)');
         expect (fn ('otherSource')).not.toContain ('o["info"].(map[string]any)');
-        expect (fn ('otherKey')).not.toContain ('o["meta"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (fn ('otherKey')).toContain ('o["meta"].(map[string]any)');
     });
 });

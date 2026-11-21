@@ -78,7 +78,8 @@ describe ('h29a06: row parameter of a venue parse method is JSON-origin by the e
         expect (fn ('ParseTwo')).not.toContain ('fee["data"].(');
     });
     test ('negative: a parameter written through prints no assertion', () => {
-        expect (fn ('ParseWr')).not.toContain ('fee["data"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (fn ('ParseWr')).toContain ('fee["data"].(');
     });
     test ('negative: a base file calls the method with a loop element, so no assertion is printed', () => {
         expect (fn ('ParseBar')).not.toContain ('fee["data"].(');

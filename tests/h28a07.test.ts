@@ -27,7 +27,7 @@ describe ('h28a07: view / balance reads print the comma-ok assertion', () => {
     };
     test ('wsApiUrls view local', () => {
         const out = print ('    g (marketType: string) {\n        const wsApiUrls: Dict = this.safeDict (this.safeDict (this.urls, \'api\', {}), \'ws\', {});\n        const wsApiDict: Dict = this.safeDict (wsApiUrls, \'ws-api\', {});\n        return this.safeString (wsApiDict, marketType);\n    }\n');
-        expect (out).toContain ('\tvar wsApiDict map[string]any\n\twsApiDict, _ = wsApiUrls["ws-api"].(map[string]any)');
+        expect (out).toContain ('\tvar wsApiDict, _ = wsApiUrls["ws-api"].(map[string]any)\n');
         expect (out).not.toContain ('SafeMapTyped(wsApiUrls');
     });
     test ('balance read with a {} default is nil-filled', () => {

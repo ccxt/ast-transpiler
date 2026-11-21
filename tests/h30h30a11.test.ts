@@ -52,11 +52,13 @@ describe ('h30 A11 frame reads with an empty-dict default', () => {
     test ('negative: a handler also called with a built dict keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        const data = this.safeDict (message, \'feed\', {});\n        return this.safeString (data, \'s\');')
             + '\n    other (client: Client) {\n        const m: Dict = { \'feed\': {} };\n        this.handleTrade (client, m);\n    }');
-        expect (out).not.toContain ('message["feed"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('message["feed"].(map[string]any)');
     });
     test ('negative: a frame written into keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        message[\'x\'] = 1;\n        const data = this.safeDict (message, \'feed\', {});\n        return this.safeString (data, \'s\');'));
-        expect (out).not.toContain ('message["feed"].(map[string]any)');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('message["feed"].(map[string]any)');
     });
     test ('negative: a non-empty default is not the comma-ok read', () => {
         const out = go (dispatch + '\n' + handler ('        const data = this.safeDict (message, \'feed\', { \'a\': 1 });\n        return this.safeString (data, \'s\');'));

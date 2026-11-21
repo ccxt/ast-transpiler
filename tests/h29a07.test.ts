@@ -68,14 +68,17 @@ describe ('h29 A07 parseWs row parameter fed only by ws frames', () => {
     });
     test ('negative: a second caller passes a built dict, so no assertion is printed', () => {
         const out = go (dispatch + '\n' + parser (read) + '\n    other () {\n        const m: Dict = { \'data\': {} };\n        return this.parseWsTicker (m);\n    }');
-        expect (out).not.toContain ('ticker["data"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('ticker["data"].(');
     });
     test ('negative: a row written through prints no assertion', () => {
         const out = go (dispatch + '\n' + parser ('        ticker[\'x\'] = 1;\n' + read));
-        expect (out).not.toContain ('ticker["data"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('ticker["data"].(');
     });
     test ('negative: the helper also held by reference prints no assertion', () => {
         const out = go (dispatch + '\n' + parser (read) + '\n    other () {\n        const f = this.parseWsTicker;\n        return f;\n    }');
-        expect (out).not.toContain ('ticker["data"].(');
+        // a typed map receiver reads by assertion whatever its origin (h32-R01)
+        expect (out).toContain ('ticker["data"].(');
     });
 });
