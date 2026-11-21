@@ -57361,3 +57361,43 @@ GoTranspiler.prototype.h30G16PointerSlots = function (declaration): number[] | u
     };
 }
 // ===== end h30-H30-G16
+// ===== h30-H30-G21
+// `const x = this.client (url)` / `this.orderBook (..)` in a prediction source: the ws regexes print the same
+// interface reads there as in the pro tree, so the local takes the interface type the pro tree already gives
+// it; `this.packb (..)` is the hand-written `[]uint8` (base only, no override). The value is the one the box held.
+const H30G21_PREDICTION_CALLEES: { [callee: string]: string } = { 'this.Client': 'ClientInterface', 'this.OrderBook': 'OrderBookInterface', 'this.IndexedOrderBook': 'OrderBookInterface', 'this.CountedOrderBook': 'OrderBookInterface' };
+const H30G21_BASE_CALLEES: { [callee: string]: string } = { 'packb': '[]uint8' };
+const goTypeOfInitializerBaseH30G21 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTypeOfInitializerBaseH30G21.call(this, initializer, printedValue);
+    if (known !== undefined) {
+        return known;
+    }
+    return (this.__ccxtGoLocalTypesInstalled === true) ? h30g21HandWrittenCallType(this, initializer, printedValue) : undefined;
+};
+function h30g21HandWrittenCallType (goTranspiler, initializer, printedValue: string): string | undefined {
+    const callee: any = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const printedCallee = ccxtGoPrintedCallParts(goTranspiler, printedValue)?.callee;
+    let method: any;
+    try {
+        method = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    // the base declaration (a venue override could return another shape)
+    if (!/(^|[\\/])ts[\\/]src[\\/]base[\\/](Exchange|functions[\\/]\w+)\.ts$/.test(String(method?.getSourceFile?.()?.fileName ?? ''))) {
+        return undefined;
+    }
+    const name = callee.name.text;
+    const goType = H30G21_BASE_CALLEES[name]
+        ?? ((clientIsInterfaceFrame(initializer) && !goSourceIsWsTree(initializer)) ? H30G21_PREDICTION_CALLEES[printedCallee] : undefined);
+    if ((goType === undefined) || (printedCallee !== 'this.' + name.charAt(0).toUpperCase() + name.slice(1))) {
+        return undefined;
+    }
+    return typeNameIsUsable(goTranspiler, initializer, goType) ? goType : undefined;
+}
+// ===== end h30-H30-G21
