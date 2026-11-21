@@ -56994,3 +56994,9 @@ GoTranspiler.prototype.h30g07DerefStoredAccessorWrite = function (expr) {
     return H30G07_PRINTED.test(printed) ? true : undefined;
 };
 // ===== end h30-H30-G07
+// ===== h30-H30-G08
+// position parsers whose every override returns a map literal, safePredictionPosition (a literal) or
+// PositionToMap (the base panics): the ccxt build retypes them to map[string]any (goProvenParseMapMethods).
+Object.assign (CCXT_GO_HELPER_RETURN_TYPES, Object.fromEntries ([ 'ParsePredictionPosition', 'ParseWsOptionsPosition' ]
+    .flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])));
+// ===== end h30-H30-G08
