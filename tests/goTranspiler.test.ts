@@ -19407,9 +19407,6 @@ describe ('go dict param sibling-file call sites', () => {
     test('a sibling argument of another type keeps the box', () => {
         expect(print('tmp-sibling-dict-arg-num', 'const r: any = 1;')).toContain('RemoveKeysFromDict(dict any');
     });
-    test('a sibling safeDict-seeded const read only as the argument types the parameter', () => {
-        expect(print('tmp-sibling-dict-arg-sd', "const x: any = {}; const r = this.safeDict (x, 'k');")).toContain('RemoveKeysFromDict(dict map[string]any');
-    });
     test('a safeDict-seeded const that is also read elsewhere keeps the box', () => {
         expect(print('tmp-sibling-dict-arg-sd2', "const x: any = {}; const r = this.safeDict (x, 'k'); this.removeKeysFromDict (x, [ r ]);")).toContain('RemoveKeysFromDict(dict any');
     });

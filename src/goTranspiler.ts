@@ -5920,20 +5920,6 @@ function ccxtGoSomeUseOf (scope, varName: string, nameNode, fails: (n: any) => b
     return found;
 }
 
-// every later read of the local must be a position the pointer box was already transparent in
-// (the Closure pointer-join read table); writes, native comparisons and anything unknown reject
-function ccxtGoClosureDefaultReadsAreSafe (goTranspiler, declaration, valueType) {
-    const scope = goTranspiler.goEnclosingFunction (declaration);
-    if (scope === undefined) {
-        return false;
-    }
-    const name = declaration.name;
-    const varName = name.text;
-    const unproven = ccxtGoSomeUseOf (scope, varName, name, (n) => !goReadRuleAccepts (CCXT_GO_CLOSURE_READ_RULE, goTranspiler, n, varName));
-    return !unproven && !goTranspiler.goTypeNameIsShadowed (scope, valueType)
-        && goTranspiler.goLocalIsSafeToType (scope, declaration, varName, valueType);
-}
-
 function installCcxtGoClosureDefaultValue (goTranspiler) {
     if (!goInstallOnce (goTranspiler, '__ccxtGoClosureDefaultValueInstalled')) {
         return;
@@ -5952,8 +5938,7 @@ function installCcxtGoClosureDefaultValue (goTranspiler) {
         const pointerLine = shape.pointerIsTrueArm ? 2 : 4;
         const expectedCondition = body + 'if ' + shape.pointerName + (shape.pointerIsTrueArm ? ' != nil {' : ' == nil {');
         const expectedReturn = (shape.pointerIsTrueArm ? body + '\t' : body) + 'return ' + shape.pointerName;
-        if ((lines[1] !== expectedCondition) || (lines[pointerLine] !== expectedReturn)
-                || !ccxtGoClosureDefaultReadsAreSafe (goTranspiler, declaration, shape.valueType)) {
+        if ((lines[1] !== expectedCondition) || (lines[pointerLine] !== expectedReturn)) {
             return printed;
         }
         lines[0] = literal.indent + 'var ' + literal.name + ' ' + shape.valueType + ' = func() ' + shape.valueType + ' {';
@@ -8708,31 +8693,11 @@ function ccxtGoStringConcatReadVetoes (n, parent) {
     }
     if ((parent.kind === ts.SyntaxKind.BinaryExpression) && ((parent.left === n) || (parent.right === n))) {
         const other = (parent.left === n) ? parent.right : parent.left;
-        if (isNilLiteralExpression (other) || isNonStringLiteralOperand (other)) {
+        if (isNilLiteralExpression (other)) {
             return true; // `x == nil` / `x == 0` do not compile against a Go string
         }
     }
     return ccxtGoValueUseVetoed (n, parent) || isDestructuringTarget (n);
-}
-
-function isNonStringLiteralOperand (node) {
-    if (node === undefined) {
-        return false;
-    }
-    switch (node.kind) {
-    case ts.SyntaxKind.NumericLiteral:
-    case ts.SyntaxKind.BigIntLiteral:
-    case ts.SyntaxKind.TrueKeyword:
-    case ts.SyntaxKind.FalseKeyword:
-    case ts.SyntaxKind.RegularExpressionLiteral:
-    case ts.SyntaxKind.TemplateExpression:
-        return true;
-    case ts.SyntaxKind.PrefixUnaryExpression:
-        return (node.operand !== undefined) && (node.operand.kind === ts.SyntaxKind.NumericLiteral);
-    case ts.SyntaxKind.ParenthesizedExpression:
-        return isNonStringLiteralOperand (node.expression);
-    }
-    return false;
 }
 
 // `x++` / `x--`, `...x`, `x(...)`: uses no typed scalar local survives
@@ -13784,22 +13749,8 @@ function goDictParamAwaitedMapArg (go: any, arg: any): boolean {
     const decl: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
     if (decl?.kind !== SK.VariableDeclaration) { return false; }
     // a safeDict-seeded local the printer itself declares map[string]any
-    if ((go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE) || (go.goSafeDictMapLocal (decl) === GO_BASE_DICT_PARAM_TYPE)
-        || ((go.goSafeDictCallArgs (decl.initializer) !== undefined) && goDictParamPrintedMapDeclaration (go, decl, arg))) { return true; }
+    if ((go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE) || (go.goSafeDictMapLocal (decl) === GO_BASE_DICT_PARAM_TYPE)) { return true; }
     return go.goAwaitedMapLocal (decl) || goAwaitedMapWritesOnlyLocal (go, decl);
-}
-
-// a single-binding `const x = this.safeDict (..)` read only as this argument: the container-local rule types it
-// map[string]any once the parameter is a map (the parameter proof is what it waits for, so ask without it)
-function goDictParamPrintedMapDeclaration (go: any, decl: any, arg: any): boolean {
-    const list: any = decl.parent;
-    if ((decl.name?.kind !== SK.Identifier) || (list?.kind !== SK.VariableDeclarationList) || ((list.flags & ts.NodeFlags.Const) === 0)
-        || (list.declarations.length !== 1) || (list.parent?.kind !== SK.VariableStatement)) { return false; }
-    const scope: any = go.goEnclosingFunction (decl);
-    if (scope === undefined) { return false; }
-    const name = decl.name.text;
-    return !go.hasNodeWhere (scope, (n: any) => (n.kind === SK.Identifier) && (n.text === name) && (n !== decl.name) && (n !== arg)
-        && !((n.parent?.kind === SK.PropertyAccessExpression) && (n.parent.name === n)) && !((n.parent?.kind === SK.PropertyAssignment) && (n.parent.name === n)));
 }
 
 // `this.safeDict (c, k, {})` (one key, never-nil default): passed to a map parameter it prints the same read as
