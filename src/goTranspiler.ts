@@ -50305,3 +50305,64 @@ GoTranspiler.prototype.h28a11DefaultedFrameList = function (node, declaration, i
     return this.getIden(identation) + 'var ' + this.printNode(declaration.name, 0) + ', _ = ' + this.printNode(args.container, 0) + '[' + this.printNode(args.key, 0) + '].([]any)';
 };
 // ===== end h28-A11 =====
+// ===== h28-H28-A13 =====
+// a never-rebound list local `this.safeList (C, 'lit'[, []])` cut from a ws frame (C proven by h27a11JsonContainer)
+// holds only decoded JSON rows, so the literal-index (h27a08) and loop-index (h27a09) row reads admit it too
+export interface GoTranspiler {
+    h28a13FrameList(list): boolean;
+}
+GoTranspiler.prototype.h28a13FrameList = function (list) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeList');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.h27a11JsonContainer(this.goUnwrapParenthesizedNode(args.container))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name) || this.h27a09SafeReaderArg(n, name));
+};
+const h28a13JsonList = GoTranspiler.prototype.h27a08JsonList;
+GoTranspiler.prototype.h27a08JsonList = function (list) {
+    return h28a13JsonList.call(this, list) || this.h28a13FrameList(list);
+};
+const h28a13JsonOriginList = GoTranspiler.prototype.h27a09JsonOriginList;
+GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
+    return h28a13JsonOriginList.call(this, baseExpr) || this.h28a13FrameList(baseExpr);
+};
+// `const row = this.safeDict (xs, i, {})` in the same bounded loop: the comma-ok read plus the empty-map
+// fallback answers what SafeDictMap gave for a missing or non-map element
+const printVariableDeclarationListH28a13 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH28a13.call(this, node, identation);
+    const declaration: any = node?.declarations?.[0];
+    const init: any = declaration?.initializer;
+    const fallback: any = init?.arguments?.[2];
+    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)
+        || (init?.kind !== SyntaxKind.CallExpression) || (init.arguments.length !== 3) || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)) {
+        return printed;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+    const list: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    const key: any = args?.key;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (list.text === key.text)
+        || !this.goDeclaredListIdentifier(list) || !this.h27a09JsonOriginList(list)) {
+        return printed;
+    }
+    const xs = this.printNode(list, 0);
+    const k = this.printNode(key, 0);
+    const name = this.printNode(declaration.name, 0);
+    // the plain printer may already have dropped the default (it prints SafeMapTyped): then no fallback
+    const m = /^(\s*)var (\w+) map\[string\]any = (?:this\.SafeDictMap\((\w+), (\w+), map\[string\]any\{\}\)|(?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\))$/.exec(printed);
+    const keep = (m !== null) && (m[3] === undefined);
+    if ((m === null) || (m[2] !== name) || ((m[3] ?? m[5]) !== xs) || ((m[4] ?? m[6]) !== k) || (this.goLoopBoundedIndexRead(init, list, key, xs, k) === undefined)) {
+        return printed;
+    }
+    const iden = this.getIden(identation);
+    if (keep) {
+        return `${m[1]}var ${name}, _ = ${xs}[${k}].(map[string]any)`;
+    }
+    return `${m[1]}var ${name}, _ = ${xs}[${k}].(map[string]any)\n${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = map[string]any{}\n${iden}}`;
+};
+// ===== end h28-H28-A13 =====
