@@ -47539,3 +47539,60 @@ GoTranspiler.prototype.h27a08JsonList = function (list) {
     });
 };
 // ===== h27-H27-A08 (end) =====
+// ===== h27-A09 =====
+// `const row = this.safeDict (xs, i)` inside `for (let i = 0; i < xs.length; i++)` over a JSON-origin
+// list (decoded response or its safeList chain: only maps, lists, scalars or nil) reads the element with
+// the comma-ok assertion; a missing / non-map element gives the nil map SafeMapTyped gave
+export interface GoTranspiler {
+    h27a09JsonRowRead(declaration, identation: number): string | undefined;
+    h27a09JsonOriginList(baseExpr): boolean;
+    h27a09SafeReaderArg(node, name: string): boolean;
+}
+GoTranspiler.prototype.h27a09JsonRowRead = function (declaration, identation: number) {
+    const args: any = this.goSafeAccessorLocalArgs(declaration?.initializer, 'safeDict');
+    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    const key: any = args?.key;
+    if ((args === undefined) || (declaration.initializer.arguments.length !== 2) || (container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+        || (container.text === key.text) || !this.goDeclaredListIdentifier(container) || !this.h27a09JsonOriginList(container)) {
+        return undefined;
+    }
+    const containerStr = this.printNode(container, identation);
+    const keyStr = this.printNode(key, 0);
+    if (this.goLoopBoundedIndexRead(declaration.initializer, container, key, containerStr, keyStr) === undefined) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStr}].(map[string]any)`;
+};
+// goJsonOriginList, also admitting a use as the first argument of a `this.safe*` reader (it only reads)
+GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr): boolean {
+    const declaration: any = this.goAnyBoxLocalDeclaration(baseExpr);
+    let initializer: any = declaration?.initializer;
+    while ((initializer?.kind === SyntaxKind.AsExpression) || (initializer?.kind === SyntaxKind.NonNullExpression)
+        || (initializer?.kind === SyntaxKind.ParenthesizedExpression)) {
+        initializer = initializer.expression;
+    }
+    const args: any = (declaration?.kind === SyntaxKind.VariableDeclaration) ? this.goSafeAccessorLocalArgs(initializer, 'safeList') : undefined;
+    return (args !== undefined) && this.goJsonOriginContainer(args.container)
+        && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name) || this.h27a09SafeReaderArg(n, name));
+};
+GoTranspiler.prototype.h27a09SafeReaderArg = function (node, name: string): boolean {
+    const call: any = node.parent;
+    const callee: any = call?.expression;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === node) && !this.goWritesOrRebindsName(node, name, [])
+        && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && /^safe(Dict|List|String|StringLower|StringUpper|Integer|Number|Bool|Value|Float|Timestamp)$/.test(callee.name?.text ?? '');
+};
+// the single-value assertion would panic on a non-map element: declare through the comma-ok form
+const printVariableDeclarationListH27a09 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH27a09.call(this, node, identation);
+    const declaration: any = node?.declarations?.[0];
+    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return printed;
+    }
+    const value = this.h27a09JsonRowRead(declaration, identation);
+    const name = this.printNode(declaration.name, 0);
+    const m = (value === undefined) ? null : /^(\s*)var (\w+) map\[string\]any = (?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\)$/.exec(printed);
+    return ((m !== null) && (m[2] === name) && (`${m[3]}[${m[4]}].(map[string]any)` === value)) ? `${m[1]}var ${name}, _ = ${value}` : printed;
+};
+// ===== end h27-A09 =====
