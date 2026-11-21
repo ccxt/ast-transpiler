@@ -12347,6 +12347,7 @@ function goStrLocalIsSameProof (other, method, fileName, seen) {
 // `: Strings` / `: string[]` on a closed non-parse method: `[]any`, admitted only when every path is never nil
 function goStringArrayAnnotatedReturnTypes (goTranspiler, node, name) {
     const annotation = node.type?.getText ()?.replace (/\s+/g, '');
+    const h29g20 = h29g20NumberArrayAnnotatedReturnTypes (goTranspiler, node, name); if (h29g20 !== undefined) return h29g20;
     if (((annotation !== 'Strings') && (annotation !== 'string[]')) || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name)) {
         return undefined;
     }
@@ -54793,3 +54794,118 @@ function installH29G19ReturnedLiteralTernaryStore (goTranspiler: any) {
     };
 }
 // ===== end h29-G19
+
+// ===== h29-H29-G20
+// a closed venue method declared `number[]` whose every return is a never-nil container prints `[]any`
+// (the slice its accumulator already is), so a caller local holding the result counts it with `len`
+function h29g20NumberArrayAnnotatedReturnTypes (goTranspiler, node, name) {
+    const annotation = node.type?.getText ()?.replace (/\s+/g, '');
+    if ((annotation !== 'number[]') || !ccxtGoGeneralAnnotatedMethodIsClosed (node, name)) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    return ((returns.length > 0) && returns.every ((r) => ccxtGoContainerNeverNil (goTranspiler, r.expression))) ? [ '[]any' ] : undefined;
+}
+// the list such a producer returns holds only int loop counters and plain values, never a Go pointer
+function h29g20PlainNumberListCall (goTranspiler: GoTranspiler, list): boolean {
+    const checker: any = goTranspiler.checkerOrUndefined ();
+    const declaration: any = (list?.kind === SyntaxKind.Identifier) ? checker?.getSymbolAtLocation (list)?.valueDeclaration?.resolve?.() : undefined;
+    const init: any = goTranspiler.goUnwrapParenthesizedNode (declaration?.initializer);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0)
+        || (init?.kind !== SyntaxKind.CallExpression) || (init.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const method: any = checker.getSymbolAtLocation (init.expression)?.valueDeclaration?.resolve?.();
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined)
+        || (h29g20NumberArrayAnnotatedReturnTypes (goTranspiler, method, `${method.name?.text ?? ''}`) === undefined)) {
+        return false;
+    }
+    const counter = (e: any): boolean => {
+        const d: any = (e?.kind === SyntaxKind.Identifier) ? checker.getSymbolAtLocation (e)?.valueDeclaration?.resolve?.() : undefined;
+        return (d?.kind === SyntaxKind.VariableDeclaration) && (d.parent?.parent?.kind === SyntaxKind.ForStatement)
+            && (d.parent.parent.initializer === d.parent) && (d.initializer?.kind === SyntaxKind.NumericLiteral);
+    };
+    return collectReturnStatements (method.body).every ((r: any) => {
+        const local: any = goTranspiler.goUnwrapParenthesizedNode (r.expression);
+        const d: any = (local?.kind === SyntaxKind.Identifier) ? checker.getSymbolAtLocation (local)?.valueDeclaration?.resolve?.() : undefined;
+        if ((d?.kind !== SyntaxKind.VariableDeclaration) || (goTranspiler.goUnwrapParenthesizedNode (d.initializer)?.kind !== SyntaxKind.ArrayLiteralExpression)
+            || (d.initializer.elements.length !== 0)) {
+            return false;
+        }
+        return goTranspiler.goNameWriteSites (method, local.text, d).every ((w: any) => {
+            const call: any = w.parent?.parent;
+            return (w.parent?.kind === SyntaxKind.PropertyAccessExpression) && (w.parent.name?.text === 'push') && (call?.kind === SyntaxKind.CallExpression)
+                && (call.expression === w.parent) && (call.arguments.length === 1)
+                && (counter (call.arguments[0]) || (call.arguments[0].kind === SyntaxKind.NumericLiteral) || goListElementIsPlainValue (goTranspiler, call.arguments[0]));
+        });
+    });
+}
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFree.call (this, list, depth) || h29g20PlainNumberListCall (this, list);
+    };
+    // `xs[K]` on a const list declared inside a loop body, after an exiting length guard in that same body: the
+    // list is created fresh on each pass, so the enclosing loop cannot change it between the guard and the read
+    const guarded = GoTranspiler.prototype.h26g24GuardedLiteralRead;
+    GoTranspiler.prototype.h26g24GuardedLiteralRead = function (node, writeContainer = false): boolean {
+        return guarded.call (this, node, writeContainer) || h29g20LoopBodyGuardedRead (this, node, writeContainer);
+    };
+}
+function h29g20LoopBodyGuardedRead (goTranspiler: GoTranspiler, node, writeContainer: boolean): boolean {
+    const list: any = node?.expression;
+    const key: any = node?.argumentExpression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test (`${key.text}`)) {
+        return false;
+    }
+    const checker: any = goTranspiler.checkerOrUndefined ();
+    const declaration: any = checker?.getSymbolAtLocation (list)?.valueDeclaration?.resolve?.();
+    const statement: any = declaration?.parent?.parent;
+    const block: any = statement?.parent;
+    const scope: any = goTranspiler.goEnclosingFunction (node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)
+        || (statement?.kind !== SyntaxKind.VariableStatement) || (block?.kind !== SyntaxKind.Block) || !GO_ITERATION_STATEMENT_KINDS.has (block.parent?.kind)
+        || (scope === undefined) || (goTranspiler.goEnclosingFunction (declaration) !== scope)
+        || (goTranspiler.goNameWriteSites (scope, list.text, declaration).length > 0)
+        || (!writeContainer && !goTranspiler.goListElementsArePointerFree (list))) {
+        return false;
+    }
+    // the read sits in a later statement of the same block, with no function boundary in between
+    let child: any = node;
+    for (let up: any = node.parent; up !== block; child = up, up = up.parent) {
+        if ((up === undefined) || isFunctionLike (up)) {
+            return false;
+        }
+    }
+    const statements: any[] = block.statements;
+    const at = statements.indexOf (child);
+    const from = statements.indexOf (statement);
+    const names = new Set<string> ();
+    for (let i = from + 1; i < at; i++) {
+        const s: any = statements[i];
+        if (s.kind === SyntaxKind.VariableStatement) {
+            for (const d of s.declarationList.declarations) {
+                const init: any = goTranspiler.goUnwrapParenthesizedNode (d.initializer);
+                if (((s.declarationList.flags & ts.NodeFlags.Const) !== 0) && (d.name?.kind === SyntaxKind.Identifier) && (init?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (init.name?.text === 'length') && (init.expression?.kind === SyntaxKind.Identifier) && (init.expression.text === list.text)) {
+                    names.add ('L:' + d.name.text);
+                }
+            }
+            continue;
+        }
+        if ((s.kind !== SyntaxKind.IfStatement) || (s.elseStatement !== undefined)) {
+            continue;
+        }
+        const body: any[] = (s.thenStatement?.kind === SyntaxKind.Block) ? s.thenStatement.statements : [ s.thenStatement ];
+        const last: any = body[body.length - 1];
+        // break / continue leave this pass; a labelled jump might not, so only bare ones count
+        const exits = [ SyntaxKind.ReturnStatement, SyntaxKind.ThrowStatement ].includes (last?.kind)
+            || (([ SyntaxKind.BreakStatement, SyntaxKind.ContinueStatement ].includes (last?.kind)) && (last.label === undefined));
+        if (exits && goTranspiler.h26g24GuardProves (s.expression, list, Number (key.text), names, false)) {
+            return true;
+        }
+    }
+    return false;
+}
+// ===== end h29-H29-G20
