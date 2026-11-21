@@ -13390,6 +13390,7 @@ class TupleSlots {
         const lines = printed.split ('\n').map ((line) => {
             let m = new RegExp ('^(\\s*(?:var \\w+ map\\[string\\]any = |\\w+ = ))(?:ccxt\\.)?MapTyped\\((?:ccxt\\.)?GetValue\\(' + h + ', (\\d+)\\)\\)$').exec (line);
             if (m !== null) {
+                if (h28a20TupleSliceMapSlot (first, holder, m[2])) { changed = true; return m[1] + holder + '[1].(map[string]any)'; }
                 const cls = slotClass (m[2]);
                 if ((cls === 'typedmap') || (cls === 'plain:map')) { changed = true; return m[1] + holder + '[' + m[2] + '].(map[string]any)'; }
                 // MapTyped derefs its own argument, so it reads the slice element the same as GetValue does
@@ -50785,3 +50786,11 @@ function h28a19ArrayIdentityWrite (go, node) {
     return go.printNode (node.left, 0) + ' = ' + go.printNode (node.right, 0).trim ();
 }
 // ===== end h28-H28-A19
+
+// ===== h28-H28-A20
+// `h := TupleSlice(call)` builds `[]any{value, params}` from `TupleSlice[T any](value T, params map[string]any)`:
+// element 1 always holds a map[string]any (a nil map stays a nil map), so the slot reads by index plus the assertion
+function h28a20TupleSliceMapSlot (first: string, holder: string, slot: string): boolean {
+    return (slot === '1') && first.startsWith (holder + ' := ') && /^\w+ := (?:ccxt\.)?TupleSlice\(.*\)$/.test (first);
+}
+// ===== end h28-H28-A20
