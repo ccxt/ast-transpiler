@@ -24010,6 +24010,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (goType === '[]any') {
             return this.goUnifiedAnySliceParameterType(fn, param);
         }
+        const h27g22 = this.h27g22NumberRowSliceParameterType(fn, param, goType); if (h27g22 !== undefined) return h27g22;
         if (goType === '[][]any') {
             return this.goUnifiedRowSliceParameterType(fn, param);
         }
@@ -49112,3 +49113,22 @@ GoTranspiler.prototype.h27g21StoreValueIsPlain = function (valueNode, containerN
     return false; // an `any` element read back out of the slice prints its own guarded read off this store
 };
 // ===== h27-H27-G21 (end) =====
+
+// ===== h27-G22 =====
+export interface GoTranspiler {
+    h27g22NumberRowSliceParameterType(fn, param, goType: string): string | undefined;
+}
+// a `[][]any` table slot also types a required `number[][]` row list: every element prints boxed in `any`,
+// and every caller must already hand a [][]any (the table row is the caller proof, as for string[][])
+GoTranspiler.prototype.h27g22NumberRowSliceParameterType = function (fn, param, goType) {
+    if ((goType !== '[][]any') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'number[][]')) {
+        return undefined;
+    }
+    if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[][]any')) {
+        throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than [][]any`);
+    }
+    return '[][]any';
+};
+// ===== h27-G22 (end) =====
