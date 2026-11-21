@@ -25953,6 +25953,7 @@ export class RustTranspiler extends BaseTranspiler {
                     return true;
                 }
                 if (this.rustH26r14RecordWrite(rhs)) { if (kind !== undefined && kind !== 'dict') return false; kind = 'dict'; writes++; return true; }
+                if (this.rustH27r08WsRecordWrite(rhs)) { if (kind !== undefined && kind !== 'dict') return false; kind = 'dict'; writes++; return true; }
                 const k = isObjectLiteralExpression(rhs) && !rhs.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment) ? 'dict'
                     : (isArrayLiteralExpression(rhs) && this.rustNilListLiteralOk(rhs) ? 'list' : undefined);
                 if (k === undefined || (kind !== undefined && kind !== k)) return false;
@@ -25969,6 +25970,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isBinaryExpression(parent) && this.isEqualityOp(parent.operatorToken.kind)) {
                 return this.literalKindOfNode(this.unwrapParens(parent.left === n ? parent.right : parent.left)) === 'null';
             }
+            if (this.rustH27r08CacheAppendUse(n)) { boxes++; return true; }
             if ((parent?.kind === SyntaxKind.PropertyAssignment && parent.initializer === n && !this.rustScalarInNestedWrite(n, true))
                 || (isReturnStatement(parent) && parent.expression === n) || this.rustH26r14RecordBoxUse(n)) {
                 boxes++;
@@ -26129,6 +26131,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (this.rust67cNilMapExtendWrite(left, this.rustNilMapOf(left))) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
         if (this.rustH26r14RecordWrite(rhs)) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
+        if (this.rustH27r08WsRecordWrite(rhs)) return `${name} = Some(${this.printNode(right, identation).trim()}.into_dict())`;
         if (isArrayLiteralExpression(rhs)) return `${name} = Some(${this.printBuiltListLiteral(rhs)})`;
         return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
     }
@@ -26149,6 +26152,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-67c: the optional map moves out of the local into the `extend` head (`impl ExtendHead for Option<Dict>`); the write puts it back
         const extendHeadOf = this.rustNilMapOf(node);
         if (extendHeadOf !== undefined && this.rust67cNilMapExtendHead(node, extendHeadOf)) return `${text}.take()`;
+        const h27r08 = this.rustH27r08CacheAppendBox(node, text); if (h27r08 !== undefined) return h27r08;
         if (parent === undefined || !((parent.kind === SyntaxKind.PropertyAssignment && parent.initializer === node) || (isReturnStatement(parent) && parent.expression === node)
             || this.rustNilMapExtraBox(node) || this.rustH26r14RecordBoxUse(node))) return undefined;
         const declaration = this.rustNilMapOf(node);
@@ -40975,4 +40979,53 @@ export class RustTranspiler extends BaseTranspiler {
         return receiver;
     }
     // ===== end h27-R07
+    // ===== h27-H27-R08
+    private static readonly RUST_H27R08_WS_FNS = /^parseWs(?:Trade|Order|Ticker|UpdatedTicker|BidAsk)$/;
+    private static readonly RUST_H27R08_RECORD_RETURN = /^(?:safeOrder|safeTrade|safeTicker|parseOrder|parseTrade|parseTicker)$/;
+
+    /** `x = this.parseWsTrade|Order|Ticker (..)` resolved to a venue override whose every `return` answers a record parser
+     *  of the h26-R14 table (`safeTrade (..)` ...): the ccxt build types such an override `Dict` and drops `.into_dict()`.
+     *  The base declaration (it throws) or any other return keeps the box. */
+    rustH27r08WsRecordWrite(rhs: any): boolean {
+        if (!isCallExpression(rhs) || !isPropertyAccessExpression(rhs.expression) || rhs.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || !RustTranspiler.RUST_H27R08_WS_FNS.test(String(rhs.expression.name.text)) || rhs.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        let declaration: any;
+        try { declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(rhs)); } catch (e) { return false; }
+        if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined
+            || RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))
+            || declaration.getSourceFile() !== rhs.getSourceFile()) return false;
+        let returns = 0, ok = true;
+        const visit = (n: any) => {
+            if (!ok || isFunctionLike(n)) return;
+            if (isReturnStatement(n)) {
+                const e: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
+                if (e === undefined || !isCallExpression(e) || !isPropertyAccessExpression(e.expression) || e.expression.expression.kind !== SyntaxKind.ThisKeyword
+                    || !RustTranspiler.RUST_H27R08_RECORD_RETURN.test(String(e.expression.name.text))) ok = false;
+                returns++;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        declaration.body.forEachChild(visit);
+        return ok && returns > 0;
+    }
+
+    /** `c.append (x)` on a local whose checker type is a ws cache (`ArrayCache*`): the hand-written `append` takes `impl Into<Value>`. */
+    rustH27r08CacheAppendUse(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.arguments.length !== 1 || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)
+            || String(call.expression.name.text) !== 'append' || !isIdentifier(call.expression.expression)) return false;
+        const t: any = this.typeOfNodeIfAny(call.expression.expression);
+        const parts: any[] = t === undefined ? [] : (typeParts(t) ?? [t]);
+        return parts.length > 0 && parts.every((p: any) => (p.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0 || /^ArrayCache\w*$/.test(String(this.getChecker().typeToString(p))));
+    }
+
+    /** The box at such an append: moved at the last use, else the Arc bump; `None` is `Value::Null`. */
+    rustH27r08CacheAppendBox(node: any, text: string): string | undefined {
+        if (!this.rustH27r08CacheAppendUse(node)) return undefined;
+        const declaration = this.rustNilMapOf(node);
+        if (declaration === undefined || this.rustNilListLocals.has(declaration) || this.rustNilMapAliasInit(node) !== undefined) return undefined;
+        return `${text}${this.rustLocalLastUse(node, declaration) ? '' : '.clone()'}.map_or(Value::Null, Value::Dict)`;
+    }
+    // ===== end h27-H27-R08
 }
