@@ -2677,6 +2677,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printCallExpression(node: any, identation: any): string;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
+    rustDynamicSelfCallee(callee: any): boolean;
     printDynamicSelfCall(node: any, identation: any): string | undefined;
     printThisKeyword(node: any, identation: any): string;
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
@@ -5201,9 +5202,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** zi: `const [ a, b ] = c ? this.f (..) : this.g (..)`: slot `at` is a map when each arm's own callee declares it one
      *  (the venue-pair form of `rustDeclaredDictSlot`; the temp keeps its `Vec<Value>` head). */
     rustTernaryDictSlot(element: any): boolean;
-    /** ral-54f: the last slot of a base `this.handle*AndParams (..)` whose own tuple return declares it a bare `Dict`
-     *  (`handleTriggerPricesAndParams`: `[Str, Str, Str, Dict]`) is the params map handed back, exactly as slot 1 of the
-     *  two-slot helpers. Non-test sources only (the caller checks the tier). */
+    /** The last slot of a base-tier `this.handle* (..)` reader whose own tuple return declares it a bare `Dict` (`[Str, Dict]`,
+     *  `[Str, Str, Str, Dict]`) is that map (the readers the port returns as a native pair). Non-test sources only. */
     rustBaseHandleLastDictSlot(element: any): boolean;
     /** ral-66s1: slot 1 of `const [ a, p ] = super.handle*AndParams (..)` inside a venue override, the base helper's own
      *  tuple return declaring that slot a bare `Dict`: the params map handed back, exactly as for a `this.` call. */

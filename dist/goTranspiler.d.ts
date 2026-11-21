@@ -1992,7 +1992,6 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     go93g4PointerOperands(call: any, self?: Node): string[] | undefined;
-    go93g4HasNumericUse(declaration: any): boolean;
 }
 export interface GoTranspiler {
     goOrderBookCacheLocal(declaration: any): boolean;
@@ -2167,6 +2166,7 @@ export interface GoTranspiler {
     h27a05TypedMapRead(declaration: any, declaredType: string, unboxValue: string | undefined, varName: string, identation: number): string | undefined;
     h27a05KeyText(keyNode: any): string | undefined;
     h27a05JsonOriginContainer(node: any): boolean;
+    goTypedMapDictRead(args: any, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
 }
 export interface GoTranspiler {
     h27a06OptionsDictRead(node: any, printed: string): string | undefined;
@@ -2176,7 +2176,6 @@ export interface GoTranspiler {
     h27a08JsonList(list: any): boolean;
 }
 export interface GoTranspiler {
-    h27a09JsonRowRead(declaration: any, identation: number): string | undefined;
     h27a09JsonOriginList(baseExpr: any): boolean;
     h27a09SafeReaderArg(node: any, name: string): boolean;
 }
@@ -2313,9 +2312,6 @@ export interface GoTranspiler {
     h28a08JsonContainer(node: any, depth: number): boolean;
     h28a08AwaitedEndpoint(init: any): boolean;
     h28a08ReturnedLiteralValue(node: any): boolean;
-}
-export interface GoTranspiler {
-    h28a09JsonRowReadDefault(declaration: any, identation: number): string | undefined;
 }
 export interface GoTranspiler {
     h28a10JsonList(node: any): boolean;
@@ -2619,7 +2615,6 @@ export interface GoTranspiler {
         kind: 'compare' | 'store';
         literal: any;
     } | undefined;
-    h29m05MapTupleSlot(id: any): boolean;
 }
 export interface GoTranspiler {
     h29a14DefaultedFrameRead(node: any, printed: string): string | undefined;

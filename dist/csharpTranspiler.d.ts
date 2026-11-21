@@ -432,6 +432,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNullTestCount(node: any, identifier: any): number;
     csharpSameExpressionNullTest(node: any, identifier: any): boolean;
     csharpComparisonOperandKinds(left: any, right: any): [string | undefined, string | undefined];
+    csharpNumericParamKind(node: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpMinMaxResultIsPlainValue(node: any): boolean;

@@ -413,7 +413,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printIntegralCallArithmetic(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     printDeclaredBoxArithmetic(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
-    javaNativeMathMinMaxOperandKind(node: any): "double" | "integral";
+    javaNativeMathMinMaxOperandKind(node: any): any;
+    javaGuardedLongLocalRead(node: any): boolean;
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
     javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
