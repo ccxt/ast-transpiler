@@ -55663,3 +55663,49 @@ GoTranspiler.prototype.h29m05MapTupleSlot = function (id: any): boolean {
     return (name === 'handleUntilOption') && Array.isArray(slots) && slots.includes(pattern.elements.indexOf(decl));
 };
 // ===== end h29-M05
+// ===== h29-H29-A14 =====
+// `const x = this.safeDict|safeList (F, 'lit', {} | [])` on a ws frame or a read-only local cut from one (h27a11JsonContainer):
+// the frame holds only decoded JSON, so the comma-ok read plus the empty default answers what SafeDictMap / SafeListSlice did
+export interface GoTranspiler {
+    h29a14DefaultedFrameRead(node, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h29a14DefaultedFrameRead = function (node, printed: string) {
+    const declaration: any = node?.declarations?.[0];
+    const init: any = declaration?.initializer;
+    const fallback: any = init?.arguments?.[2];
+    if ((typeof printed !== 'string') || (node?.declarations?.length !== 1) || (node.parent?.kind !== SyntaxKind.FirstStatement)
+        || (declaration?.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression) || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const isList = this.goSafeAccessorLocalArgs(init, 'safeList') !== undefined;
+    const args: any = this.goSafeAccessorLocalArgs(init, isList ? 'safeList' : 'safeDict');
+    const emptyDefault = isList ? ((fallback?.kind === SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0))
+        : ((fallback?.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0));
+    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    if (!emptyDefault || (args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_.:-]+$/.test(args.key.text)
+        || (container?.kind !== SyntaxKind.Identifier) || !this.h27a11JsonContainer(container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const recv: string = container.text;
+    const key = `"${args.key.text}"`;
+    const type = isList ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    const empty = isList ? '[]any{}' : 'map[string]any{}';
+    const shipped = isList ? [ `this.SafeListSlice(${recv}, ${key}, []any{})`, `ListTyped(this.SafeList(${recv}, ${key}, []any{}))` ]
+        : [ `this.SafeDictMap(${recv}, ${key}, map[string]any{})`, `MapTyped(this.SafeDict(${recv}, ${key}, map[string]any{}))` ];
+    const match = /^(\n*)(\t*)var (\w+) (\S+) = (.*)$/s.exec(printed);
+    if ((match === null) || (match[3] !== name) || (match[4] !== type) || !shipped.includes(match[5])) {
+        return undefined;
+    }
+    const iden = match[2];
+    return `${match[1]}${iden}var ${name} ${type}\n${iden}${name}, _ = ${recv}[${key}].(${type})\n${iden}if ${name} == nil {\n${iden}\t${name} = ${empty}\n${iden}}`;
+};
+{
+    const printVariableDeclarationListH29a14 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH29a14.call(this, node, identation);
+        const h = this.h29a14DefaultedFrameRead(node, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h29-H29-A14 =====
