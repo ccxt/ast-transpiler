@@ -6871,6 +6871,7 @@ export function ccxtGoAsyncListHolderLines (goTranspiler, awaitNode, target: str
 const CCXT_GO_ENDPOINT_PARSER_READ = /^(?:parse[A-Z]\w*|safe[A-Z]\w*|addPaginationCursorToResult|indexBy|groupBy)$/;
 
 function ccxtGoEndpointLocalParserRead (node) {
+    if (h30p02GuardedJsonRead (node) || h30p02OmitIntoParserRead (node)) { return true; }
     const parent = node.parent;
     if ((parent?.kind !== ts.SyntaxKind.CallExpression) || (parent.arguments?.[0] !== node)) {
         return false;
@@ -57707,3 +57708,107 @@ GoTranspiler.prototype.h30M04SymbolArgRead = function (node: any) {
     };
 }
 // ===== end h30-M04
+// ===== h30-H30-P02 =====
+// `this.json (x)` inside `if (r === '<lit>')` where `const r = this.safeString (x, '<k>')` (same function, x a
+// const): the branch runs only when x is a map holding k, so the typed map and the raw body print the same JSON
+function h30p02GuardedJsonRead (node: any): boolean {
+    const call: any = node?.parent;
+    const callee: any = call?.expression;
+    if ((node?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 1) || (call.arguments[0] !== node)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'json')) {
+        return false;
+    }
+    let child: any = call;
+    let at: any = call.parent;
+    while ((at !== undefined) && !isFunctionLike (at)) {
+        if ((at.kind === SyntaxKind.IfStatement) && (at.thenStatement === child) && h30p02LiteralGuardOf (at, at.expression, node.text)) {
+            return true;
+        }
+        child = at;
+        at = at.parent;
+    }
+    return false;
+}
+
+// `r === '<lit>'` (either side) with `const r = this.safeString (<name>, '<k>')` declared in the same function
+function h30p02LiteralGuardOf (ifNode: any, cond: any, name: string): boolean {
+    while (cond?.kind === SyntaxKind.ParenthesizedExpression) { cond = cond.expression; }
+    if ((cond?.kind !== SyntaxKind.BinaryExpression) || ((cond.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken) && (cond.operatorToken.kind !== SyntaxKind.EqualsEqualsToken))) {
+        return false;
+    }
+    const pair = (cond.right?.kind === SyntaxKind.StringLiteral) ? [ cond.left, cond.right ] : [ cond.right, cond.left ];
+    if ((pair[1]?.kind !== SyntaxKind.StringLiteral) || (pair[0]?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    let fn: any = ifNode.parent;
+    while ((fn !== undefined) && !isFunctionLike (fn)) { fn = fn.parent; }
+    if (fn === undefined) { return false; }
+    const local = pair[0].text;
+    let proven = false;
+    let other = false;
+    const visit = (n: any) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && ((n.name.text === local) || (n.name.text === name))) {
+            const constDecl = (n.parent?.kind === SyntaxKind.VariableDeclarationList) && ((n.parent.flags & ts.NodeFlags.Const) !== 0);
+            const init: any = n.initializer;
+            const reader: any = init?.expression;
+            if (!constDecl) { other = true; }
+            if ((n.name.text === local) && constDecl && (init?.kind === SyntaxKind.CallExpression) && (reader?.kind === SyntaxKind.PropertyAccessExpression)
+                && (reader.expression?.kind === SyntaxKind.ThisKeyword) && (reader.name?.text === 'safeString') && (init.arguments.length === 2)
+                && (init.arguments[0]?.kind === SyntaxKind.Identifier) && (init.arguments[0].text === name) && (init.arguments[1]?.kind === SyntaxKind.StringLiteral)) {
+                if (proven) { other = true; }
+                proven = true;
+            } else if (n.name.text === local) {
+                other = true;
+            }
+        }
+        if ((n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && ((n.name.text === local) || (n.name.text === name))) {
+            other = true;
+        }
+        n.forEachChild (visit);
+    };
+    fn.forEachChild (visit);
+    return proven && !other;
+}
+
+// `const s = this.omit (x, '<k>', ..)` of an awaited local x, where s is read only as arg 0 of `this.parse<X> (s, ..)`:
+// Omit of the typed map is a fresh map; for a body that is not a map the parser reads no member either way
+function h30p02OmitIntoParserRead (node: any): boolean {
+    const call: any = node?.parent;
+    const callee: any = call?.expression;
+    if ((node?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.[0] !== node) || (call.arguments.length < 2)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'omit')
+        || !call.arguments.slice (1).every ((a: any) => a.kind === SyntaxKind.StringLiteral)) {
+        return false;
+    }
+    const decl: any = call.parent;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer !== call) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || ((decl.parent?.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    let fn: any = decl.parent;
+    while ((fn !== undefined) && !isFunctionLike (fn)) { fn = fn.parent; }
+    if (fn === undefined) { return false; }
+    const name = decl.name.text;
+    let ok = true;
+    let uses = 0;
+    let awaited = false;
+    const visit = (n: any) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === node.text)
+            && (n.initializer?.kind === SyntaxKind.AwaitExpression) && ((n.parent?.flags & ts.NodeFlags.Const) !== 0)) {
+            awaited = true;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== decl.name)) {
+            const p: any = n.parent;
+            const pc: any = p?.expression;
+            uses++;
+            if (!((p?.kind === SyntaxKind.CallExpression) && (p.arguments?.[0] === n) && (pc?.kind === SyntaxKind.PropertyAccessExpression)
+                && (pc.expression?.kind === SyntaxKind.ThisKeyword) && /^parse[A-Z]\w*$/.test (String (pc.name?.text)))) {
+                ok = false;
+            }
+        }
+        n.forEachChild (visit);
+    };
+    fn.forEachChild (visit);
+    return awaited && ok && (uses > 0);
+}
+// ===== end h30-H30-P02 =====
