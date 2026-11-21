@@ -81,6 +81,6 @@ describe ('go *string declaration from a concat with two unguarded *string leave
     });
     test ('negative: nil-tested target keeps the nil answer', () => {
         const b = body ('tested');
-        expect (b).toMatch (/Add\(|h \*string = nil/);
+        expect (b).toMatch (/var h any = nil\n\s*if tf != nil \{\n\s*h = [^\n]*\*tf\n\s*\}\n\s*if h == nil \{/);
     });
 });

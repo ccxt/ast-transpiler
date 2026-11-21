@@ -61,13 +61,13 @@ describe ('go Add-chain declaration with one unguarded *string leaf keeps the ni
 
     test ('negative: a later non-string write keeps the helper', () => {
         const out = print ();
-        expect (out).toContain ('Add("ticker::", sym)');
+        expect (out).toMatch (/var hashA any = nil\n\s*if sym != nil \{\n\s*hashA = "ticker::" \+ \*sym\n\s*\}\n\s*hashA = 5/);
         expect (out).not.toContain ('hashAValue');
     });
 
     test ('negative: a returned (nil-observable) value keeps the helper', () => {
         const out = print ();
-        expect (out).toContain ('Add("trades::", sym)');
+        expect (out).toMatch (/var hashB any = nil\n\s*if sym != nil \{\n\s*hashB = "trades::" \+ \*sym\n\s*\}\n\s*return hashB/);
         expect (out).not.toContain ('hashBValue');
     });
 

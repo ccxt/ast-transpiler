@@ -7695,6 +7695,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoGuardedAddChainThrow (goTranspiler);
     installH26g12AddChainCallArgument (goTranspiler);
     installH27g15AddChainCallLeafArgument (goTranspiler);
+    installH28g33AddChainAnyDeclaration (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
@@ -52235,3 +52236,43 @@ GoTranspiler.prototype.h28g31DerefedReaderValue = function (valueNode): boolean 
     };
 }
 // ===== end h28-H28-G32
+// ===== h28-H28-G33
+// `var x any = Add(..)` whose leaves are Go strings plus `*string` identifiers: Add derefs each pointer and answers
+// nil when one is nil, else the concatenation; x stays `any`, seeded nil, and takes the native concat under the test
+function h28g33AddChainAnyDeclaration (goTranspiler, node, printed) {
+    const declarations = node?.declarations ?? [];
+    const declaration = declarations[0];
+    const match = (typeof printed === 'string') ? /^(\s*)var ([A-Za-z0-9_]+) any = ((?:ccxt\.)?Add\([^\n]*?)(\s*)$/.exec (printed) : null;
+    if ((match === null) || (declarations.length !== 1) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (match[2] !== goTranspiler.printNode (declaration.name, 0)) || (ccxtGoWholeAddCallEnd (match[3].replace (/^ccxt\./, '')) < 0)) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (declaration.initializer, []);
+    const isPointer = (leaf) => (leaf?.kind === SyntaxKind.Identifier) && (leaf.text !== declaration.name.text)
+        && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string') && !goStringOperand (goTranspiler, leaf);
+    const pointers = leaves.filter (isPointer);
+    if ((leaves.length < 2) || (pointers.length < 1) || !leaves.every ((leaf) => pointers.includes (leaf) || goStringOperand (goTranspiler, leaf))) {
+        return printed;
+    }
+    const texts = leaves.map ((leaf) => (pointers.includes (leaf) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    const names: string[] = [ ...new Set<string> (pointers.map ((leaf): string => goTranspiler.printNode (leaf, 0))) ];
+    if (texts.some ((text) => text.includes ('\n')) || !names.every ((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test (n))) {
+        return printed;
+    }
+    const indent = match[1].replace (/^\n+/, '');
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    const name = match[2];
+    return lead + indent + 'var ' + name + ' any = nil\n' + indent + 'if ' + names.map ((n) => n + ' != nil').join (' && ') + ' {\n'
+        + indent + '\t' + name + ' = ' + texts.join (' + ') + '\n' + indent + '}' + match[4];
+}
+
+function installH28g33AddChainAnyDeclaration (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h28g33AddChainAnyDeclarationInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const upstream = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        return h28g33AddChainAnyDeclaration (this, node, upstream.call (this, node, identation));
+    };
+}
+// ===== end h28-H28-G33

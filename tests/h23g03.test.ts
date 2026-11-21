@@ -73,7 +73,7 @@ describe ('go string locals written from iso8601 of the clock / numberToString i
     });
 
     test ('negative: iso8601 of an arbitrary input can be nil, Add stays', () => {
-        expect (out).toMatch (/Add\(Add\(loose, "\/"\), "x"\)/);
+        expect (out).toMatch (/var looseload any = nil\n\s*if loose != nil \{\n\s*looseload = \*loose \+ "\/" \+ "x"\n\s*\}/);
     });
 
     test ('negative: a Str local written by numberToString and read by parseToNumeric keeps the box', () => {
