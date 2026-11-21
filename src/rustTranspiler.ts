@@ -7983,6 +7983,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (write !== undefined && isBinaryExpression(write) && this.isNodeInsideNode(n, write.right) && !this.rustScalarBoxedField(n, write, declaration)
                 && !this.rustScalarFeedsElementWrite(n, write) && !this.rustScalarPreciseFeed(n, write, declaration) && !this.rustScalarCacheFieldCtor(n, write)
                 && !this.rustScalarSumOperandWrite(n, write) && !this.rust58kDictReaderKeyWrite(n, write) && !this.rust60kBaseCallArgDictWrite(n, write)
+                && !this.h29r08ClockLiteralValue(n, declaration)
                 && !this.rust62pBaseCallArgKeyWrite(n, write) && !this.rust64nTypedArgWrite(n, write, form) && !this.rust68fReaderSelfArgWrite(n, write, form, declaration) && !(r70f && (form !== 'targ' || this.rust70fTargLocalWrite(write)))) return false;
         }
         return true;
@@ -41654,4 +41655,13 @@ export class RustTranspiler extends BaseTranspiler {
         return lines.every((l: string) => column + width(l) <= 400 || (column + width(l) <= 720 && l.includes(', '))) ? true : undefined;
     }
     // ===== end h29-H29-R07
+    // ===== h29-R08
+    /** A clock / id string local (`this.seconds ().toString ()`) as a property value of an object literal: the slot prints
+     *  `Value::from(x)` of the `String`, the same `Str` text the `Value` local held, whatever local the literal feeds. */
+    h29r08ClockLiteralValue(n: any, declaration: any): boolean {
+        const init: any = this.unwrapParens(declaration?.initializer);
+        if (init === undefined || !(this.rustClockString(init) || this.rustIdString(init))) return false;
+        return n.parent?.kind === SyntaxKind.PropertyAssignment && n.parent.initializer === n && isObjectLiteralExpression(n.parent.parent);
+    }
+    // ===== end h29-R08
 }
