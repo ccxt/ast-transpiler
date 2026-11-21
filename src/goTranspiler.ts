@@ -55842,3 +55842,96 @@ GoTranspiler.prototype.h30a02WrittenThroughElement = function (declaration): boo
     };
 }
 // ===== end h30-H30-A02
+// ===== h30-H30-A03
+// the h29-A02 defaulted read widened to a nil-seeded / branch-assigned endpoint local (h28-A03 proof: every write is
+// an awaited map endpoint, every other use a read) and to the assignment form `x = this.safeList|safeDict (R, 'k', [] | {})`
+// on such a receiver; the comma-ok read plus the fresh empty default answers what SafeListSlice / SafeDictMap did
+export interface GoTranspiler {
+    h30a03Receiver(container, read): boolean;
+    h30a03Site(call, name: string, identation: number, printed: string, prefix: string, declaration?): string | undefined;
+    h30a03DeclRead(node, identation: number, printed: string): string | undefined;
+    h30a03AssignRead(node, identation: number, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h30a03Receiver = function (container, read) {
+    if ((container?.kind !== SyntaxKind.Identifier) || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    if (this.h28a03JoinedEndpointLocal(container)) {
+        return true;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(container);
+    return (this.goUnwrapParenthesizedNode(source?.initializer)?.kind === SyntaxKind.AwaitExpression)
+        && (this.h27a02JsonOrigin(container, 0) || ((read !== undefined) && this.h27a02JsonOriginBeforeRead(container, read)));
+};
+GoTranspiler.prototype.h30a03Site = function (call, name: string, identation: number, printed: string, prefix: string, declaration?) {
+    let init: any = call;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    if ((typeof printed !== 'string') || (init?.kind !== SyntaxKind.CallExpression) || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const accessor = init.expression?.name?.text;
+    if ((accessor !== 'safeList') && (accessor !== 'safeDict')) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, accessor);
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test(args.key.text)
+        || !this.h30a03Receiver(args.container, ((declaration !== undefined) && (declaration.initializer === init)) ? declaration : undefined)) {
+        return undefined;
+    }
+    const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    const container = this.printNode(args.container, 0).trim();
+    const iden = this.getIden(identation);
+    const tail = `(${container}, "${args.key.text}", ${goType}{})`;
+    const forms = (accessor === 'safeList')
+        ? [ `this.SafeListSlice${tail}`, `SafeListTypedDefault${tail}`, `ListTyped(this.SafeList${tail})`, `ArrayTyped(this.SafeList${tail})` ]
+        : [ `this.SafeDictMap${tail}`, `MapTyped(this.SafeDict${tail})` ];
+    const lead = /^\n*/.exec(printed)[0];
+    const body = printed.substring(lead.length).replace(/;?\s*$/, '');
+    const head = prefix.replace('%T', goType);
+    if (!forms.some((form) => body === `${iden}${head}${form}`)) {
+        return undefined;
+    }
+    const decl = head.startsWith('var ') ? `${iden}var ${name} ${goType}\n` : '';
+    return `${lead}${decl}${iden}${name}, _ = ${container}["${args.key.text}"].(${goType})\n`
+        + `${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = ${goType}{}\n${iden}}`;
+};
+GoTranspiler.prototype.h30a03DeclRead = function (node, identation: number, printed: string) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.initializer === undefined)) {
+        return undefined;
+    }
+    const name = this.printNode(declaration.name, 0).trim();
+    return this.h30a03Site(declaration.initializer, name, identation, printed, `var ${name} %T = `, declaration);
+};
+GoTranspiler.prototype.h30a03AssignRead = function (node, identation: number, printed: string) {
+    const e: any = node?.expression;
+    if ((e?.kind !== SyntaxKind.BinaryExpression) || (e.operatorToken.kind !== SyntaxKind.EqualsToken) || (e.left?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const name = this.printNode(e.left, 0).trim();
+    const declared = this.goResolvedLocalGoType(e.left);
+    const res = this.h30a03Site(e.right, name, identation, printed, `${name} = `);
+    if (res === undefined) {
+        return undefined;
+    }
+    const accessor = this.goUnwrapParenthesizedNode(e.right)?.expression?.name?.text;
+    const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    return (declared === goType) ? res : undefined;
+};
+{
+    const printVariableDeclarationListH30a03 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH30a03.call(this, node, identation);
+        const h = this.h30a03DeclRead(node, identation, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+    const printExpressionStatementH30a03 = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        const printed = printExpressionStatementH30a03.call(this, node, identation);
+        const h = this.h30a03AssignRead(node, identation, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h30-H30-A03
