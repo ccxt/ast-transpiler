@@ -18108,6 +18108,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         if (stringWriteProven && (goType === 'string')) {
                             return false;
                         }
+                        if ((goType === GO_STRING_LIST_LOCAL_TYPE) && (this.h28G05GetArgSliceCopy(parent.right, goType) !== undefined)) { return false; }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
                             && !((declaration.kind === SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)
                             && !((goType === GO_WS_CACHE_TYPE) && (this.goWsCacheTypeOfNode(parent.right) !== undefined))
@@ -20144,6 +20145,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || ((initializer.kind === SyntaxKind.Identifier) && (initializer.text === 'undefined'))) {
             return 'direct'; // `var x T = nil`: a nil map/slice is the absent value the box held
         }
+        const h28G05 = this.h28G05GetArgSliceCopy(initializer, goType); if (h28G05 !== undefined) return h28G05;
         if (goType === GO_STRING_LIST_LOCAL_TYPE) {
             // the printer opens the literal as []string only when every element is a Go string
             return ((initializer.kind === SyntaxKind.ArrayLiteralExpression) && this.goStringListLiteralIsProven(initializer))
@@ -20179,6 +20181,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (parent === undefined) {
             return false;
         }
+        const h28g05 = this.h28G05StringListUse(node, goType); if (h28g05 !== undefined) return h28g05;
         if (parent.kind === SyntaxKind.BinaryExpression && parent.left === node) {
             return (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
                 && (this.goContainerWriteConversion(parent.right, goType) !== undefined);
@@ -27284,6 +27287,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (printedText.includes('\n')) {
             return undefined;
         }
+        const h28G05 = this.h28G05GetArgSliceLength(expression, printedText); if (h28G05 !== undefined) return h28G05;
         const goType = this.goPrintedTypeOfExpression(expression, printedText) ?? this.goPrintedLocalDeclarationType(expression);
         if ((typeof goType === 'string') && this.sliceLengthTypes.indexOf(goType) >= 0) {
             return `len(${printedText})`;
@@ -29665,6 +29669,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         // the verdict on one use of the parameter's symbol
         const useIsSafe = (n: any): boolean => {
+            const h28g05 = this.h28G05StringSliceCopyUse(n, param, goType, nilable, boxed, seen); if (h28g05 !== undefined) return h28g05;
             const parent: any = n.parent;
             if (parent === param) {
                 return true;                     // the parameter's own name is not a use
@@ -50946,3 +50951,105 @@ GoTranspiler.prototype.h28g04WatchMultipleHashesArg = function (node): boolean {
         && /[\\/]base[\\/]Exchange\.ts$/.test(declaration.getSourceFile().fileName);
 };
 // ===== end h28-H28-G04
+// ===== h28-G05 =====
+export interface GoTranspiler {
+    h28G05StringSliceCopyUse(n, param, goType: string, nilable: boolean, boxed: boolean, seen: Set<any>): boolean | undefined;
+}
+// a `Strings`/`string[]` copy of a nil-defaulted []string parameter: a write of a []string value keeps the
+// copy a []string, and its nil test answers as IsEqual did (derefScalar folds a nil []string to nil)
+GoTranspiler.prototype.h28G05StringSliceCopyUse = function (n, param, goType: string, nilable: boolean, boxed: boolean, seen: Set<any>) {
+    if ((goType !== '[]string') || !nilable || !boxed || (param?.kind !== SyntaxKind.VariableDeclaration)) {
+        return undefined;
+    }
+    const declared = String(param.type?.getText() ?? '').replace(/\s+/g, ' ');
+    if ((declared !== 'Strings') && (declared !== 'string[]')) {
+        return undefined;
+    }
+    const parent: any = n.parent;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.parent?.kind === SyntaxKind.BinaryExpression)) {
+        return undefined;
+    }
+    const op = parent.operatorToken?.kind;
+    if ((op === SyntaxKind.EqualsToken) && (parent.left === n)) {
+        const right: any = parent.right;
+        if ((right?.kind === SyntaxKind.Identifier) && (right.text === 'undefined')) {
+            return true;
+        }
+        // the value being followed (the parameter or an earlier copy of it)
+        const rdecl: any = (right?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(right)?.valueDeclaration?.resolve() : undefined;
+        if ((rdecl !== undefined) && seen.has(rdecl)) {
+            return true;
+        }
+        return this.goTypeOfInitializer(right, this.printNode(right, 0)) === '[]string';
+    }
+    const other: any = (parent.left === n) ? parent.right : parent.left;
+    const nilTest = [SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken].includes(op)
+        && ((other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined')));
+    return nilTest ? true : undefined;
+};
+export interface GoTranspiler {
+    h28G05StringListNilTest(node): boolean | undefined;
+    h28G05StringListUse(node, goType: string): boolean | undefined;
+}
+// `xs === undefined` on a `Strings`-declared []string local seeded with a value prints `xs == nil`: a nil slice is the only
+// absent value it holds, as IsEqual(box, nil) answered through derefScalar
+GoTranspiler.prototype.h28G05StringListNilTest = function (node) {
+    const parent: any = node?.parent;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.parent?.kind === SyntaxKind.BinaryExpression)
+        || ![SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken].includes(parent.operatorToken?.kind)) {
+        return undefined;
+    }
+    const other: any = (parent.left === node) ? parent.right : parent.left;
+    const nil = (other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'));
+    const decl: any = nil ? this.goDeclarationOfIdentifier(node) : undefined;
+    const declared = String(decl?.type?.getText() ?? '').replace(/\s+/g, ' ');
+    return ((decl?.kind === SyntaxKind.VariableDeclaration) && !this.goNilInitInitializer(decl.initializer)
+        && ((declared === 'Strings') || (declared === 'string[]'))) ? true : undefined;
+};
+// a []string local: its nil test, or a write of a defaulted parameter the GetArg rule binds as []string
+GoTranspiler.prototype.h28G05StringListUse = function (node, goType: string) {
+    if (goType !== GO_STRING_LIST_LOCAL_TYPE) {
+        return undefined;
+    }
+    const nilTest = this.h28G05StringListNilTest(node);
+    if (nilTest !== undefined) {
+        return nilTest;
+    }
+    const parent: any = node.parent;
+    if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.left !== node) || (parent.operatorToken?.kind !== SyntaxKind.EqualsToken)) {
+        return undefined;
+    }
+    return (this.h28G05GetArgSliceCopy(parent.right, goType) !== undefined) ? true : undefined;
+};
+// `xs.length` on a defaulted parameter the GetArg rule binds as a slice (`var xs []string = GetArgStringSlice(..)`)
+// is `len(xs)`: len of a nil slice is 0, as GetArrayLength answered for the nil box and the []T cases
+export interface GoTranspiler {
+    h28G05GetArgSliceLength(expression, printedText: string): string | undefined;
+}
+GoTranspiler.prototype.h28G05GetArgSliceLength = function (expression, printedText: string) {
+    if ((expression?.kind !== SyntaxKind.Identifier) || (printedText !== expression.text)) {
+        return undefined;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(expression)?.valueDeclaration?.resolve();
+    if ((decl?.kind !== SyntaxKind.Parameter) || this.goGetArgTypeComputing?.has(decl)) {
+        return undefined;
+    }
+    const bound = this.goGetArgParameterType(decl);
+    return ((bound !== undefined) && bound.startsWith('[]') && (this.sliceLengthTypes.indexOf(bound) >= 0)) ? `len(${printedText})` : undefined;
+};
+export interface GoTranspiler {
+    h28G05GetArgSliceCopy(initializer, goType: string): 'direct' | undefined;
+}
+// `let r: Strings = xs` with xs a defaulted parameter bound `var xs []string = GetArgStringSlice(..)`
+// copies the same slice (nil when absent), so the copy may be declared with that type
+GoTranspiler.prototype.h28G05GetArgSliceCopy = function (initializer, goType: string) {
+    if ((initializer?.kind !== SyntaxKind.Identifier) || !goType.startsWith('[]')) {
+        return undefined;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(initializer)?.valueDeclaration?.resolve();
+    if ((decl?.kind !== SyntaxKind.Parameter) || this.goGetArgTypeComputing?.has(decl)) {
+        return undefined;
+    }
+    return (this.goGetArgParameterType(decl) === goType) ? 'direct' : undefined;
+};
+// ===== h28-G05 (end) =====
