@@ -7686,6 +7686,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoGuardedAddChainReturn (goTranspiler);
     installCcxtGoGuardedAddChainThrow (goTranspiler);
     installH26g12AddChainCallArgument (goTranspiler);
+    installH27g15AddChainCallLeafArgument (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
@@ -48737,3 +48738,58 @@ function h27g14NeverNilMethodCall (goTranspiler, expression, callee) {
 }
 const H27G14_IN_PROGRESS = new Set ();
 // ===== end h27-H27-G14
+
+// ===== h27-H27-G15
+// `f(.., 'a' + this.marketId (s), ..)` as a statement: the one concat argument has Go string / derefable leaves plus ONE
+// call leaf typed `*string`; bind it in the if header (only when nothing else in the statement makes a call) and keep
+// the same statement with an untyped `nil` argument as Add's nil answer
+function h27g15AddChainCallLeafArgument (goTranspiler, node, printed) {
+    const match = (typeof printed === 'string') ? /^((?:\s*\/\/[^\n]*\n)*\s*)([^\n]*?)(\s*)$/.exec (printed) : null;
+    const expr = node?.expression;
+    const call = ((expr?.kind === SyntaxKind.BinaryExpression) && (expr.operatorToken?.kind === SyntaxKind.EqualsToken)) ? expr.right : expr;
+    if ((match === null) || match[2].startsWith ('//') || (call?.kind !== SyntaxKind.CallExpression)
+        || ((call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.name?.text === 'push'))) {
+        return printed;
+    }
+    const args = call.arguments ?? [];
+    const chains = args.filter ((a) => (a.kind === SyntaxKind.BinaryExpression) && (a.operatorToken?.kind === SyntaxKind.PlusToken));
+    if ((chains.length !== 1) || args.some ((a) => (a !== chains[0]) && ccxtGoScopeNamesCall (a))
+        || ((expr !== call) && ccxtGoScopeNamesCall (expr.left)) || ccxtGoScopeNamesCall (call.expression)) {
+        return printed;
+    }
+    const leaves = ccxtGoAddChainLeaves (chains[0], []);
+    const calls = leaves.filter ((leaf) => (leaf?.kind === SyntaxKind.CallExpression) && !goStringOperand (goTranspiler, leaf));
+    const scope = goTranspiler.goEnclosingFunction?.(call);
+    const piece = 'argPiece';
+    if ((leaves.length < 2) || (calls.length !== 1) || ccxtGoScopeNamesIdentifier (scope, piece)
+        || (goTranspiler.goTypeOfInitializer (calls[0], goTranspiler.printNode (calls[0], 0)) !== '*string')
+        || leaves.some ((leaf) => (leaf !== calls[0]) && ccxtGoScopeNamesCall (leaf))) {
+        return printed;
+    }
+    const derefable = (leaf) => (leaf?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string')
+        && goTranspiler.goConcatDerefableStringOperand (leaf);
+    if (!leaves.every ((leaf) => (leaf === calls[0]) || goStringOperand (goTranspiler, leaf) || derefable (leaf))) {
+        return printed;
+    }
+    const argText = goTranspiler.printNode (chains[0], 0).trim ();
+    const callText = goTranspiler.printNode (calls[0], 0);
+    const texts = leaves.map ((leaf) => ((leaf === calls[0]) ? ('*' + piece) : ((derefable (leaf) ? '*' : '') + goTranspiler.printNode (leaf, 0))));
+    if (!/^(?:ccxt\.)?Add\(/.test (argText) || (match[2].split (argText).length !== 2) || texts.concat (callText).some ((t) => t.includes ('\n'))) {
+        return printed;
+    }
+    const indent = /[ \t]*$/.exec (match[1])[0];
+    const lead = match[1].substring (0, match[1].length - indent.length);
+    return lead + indent + 'if ' + piece + ' := ' + callText + '; ' + piece + ' != nil {\n' + indent + '\t' + match[2].replace (argText, () => texts.join (' + ')) + '\n'
+        + indent + '} else {\n' + indent + '\t' + match[2].replace (argText, 'nil') + '\n' + indent + '}' + match[3];
+}
+
+function installH27g15AddChainCallLeafArgument (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h27g15AddChainCallLeafArgumentInstalled', 'printExpressionStatement')) {
+        return;
+    }
+    const upstream = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return h27g15AddChainCallLeafArgument (this, node, upstream.call (this, node, identation));
+    };
+}
+// ===== end h27-H27-G15
