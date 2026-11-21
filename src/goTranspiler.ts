@@ -22794,6 +22794,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return cacheStore;
             }
             const h27g20 = (op === SyntaxKind.EqualsToken) ? this.h27g20BalanceStore(node, baseExpr, keys, right, rhs, identation) : undefined; if (h27g20 !== undefined) return h27g20;
+            const h28g14 = ((op === SyntaxKind.EqualsToken) && (native === undefined) && (keyStrs.length === 1)) ? this.h28g14AwaitedMapStore(baseExpr, containerStr, keys[0], lastKey, right, rhs, identation) : undefined; if (h28g14 !== undefined) return h28g14;
             const balanceStore = (op === SyntaxKind.EqualsToken) ? this.goBalanceStoreText(node, baseExpr, keys, right, rhs, identation) : undefined;
             if (balanceStore !== undefined) {
                 return balanceStore;
@@ -51351,3 +51352,47 @@ GoTranspiler.prototype.h28g13ProvenDefaultSafeRead = function (expr) {
     }
 };
 // ===== end h28-G13
+// ===== h28-H28-G14
+export interface GoTranspiler {
+    h28g14AwaitedMapStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, rhs: string, identation: number): string | undefined;
+}
+// `m[k] = await this.f (..)` on a map local non-nil at the write, `f` declared `Promise<Dict>` (a map, never a scalar
+// pointer, so derefScalar keeps it): the native store; a nil `*string` key is the helper's no-op behind `if k != nil`
+GoTranspiler.prototype.h28g14AwaitedMapStore = function (containerNode, containerStr, keyNode, keyStr, valueNode, rhs, identation) {
+    const value: any = this.goUnwrapParenthesizedNode(valueNode);
+    const callee = value?.expression?.expression;
+    if ((value?.kind !== SyntaxKind.AwaitExpression) || (value.expression?.kind !== SyntaxKind.CallExpression)
+        || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (containerNode?.kind !== SyntaxKind.Identifier) || rhs.includes('\n') || !this.goNonNilMapLocalAtWrite(containerNode)) {
+        return undefined;
+    }
+    let declaration: any;
+    try {
+        declaration = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+    } catch {
+        return undefined;
+    }
+    if (!/^Promise<\s*Dict\s*>$/.test(String(declaration?.type?.getText?.() ?? '').trim())) {
+        return undefined;
+    }
+    if (!/^\(<-this\.\w+Async\([^\n]*\)\)$/.test(rhs)) {
+        return undefined;
+    }
+    // the receive and its error check run before the key test, as the helper call's argument did
+    let holder = 'r' + this.getLineBasedSuffix(valueNode);
+    while (rhs.includes(holder) || keyStr.includes(holder) || containerStr.includes(holder)) {
+        holder += 'v';
+    }
+    const iden = this.getIden(identation);
+    const head = `${holder} := ${rhs}\n${iden}PanicOnError(${holder}.Raw)\n${iden}`;
+    keyNode = this.goUnwrapPrintedAssertions(keyNode);
+    const index = this.goScalarStoreIndex(keyNode, keyStr);
+    if (index !== undefined) {
+        return head + `${containerStr}[${index}] = ${holder}.Value`;
+    }
+    if ((keyNode?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(keyNode) !== '*string')) {
+        return undefined;
+    }
+    return head + this.goNilGuardedKeyWrite(containerStr, keyStr, `${holder}.Value`, identation);
+};
+// ===== end h28-H28-G14

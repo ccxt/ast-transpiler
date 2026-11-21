@@ -58,7 +58,7 @@ describe('go *string-key store of a ts-declared dict value into a non-nil map lo
     });
     test('negative: an awaited Dict value keeps the helper path (the receive and its error check)', () => {
         const out = print ("const symbols = this.safeList (response, 's', []);\nconst result: Dict = {};\nfor (let i = 0; i < symbols.length; i++) {\n    const symbol = this.safeString (symbols, i);\n    result[symbol] = await this.fetchLimits (symbol);\n}\nreturn result;", true);
-        expect (out).toContain ('AddElementToObject(result, symbol,');
+        expect (out).toMatch (/\t(r\d+) := \(<-this\.FetchLimitsAsync\(symbol\)\)\n\t+PanicOnError\(\1\.Raw\)\n\t+if symbol != nil \{\n\t+result\[\*symbol\] = \1\.Value\n/);
         expect (out).not.toMatch (/result\[\*symbol\] = \(<-/);
     });
 });
