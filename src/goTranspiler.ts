@@ -47241,3 +47241,79 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${ind}var ${name} map[string]any\n${ind}${name}, _ = ${read}\n${ind}if ${name} == nil {\n${ind}\t${name} = map[string]any{}\n${ind}}`;
 };
 // ===== end h27-A03 =====
+// ===== h27-A04 =====
+// `const xs = this.safeList (R, 'k', [])` with R a `map[string]any` local holding a decoded JSON document
+// (goJsonOriginContainer): the member is a []any, another JSON value or absent, so the comma-ok read plus the
+// empty default answers exactly what SafeListSlice did, and the local stays never-nil.
+export interface GoTranspiler {
+    h27a04JsonListRead(node, printed: string): string | undefined;
+    h27a04DictEndpointResponse(node): boolean;
+    h27a04WrittenThrough(access): boolean;
+}
+GoTranspiler.prototype.h27a04WrittenThrough = function (access): boolean {
+    let read: any = access;
+    while ((read.parent?.kind === SyntaxKind.ElementAccessExpression) && (read.parent.expression === read)) {
+        read = read.parent;
+    }
+    return this.isGoElementAccessAssignmentTarget(read);
+};
+// `const response = await this.<endpoint> (..)` of a request stub declared `Promise<Dict>`: the ccxt endpoint pass
+// binds it `var response map[string]any = r.Value` (EndpointResult[map[string]any]); a nil test would keep it boxed
+GoTranspiler.prototype.h27a04DictEndpointResponse = function (node): boolean {
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((init?.kind !== SyntaxKind.AwaitExpression) || !this.goAwaitedCallIsRequestStub(init.expression)) {
+        return false;
+    }
+    const callee: any = this.goUnwrapParenthesizedNode(init.expression).expression;
+    const methods: any[] = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+    if ((methods.length === 0) || !methods.every((d) => /^Promise<Dict>$/.test(String(d.type?.getText?.() ?? '').replace(/\s+/g, '')))) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(declaration);
+    return (scope !== undefined) && !this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === node.text)
+        && (n !== declaration.name) && this.goIsNilComparisonOperand(n, n.parent));
+};
+GoTranspiler.prototype.h27a04JsonListRead = function (node, printed: string): string | undefined {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((typeof printed !== 'string') || (node.parent?.kind !== SyntaxKind.VariableStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'safeList')
+        || (call.arguments.length !== 3) || (call.arguments[1].kind !== SyntaxKind.StringLiteral)
+        || (call.arguments[2].kind !== SyntaxKind.ArrayLiteralExpression) || (call.arguments[2].elements.length !== 0)) {
+        return undefined;
+    }
+    const container: any = call.arguments[0];
+    if ((container?.kind !== SyntaxKind.Identifier) || !this.goJsonOriginContainer(container)
+        || ((this.goResolvedLocalGoType(container) !== 'map[string]any') && !this.h27a04DictEndpointResponse(container))) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    // an element write (`xs[i][k] = v`) is printed from the SafeListSlice declaration line: keep that form
+    const scope: any = this.goEnclosingFunction(declaration);
+    if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+        && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+        return undefined;
+    }
+    const key = JSON.stringify(call.arguments[1].text);
+    const lead = /^\n*/.exec(printed)[0];
+    // the forms the ccxt passes turn into SafeListSlice (goSafeListSliceReads / goSafeListTypedDefaultReads)
+    const match = /^(\t*)var (\w+) \[\]any = (this\.SafeListSlice\(|SafeListTypedDefault\(|ListTyped\(this\.SafeList\()(\w+), ("(?:[^"\\]|\\.)*"), \[\]any\{\}\)(\)?)$/.exec(printed.substring(lead.length));
+    if ((match === null) || (match[2] !== name) || (match[4] !== container.text) || (match[5] !== key) || ((match[6] === ')') !== match[3].startsWith('ListTyped'))) {
+        return undefined;
+    }
+    const ind = match[1];
+    return lead + ind + 'var ' + name + ' []any\n' + ind + name + ', _ = ' + match[4] + '[' + key + '].([]any)\n'
+        + ind + 'if ' + name + ' == nil {\n' + ind + '\t' + name + ' = []any{}\n' + ind + '}';
+};
+{
+    const h27a04Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h27a04Upstream.call(this, node, identation);
+        const h = this.h27a04JsonListRead(node, printed);
+        if (h !== undefined) return h;
+        return printed;
+    };
+}
+// ===== end h27-A04 =====
