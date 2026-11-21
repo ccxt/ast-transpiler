@@ -52773,3 +52773,98 @@ GoTranspiler.prototype.h29a03ScalarReaderArg = function (node, name: string): bo
     };
 }
 // ===== end h29-H29-A03
+// ===== h29-A05 =====
+// `const d = this.safeDict (R, k, {})` / `this.safeList (R, k, [])` with R a map local holding a decoded JSON document
+// and k a Go string (or a nil-guarded *string): comma-ok read plus the empty default, the answer SafeDictMap /
+// SafeListSlice gave for a missing key, a nil map, nil, "" or a value of another kind (JSON holds no sync.Map or cache)
+export interface GoTranspiler {
+    h29a05VarKeyDefaultRead(node, printed: string): string | undefined;
+    h29a05MapReceiver(container): boolean;
+    h29a05JsonOrigin(container): boolean;
+}
+// h27a05JsonOriginContainer, also for an awaited endpoint local whose only other uses are `Object.keys (x)` reads
+GoTranspiler.prototype.h29a05JsonOrigin = function (container) {
+    if (this.h27a05JsonOriginContainer(container)) {
+        return true;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (init?.kind !== SyntaxKind.AwaitExpression)
+        || !(this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression))) {
+        return false;
+    }
+    const keysRead = (n: any): boolean => {
+        const call: any = n.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === n)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.Identifier)
+            && (call.expression.expression.text === 'Object') && (call.expression.name?.text === 'keys');
+    };
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => keysRead(n) || this.goJsonOriginUseIsReadOnly(n, name));
+};
+GoTranspiler.prototype.h29a05MapReceiver = function (container) {
+    if (this.goDeclaredTypeOfIdentifier(container) === GO_SAFE_DICT_LOCAL_TYPE) {
+        return true;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(container);
+    const init: any = this.goUnwrapParenthesizedNode(source?.initializer);
+    return (init?.kind === SyntaxKind.AwaitExpression)
+        ? (ccxtGoEndpointElement(this, this.goUnwrapParenthesizedNode(init.expression)) === GO_SAFE_DICT_LOCAL_TYPE)
+        : (this.goSafeDictLocalUnbox(source) === GO_SAFE_DICT_LOCAL_TYPE);
+};
+GoTranspiler.prototype.h29a05VarKeyDefaultRead = function (node, printed) {
+    if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
+        return undefined;
+    }
+    const decl: any = node.declarations[0];
+    const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    const callee: any = call?.expression;
+    if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments.length !== 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    const k0 = (key?.kind === SyntaxKind.Identifier) ? this.printNode(key, 0).trim() : undefined;
+    const isDict = (callee.name?.text === 'safeDict') && (fallback?.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0);
+    const isList = (callee.name?.text === 'safeList') && (fallback?.kind === SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0);
+    if ((!isDict && !isList) || (container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (key.text === container.text)) {
+        return undefined;
+    }
+    // a key local the printer declares `var k string` (e.g. `const k = keys[i]` over a string list) is a Go string too
+    const keyText = this.h27a05KeyText(key) ?? ((this.goResolvedLocalGoType(key) === 'string') ? k0 : undefined);
+    if ((keyText === undefined) || !this.h29a05JsonOrigin(container) || !this.h29a05MapReceiver(container)) {
+        return undefined;
+    }
+    const name: string = decl.name.text;
+    const goType = isDict ? GO_SAFE_DICT_LOCAL_TYPE : GO_SAFE_LIST_LOCAL_TYPE;
+    if (isList) {
+        // an element write (`xs[i][k] = v`) is printed from the SafeListSlice declaration line: keep that form
+        const scope: any = this.goEnclosingFunction(decl);
+        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
+            && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+            return undefined;
+        }
+    }
+    const c = container.text;
+    const k = this.printNode(key, 0).trim();
+    const lead = /^\n*/.exec(printed)[0];
+    const shipped = isDict
+        ? [ `var ${name} map[string]any = this.SafeDictMap(${c}, ${k}, map[string]any{})`, `var ${name} map[string]any = MapTyped(this.SafeDict(${c}, ${k}, map[string]any{}))` ]
+        : [ `var ${name} []any = this.SafeListSlice(${c}, ${k}, []any{})`, `var ${name} []any = SafeListTypedDefault(${c}, ${k}, []any{})`, `var ${name} []any = ListTyped(this.SafeList(${c}, ${k}, []any{}))` ];
+    const m = /^(\t*)(.*)$/.exec(printed.substring(lead.length));
+    if ((m === null) || (shipped.indexOf(m[2]) < 0)) {
+        return undefined;
+    }
+    const ind = m[1];
+    const empty = isDict ? 'map[string]any{}' : '[]any{}';
+    return `${lead}${ind}var ${name} ${goType}\n${ind}${name}, _ = ${c}[${keyText}].(${goType})\n${ind}if ${name} == nil {\n${ind}\t${name} = ${empty}\n${ind}}`;
+};
+{
+    const h29a05Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h29a05Upstream.call(this, node, identation);
+        const h = this.h29a05VarKeyDefaultRead(node, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h29-A05 =====
