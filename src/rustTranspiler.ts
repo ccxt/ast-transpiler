@@ -2283,10 +2283,6 @@ export class RustTranspiler extends BaseTranspiler {
         return this.quotedStringLiteral(inner.text);
     }
 
-    printNativeStringConcat(leftText: string, rightText: string): string {
-        return `Value::Str(${this.rustFormatConcatText(leftText, rightText)}.into())`;
-    }
-
     rustFormatConcatText(leftText: string, rightText: string): string {
         return `format!("{}{}", ${leftText}, ${rightText})`;
     }
@@ -2737,10 +2733,6 @@ export class RustTranspiler extends BaseTranspiler {
         else if (arm === 'bearer') index = `${this.printNode(key, 0).trim()}.as_i64().unwrap_or(-1) as usize`;
         else index = this.rustI64IndexText(key, this.printNode(key, 0).trim());
         return `${indent}let ${varName}: &Value = ${recv}.get(${index}).unwrap_or(&Value::Null)`;
-    }
-
-    rust58eBorrowedElementLocal(declaration: any): boolean {
-        return this.rust58eBorrowedElementArm(declaration) !== undefined;
     }
 
     /** Which arm of printNativeContainerAccess prints `xs[k]` as a slice read: a read-only list bearer, or a typed Vec local. */
@@ -13136,20 +13128,6 @@ export class RustTranspiler extends BaseTranspiler {
     // ral-59n: base readers whose generated Rust answers a plain `Value` of one primitive family (or `Null`)
     private static readonly RUST_59N_VALUE_READERS = new Set([ 'safeString', 'safeString2', 'safeStringLower', 'safeStringUpper', 'safeInteger', 'safeInteger2', 'safeNumber', 'safeNumber2', 'safeBool', 'safeBool2' ]);
 
-    /** ral-59n: some read of the local is the argument of an element access `m[x]` (decided on the TS AST). */
-    rust59nKeysElementRead(self: any): boolean {
-        const declaration: any = this.rustDeclaredNode(self);
-        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return true;
-        let keys = false;
-        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
-            let top: any = n;
-            while (isParenthesizedExpression(top.parent) || top.parent?.kind === SyntaxKind.AsExpression) top = top.parent;
-            if (isElementAccessExpression(top.parent) && top.parent.argumentExpression === top) keys = true;
-            return true;
-        });
-        return keys;
-    }
-
     /** ral-59n: `this.safeString|Integer|Number|Bool(..)` declared in the base tier (no venue override): printed as the
      *  generated `self.safe_*` reader, a `Value`. The boxed compare against it was the payload pair `a.<p>() == r.<p>()`
      *  (printNativeEqualityComparison, both sides `Value`, same checker kind), so the typed side prints its own payload. */
@@ -15026,29 +15004,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''))) return true;
         const hidden: any = this.getMethodOverride(node);
         return hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile?.()?.fileName ?? ''));
-    }
-
-    /** Every `return` of the method's own body converts, and the body's last
-     *  statement is one of them (so Rust sees no `()`-valued tail the
-     *  `-> Value` post-passes would have patched with `Value::Null`). */
-    rustStrReturnPathsConvert(body: Block): boolean {
-        const last = body?.statements[body.statements.length - 1];
-        if (last === undefined || !isReturnStatement(last)) {
-            return false;
-        }
-        let ok = true;
-        const visit = (n: Node) => {
-            if (!ok || (n !== body && isFunctionLike(n))) {
-                return; // a nested function keeps the boxed signature
-            }
-            if (isReturnStatement(n) && !this.rustStrReturnValueConverts(n.expression)) {
-                ok = false;
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
-        return ok;
     }
 
     /** A `return` value of a native-`Str` method: a nullish literal, an
@@ -19357,22 +19312,6 @@ export class RustTranspiler extends BaseTranspiler {
                 && isIdentifier(e.right) && String(e.right.text) === name;
         }
         return false;
-    }
-
-    /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
-     *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
-     *  the bind alone, so its counter key may print boxed (`get_value(&xs, &Value::Int(i))`, the same helper call and value). */
-    rustWriteBackPassBind(read: any): boolean {
-        const declaration: any = read.parent;
-        const name = String(declaration.name.text);
-        let statement: any = declaration;
-        while (statement !== undefined && !isStatement(statement)) statement = statement.parent;
-        const siblings: any[] = statement?.parent?.statements ?? [];
-        const next: any = siblings[siblings.indexOf(statement) + 1];
-        if (next === undefined || next.kind !== SyntaxKind.ExpressionStatement) return false;
-        const e: any = next.expression;
-        if (isBinaryExpression(e) && rustIsAssignmentOperator(e.operatorToken.kind)) return !isIdentifier(e.left) && this.rootPlaceText(e.left) === name;
-        return isCallExpression(e) && isPropertyAccessExpression(e.expression) && e.expression.name.text === 'push' && this.rootPlaceText(e.expression.expression) === name;
     }
 
     /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
