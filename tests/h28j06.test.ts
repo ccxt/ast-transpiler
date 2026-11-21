@@ -60,7 +60,7 @@ describe('h28-J06 future list seeded with typed calls', () => {
             "        const promises = [ p ];\n" +
             "        return await Promise.all (promises);\n" +
             "    }\n");
-        expect(out).not.toContain(`${F}<?>> promises`);
+        expect(out).toContain(`${F}<?>> promises = new java.util.ArrayList<${F}<?>>(java.util.Arrays.<${F}<?>>asList(p));`);
     });
 
     test('another use of the list keeps the boxed list', () => {
@@ -70,6 +70,6 @@ describe('h28-J06 future list seeded with typed calls', () => {
             "        const n = promises.length;\n" +
             "        return await Promise.all (promises);\n" +
             "    }\n");
-        expect(out).not.toContain(`${F}<?>> promises`);
+        expect(out).toContain(`${F}<?>> promises = new java.util.ArrayList<${F}<?>>(java.util.Arrays.<${F}<?>>asList(this.fetchA(1)));`);
     });
 });

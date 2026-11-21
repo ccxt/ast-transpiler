@@ -65,7 +65,7 @@ describe('h27-J06 typed future list for Promise.all', () => {
             "        const n = promises.length;\n" +
             "        return await Promise.all (promises);\n" +
             "    }\n");
-        expect(out).not.toContain('CompletableFuture<?>> promises');
+        expect(out).toContain('java.util.List<java.util.concurrent.CompletableFuture<?>> promises = new java.util.ArrayList<java.util.concurrent.CompletableFuture<?>>();');
     });
 
     test('a reassignable let list keeps the boxed list', () => {

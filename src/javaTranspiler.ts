@@ -4442,6 +4442,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.printNode(declaration.initializer, identation).trimEnd();
         }
         const indent = this.getIden(identation);
+        const h30j06 = this.h30J06Declaration(declaration, indent); if (h30j06 !== undefined) return h30j06;
         const h29j06 = this.h29J06LiteralJoinDeclaration(node, declaration, identation, indent); if (h29j06 !== undefined) return h29j06;
         const h28j06 = this.h28J06SeededListDeclaration(declaration, indent); if (h28j06 !== undefined) return h28j06;
         const h29j04 = this.h29J04RowMapDeclaration(declaration, indent); if (h29j04 !== undefined) return h29j04;
@@ -5698,6 +5699,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printArrayPushCall(_node, _identation, name = undefined, parsedArg = undefined) {
+        const h30j06 = this.h30J06ListPush(_node, name, parsedArg); if (h30j06 !== undefined) return h30j06;
         const h28j06 = this.h28J06SeededListPush(_node, name, parsedArg); if (h28j06 !== undefined) return h28j06;
         const h27j06 = this.h27J06FutureListPush(_node, name, parsedArg); if (h27j06 !== undefined) return h27j06;
         return `((java.util.List<Object>)${name}).add(${parsedArg})`;
@@ -9002,6 +9004,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
+        const h30j06 = this.h30J06ListJoin(node); if (h30j06 !== undefined) return h30j06;
         const h29j06 = this.h29J06LiteralJoin(node); if (h29j06 !== undefined) return h29j06;
         const h28j06 = this.h28J06SeededListJoin(node); if (h28j06 !== undefined) return h28j06;
         const h27j06 = this.h27J06FutureListJoin(node); if (h27j06 !== undefined) return h27j06;
@@ -11047,6 +11050,187 @@ export class JavaTranspiler extends BaseTranspiler {
             `${this.getIden(identation)}${left} = new java.util.HashMap<String, Object>(${right})${this.LINE_TERMINATOR}`);
     }
     // ===== end h30-J04
+    // ===== h30-J06
+    h30J06Cache: WeakMap<any, boolean>;
+    // `const ps = [ .. ]` of Promise-typed calls or const future locals, used only as push (Promise call),
+    // `ps.length` reads and `await Promise.all (ps)`; fires only where a `.length` or a local seed blocks h27/h28
+    h30J06List(declaration): boolean {
+        this.h30J06Cache ??= new WeakMap<any, boolean>();
+        if (!this.h30J06Cache.has(declaration)) {
+            let ok = false;
+            try {
+                ok = this.h30J06ListProof(declaration);
+            } catch (e) {
+                ok = false;
+            }
+            this.h30J06Cache.set(declaration, ok);
+        }
+        return this.h30J06Cache.get(declaration);
+    }
+
+    h30J06FutureCall(element): boolean {
+        return isCallExpression(element) && this.isPromiseType(this.getChecker().getTypeAtLocation(element));
+    }
+
+    // a const local initialised by a Promise-typed call whose only use is one seed of `list`
+    h30J06SeedLocal(element, list): boolean {
+        if (!isIdentifier(element)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(element);
+        const declaration = symbol?.valueDeclaration?.resolve();
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !this.h30J06FutureCall(declaration.initializer) || !isVariableDeclarationList(declaration.parent)
+            || declaration.parent.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const scope = this.javaFunctionOrFile(declaration);
+        if (scope === undefined || scope !== this.javaFunctionOrFile(list)) {
+            return false;
+        }
+        let uses = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            uses++;
+            return current !== element;
+        });
+        return !rejected && uses === 1;
+    }
+
+    h30J06ListProof(declaration): boolean {
+        const list = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !isArrayLiteralExpression(declaration.initializer)
+            || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (JAVA_TEST_TIER_FILES.test(fileName)) {
+            return false;
+        }
+        const elements = declaration.initializer.elements as unknown as Expression[];
+        let seeds = 0;
+        for (const element of elements) {
+            if (this.h30J06SeedLocal(element, declaration)) {
+                seeds++;
+            } else if (!this.h30J06FutureCall(element)) {
+                return false;
+            }
+        }
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return false;
+        }
+        let pushes = 0;
+        let joins = 0;
+        let lengths = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            const parent = current.parent;
+            const call = parent?.parent;
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'push'
+                && isCallExpression(call) && call.expression === parent && call.arguments.length === 1
+                && isExpressionStatement(call.parent) && this.h30J06FutureCall(call.arguments[0])) {
+                pushes++;
+                return false;
+            }
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'length'
+                && isVariableDeclaration(call) && call.initializer === parent) {
+                lengths++;
+                return false;
+            }
+            if (isCallExpression(parent) && parent.arguments.length === 1 && parent.arguments[0] === current
+                && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+                && parent.expression.expression.text === 'Promise' && parent.expression.name.text === 'all'
+                && parent.parent?.kind === SyntaxKind.AwaitExpression) {
+                joins++;
+                return false;
+            }
+            return true;
+        });
+        return !rejected && joins > 0 && (elements.length > 0 || pushes > 0) && (lengths > 0 || seeds > 0);
+    }
+
+    h30J06ListDeclarationOf(identifier) {
+        if (identifier === undefined || !isIdentifier(identifier)) {
+            return undefined;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
+        return declaration !== undefined && this.h30J06List(declaration) ? declaration : undefined;
+    }
+
+    h30J06Declaration(declaration, indent: string): string | undefined {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const name = this.printNode(declaration.name, 0);
+        if (this.h30J06List(declaration)) {
+            const seeds = ((declaration.initializer as any).elements as Expression[]).map((element) => this.printNode(element, 0).trim());
+            const init = seeds.length === 0 ? '' : `java.util.Arrays.<${future}<?>>asList(${seeds.join(', ')})`;
+            return `${indent}java.util.List<${future}<?>> ${name} = new java.util.ArrayList<${future}<?>>(${init})`;
+        }
+        const seedOf = declaration.initializer !== undefined && isCallExpression(declaration.initializer)
+            ? this.h30J06SeedListOf(declaration) : undefined;
+        if (seedOf !== undefined) {
+            return `${indent}${future}<?> ${name} = ${this.printNode(declaration.initializer, 0).trim()}`;
+        }
+        return undefined;
+    }
+
+    // the h30 list whose literal holds the only use of this future local
+    h30J06SeedListOf(declaration) {
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return undefined;
+        }
+        let found;
+        this.javaTreeSome(scope, (current) => {
+            if (isIdentifier(current) && current !== declaration.name && checker.getSymbolAtLocation(current) === symbol) {
+                found = current;
+                return true;
+            }
+            return undefined;
+        });
+        const literal = found?.parent;
+        if (literal === undefined || !isArrayLiteralExpression(literal) || !isVariableDeclaration(literal.parent)
+            || literal.parent.initializer !== literal || !this.h30J06List(literal.parent)) {
+            return undefined;
+        }
+        return this.h30J06SeedLocal(found, literal.parent) ? literal.parent : undefined;
+    }
+
+    h30J06ListPush(node, name, parsedArg): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (parsedArg === undefined || this.h30J06ListDeclarationOf(receiver) === undefined || name !== receiver.text) {
+            return undefined;
+        }
+        return `${name}.add(${parsedArg})`;
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h30J06ListJoin(node): string | undefined {
+        const argument = node?.arguments?.[0];
+        if (node?.parent?.kind !== SyntaxKind.AwaitExpression || this.h30J06ListDeclarationOf(argument) === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const list = this.printNode(argument, 0);
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h30-J06
 }
 
 // `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
