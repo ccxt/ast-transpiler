@@ -50898,3 +50898,15 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
         + `${iden}}`;
 };
 // ===== end h28-H28-A24
+// ===== h28-G01
+// the option-slot default may also be a reassigned local the printer types Go `string` (every write a string):
+// GetArgStringPtr then answers &value and CheckOptionString a present string or a panic, so slot 0 is never nil
+const h28g01NonNilDefaultLocal = GoTranspiler.prototype.h25g17NonNilDefaultLocal;
+GoTranspiler.prototype.h25g17NonNilDefaultLocal = function (node) {
+    if (h28g01NonNilDefaultLocal.call(this, node)) {
+        return true;
+    }
+    const decl: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+    return (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.name?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === 'string');
+};
+// ===== end h28-G01
