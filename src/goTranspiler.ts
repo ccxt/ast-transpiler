@@ -51576,3 +51576,55 @@ GoTranspiler.prototype.h28g17BranchEnsuresEntry = function (branch, read) {
     return guard(stmts[stmts.length - 1]);
 };
 // ===== end h28-H28-G17
+// ===== h28-H28-G19
+// a PredictionOrderRequest[] batch is the same request-row list as OrderRequest[] (the typed wrapper converts
+// each struct to a map row), so a `[]map[string]any` table slot proves it with the same bounded-read rule
+GO_REQUEST_ROW_ANNOTATIONS.push('PredictionOrderRequest[]');
+export interface GoTranspiler {
+    h28g19RowLiteralLocal(declaration): boolean;
+}
+// `const xs = [ {..}, .. ]` of object literals whose only use is the whole list handed to a `[]map[string]any`
+// request-row slot (any receiver: the test tier calls through the interface) is that slice of fresh maps
+GoTranspiler.prototype.h28g19RowLiteralLocal = function (declaration): boolean {
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length === 0)
+        || !init.elements.every((e: any) => e.kind === SyntaxKind.ObjectLiteralExpression)) {
+        return false;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    let handed = 0;
+    const unsafe = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n === declaration.name) || (n.text !== declaration.name.text) || !this.goIdentifierRefersToDeclaration(n, declaration)) {
+            return false;
+        }
+        const call: any = n.parent;
+        const callee: any = call?.expression;
+        const index = (call?.kind === SyntaxKind.CallExpression) ? call.arguments.indexOf(n) : -1;
+        const name = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
+        const entry = ((name !== undefined) && Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, name)) ? this.unifiedSliceParams[name] : undefined;
+        if ((index >= 0) && (entry?.[index] === GO_REQUEST_ROW_LIST_TYPE)) {
+            handed += 1;
+            return false;
+        }
+        return true;
+    });
+    return !unsafe && (handed > 0);
+};
+{
+    const getGoLocalTypeH28g19 = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+        const h = this.h28g19RowLiteralLocal(declaration) ? GO_REQUEST_ROW_LIST_TYPE : undefined; if (h !== undefined) return h;
+        return getGoLocalTypeH28g19.call(this, declaration, parsedValue);
+    };
+    const printArrayLiteralExpressionH28g19 = GoTranspiler.prototype.printArrayLiteralExpression;
+    GoTranspiler.prototype.printArrayLiteralExpression = function (node, identation = 0) {
+        if ((node?.parent?.initializer === node) && this.h28g19RowLiteralLocal(node.parent)) {
+            this.goSliceLiteralTypes.delete(node);
+            const printed = printArrayLiteralExpressionH28g19.call(this, node, identation);
+            return printed.startsWith('[]any{') ? GO_REQUEST_ROW_LIST_TYPE + printed.substring(5) : printed;
+        }
+        return printArrayLiteralExpressionH28g19.call(this, node, identation);
+    };
+}
+// ===== end h28-H28-G19
