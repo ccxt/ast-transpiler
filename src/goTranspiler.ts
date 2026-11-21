@@ -56469,3 +56469,89 @@ function h30a18InlinedProbeCall (go: any, call: any): boolean {
     return ccxtGoCallerMethodProbe (go, call, declaration, 0) !== undefined;
 }
 // ===== end h30-H30-A18 =====
+// ===== h30-H30-A19
+// `const d = this.safeDict (R, 'lit', R)` that the printer leaves `var d any` while R is an h29a17 receive / joined endpoint
+// local (printed map[string]any, decoded JSON only): d is declared map[string]any and read with the comma-ok form, R as the
+// nil fallback. d is only handed on (call argument, dict value, store); a nil R gives the same R-typed nil map as before
+export interface GoTranspiler {
+    h30a19AnyResult(n: any): boolean;
+    h30a19HandedOn(n: any): boolean;
+}
+GoTranspiler.prototype.h30a19HandedOn = function (n: any): boolean {
+    const parent: any = n?.parent;
+    if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && (parent.arguments.indexOf(n) >= 0)) {
+        const callee: any = parent.expression;
+        const name: string = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : '';
+        return !/^(isEqual|isArray|isDictionary|isObject|isString|inArray)$/.test(name);
+    }
+    if ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === n)) {
+        return true;
+    }
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (parent.left?.kind === SyntaxKind.ElementAccessExpression) && (parent.parent?.kind === SyntaxKind.ExpressionStatement);
+};
+// the self-default call shape h29a17SelfDefault matches, with the result kept `any` by the printer and only handed on
+GoTranspiler.prototype.h30a19AnyResult = function (n: any): boolean {
+    const call: any = n?.parent;
+    if ((n?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 3)
+        || ((call.arguments[0] !== n) && (call.arguments[2] !== n))) {
+        return false;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    const callee: any = call.expression;
+    if ((container?.kind !== SyntaxKind.Identifier) || (fallback?.kind !== SyntaxKind.Identifier) || (container.text !== fallback.text)
+        || (key?.kind !== SyntaxKind.StringLiteral) || !/^[^"\\\n]*$/.test(key.text) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')) {
+        return false;
+    }
+    const decl: any = call.parent;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer !== call) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || (decl.type !== undefined) || (decl.parent?.declarations?.length !== 1) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0) || (this.goSafeDictLocalUnbox(decl) !== undefined)) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(decl);
+    if (scope === undefined) {
+        return false;
+    }
+    let uses = 0;
+    const bad = this.hasNodeWhere(scope, (m: any) => {
+        if ((m.kind !== SyntaxKind.Identifier) || (m.text !== decl.name.text) || (m === decl.name)
+            || ((m.parent?.kind === SyntaxKind.PropertyAccessExpression) && (m.parent.name === m))
+            || ((m.parent?.kind === SyntaxKind.PropertyAssignment) && (m.parent.name === m))) {
+            return false;
+        }
+        if (!this.goIdentifierRefersToDeclaration(m, decl)) {
+            return true; // another binding of the name: stay out
+        }
+        uses++;
+        return !this.h30a19HandedOn(m);
+    });
+    return !bad && (uses > 0);
+};
+{
+    const selfDefaultH30a19 = GoTranspiler.prototype.h29a17SelfDefault;
+    GoTranspiler.prototype.h29a17SelfDefault = function (n: any): boolean {
+        return selfDefaultH30a19.call(this, n) || this.h30a19AnyResult(n);
+    };
+    const printVariableDeclarationListH30a19 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed: string = printVariableDeclarationListH30a19.call(this, node, identation);
+        const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const call: any = decl?.initializer;
+        if ((typeof printed !== 'string') || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 3)
+            || !this.h30a19AnyResult(call.arguments[0]) || (this.h29a17Site(node) === undefined)) {
+            return printed;
+        }
+        const name: string = decl.name.text;
+        const container: string = call.arguments[0].text;
+        const lit = `"${call.arguments[1].text}"`;
+        const m = /^(\n*)(\t*)var (\w+) any = this\.SafeDict\((\w+), ("[^"]*"), (\w+)\)$/.exec(printed);
+        if ((m === null) || (m[3] !== name) || (m[4] !== container) || (m[5] !== lit) || (m[6] !== container)) {
+            return printed;
+        }
+        const ind = m[2];
+        return `${m[1]}${ind}var ${name} map[string]any\n${ind}${name}, _ = ${container}[${lit}].(map[string]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = ${container}\n${ind}}`;
+    };
+}
+// ===== end h30-H30-A19
