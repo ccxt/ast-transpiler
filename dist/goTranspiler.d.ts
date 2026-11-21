@@ -2453,3 +2453,175 @@ export interface GoTranspiler {
     h28t07DictEndpointCall(expression: any): boolean;
     h28t07JsonLetRead(declaration: any, printed: string): string | undefined;
 }
+export interface GoTranspiler {
+    h29a02EndpointDefaultedRead(node: any, identation: number, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h29a03ScalarReaderArg(node: any, name: string): boolean;
+}
+export interface GoTranspiler {
+    h29a05VarKeyDefaultRead(node: any, printed: string): string | undefined;
+    h29a05MapReceiver(container: any): boolean;
+    h29a05JsonOrigin(container: any): boolean;
+}
+export interface GoTranspiler {
+    h29a06ParseParamReadOnly(fn: any, param: any): boolean;
+    h29a06ReadOnlyArg(node: any): boolean;
+    h29a06JsonParam(node: any, depth: number): boolean;
+    h29a06ReadOnlyCache: Map<any, boolean>;
+    h29a06Active: Set<any>;
+}
+export interface GoTranspiler {
+    h29a07JsonParam(node: any, depth: number): boolean;
+    h29a07ParamReadOnly(fn: any, param: any): boolean;
+    h29a07ReadOnlyArg(node: any): boolean;
+    h29a07Cache: Map<any, boolean>;
+    h29a07Active: Set<any>;
+}
+export interface GoTranspiler {
+    h29a08JsonListParam(node: any, depth: number): boolean;
+    h29a08ListParamReadOnly(fn: any, param: any): boolean;
+    h29a08ReadOnlyListArg(node: any): boolean;
+    h29a08JsonListArg(node: any, depth: number): boolean;
+    h29a08Active: Set<any>;
+    h29a08Cache: Map<any, boolean>;
+}
+export interface GoTranspiler {
+    h29a09EndpointList(node: any): boolean;
+}
+export interface GoTranspiler {
+    h29a10EndpointTask(node: any): boolean;
+    h29a10EndpointTaskList(node: any): boolean;
+    h29a10PromiseAllList(list: any): boolean;
+    h29a10Tasks(node: any): any[];
+}
+export interface GoTranspiler {
+    h29a11LoopRow(node: any, depth: number): boolean;
+    h29a11JsonList(list: any, depth: number): boolean;
+}
+export interface GoTranspiler {
+    h29a12FrameCut(arg: any, holderFrame: any): boolean;
+}
+export interface GoTranspiler {
+    h29a13FrameDictRead(declaration: any, printed: string): string | undefined;
+    h29a13FrameMap(container: any): boolean;
+}
+export interface GoTranspiler {
+    h29a15DefaultedFrameDict(node: any, depth: number): boolean;
+}
+export interface GoTranspiler {
+    h29A16JsonOrigin(node: any, depth: number): boolean;
+}
+export interface GoTranspiler {
+    h29a17SelfDefault(n: any): boolean;
+    h29a17Site(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    } | undefined;
+    h29a17Receive(declaration: any): boolean;
+    h29a17Joined(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h29a18Row(declaration: any): boolean;
+    h29a18RawUse(n: any): boolean;
+}
+export interface GoTranspiler {
+    h29a20SafeListWrite(node: any, identation: number, printed: string): string | undefined;
+    h29a20ListWriteUse(node: any, name: string): boolean;
+    h29a20JsonMap(container: any): boolean;
+}
+export interface GoTranspiler {
+    h29g02SlotRead(n: any): boolean | undefined;
+    h29g02PointerEntries(node: any): any[];
+    h29g02Nil: Set<any> | undefined;
+}
+export interface GoTranspiler {
+    h29g03NestedInt64Operand(operand: any, index: number): {
+        'pointer': boolean;
+        'text': string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h29g05ListFrameParam(param: any): boolean;
+    h29g05ListFrameCache: Map<any, boolean>;
+    h29g05Active: Set<any>;
+}
+export interface GoTranspiler {
+    h29g06SubscriptionDictRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h29g06StringKey(key: any): boolean;
+}
+export interface GoTranspiler {
+    h29g08HashmapRowEntryRead(node: any): {
+        name: string;
+        row: string;
+        key: string;
+        pointer: boolean;
+    } | undefined;
+    h29g08HashmapRow(row: any): boolean;
+}
+export interface GoTranspiler {
+    h29g11CopyOrFreshMapSource(expr: any): boolean | undefined;
+    h29g11CopyNilCompare(left: any, rFam: string | undefined, nilText: string): string | undefined;
+    h29g11EveryWriteProven(decl: any): boolean;
+    h29g11Proving: Set<any>;
+}
+export interface GoTranspiler {
+    h29g14RowParamCellRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+export interface GoTranspiler {
+    h29g15RebindGuardProves(id: any): boolean;
+}
+export interface GoTranspiler {
+    h29g23WsUrlLocal(decl: any): string | undefined;
+    h29g23NonNilStringLeaf(e: any): boolean;
+    h29g23LiteralDefaultedConst(ident: any): boolean;
+}
+export interface GoTranspiler {
+    h29g28LengthAliasBound(bound: any, baseExpr: any, loop: any): boolean;
+    h29g28AsCastLoopRead(node: any, baseExpr: any, keys: any, containerStr: string, keyStrs: string[]): string | undefined;
+}
+export interface GoTranspiler {
+    h29p03PositionRow(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h27m02StringRowFieldRead(node: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h28m02StringOnlyLocal(init: any): boolean;
+    h28m02MarketBound(row: any): boolean;
+    h28m02PointerLocalRead(node: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h29m02AccessorDeclaration(call: any): {
+        text: string;
+        value: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h29m01EntryUse(n: any): {
+        field: string;
+        statement: any;
+        target: any;
+        key: string;
+    } | undefined;
+    h29m01Pending: Map<any, Map<any, string>> | undefined;
+}
+export interface GoTranspiler {
+    h29m05TypedMapStore(n: any): {
+        field: string;
+        goType: string;
+        kind: 'compare' | 'store';
+        literal: any;
+    } | undefined;
+    h29m05MapTupleSlot(id: any): boolean;
+}
+export interface GoTranspiler {
+    h29a14DefaultedFrameRead(node: any, printed: string): string | undefined;
+}

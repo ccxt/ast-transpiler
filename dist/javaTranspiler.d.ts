@@ -605,5 +605,18 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h28J06SeededListDeclaration(declaration: any, indent: string): string | undefined;
     h28J06SeededListPush(node: any, name: any, parsedArg: any): string | undefined;
     h28J06SeededListJoin(node: any): string | undefined;
+    h29J04RowContainer(declaration: any): boolean;
+    h29J04ContainerCache: WeakMap<Node, boolean | typeof JAVA_MEMO_UNDEFINED>;
+    h29J04ContainerUsesOk(declaration: any): boolean;
+    h29J04ContainerUseOk(node: any): boolean;
+    h29J04RowLocal(declaration: any): boolean;
+    h29J04SeedGuard(guard: any, containerName: string, keyName: string): boolean;
+    h29J04RowUsesByKey(name: any): boolean;
+    h29J04RowMapDeclaration(declaration: any, indent: string): string | undefined;
+    h29J06Lists: WeakMap<any, string>;
+    h29J06Busy: boolean;
+    h29J06LiteralCall(declaration: any): import("typescript/unstable/ast").CallExpression;
+    h29J06LiteralJoinDeclaration(node: any, declaration: any, identation: any, indent: string): string | undefined;
+    h29J06LiteralJoin(node: any): string | undefined;
 }
 export {};
