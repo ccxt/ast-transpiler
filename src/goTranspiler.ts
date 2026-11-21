@@ -57925,3 +57925,17 @@ GoTranspiler.prototype.h30t06FrameSelfDefault = function (declaration, printed: 
     };
 }
 // ===== end h30-H30-T06
+// ===== H32-R07: an element of a `[]string` local printed as the plain slice index is a Go string operand
+{
+    const goOperandStaticTypeH32R07 = GoTranspiler.prototype.goOperandStaticType;
+    GoTranspiler.prototype.goOperandStaticType = function (node, printedText: string): string | undefined {
+        const shipped = goOperandStaticTypeH32R07.call(this, node, printedText);
+        if ((shipped !== undefined) || (node?.kind !== SyntaxKind.ElementAccessExpression) || (node.expression?.kind !== SyntaxKind.Identifier)) {
+            return shipped;
+        }
+        const index = this.printNode(node.argumentExpression, 0);
+        const native = (typeof printedText === 'string') && (printedText.trim() === `${node.expression.text}[${index}]`);
+        return (native && (this.goResolvedLocalGoType(node.expression) === GO_STRING_LIST_LOCAL_TYPE)) ? 'string' : undefined;
+    };
+}
+// ===== end H32-R07
