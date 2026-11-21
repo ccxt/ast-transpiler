@@ -25879,6 +25879,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((containerType === '[]any') && this.goSliceIndexProvablyInRange(containerNode, keyNode)) {
             return `${containerStr}[${keyStr}] = ${valueStr}`;
         }
+        const h27g21 = compound ? undefined : this.h27g21SliceIndexStore(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode); if (h27g21 !== undefined) return h27g21;
         return undefined;
     }
 
@@ -48938,3 +48939,176 @@ GoTranspiler.prototype.h27g20BalanceNeverNil = function (field) {
     return ok;
 };
 // ===== h27-G20 (end) =====
+
+// ===== h27-H27-G21 =====
+export interface GoTranspiler {
+    h27g21SliceIndexStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode): string | undefined;
+    h27g21IndexInRange(containerNode, keyNode): boolean;
+    h27g21LengthGuarded(containerNode, at, lengthNode): boolean;
+    h27g21IsLengthOf(node, containerSymbol): boolean;
+    h27g21SliceKeepsLength(containerNode): boolean;
+    h27g21StoreValueIsPlain(valueNode, containerNode): boolean;
+}
+// `xs[i] = v` on a never-shrunk `[]any` local with `i` an int proven in range (a `n > 0` guard over `n = xs.length` for
+// index 0 / n - 1, or the slice's own `i < xs.length` counting loop) and `v` never a pointer or typed nil: the helper
+// stores derefScalar(v) at an in-range int index, which is exactly the native store; anything else keeps the helper
+GoTranspiler.prototype.h27g21SliceIndexStore = function (containerNode, containerStr, keyNode, keyStr, valueStr, valueNode) {
+    if ((containerNode?.kind !== SyntaxKind.Identifier) || (this.goElementAssignmentContainerType(containerNode, containerStr) !== '[]any')
+        || valueStr.includes('\n') || !this.h27g21SliceKeepsLength(containerNode) || !this.h27g21IndexInRange(containerNode, this.goUnwrapParenthesizedNode(keyNode))
+        || !this.h27g21StoreValueIsPlain(valueNode, containerNode)) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStr}] = ${valueStr}`;
+};
+GoTranspiler.prototype.h27g21IndexInRange = function (containerNode, keyNode) {
+    const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode);
+    if (symbol === undefined) {
+        return false;
+    }
+    if ((keyNode?.kind === SyntaxKind.NumericLiteral) && (keyNode.text === '0')) {
+        return this.h27g21LengthGuarded(containerNode, containerNode, undefined);
+    }
+    if ((keyNode?.kind === SyntaxKind.BinaryExpression) && (keyNode.operatorToken.kind === SyntaxKind.MinusToken)
+        && (keyNode.right.kind === SyntaxKind.NumericLiteral) && (keyNode.right.text === '1') && (keyNode.left.kind === SyntaxKind.Identifier)
+        && (this.goDeclaredTypeOfIdentifier(keyNode.left) === 'int')) {
+        const decl: any = this.goDeclarationOfIdentifier(keyNode.left);
+        if ((decl === undefined) || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0) || !this.h27g21IsLengthOf(decl.initializer, symbol)) {
+            return false;
+        }
+        return this.h27g21LengthGuarded(containerNode, containerNode, keyNode.left);
+    }
+    if (keyNode?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    // the counting loop (Go prints its index `j := 0`, an int) `for (let i = 0; i < xs.length; i++)` whose body never rebinds i
+    const decl: any = this.goDeclarationOfIdentifier(keyNode);
+    const loop: any = decl?.parent?.parent;
+    if ((loop?.kind !== SyntaxKind.ForStatement) || (loop.initializer !== decl.parent) || (decl.parent.declarations.length !== 1)
+        || (decl.initializer?.kind !== SyntaxKind.NumericLiteral) || (decl.initializer.text !== '0')) {
+        return false;
+    }
+    const cond: any = loop.condition;
+    if ((cond?.kind !== SyntaxKind.BinaryExpression) || (cond.operatorToken.kind !== SyntaxKind.LessThanToken)
+        || (cond.left.kind !== SyntaxKind.Identifier) || (this.checkerOrUndefined()?.getSymbolAtLocation(cond.left) !== this.checkerOrUndefined()?.getSymbolAtLocation(keyNode))
+        || !this.h27g21IsLengthOf(cond.right, symbol)) {
+        return false;
+    }
+    let inside = false;
+    for (let n: any = containerNode; n !== undefined; n = n.parent) {
+        if (n === loop.statement) {
+            inside = true;
+            break;
+        }
+        if (isFunctionLike(n)) {
+            break;
+        }
+    }
+    return inside && !this.goLocalIsRebound(loop.statement, keyNode);
+};
+// `xs.length`, or a const local initialised to it
+GoTranspiler.prototype.h27g21IsLengthOf = function (node, containerSymbol) {
+    node = this.goUnwrapParenthesizedNode(node);
+    if ((node?.kind === SyntaxKind.PropertyAccessExpression) && (node.name?.text === 'length') && (node.expression?.kind === SyntaxKind.Identifier)) {
+        return this.checkerOrUndefined()?.getSymbolAtLocation(node.expression) === containerSymbol;
+    }
+    if (node?.kind === SyntaxKind.Identifier) {
+        const decl: any = this.goDeclarationOfIdentifier(node);
+        const nested: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+        return (decl !== undefined) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0) && (nested?.kind === SyntaxKind.PropertyAccessExpression)
+            && this.h27g21IsLengthOf(nested, containerSymbol);
+    }
+    return false;
+};
+// the write sits in the then-branch of an `if` whose condition (or one `&&` operand of it) is `n > 0` / `0 < n` /
+// `n >= 1`, n the slice's length; with lengthNode given, n must be that very local
+GoTranspiler.prototype.h27g21LengthGuarded = function (containerNode, at, lengthNode) {
+    const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode);
+    const lengthSymbol = (lengthNode !== undefined) ? this.checkerOrUndefined()?.getSymbolAtLocation(lengthNode) : undefined;
+    const positive = (c): boolean => {
+        c = this.goUnwrapParenthesizedNode(c);
+        if (c?.kind !== SyntaxKind.BinaryExpression) {
+            return false;
+        }
+        const op = c.operatorToken.kind;
+        if (op === SyntaxKind.AmpersandAmpersandToken) {
+            return positive(c.left) || positive(c.right);
+        }
+        let n: any;
+        if (((op === SyntaxKind.GreaterThanToken) && (c.right.kind === SyntaxKind.NumericLiteral) && (c.right.text === '0'))
+            || ((op === SyntaxKind.GreaterThanEqualsToken) && (c.right.kind === SyntaxKind.NumericLiteral) && (c.right.text === '1'))) {
+            n = c.left;
+        } else if ((op === SyntaxKind.LessThanToken) && (c.left.kind === SyntaxKind.NumericLiteral) && (c.left.text === '0')) {
+            n = c.right;
+        }
+        n = this.goUnwrapParenthesizedNode(n);
+        if ((n === undefined) || !this.h27g21IsLengthOf(n, symbol)) {
+            return false;
+        }
+        return (lengthSymbol === undefined) || ((n.kind === SyntaxKind.Identifier) && (this.checkerOrUndefined()?.getSymbolAtLocation(n) === lengthSymbol));
+    };
+    let child: any = at;
+    for (let n: any = at.parent; n !== undefined; child = n, n = n.parent) {
+        if (isFunctionLike(n)) {
+            return false;
+        }
+        if ((n.kind === SyntaxKind.IfStatement) && (n.thenStatement === child) && positive(n.expression)) {
+            return true;
+        }
+    }
+    return false;
+};
+// the local's slice header keeps its length: never rebound, never popped/shifted/spliced or length-assigned
+GoTranspiler.prototype.h27g21SliceKeepsLength = function (containerNode) {
+    const checker = this.checkerOrUndefined();
+    const symbol = checker?.getSymbolAtLocation(containerNode);
+    const decl: any = symbol?.valueDeclaration?.resolve?.();
+    if ((decl === undefined) || ((decl.kind !== SyntaxKind.VariableDeclaration) && (decl.kind !== SyntaxKind.Parameter)) || (decl.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const scope = this.goEnclosingFunction(decl);
+    if ((scope === undefined) || (scope.kind === SyntaxKind.SourceFile) || this.goLocalIsRebound(scope, decl.name)) {
+        return false;
+    }
+    let ok = true;
+    const visit = (n) => {
+        if (!ok) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n !== decl.name) && (n.text === decl.name.text) && (checker.getSymbolAtLocation(n) === symbol)) {
+            const p: any = n.parent;
+            if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && [ 'pop', 'shift', 'splice', 'length' ].includes(p.name?.text)
+                && ((p.name.text !== 'length') || (this.goRebindingTargetOf(p) !== undefined))) {
+                ok = false;
+            }
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    visit(scope);
+    return ok;
+};
+// a string literal, a value the printer types as a non-pointer scalar, or a never-rebound map local seeded by a
+// literal-defaulted safeDict (never nil)
+GoTranspiler.prototype.h27g21StoreValueIsPlain = function (valueNode, containerNode) {
+    const value: any = this.goUnwrapParenthesizedNode(valueNode);
+    if ((value?.kind === SyntaxKind.StringLiteral) || (value?.kind === SyntaxKind.NoSubstitutionTemplateLiteral) || (value?.kind === SyntaxKind.NumericLiteral)) {
+        return true;
+    }
+    if (value?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declared = this.goDeclaredTypeOfIdentifier(value);
+    if ([ 'string', 'int64', 'float64', 'bool', 'int' ].includes(declared ?? '')) {
+        return true;
+    }
+    const decl: any = this.goDeclarationOfIdentifier(value);
+    if ((decl === undefined) || this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name)) {
+        return false;
+    }
+    if (((declared === undefined) || (declared === 'map[string]any')) && (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE)) {
+        return (this.goSafeDictCallArgs(decl.initializer)?.fallback?.kind === SyntaxKind.ObjectLiteralExpression)
+            && (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE);
+    }
+    return false; // an `any` element read back out of the slice prints its own guarded read off this store
+};
+// ===== h27-H27-G21 (end) =====
