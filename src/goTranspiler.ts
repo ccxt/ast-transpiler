@@ -7733,6 +7733,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoTypedTernaryDeclaration (goTranspiler);
     installH26G23StringTernaryHoist (goTranspiler);
     installH27a07ConfigMapReads (goTranspiler);
+    installH28a07ConfigMapNilFill (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
@@ -50042,3 +50043,68 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return printed;
 };
 // ===== end h28-A06 =====
+// ===== h28-H28-A07 =====
+// `x = this.safeDict (R, k[, {}])` on `this.balance` (ws handlers store only decoded frames, safeBalance maps,
+// account() literals, scalars and nil there) or on a const local read from the UrlsApiSections view: the comma-ok
+// assertion, then a nil-fill when the default is `{}`, answers exactly what SafeDictMap / SafeMapTyped did.
+function h28a07Receiver (goTranspiler, node): boolean {
+    const expr = goTranspiler.goUnwrapParenthesizedNode (node);
+    if ((expr?.kind === SyntaxKind.PropertyAccessExpression) && (expr.expression?.kind === SyntaxKind.ThisKeyword)) {
+        const name = expr.name?.text;
+        // Balance is declared `map[string]any` in go/v4/exchange.go (no field-table row: other readers keep the helper)
+        return (name === 'balance') || ((name === 'fees') && (goTranspiler.goFieldContainerTypeNative (expr) === 'map[string]any'));
+    }
+    if (expr?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration = goTranspiler.goDeclarationOfIdentifier (expr);
+    if ((declaration === undefined) || (declaration.name?.kind !== SyntaxKind.Identifier) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+        || (goTranspiler.goSafeDictLocalUnbox (declaration) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    return (h25g05UrlsViewValue (goTranspiler, declaration) ?? '').startsWith ('this.UrlsApiSections[');
+}
+
+function h28a07ElementWritten (goTranspiler, declaration): boolean {
+    const name = declaration.name.text;
+    return goTranspiler.hasNodeWhere (goTranspiler.goEnclosingFunction (declaration), (n: any) => (n.kind === SyntaxKind.BinaryExpression)
+        && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && (n.left?.kind === SyntaxKind.ElementAccessExpression)
+        && (n.left.expression?.kind === SyntaxKind.Identifier) && (n.left.expression.text === name));
+}
+
+function installH28a07ConfigMapNilFill (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h28a07ConfigMapNilFillInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const shipped = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const printed = shipped.call (this, node, identation);
+        const declaration = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+            return printed;
+        }
+        const args = h25g05UrlsSafeDictArgs (this, declaration.initializer);
+        if ((args === undefined) || !h28a07Receiver (this, args.container)) {
+            return printed;
+        }
+        const key = this.printNode (args.key, 0);
+        if (!this.goKeyIsString (args.key, key)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const container = this.printNode (args.container, 0);
+        const match = /^(\n*)(\t*)var (\w+) map\[string\]any = (?:(?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\((.*)\)$/.exec (printed);
+        // the shipped line keeps the `{}` default only on SafeDictMap: that read answers a fresh map when absent
+        const fill = (match !== null) && (match[4] === container + ', ' + key + ', map[string]any{}');
+        if ((match === null) || (match[3] !== name) || (!fill && (match[4] !== container + ', ' + key))) {
+            return printed;
+        }
+        // the build's never-nil proof for native element writes reads only the SafeDictMap seed: keep it where the local is written into
+        if (fill && h28a07ElementWritten (this, declaration)) {
+            return printed;
+        }
+        const read = match[1] + match[2] + 'var ' + name + ' map[string]any\n' + match[2] + name + ', _ = ' + container + '[' + key + '].(map[string]any)';
+        return fill ? read + '\n' + match[2] + 'if ' + name + ' == nil {\n' + match[2] + '\t' + name + ' = map[string]any{}\n' + match[2] + '}' : read;
+    };
+}
+// ===== end h28-H28-A07 =====
