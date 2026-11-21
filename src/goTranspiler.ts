@@ -55935,3 +55935,37 @@ GoTranspiler.prototype.h30a03AssignRead = function (node, identation: number, pr
     };
 }
 // ===== end h30-H30-A03
+// ===== h30-H30-A06
+// a JSON-origin local stored as `'info': x` in an object literal that leaves the method through `return` (directly or
+// as the argument of the returned call): nothing in this method runs after the store, so no read can see a write a
+// callee makes through the literal, and the slot keeps the same map value the reads use
+export interface GoTranspiler {
+    h30a06ReturnedInfoUse(node, name: string): boolean;
+}
+GoTranspiler.prototype.h30a06ReturnedInfoUse = function (node, name: string): boolean {
+    const slot: any = node?.parent;
+    const key: any = slot?.name;
+    if ((node?.kind !== SyntaxKind.Identifier) || (slot?.kind !== SyntaxKind.PropertyAssignment) || (slot.initializer !== node)
+        || (slot.parent?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || ((key?.kind !== SyntaxKind.Identifier) && (key?.kind !== SyntaxKind.StringLiteral)) || (String(key.text) !== 'info')
+        || this.goWritesOrRebindsName(node, name, [])) {
+        return false;
+    }
+    let top: any = slot.parent;
+    while ((top.parent !== undefined) && ((top.parent.kind === SyntaxKind.AsExpression) || (top.parent.kind === SyntaxKind.ParenthesizedExpression)
+        || ((top.parent.kind === SyntaxKind.CallExpression) && (top.parent.expression !== top)))) {
+        top = top.parent;
+    }
+    let fn: any = top.parent;
+    while ((fn !== undefined) && !isFunctionLike(fn)) {
+        fn = fn.parent;
+    }
+    return (top.parent?.kind === SyntaxKind.ReturnStatement) && (top.parent.expression === top) && (fn?.kind === SyntaxKind.MethodDeclaration);
+};
+{
+    const goJsonOriginUseIsReadOnlyH30a06 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        return goJsonOriginUseIsReadOnlyH30a06.call(this, node, name) || this.h30a06ReturnedInfoUse(node, name);
+    };
+}
+// ===== end h30-H30-A06
