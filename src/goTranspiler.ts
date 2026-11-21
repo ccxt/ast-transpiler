@@ -22825,6 +22825,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (balanceStore !== undefined) {
                 return balanceStore;
             }
+            const h30g31 = ((op === SyntaxKind.EqualsToken) && (native === undefined)) ? this.h30g31RowFieldStore(node, baseExpr, keys, keyStrs, right, rhs, identation) : undefined; if (h30g31 !== undefined) return h30g31;
             return (native !== undefined) ? native : `AddElementToObject(${acc}, ${lastKey}, ${rhs})`;
         }
         return undefined;
@@ -57569,3 +57570,38 @@ GoTranspiler.prototype.h30g29ForCounterKind = function (node) {
     return (this.h26g57ForCounterSeed(declaration) !== undefined) ? 'int' : undefined;
 };
 // ===== end h30-G29 =====
+// ===== h30-H30-G31 =====
+export interface GoTranspiler {
+    h30g31RowFieldStore(node, baseExpr, keys: any[], keyStrs: string[], valueNode, rhs: string, identation: number): string | undefined;
+}
+const H30G31_POINTER_TYPES = [ '*string', '*int64', '*float64', '*bool' ];
+// `xs[i][k] = v` whose row container already prints `xs[i]` (goBoundedListRowWriteContainer: a pointer-free []any row in
+// range) and k a Go string: the helper stores derefScalar(v) into a non-nil map row and skips any other row, which is the
+// comma-ok store below; a `*T` local value stores `*v`, or nil for a nil pointer, exactly as derefScalar does
+GoTranspiler.prototype.h30g31RowFieldStore = function (node, baseExpr, keys, keyStrs, valueNode, rhs, identation) {
+    if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (keys.length !== 2) || rhs.includes('\n')
+        || !this.goKeyIsString(keys[1], keyStrs[1]) || keyStrs[1].includes('\n')) {
+        return undefined;
+    }
+    const containerStr = this.printNode(baseExpr, 0);
+    if (!this.goBoundedListRowWriteContainer(baseExpr, containerStr, keys, keyStrs)) {
+        return undefined;
+    }
+    const value: any = this.goUnwrapParenthesizedNode(valueNode);
+    const pointerType = (value?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(value) : undefined;
+    const pointer = H30G31_POINTER_TYPES.includes(pointerType ?? '') && /^\w+$/.test(rhs);
+    if (!pointer && (!this.goMapWriteValueIsNotPointer(valueNode) || this.goValueMayHoldPointer(valueNode))) {
+        return undefined;
+    }
+    let row = 'row';
+    for (let n = 1; new RegExp('\\b' + row + '\\b').test(rhs + ' ' + keyStrs[1] + ' ' + containerStr + ' ' + keyStrs[0]); n++) {
+        row = 'row' + n;
+    }
+    const iden = this.getIden(identation);
+    const target = `${row}[${keyStrs[1]}]`;
+    const store = pointer
+        ? `if ${rhs} != nil {\n${iden}\t\t${target} = *${rhs}\n${iden}\t} else {\n${iden}\t\t${target} = nil\n${iden}\t}`
+        : `${target} = ${rhs}`;
+    return `if ${row}, ok := ${containerStr}[${keyStrs[0]}].(map[string]any); ok && (${row} != nil) {\n${iden}\t${store}\n${iden}}`;
+};
+// ===== end h30-H30-G31 =====

@@ -88,7 +88,7 @@ describe ('go bounded list row write container', () => {
     });
     afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h25g20'), { recursive: true, force: true }));
     test ('positive: the row of a bounded loop over a declared list is the plain index', () => {
-        expect (out).toMatch (/AddElementToObject\(rows\[i\], "type", "deposit"\)/);
+        expect (out).toMatch (/if row, ok := rows\[i\]\.\(map\[string\]any\); ok && \(row != nil\) \{\n\s*row\["type"\] = "deposit"/);
         expect (out).not.toMatch (/AddElementToObject\(GetValue\(rows, i\), "type"/);
     });
 
