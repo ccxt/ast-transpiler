@@ -57000,3 +57000,21 @@ GoTranspiler.prototype.h30g07DerefStoredAccessorWrite = function (expr) {
 Object.assign (CCXT_GO_HELPER_RETURN_TYPES, Object.fromEntries ([ 'ParsePredictionPosition', 'ParseWsOptionsPosition' ]
     .flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])));
 // ===== end h30-H30-G08
+// ===== h30-H30-G11: base getListFromObjectValues returns its []any accumulator =====
+// The base body builds `results` (printed `[]any`) and returns it on its only path, never nil, so the
+// signature and every `var x = this.GetListFromObjectValues(..)` local take `[]any`; a passed value re-boxes the same slice.
+function h30g11ListFromValuesBase (go: any, node: any): boolean {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.name?.text !== 'getListFromObjectValues') || (node.body === undefined)
+        || go.isAsyncFunction(node) || !/[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? ''))) {
+        return false;
+    }
+    const returns = collectReturnStatements(node.body);
+    return (returns.length > 0) && returns.every((r: any) => (r.expression?.kind === SyntaxKind.Identifier)
+        && (go.goDeclaredTypeOfIdentifier(r.expression) === '[]any'));
+}
+const goStrPtrFamilyReturnTypeH30g11 = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+    return h30g11ListFromValuesBase(this, node) ? '[]any' : goStrPtrFamilyReturnTypeH30g11.call(this, node);
+};
+Object.assign (CCXT_GO_HELPER_RETURN_TYPES, { 'this.GetListFromObjectValues': '[]any', 'this.DerivedExchange.GetListFromObjectValues': '[]any' });
+// ===== end h30-H30-G11 =====
