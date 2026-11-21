@@ -7486,7 +7486,30 @@ export class JavaTranspiler extends BaseTranspiler {
         if (isNumericLiteral(node)) {
             return this.javaProvableNumericKind(node) === 'double' ? 'double' : undefined;
         }
+        if (this.javaGuardedLongLocalRead(node)) {
+            return 'integral';
+        }
+        // a nested Math.min/Math.max that prints natively is a primitive of its operands' family
+        const inner = this.unwrapParenthesized(node);
+        if (isCallExpression(inner) && inner.arguments.length === 2 && /^Math\.(?:min|max)$/.test(inner.expression.getText())) {
+            const kind = this.javaNativeMathMinMaxOperandKind(inner.arguments[0]);
+            return kind !== undefined && kind === this.javaNativeMathMinMaxOperandKind(inner.arguments[1]) ? kind : undefined;
+        }
         return this.javaProvableNumericKind(node) === 'long' ? 'integral' : undefined;
+    }
+
+    // a `const` local the printer declares `Long`, read where a null test already excludes null:
+    // it unboxes like a primitive
+    javaGuardedLongLocalRead(node): boolean {
+        if (!isIdentifier(node) || !this.javaIdentifierPrintsDeclaredName(node)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const type = this.javaTry(() => this.javaDeclaredTypeOfDeclaration(declaration));
+        return typeof type === 'string' && type.replace(/^final\s+/, '').trim() === 'Long' && this.javaNullGuardAdmitsRead(node);
     }
 
     // a primitive has no members, so a receiver position (and the printer's cast wrappers) keep the

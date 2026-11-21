@@ -10859,3 +10859,36 @@ describe('ws client owner map read keyed by a declared-List counter element: Hel
         expect(none).toMatch(/Object a = Helpers\.GetValue\(client\.subscriptions, /);
     });
 });
+
+describe('java Math.min/Math.max over a guarded Long local and a nested native call', () => {
+    const SOURCE =
+        "class T {\n" +
+        "    test(params: any, other: any): void {\n" +
+        "        const r = params['limit'];\n" +
+        "        const a = (r === undefined) ? 100 : Math.max (1, Math.min (r, 100));\n" +
+        "        const b = Math.max (1, Math.min (r, 100));\n" +
+        "        const c = (r === undefined) ? 1.5 : Math.max (1.5, Math.min (r, 100));\n" +
+        "        const d = (other === undefined) ? 100 : Math.max (1, Math.min (other, 100));\n" +
+        "    }\n" +
+        "}";
+    const run = (longs: string[]): string => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => (longs.includes(declaration?.name?.text) ? 'Long' : undefined);
+        try {
+            return transpiler.transpileJava(SOURCE).content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    test('a Long const local behind its null test unboxes: the whole chain is native', () => {
+        expect(run(['r'])).toContain(": Math.max(1, Math.min(r, 100));");
+    });
+    test('no null test, a double partner, or an Object local keeps the helper', () => {
+        const out = run(['r']);
+        expect(out).toContain("Object b = Helpers.mathMax(1, Helpers.mathMin(r, 100));");
+        expect(out).toContain("Helpers.mathMax(1.5, Math.min(r, 100))");
+        expect(out).toContain("Helpers.mathMax(1, Helpers.mathMin(other, 100))");
+        expect(run([])).toContain("Helpers.mathMax(1, Helpers.mathMin(r, 100))");
+    });
+});
