@@ -16424,6 +16424,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.asyncMapRowListCallees = new Set<string>(config['asyncMapRowListCallees'] ?? []);
         this.asyncTickerMapCallees = new Set<string>(config['asyncTickerMapCallees'] ?? []);
         this.asyncStringCallees = new Set<string>(config['asyncStringCallees'] ?? []);
+        (this as any).h27g08Config = config;
         this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
         this.provenReturnFamilies = config['provenReturnFamilies'] ?? [];
@@ -48464,3 +48465,92 @@ function h27g07ExtendWrite(goTranspiler: GoTranspiler, n): boolean {
     }
 }
 // ===== end h27-G07
+
+// ===== h27-H27-G08 =====
+// A `[]`-seeded list-declared local whose every write is `x = await this.M (..)` with M's channel carrying a
+// struct list (host table asyncStructRowListCallees: the receive is the `*ToList` carrier, every row a map or a
+// row slice, nil for a nil slice) prints `[]any` when it is only measured and element-read (both answer alike for nil).
+function h27g08StructRowCallees (goTranspiler: GoTranspiler): Set<string> {
+    const go: any = goTranspiler;
+    go.h27g08StructRowCallees ??= new Set<string> (Object.keys (go.h27g08Config?.['asyncStructRowListCallees'] ?? {}));
+    return go.h27g08StructRowCallees;
+}
+function h27g08StructRowWrite (goTranspiler: GoTranspiler, right): boolean {
+    const value: any = goTranspiler.goUnwrapParenthesizedNode (right);
+    const call: any = (value?.kind === SyntaxKind.AwaitExpression) ? value.expression : undefined;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const name = String (callee.name?.text ?? '');
+    return h27g08StructRowCallees (goTranspiler).has (name.charAt (0).toUpperCase () + name.slice (1));
+}
+const h27g08Verdicts = new WeakMap<any, boolean> ();
+function h27g08StructRowListLocal (goTranspiler: GoTranspiler, declaration): boolean {
+    if (h27g08Verdicts.has (declaration)) {
+        return h27g08Verdicts.get (declaration);
+    }
+    h27g08Verdicts.set (declaration, false);
+    const verdict = h27g08StructRowListLocalUncached (goTranspiler, declaration);
+    h27g08Verdicts.set (declaration, verdict);
+    return verdict;
+}
+function h27g08StructRowListLocalUncached (goTranspiler: GoTranspiler, declaration): boolean {
+    if ((h27g08StructRowCallees (goTranspiler).size === 0) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.VariableStatement)
+        || !h24n04DeclaredList (declaration.type)) {
+        return false;
+    }
+    const init: any = goTranspiler.goUnwrapParenthesizedNode (declaration.initializer);
+    if ((init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length !== 0)) {
+        return false;
+    }
+    const scope: any = goTranspiler.goEnclosingFunction (declaration);
+    if ((scope === undefined) || goTranspiler.goTypeNameIsShadowed (scope, GO_SAFE_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    const name = declaration.name.text;
+    let written = 0;
+    const unsafe = goTranspiler.hasNodeWhere (scope, (n: any) => {
+        if (((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter) || (n.kind === SyntaxKind.BindingElement))
+            && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+            return false; // a member name, not the local
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            written += 1;
+            return !h27g08StructRowWrite (goTranspiler, parent.right);
+        }
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n) && !goTranspiler.isGoElementAccessAssignmentTarget (parent)) {
+            return false;
+        }
+        return true; // a nil test, an argument, a return or a store would observe the typed nil
+    });
+    return !unsafe && (written > 0);
+}
+{
+    const getGoLocalTypeStructRows = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+        const shipped = getGoLocalTypeStructRows.call (this, declaration, parsedValue);
+        return ((shipped === 'any') && h27g08StructRowListLocal (this, declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+    };
+    const awaitedRows = GoTranspiler.prototype.goAwaitedMapRowList;
+    GoTranspiler.prototype.goAwaitedMapRowList = function (base): boolean {
+        if (awaitedRows.call (this, base)) {
+            return true;
+        }
+        const decl: any = this.checkerOrUndefined ()?.getSymbolAtLocation (base)?.valueDeclaration?.resolve?.();
+        return h27g08StructRowListLocal (this, decl);
+    };
+}
+// ===== end h27-H27-G08 =====
