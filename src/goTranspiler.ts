@@ -54194,71 +54194,6 @@ GoTranspiler.prototype.h29g03NestedInt64Operand = function (operand, index: numb
     return (this.goOperandStaticType(operand, printed) === 'int64') ? { 'pointer': false, 'text': this.go92g7OperandText(operand, index) } : undefined;
 };
 // ===== end h29-H29-G03 =====
-<<<<<<< HEAD
-// ===== h29-G04 =====
-export interface GoTranspiler {
-    h29G04PushedStrPtrIsNonNil(pushNode): boolean;
-    h29G04StringSliceCopyFill(n, param, goType: string, nilable: boolean, boxed: boolean): boolean | undefined;
-}
-// `xs.push (id)` with a safeString `*string` id a nil test proves non-nil at the push: printArrayPushCall
-// appends `*id` (goPushedStringPointerIsNonNil), so a []string receiver keeps its element type
-GoTranspiler.prototype.h29G04PushedStrPtrIsNonNil = function (pushNode) {
-    const arg: any = pushNode?.arguments?.[0];
-    if (arg?.kind !== SyntaxKind.Identifier) {
-        return false;
-    }
-    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
-    const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
-    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
-        || !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`))) {
-        return false;
-    }
-    return this.goInOpPointerKeyProvenNonNil(pushNode.parent, arg);
-};
-// a `Strings` copy of a nil-defaulted []string parameter refilled from scratch: `r = []` opens `[]string{}` (non-nil and
-// empty, as `[]any{}` was) and a push of a proven Go string appends natively; both keep the copy a []string
-GoTranspiler.prototype.h29G04StringSliceCopyFill = function (n, param, goType: string, nilable: boolean, boxed: boolean) {
-    if ((goType !== '[]string') || !nilable || !boxed || (param?.kind !== SyntaxKind.VariableDeclaration)) {
-        return undefined;
-    }
-    const declared = String(param.type?.getText() ?? '').replace(/\s+/g, ' ');
-    if ((declared !== 'Strings') && (declared !== 'string[]')) {
-        return undefined;
-    }
-    const parent: any = n.parent;
-    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
-        && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
-        return this.goH26g56StringListLiteralWrite(parent.right, GO_STRING_LIST_LOCAL_TYPE) ? true : undefined;
-    }
-    if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'push')) {
-        return this.goStringListAppendsAString(parent.parent) ? true : undefined;
-    }
-    return undefined;
-};
-export interface GoTranspiler {
-    h29G04StringListDefaultedArg(node, goType: string): boolean | undefined;
-}
-// a `Strings` local handed whole to a defaulted `Strings` / `string[]` parameter: the callee binds it through
-// GetArgStringSlice (or GetArg), which reads a nil []string as absent, as it read the nil box
-GoTranspiler.prototype.h29G04StringListDefaultedArg = function (node, goType: string) {
-    if ((goType !== GO_STRING_LIST_LOCAL_TYPE) || (node?.kind !== SyntaxKind.Identifier)) {
-        return undefined;
-    }
-    const decl: any = this.goDeclarationOfIdentifier(node);
-    const own = String(decl?.type?.getText() ?? '').replace(/\s+/g, ' ');
-    const call: any = node.parent;
-    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || ((own !== 'Strings') && (own !== 'string[]'))
-        || (call?.kind !== SyntaxKind.CallExpression) || (call.expression === node)) {
-        return undefined;
-    }
-    const argIndex = call.arguments.indexOf(node);
-    if (!this.goGetArgPositionIsDefaulted(call.expression, argIndex)) {
-        return undefined;
-    }
-    const declared = String(this.goGetArgCalleeDeclaration(call.expression)?.parameters?.[argIndex]?.type?.getText() ?? '').replace(/\s+/g, ' ');
-    return ((declared === 'Strings') || (declared === 'string[]')) ? true : undefined;
-};
-// ===== end h29-G04 =====
 // ===== h29-H29-G05 =====
 // A list frame: parameter 1 of a pro `handleListMessage` override (the ws dispatch hands it the decoded json array) or of a
 // pro handler every caller hands such a frame (direct calls, or `.call (this, client, frame)` from a local table in a frame
@@ -55728,5 +55663,3 @@ GoTranspiler.prototype.h29m05MapTupleSlot = function (id: any): boolean {
     return (name === 'handleUntilOption') && Array.isArray(slots) && slots.includes(pattern.elements.indexOf(decl));
 };
 // ===== end h29-M05
-=======
->>>>>>> parent of bd858572 (hx12 H29-G04: merge unit (6c505ca411ee9f94e49fbc1afbe87752241c1110))
