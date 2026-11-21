@@ -33752,6 +33752,7 @@ ${tryBodyBlock}
         if (shapedRead !== undefined) {
             return shapedRead;
         }
+        const h27g33 = this.h27g33StringListLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h27g33 !== undefined) return h27g33;
 
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
@@ -49427,3 +49428,49 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${iden}var ${name} ${GO_STRING_LIST_LOCAL_TYPE}\n` + lines.join('\n');
 };
 // ===== end h27-G32 =====
+
+// ===== h27-G33
+export interface GoTranspiler {
+    h27g33StringListLiteralRead(node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+// `xs[K]` (K a literal) on a `[]string` local that a length guard proves in range (h26g24GuardedLiteralRead): the plain
+// slice index, the string GetValue answers there. A string element is never a pointer, so no pointer-free proof is needed
+GoTranspiler.prototype.h27g33StringListLiteralRead = function (node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]) {
+    if ((keys.length !== 1) || (baseExpr?.kind !== SyntaxKind.Identifier) || containerStr.includes('\n') || this.isGoElementAccessAssignmentTarget(node)
+        || (this.goResolvedLocalGoType(baseExpr) !== GO_STRING_LIST_LOCAL_TYPE) || !this.h26g24GuardedLiteralRead(node, true)) {
+        return undefined;
+    }
+    // a `*string` target keeps its address-of hoist (the bare string would be re-wrapped in SafeStringPtr)
+    const parent: any = node.parent;
+    const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
+        : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
+    if ((target?.kind === SyntaxKind.Identifier) && (this.goResolvedLocalGoType(target) !== 'any')) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStrs[0]}]`;
+};
+{
+    // an exiting `if (n !== K) throw` / `if (xs.length != K) return` leaves `n === K` behind it: every index below K is in range
+    const guardProves = GoTranspiler.prototype.h26g24GuardProves;
+    GoTranspiler.prototype.h26g24GuardProves = function (condition, list, index: number, names: Set<string>, thenSide: boolean) {
+        const c: any = this.goUnwrapParenthesizedNode(condition);
+        if (!thenSide && (c?.kind === SyntaxKind.BinaryExpression)
+            && [ SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken ].includes(c.operatorToken?.kind)) {
+            const isLength = (n: any): boolean => {
+                const e: any = this.goUnwrapParenthesizedNode(n);
+                return ((e?.kind === SyntaxKind.PropertyAccessExpression) && (e.name?.text === 'length') && (e.expression?.kind === SyntaxKind.Identifier)
+                    && (e.expression.text === list.text)) || ((e?.kind === SyntaxKind.Identifier) && names.has('L:' + e.text));
+            };
+            const num = (n: any): number | undefined => {
+                const e: any = this.goUnwrapParenthesizedNode(n);
+                return ((e?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${e.text}`)) ? Number(e.text) : undefined;
+            };
+            const k = isLength(c.left) ? num(c.right) : (isLength(c.right) ? num(c.left) : undefined);
+            if ((k !== undefined) && (k > index)) {
+                return true;
+            }
+        }
+        return guardProves.call(this, condition, list, index, names, thenSide);
+    };
+}
+// ===== end h27-G33
