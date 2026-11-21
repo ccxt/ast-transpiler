@@ -53368,3 +53368,55 @@ GoTranspiler.prototype.h29a10Tasks = function (node) {
     };
 }
 // ===== end h29-H29-A10
+// ===== h29-H29-A11
+// ruling 6(d), nested: `const row = this.safeDict (xs, i[, {}])` printed `map[string]any`, where xs is a read-only
+// `[]any` list cut by a literal-key safeList from a JSON-origin container and i counts 0..len(xs) in a loop that
+// writes neither; a read-only row holds only decoded JSON, so lists read from it (and indexBy of those) carry the proof
+export interface GoTranspiler {
+    h29a11LoopRow(node, depth: number): boolean;
+    h29a11JsonList(list, depth: number): boolean;
+}
+GoTranspiler.prototype.h29a11JsonList = function (list, depth: number): boolean {
+    const declaration: any = (list?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(list) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !this.goDeclaredListIdentifier(list)) {
+        return false;
+    }
+    let init: any = declaration.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.NonNullExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.goJsonOriginContainer(this.goUnwrapParenthesizedNode(args.container), depth + 1)) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name) || this.h27a09SafeReaderArg(n, name));
+};
+GoTranspiler.prototype.h29a11LoopRow = function (node, depth: number): boolean {
+    if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+    const fallback: any = init?.arguments?.[2];
+    const list: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    const key: any = args?.key;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (list.text === key.text)
+        || ((fallback !== undefined) && ((fallback.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)))
+        || (this.goLoopBoundedIndexRead(init, list, key, list.text, key.text) === undefined) || !this.h29a11JsonList(list, depth)) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+};
+{
+    const jsonOriginH29a11 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        return jsonOriginH29a11.call(this, node, depth) || this.h29a11LoopRow(node, depth);
+    };
+}
+// ===== end h29-H29-A11
