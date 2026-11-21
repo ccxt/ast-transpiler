@@ -57401,3 +57401,53 @@ function h30g21HandWrittenCallType (goTranspiler, initializer, printedValue: str
     return typeNameIsUsable(goTranspiler, initializer, goType) ? goType : undefined;
 }
 // ===== end h30-H30-G21
+// ===== h30-H30-G24
+// `const o = this.safeDict (R, k, {})` on an ArrayCache hashmap row R (the h29g08 proof: a row holds only
+// map[string]any items) with a string / *string key: the comma-ok read, then the fresh `{}` exactly where
+// SafeDict answered its default (missing key, nil key, non-map entry).
+export interface GoTranspiler {
+    h30g24DefaultedRowEntryRead(node): { name: string, row: string, key: string, pointer: boolean } | undefined;
+}
+GoTranspiler.prototype.h30g24DefaultedRowEntryRead = function (node) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    const fallback: any = call?.arguments?.[2];
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 3)
+        || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments[1].kind !== SyntaxKind.Identifier)
+        || !this.h29g08HashmapRow(call.arguments[0])) {
+        return undefined;
+    }
+    const keyNode: any = call.arguments[1];
+    const keyType = this.goLocalStaticType(keyNode) ?? this.goDeclaredParamStaticType(keyNode);
+    if ((keyType !== 'string') && (keyType !== '*string')) {
+        return undefined;
+    }
+    return { name: declaration.name.text, row: call.arguments[0].text, key: keyNode.text, pointer: keyType === '*string' };
+};
+const h30g24ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = h30g24ShippedPrintDeclarationList.call(this, node, identation);
+    const site = (typeof printed === 'string') ? this.h30g24DefaultedRowEntryRead(node) : undefined;
+    const shipped = (site === undefined) ? [] : [ `this.SafeDictMap(${site.row}, ${site.key}, map[string]any{})`, `MapTyped(this.SafeDict(${site.row}, ${site.key}, map[string]any{}))` ]
+        .map((f) => `var ${site.name} map[string]any = ${f}`);
+    // an earlier rule may already have dropped the default (its consumers read nil and {} alike): keep that answer
+    const dropped = (site === undefined) ? [] : [ 'SafeMapTyped', 'ccxt.SafeMapTyped' ].map((f) => `var ${site.name} map[string]any = ${f}(${site.row}, ${site.key})`);
+    if ((site === undefined) || !(shipped.includes(printed.trim()) || dropped.includes(printed.trim()))) {
+        return printed;
+    }
+    const keepDefault = shipped.includes(printed.trim());
+    const iden = this.getIden(identation);
+    const inner = this.getIden(identation + 1);
+    const lead = printed.startsWith('\n') ? '\n' : '';
+    const read = site.pointer
+        ? `${iden}var ${site.name} map[string]any\n${iden}if ${site.key} != nil {\n${inner}${site.name}, _ = ${site.row}[*${site.key}].(map[string]any)\n${iden}}\n`
+        : `${iden}var ${site.name}, _ = ${site.row}[${site.key}].(map[string]any)\n`;
+    if (!keepDefault) {
+        return `${lead}${read.slice(0, -1)}`;
+    }
+    return `${lead}${read}${iden}if ${site.name} == nil {\n${inner}${site.name} = map[string]any{}\n${iden}}`;
+};
+// ===== end h30-H30-G24
