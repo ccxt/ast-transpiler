@@ -48034,3 +48034,132 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
         + `${iden}}`;
 };
 // ===== end h27-H27-A15 =====
+// ===== h27-H27-A16 =====
+// A map local born `{}` whose slots the function only ever fills with array literals (or the list read back out
+// of a slot) holds []any or nil in every slot, so a slot read before any other write is the comma-ok list read.
+// `const xs = m[k]` used only by pushes and store-backs, and the bare `m[k].push (v)`, append natively and store back.
+export interface GoTranspiler {
+    h27a16ListSlotMap(access, at): boolean;
+    h27a16AliasSlot(declaration): string | undefined;
+}
+GoTranspiler.prototype.h27a16ListSlotMap = function (access, at) {
+    const map: any = access?.expression;
+    const key: any = access?.argumentExpression;
+    if ((access?.kind !== SyntaxKind.ElementAccessExpression) || (map?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const mapDecl: any = this.goDeclarationOfIdentifier(map);
+    const scope = this.goEnclosingFunction(at);
+    if ((mapDecl?.initializer?.kind !== SyntaxKind.ObjectLiteralExpression) || (mapDecl.initializer.properties.length !== 0)
+        || (this.goEnclosingFunction(mapDecl) !== scope) || (this.goDeclaredTypeOfIdentifier(map) !== 'map[string]any') || this.goLocalIsRebound(scope, map)) {
+        return false;
+    }
+    // uses after the outermost loop around the read cannot reach it
+    let anchor: any = at;
+    for (let p: any = at.parent; (p !== undefined) && (p !== scope); p = p.parent) {
+        if ((p.kind === SyntaxKind.ForStatement) || (p.kind === SyntaxKind.ForOfStatement) || (p.kind === SyntaxKind.ForInStatement)
+            || (p.kind === SyntaxKind.WhileStatement) || (p.kind === SyntaxKind.DoStatement)) {
+            anchor = p;
+        }
+    }
+    const isSlotAlias = (n: any) => {
+        const d: any = (n?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(n) : undefined;
+        const i: any = d?.initializer;
+        return (i?.kind === SyntaxKind.ElementAccessExpression) && (i.expression?.kind === SyntaxKind.Identifier) && (i.expression.text === map.text);
+    };
+    let seeded = false;
+    const unsafe = this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== map.text) || (n === mapDecl.name) || (n.pos >= anchor.end)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
+            return false;
+        }
+        if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== n)) {
+            return true;
+        }
+        const assign: any = parent.parent;
+        if ((assign?.kind === SyntaxKind.BinaryExpression) && (assign.left === parent)) {
+            if (assign.operatorToken?.kind !== SyntaxKind.EqualsToken) {
+                return true;
+            }
+            if (assign.right?.kind === SyntaxKind.ArrayLiteralExpression) {
+                seeded = seeded || ((parent.argumentExpression?.kind === SyntaxKind.Identifier) && (parent.argumentExpression.text === key.text));
+                return false;
+            }
+            return !isSlotAlias(assign.right);
+        }
+        return false;
+    });
+    return !unsafe && seeded;
+};
+// the slot `m[k]` a never-rebound `const xs = m[k]` copies, printed with its own key proof; xs is only pushed and stored back
+GoTranspiler.prototype.h27a16AliasSlot = function (declaration) {
+    const access: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (access?.kind !== SyntaxKind.ElementAccessExpression) || !this.h27a16ListSlotMap(access, declaration)) {
+        return undefined;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    if (this.goLocalIsRebound(scope, declaration.name)) {
+        return undefined;
+    }
+    const name = declaration.name.text;
+    let pushes = 0;
+    const other = this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'push')
+            && this.goIsNativeAppendShape(n, parent.parent) && (parent.parent.arguments?.length === 1)) {
+            pushes++;
+            return false;
+        }
+        return !this.h26g51StoreBackOf(n);
+    });
+    const slot = this.printNode(access, 0).trim();
+    if (other || (pushes === 0) || !new RegExp('^' + access.expression.text + '\\[\\*?\\w+\\]$').test(slot)) {
+        return undefined;
+    }
+    return slot;
+};
+const getGoLocalTypeA16 = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    return (this.h27a16AliasSlot(declaration) !== undefined) ? '[]any' : getGoLocalTypeA16.call(this, declaration, parsedValue);
+};
+const printVariableDeclarationListA16 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const slot = (node?.parent?.kind === SyntaxKind.FirstStatement) ? this.h27a16AliasSlot(declaration) : undefined;
+    if (slot !== undefined) {
+        return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)}, _ = ${slot}.([]any)`;
+    }
+    return printVariableDeclarationListA16.call(this, node, identation);
+};
+const printArrayPushCallA16 = GoTranspiler.prototype.printArrayPushCall;
+GoTranspiler.prototype.printArrayPushCall = function (node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
+    const receiver: any = (node as any)?.expression?.expression;
+    const statement = (node as any)?.parent?.kind === SyntaxKind.ExpressionStatement;
+    if (statement && ((node as any).arguments?.length === 1) && (receiver?.kind === SyntaxKind.ElementAccessExpression) && this.h27a16ListSlotMap(receiver, node)) {
+        const slot = this.printNode(receiver, 0).trim();
+        if (new RegExp('^' + receiver.expression.text + '\\[\\*?\\w+\\]$').test(slot)) {
+            const local = 'retRes' + this.getLineBasedSuffix(node);
+            const arg = this.goPrintCallArgument((node as any).arguments[0], parsedArg);
+            const ind = this.getIden(identation);
+            return `var ${local}, _ = ${slot}.([]any)\n${ind}${local} = append(${local}, ${arg})\n${ind}${slot} = ${local}`;
+        }
+    }
+    const printed = printArrayPushCallA16.call(this, node, identation, name, parsedArg);
+    const decl: any = (statement && (receiver?.kind === SyntaxKind.Identifier)) ? this.goDeclarationOfIdentifier(receiver) : undefined;
+    const slot = (decl !== undefined) ? this.h27a16AliasSlot(decl) : undefined;
+    if ((slot === undefined) || printed.includes('AppendToArray')) {
+        return printed;
+    }
+    // the grown slice goes back into the slot unless the source stores it back itself
+    const storedBack = this.hasNodeWhere(this.goEnclosingFunction(decl), (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
+        && (n !== decl.name) && this.h26g51StoreBackOf(n));
+    return storedBack ? printed : `${printed}\n${this.getIden(identation)}${slot} = ${this.printNode(receiver, 0)}`;
+};
+// ===== end h27-H27-A16 =====

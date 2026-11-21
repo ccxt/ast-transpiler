@@ -43,7 +43,7 @@ describe('go map read with a guard-proven *string key', () => {
     });
     test('a push receiver (`m[k].push`) on a proven key reads natively', () => {
         const out = print ("const groups: Dict = {};\nconst rows = this.safeValue (message, 'r');\nfor (let i = 0; i < rows.length; i++) {\nconst code = this.safeString (rows[i], 'a');\nif (code !== undefined) {\n    if (!(code in groups)) { groups[code] = []; }\n    groups[code].push (message);\n}\n}");
-        expect (out).toMatch (/:= groups\[\*code\]\n/);
+        expect (out).toMatch (/, _ = groups\[\*code\]\.\(\[\]any\)\n/);
         expect (out).not.toContain ('if code == nil');
     });
     test('a push receiver on an unproven key keeps the guarded read', () => {

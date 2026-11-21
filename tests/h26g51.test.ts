@@ -43,7 +43,7 @@ describe ('h26g51: AppendToArray on safeList push/store-back locals and map-slot
             + '            const code = this.safeString (rows[i], \'c\');\n            if (code !== undefined) {\n'
             + '                if (!(code in byCode)) {\n                    byCode[code] = [];\n                }\n'
             + '                const bucket = byCode[code];\n                bucket.push (rows[i]);\n            }\n        }\n        return byCode;\n    }\n');
-        expect (out).toMatch (/AppendToArray\(&bucket, [^\n]*\)\n\s*byCode\[\*code\] = bucket/);
+        expect (out).toMatch (/bucket = append\(bucket, [^\n]*\)\n\s*byCode\[\*code\] = bucket/);
     });
     test ('negative: an alias the source already stores back gets no second store', () => {
         const out = print ('    f (rows: string[]) {\n        const byKey: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n'
