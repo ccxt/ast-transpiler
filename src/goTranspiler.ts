@@ -29671,6 +29671,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // the verdict on one use of the parameter's symbol
         const useIsSafe = (n: any): boolean => {
             const h28g05 = this.h28G05StringSliceCopyUse(n, param, goType, nilable, boxed, seen); if (h28g05 !== undefined) return h28g05;
+            if ((goType === '*string') && h28g08StrParamDerefArg (n)) { return true; }
             const parent: any = n.parent;
             if (parent === param) {
                 return true;                     // the parameter's own name is not a use
@@ -51087,3 +51088,32 @@ function h28g07SiblingNumBound (go: any, tree: any, name: string, site: any, ind
     }
 }
 // ===== end h28-H28-G07
+// ===== h28-H28-G08
+// a `Str = undefined` parameter as an argument (through parens / `as string`) of `Precise.stringXxx` or of a
+// `this.m` slot the audited GetArg consumer table marks deref: those bodies derefScalar it, so nil reads as the box
+function h28g08StrParamDerefArg (n) {
+    let arg = n;
+    while ((arg.parent?.kind === ts.SyntaxKind.ParenthesizedExpression) || (arg.parent?.kind === ts.SyntaxKind.AsExpression)) {
+        arg = arg.parent;
+    }
+    const call = arg.parent;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression === arg)) {
+        return false;
+    }
+    const index = call.arguments.indexOf (arg);
+    const callee = call.expression;
+    if ((index < 0) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const name = callee.name.text;
+    if ((callee.expression.kind === ts.SyntaxKind.Identifier) && (callee.expression.text === 'Precise')) {
+        return /^string[A-Z]/.test (name);
+    }
+    if ((callee.expression.kind !== ts.SyntaxKind.ThisKeyword) || (arg === n)) {
+        return false;
+    }
+    const entry = CCXT_GO_GETARG_SAFE_CONSUMERS[name.charAt (0).toUpperCase () + name.slice (1)];
+    const verdict = (typeof entry === 'string') ? entry : entry?.[String (index)];
+    return (verdict === '*') || (verdict === 'deref');
+}
+// ===== end h28-H28-G08
