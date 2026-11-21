@@ -47382,3 +47382,41 @@ GoTranspiler.prototype.h27a05TypedMapRead = function (declaration, declaredType:
     return `${this.getIden(identation)}var ${varName}, _ = ${container}[${keyText}].(${declaredType})`;
 };
 // ===== end h27-A05 =====
+// ===== h27-A06 =====
+// `const x = this.safeDict (this.options, k)` with k a Go string prints the comma-ok read of the typed
+// Options map: every Options writer stores JSON-shaped values (no *sync.Map, no pointer box), so a missing
+// key, nil, "" or a non-map value reads a nil map exactly as SafeMapTyped does (a `{}` default only where the
+// printer already dropped it for SafeMapTyped)
+export interface GoTranspiler {
+    h27a06OptionsDictRead(node, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
+        || ((call.arguments.length !== 2) && ((call.arguments.length !== 3) || (call.arguments[2].kind !== SyntaxKind.ObjectLiteralExpression)
+            || (call.arguments[2].properties.length !== 0))) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'safeDict')
+        || (baseMemberDecl (this, call.arguments[0], 'options') === undefined)) {
+        return undefined;
+    }
+    const keyNode = call.arguments[1];
+    const key = this.printNode (keyNode, 0).trim ();
+    const isLiteral = (keyNode.kind === SyntaxKind.StringLiteral) && /^"[\w.-]*"$/.test (key);
+    if (!isLiteral && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
+        return undefined;
+    }
+    const name = declaration.name.text;
+    const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?)SafeMapTyped\(this\.Options, (.*)\)$/.exec (printed);
+    if ((match === null) || (match[3] !== name) || (match[5] !== key)) {
+        return undefined;
+    }
+    return match[1] + match[2] + 'var ' + name + ', _ = this.Options[' + key + '].(map[string]any)';
+};
+const printVariableDeclarationListH27a06 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = printVariableDeclarationListH27a06.call (this, node, identation);
+    const h = this.h27a06OptionsDictRead (node, printed); if (h !== undefined) return h;
+    return printed;
+};
+// ===== end h27-A06 =====
