@@ -21722,10 +21722,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
+        const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
         return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
+        const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'values'); if (h27 !== undefined) return h27;
         return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
@@ -40896,4 +40898,37 @@ export class RustTranspiler extends BaseTranspiler {
         return out.length + 40 > 400 ? undefined : out;
     }
     // ===== end h27-R05
+
+    // ===== h27-R06: `Object.keys/values (x)` where `x` is bound once to a fresh `this.parseX (..)` / `super.setMarkets (..)` map
+    /** Such a result is built by the parser (or is the stored markets table): never a ws-tagged snapshot, so the map's own
+     *  insertion-order iterators list what `object_keys` / `object_values` listed; a non-map (Null) lists nothing, as before. */
+    h27r06FreshParseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const text = parsedArg?.trim();
+        if (arg === undefined || text === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== undefined) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        const list: any = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || list?.kind !== SyntaxKind.VariableDeclarationList
+            || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h27r06FreshParseCall(declaration.initializer)
+            || this.rustBorrowedLocalKind(declaration) !== undefined || this.rustDictLocalIsTyped(declaration)) return undefined; // typed locals: their own rules
+        const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
+        return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+
+    /** `this.parseX (..)` or `super.setMarkets (..)` whose declared return is a proven map type. */
+    h27r06FreshParseCall(node: any): boolean {
+        const n: any = this.rustSkipWrappers(node);
+        if (n === undefined || !isCallExpression(n) || !isPropertyAccessExpression(n.expression)) return false;
+        const recv = n.expression.expression.kind;
+        const name = String(n.expression.name.text);
+        if (!((recv === SyntaxKind.ThisKeyword && /^parse[A-Z]/.test(name)) || (recv === SyntaxKind.SuperKeyword && name === 'setMarkets'))) return false;
+        try {
+            const checker: any = this.getChecker();
+            const signature = checker.getResolvedSignature(n);
+            return signature !== undefined && this.isProvenMapType(checker.getReturnTypeOfSignature(signature));
+        } catch (e) {
+            return false;
+        }
+    }
+    // ===== end h27-R06
 }
