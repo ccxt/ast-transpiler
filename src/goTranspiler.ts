@@ -53961,3 +53961,61 @@ GoTranspiler.prototype.h29a18Row = function (declaration: any): boolean {
     };
 }
 // ===== end h29-H29-A18 =====
+// ===== h29-H29-A20
+// `x = this.safeList (c, 'k', [])` into a local typed `[]any`, c a decoded-JSON map (h28a16JsonMap): a JSON
+// value is a list only as []any, so the comma-ok read plus the literal for a missing / non-list member gives
+// exactly what ArrayTyped(SafeList(..)) gave, never nil
+export interface GoTranspiler {
+    h29a20SafeListWrite(node, identation: number, printed: string): string | undefined;
+    h29a20ListWriteUse(node, name: string): boolean;
+    h29a20JsonMap(container): boolean;
+}
+GoTranspiler.prototype.h29a20SafeListWrite = function (node, identation: number, printed: string): string | undefined {
+    const write: any = node?.expression;
+    if ((typeof printed !== 'string') || (write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken)
+        || (write.left?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(write.left) !== '[]any')) {
+        return undefined;
+    }
+    const read: any = this.goUnwrapParenthesizedNode(write.right);
+    const args: any = this.goSafeAccessorLocalArgs(read, 'safeList');
+    if ((args === undefined) || (read.arguments.length !== 3) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.h29a20JsonMap(args.container)) {
+        return undefined;
+    }
+    const name: string = this.printNode(write.left, 0).trim();
+    const ind = this.getIden(identation);
+    if (!/^\w+$/.test(name) || (printed.trim().indexOf('\n') >= 0) || !printed.startsWith(ind + name + ' = ')) {
+        return undefined;
+    }
+    return ind + name + ', _ = ' + args.container.text + '[' + JSON.stringify(args.key.text) + '].([]any)\n'
+        + ind + 'if ' + name + ' == nil {\n' + ind + '\t' + name + ' = []any{}\n' + ind + '}' + /\s*$/.exec(printed)[0];
+};
+// the read `x = this.safeList (R, 'lit', [])` into a `[]`-seeded local ts declares a list leaves R untouched:
+// it counts as a read-only use of R for the JSON-origin proof, as the declaration-initializer form does
+GoTranspiler.prototype.h29a20ListWriteUse = function (node, name: string): boolean {
+    const call: any = node.parent;
+    const write: any = call?.parent;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 3) && (call.arguments[0] === node)
+        && (this.goSafeAccessorLocalArgs(call, 'safeList') !== undefined) && (call.arguments[1].kind === SyntaxKind.StringLiteral)
+        && (write?.kind === SyntaxKind.BinaryExpression) && (write.operatorToken?.kind === SyntaxKind.EqualsToken) && (write.right === call)
+        && (write.parent?.kind === SyntaxKind.ExpressionStatement) && (write.left?.kind === SyntaxKind.Identifier) && (write.left.text !== name)
+        && (ccxtGoArrayLiteralDeclarationOf(this, write.left) !== undefined) && (this.goDeclaredTypeOfIdentifier(write.left) === '[]any');
+};
+// the receiver proofs the declaration form (h27a04) and the handleDeltas argument (h28a16) accept
+GoTranspiler.prototype.h29a20JsonMap = function (container): boolean {
+    return this.h28a16JsonMap(container);
+};
+{
+    const h29a20UpstreamUse = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string): boolean {
+        return h29a20UpstreamUse.call(this, node, name) || this.h29a20ListWriteUse(node, name);
+    };
+}
+{
+    const h29a20UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        const upstream = h29a20UpstreamExpressionStatement.call(this, node, identation);
+        const h = this.h29a20SafeListWrite(node, identation, upstream); if (h !== undefined) return h;
+        return upstream;
+    };
+}
+// ===== end h29-H29-A20
