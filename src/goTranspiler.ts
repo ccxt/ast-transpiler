@@ -51244,3 +51244,63 @@ GoTranspiler.prototype.printInlineEquality = function (left, right, leftText, ri
     return h28g11Equality.call (this, left, right, leftText, rightText, isEq);
 };
 // ===== end h28-G11
+// ===== h28-H28-G12 =====
+// the truthiness of `x` from `const [ x, p ] = this.handleOptionBoolAndParams (..)` with a nullable default: the pair
+// bind boxes it as `x := func() any { if xPtr != nil { return *xPtr }; return nil }()`, so EvalTruthy(x) is `xPtr != nil && *xPtr`
+export interface GoTranspiler {
+    h28g12NullableBoolTruthy(node): string | undefined;
+}
+GoTranspiler.prototype.h28g12NullableBoolTruthy = function (node) {
+    const id = this.goUnwrapParenthesizedNode(node);
+    if (id?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    let element;
+    try {
+        const symbol = this.getChecker().getSymbolAtLocation(id);
+        element = symbol?.valueDeclaration?.resolve() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+    } catch (e) {
+        return undefined;
+    }
+    const pattern = element?.parent;
+    const declaration = pattern?.parent;
+    const call = declaration?.initializer;
+    if ((element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements[0] !== element)
+        || (pattern.elements.length !== 2) || (element.name?.kind !== SyntaxKind.Identifier) || (element.initializer !== undefined)
+        || (declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.name?.text !== 'handleOptionBoolAndParams')
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (ccxtGoPairSlot0 (this, call) !== '*bool')) {
+        return undefined;
+    }
+    // the boxed local must keep a use this rule leaves alone, or Go rejects it as unused
+    const name = element.name.text;
+    const scope = this.goEnclosingFunction(declaration);
+    const conditionLike = (n): boolean => {
+        let p = n.parent;
+        while (p?.kind === SyntaxKind.ParenthesizedExpression) {
+            p = p.parent;
+        }
+        return ((p?.kind === SyntaxKind.PrefixUnaryExpression) && (p.operator === SyntaxKind.ExclamationToken))
+            || ((p?.kind === SyntaxKind.BinaryExpression) && ((p.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) || (p.operatorToken.kind === SyntaxKind.BarBarToken)))
+            || (p?.kind === SyntaxKind.IfStatement) || (p?.kind === SyntaxKind.WhileStatement) || (p?.kind === SyntaxKind.ConditionalExpression);
+    };
+    if ((scope === undefined) || !this.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== element.name) && !conditionLike(n))) {
+        return undefined;
+    }
+    // the same temp name the pair bind picked; it is declared only on the boxed path
+    const temp = ccxtGoFreeLocalName (this, declaration, element.name.text + 'Ptr');
+    const printed = this.printNode(declaration.parent, 0);
+    if ((temp === undefined) || (typeof printed !== 'string')
+        || !printed.includes('var ' + temp + ' *bool = nil\n') || !printed.includes(element.name.text + ' := func() any {')) {
+        return undefined;
+    }
+    return `(${temp} != nil && *${temp})`;
+};
+{
+    const printConditionH28g12 = GoTranspiler.prototype.printCondition;
+    GoTranspiler.prototype.printCondition = function (node, identation) {
+        const h = this.h28g12NullableBoolTruthy(node); if (h !== undefined) return `${this.getIden(identation)}${h}`;
+        return printConditionH28g12.call(this, node, identation);
+    };
+}
+// ===== end h28-H28-G12 =====
