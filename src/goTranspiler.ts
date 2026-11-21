@@ -20584,6 +20584,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goNilInitStrDeclaredReadOk(n): boolean {
         const { current, parent } = goReadClimb(n);
         const h29g02 = this.h29g02SlotRead(n); if (h29g02 !== undefined) return h29g02;
+        const h30g02 = this.h30G02SlotRead(n); if (h30g02 !== undefined) return h30g02;
         if (this.goNilInitStrLiteralTernaryArmRead(current, parent)) {
             return true;
         }
@@ -56596,3 +56597,137 @@ GoTranspiler.prototype.h30g01DefaultArg = function (node): any {
     return ((arity !== undefined) && (node.arguments.length === arity) && (last?.kind === SyntaxKind.Identifier)) ? last : undefined;
 };
 // ===== end h30-H30-G01
+// ===== h30-H30-G02
+export interface GoTranspiler {
+    h30G02SlotRead(n): boolean | undefined;
+    h30g02Hoist: Map<any, string> | undefined;
+}
+// `return { .., 'k': x }` / `return this.f ({ .., 'k': x })` (other arguments local reads) with x a `*string`
+// nil-init local: the literal is bound first to `var literalN map[string]any` with the slot `nil`, then
+// `if x != nil { literalN["k"] = *x }`, then the statement uses the name (the callee gets the same map).
+function h30g02Literal (literal: any): boolean {
+    if (literal?.kind !== SyntaxKind.ObjectLiteralExpression) {
+        return false;
+    }
+    let up: any = literal.parent;
+    while (up?.kind === SyntaxKind.ParenthesizedExpression) {
+        up = up.parent;
+    }
+    let statement: any = up;
+    if (up?.kind === SyntaxKind.CallExpression) {
+        if ((up.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || ((up.expression.expression?.kind !== SyntaxKind.ThisKeyword) && (up.expression.expression?.kind !== SyntaxKind.Identifier))) {
+            return false;
+        }
+        const literals = up.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind === SyntaxKind.ObjectLiteralExpression);
+        const others = up.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind !== SyntaxKind.ObjectLiteralExpression);
+        if ((literals.length !== 1) || !others.every ((a: any) => h28g23LocalRead (a))) {
+            return false;
+        }
+        statement = up.parent;
+        while (statement?.kind === SyntaxKind.ParenthesizedExpression) {
+            statement = statement.parent;
+        }
+        if ((statement?.kind !== SyntaxKind.ReturnStatement) && (statement?.kind !== SyntaxKind.ExpressionStatement)) {
+            return false;
+        }
+    } else if (up?.kind !== SyntaxKind.ReturnStatement) {
+        return false;
+    }
+    const holder = statement.parent?.kind;
+    return ((holder === SyntaxKind.Block) || (holder === SyntaxKind.CaseClause) || (holder === SyntaxKind.DefaultClause))
+        && (h29g19Entries (literal).length === 0);
+}
+function h30g02SlotEntry (n: any): any {
+    const { current, parent } = goReadClimb (n);
+    if ((n?.kind !== SyntaxKind.Identifier) || (parent?.kind !== SyntaxKind.PropertyAssignment) || (parent.initializer !== current)
+        || ((parent.name?.kind !== SyntaxKind.StringLiteral) && (parent.name?.kind !== SyntaxKind.Identifier)) || !/^[\w.-]+$/.test (parent.name.text)
+        || !h30g02Literal (parent.parent)) {
+        return undefined;
+    }
+    return parent;
+}
+GoTranspiler.prototype.h30G02SlotRead = function (n): boolean | undefined {
+    return (h30g02SlotEntry (n) !== undefined) ? true : undefined;
+};
+function h30g02PointerEntries (goTranspiler: any, literal: any): any[] {
+    if (!h30g02Literal (literal)) {
+        return [];
+    }
+    return literal.properties.filter ((p: any) => {
+        const value: any = ral90g5UnwrapNode (p.initializer);
+        if ((p.kind !== SyntaxKind.PropertyAssignment) || (value?.kind !== SyntaxKind.Identifier) || (h30g02SlotEntry (value) !== p)) {
+            return false;
+        }
+        const local: any = goTranspiler.goAnyBoxLocalDeclaration (value);
+        return (local?.kind === SyntaxKind.VariableDeclaration) && (local.type?.typeName?.text === 'Str')
+            && (goTranspiler.goEnclosingFunction (local) === goTranspiler.goEnclosingFunction (literal)) && (goTranspiler.goNilInitLocalType (local) === '*string');
+    });
+}
+function h30g02StatementLiteral (node: any): any {
+    let e: any = ral90g5UnwrapNode (node?.expression);
+    if (e?.kind === SyntaxKind.CallExpression) {
+        e = e.arguments.map ((a: any) => ral90g5UnwrapNode (a)).find ((a: any) => a?.kind === SyntaxKind.ObjectLiteralExpression);
+    }
+    return (e?.kind === SyntaxKind.ObjectLiteralExpression) ? e : undefined;
+}
+function h30g02PrintStatement (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const literal = h30g02StatementLiteral (node);
+    const entries = (literal === undefined) ? [] : h30g02PointerEntries (goTranspiler, literal);
+    if (entries.length === 0) {
+        return print ();
+    }
+    // the locals were typed `*string` on the strength of these stores: never fall back to storing the pointer
+    const name = 'literal' + goTranspiler.getLineBasedSuffix (literal);
+    const values = entries.map ((p: any) => ral90g5UnwrapNode (p.initializer));
+    const previousNil = goTranspiler.h29g02Nil;
+    const previousHoist = goTranspiler.h30g02Hoist;
+    const level = goTranspiler.goStatementLevel;
+    let printed: string;
+    let statement: string;
+    try {
+        goTranspiler.h29g02Nil = new Set ([ ...(previousNil ?? []), ...values ]);
+        goTranspiler.goStatementLevel = identation;
+        printed = goTranspiler.printNode (literal, 0).trim ();
+        goTranspiler.goStatementLevel = level;
+        goTranspiler.h29g02Nil = previousNil;
+        goTranspiler.h30g02Hoist = new Map ([ ...(previousHoist ?? []), [ literal, name ] ]);
+        statement = print ();
+    } finally {
+        goTranspiler.h29g02Nil = previousNil;
+        goTranspiler.h30g02Hoist = previousHoist;
+        goTranspiler.goStatementLevel = level;
+    }
+    const iden = goTranspiler.getIden (identation);
+    const lines = [ `${iden}var ${name} map[string]any = ${printed}` ];
+    for (const p of entries) {
+        const value = goTranspiler.printNode (ral90g5UnwrapNode (p.initializer), 0).trim ();
+        if (!/^\w+$/.test (value) || (value === 'nil')) {
+            return print ();
+        }
+        lines.push (`${iden}if ${value} != nil {\n${goTranspiler.getIden (identation + 1)}${name}[${JSON.stringify (p.name.text)}] = *${value}\n${iden}}`);
+    }
+    const parts = statement.split ('\n');
+    let at = parts.findIndex ((l: string) => (l.trim () !== '') && !l.trim ().startsWith ('//'));
+    if (at < 0) {
+        at = parts.length;
+    }
+    parts.splice (at, 0, ...lines);
+    return parts.join ('\n');
+}
+{
+    const literalExpression = GoTranspiler.prototype.printObjectLiteralExpression;
+    GoTranspiler.prototype.printObjectLiteralExpression = function (node, identation) {
+        const name = this.h30g02Hoist?.get (node);
+        return (name !== undefined) ? name : literalExpression.call (this, node, identation);
+    };
+    const returnStatement = GoTranspiler.prototype.printReturnStatement;
+    GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+        return h30g02PrintStatement (this, node, identation, () => returnStatement.call (this, node, identation));
+    };
+    const expressionStatement = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        return h30g02PrintStatement (this, node, identation, () => expressionStatement.call (this, node, identation));
+    };
+}
+// ===== end h30-H30-G02

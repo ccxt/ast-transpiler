@@ -37,10 +37,10 @@ describe ('h29g02: a *string nil-init local stored into a local map-literal slot
         expect (out).not.toContain ('= *s');
     });
 
-    test ('negative: a literal handed to a call (no local map) prints no guarded store', () => {
+    test ('a literal handed to a call (no local map) is hoisted to a literal local before its guarded store', () => {
         const out = print (seed + '        return this.note ({ \'k\': s });\n');
-        expect (out).not.toContain ('= *s');
-        expect (out).not.toContain ('if s != nil');
+        expect (out).not.toMatch (/\bNote\(map\[string\]any\{/);
+        expect (out).toMatch (/literal\d+\["k"\] = \*s/);
     });
 
     test ('negative: a nested literal slot (not the local map itself) prints no guarded store', () => {
