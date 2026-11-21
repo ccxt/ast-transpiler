@@ -53619,3 +53619,35 @@ GoTranspiler.prototype.h29a13FrameDictRead = function (declaration, printed: str
     };
 }
 // ===== end h29-H29-A13
+// ===== h29-H29-A15 =====
+// `const data = this.safeDict (C, 'lit', {})` cut from a proven frame container and never written: the local holds the
+// decoded member map or the literal `{}`, both plain JSON maps, so reads from it are frame reads too
+export interface GoTranspiler {
+    h29a15DefaultedFrameDict(node, depth: number): boolean;
+}
+GoTranspiler.prototype.h29a15DefaultedFrameDict = function (node, depth: number): boolean {
+    if ((depth > 4) || (node?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(node);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    const fallback: any = init?.arguments?.[2];
+    if ((init?.kind !== SyntaxKind.CallExpression) || (init.arguments.length !== 3) || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+    return (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && (this.goResolvedLocalGoType(decl.name) === GO_SAFE_DICT_LOCAL_TYPE)
+        && this.h27a11JsonContainer(this.goUnwrapParenthesizedNode(args.container), depth + 1)
+        && !h27a11WritesInto(this, this.goEnclosingFunction(decl), decl.name.text, decl);
+};
+{
+    const h29a15JsonContainer = GoTranspiler.prototype.h27a11JsonContainer;
+    GoTranspiler.prototype.h27a11JsonContainer = function (node, depth = 0) {
+        return h29a15JsonContainer.call(this, node, depth) || this.h29a15DefaultedFrameDict(node, depth);
+    };
+}
+// ===== end h29-H29-A15 =====
