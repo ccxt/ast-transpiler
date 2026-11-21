@@ -19313,6 +19313,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             base = this.goUnwrapParenthesizedNode(base.expression);
         }
         const table = (base?.kind === SyntaxKind.Identifier) ? this.goTypedRowTable(base, keys[0]) : undefined;
+        if ((table !== undefined) && !this.h27m01RowBaseIsStruct(base)) {
+            return undefined;
+        }
         let entry: any = table;
         const goPath: string[] = [];
         for (const key of keys) {
@@ -19383,7 +19386,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!this.goTypedRowBinderCache.has(declaration)) {
             this.goTypedRowBinderCache.set(declaration, undefined);
             this.goTypedRowBinderCache.set(declaration, this.goDeclaredLocalTypeIfSafe(declaration, goType,
-                (n) => !this.goTypedRowBinderWrite(n) && !this.goIsNilComparisonOperand(n, this.goUnwrapParenthesizedNode(n.parent)),
+                (n) => !this.goTypedRowBinderWrite(n) && !this.goIsNilComparisonOperand(n, this.goUnwrapParenthesizedNode(n.parent))
+                    && this.h27m01BinderUseIsFieldRead(n),
                 (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                     || !this.goIdentifierRefersToDeclaration(n, declaration)));
         }
@@ -49653,3 +49657,39 @@ function goH27g38JsonListArg (goTranspiler: GoTranspiler, arg, name: string, ind
     };
 }
 // ===== end h27-G38 =====
+
+// ===== h27-M01
+export interface GoTranspiler {
+    h27m01BinderUseIsFieldRead(n: any): boolean;
+    h27m01RowBaseIsStruct(base: any): boolean;
+    h27m01Proving: Set<any> | undefined;
+}
+// while rows are stored as maps, a binder is typed only when every use is a struct-field read the row
+// table prints natively: no use then needs the map back, so no MarketInterfaceToMap / CurrencyToMap is printed
+GoTranspiler.prototype.h27m01BinderUseIsFieldRead = function (n: any): boolean {
+    if (this.nativeStoreFields?.['markets']?.['mapStorage'] !== true) {
+        return true;
+    }
+    const parent: any = n.parent;
+    if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== n)) {
+        return false;
+    }
+    const declaration = this.goDeclarationOfIdentifier(n);
+    this.h27m01Proving = this.h27m01Proving ?? new Set<any>();
+    this.h27m01Proving.add(declaration);
+    try {
+        return this.goTypedRowFieldRead(parent) !== undefined;
+    } finally {
+        this.h27m01Proving.delete(declaration);
+    }
+};
+// the struct-field print needs a Go struct value: while the embedder still stores rows as maps ('mapStorage'),
+// only a typed binder local holds one
+GoTranspiler.prototype.h27m01RowBaseIsStruct = function (base: any): boolean {
+    if (this.nativeStoreFields?.['markets']?.['mapStorage'] !== true) {
+        return true;
+    }
+    const declaration = this.goDeclarationOfIdentifier(base);
+    return (declaration !== undefined) && ((this.h27m01Proving?.has(declaration) === true) || (this.goTypedRowBinder(declaration) !== undefined));
+};
+// ===== end h27-M01
