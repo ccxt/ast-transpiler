@@ -52628,3 +52628,73 @@ GoTranspiler.prototype.h28t07JsonLetRead = function (declaration, printed: strin
     };
 }
 // ===== end h28-T07 =====
+// ===== h29-A01
+// a `map[string]any` slot of a sync venue method whose same-file callers hand it an awaited map endpoint local
+// (the receive the printer declares map[string]any, or a nil-seeded local every write of which is such a receive):
+// that argument already prints the typed map, so the slot takes it; sibling callers need the same proof
+{
+    const sitesPassTypeH29a01 = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string): boolean {
+        if (sitesPassTypeH29a01.call(this, fn, index, goType)) {
+            return true;
+        }
+        return (goType === GO_SAFE_DICT_LOCAL_TYPE) && h29a01EndpointMapSites(this, fn, index);
+    };
+}
+function h29a01EndpointMapSites (go: any, fn: any, index: number): boolean {
+    if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || go.isAsyncFunction(fn)
+        || goIsBaseExchangeFile(fn) || go.goMethodKeepsBaseSignature(fn) || goHasDynamicCall(fn, fn.name.text)) {
+        return false;
+    }
+    const name: string = fn.name.text;
+    const calls: any[] = go.goSameFileCallsOf(fn, name);
+    let endpoints = 0;
+    for (const call of calls) {
+        const arg: any = call.arguments?.[index];
+        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (call.runner !== undefined)) {
+            return false;
+        }
+        if (go.goPrintedArgType(arg) === GO_SAFE_DICT_LOCAL_TYPE) {
+            continue;
+        }
+        if ((arg.kind !== SyntaxKind.Identifier) || !h29a01EndpointMapLocal(go, arg)) {
+            return false;
+        }
+        endpoints += 1;
+    }
+    if (endpoints === 0) {
+        return false;
+    }
+    const tree = go.goTsSrcTree(fn.getSourceFile());
+    if (tree === undefined) {
+        return true;
+    }
+    const myClass = go.goEnclosingClassName(fn);
+    const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+    for (const site of (tree.callIndex.get(name) ?? [])) {
+        if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom(tree, site.file, myClass) || go.h27g01ForeignNamesake(tree, site.file, myFile)) {
+            continue;
+        }
+        if (!goDictParamSiblingSiteProven(go, tree, name, site, index)) {
+            return false;
+        }
+    }
+    return true;
+}
+// the identifier's declaration is an awaited map endpoint receive the printer declares map[string]any
+function h29a01EndpointMapLocal (go: any, arg: any): boolean {
+    let decl: any;
+    try {
+        decl = go.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+    } catch (e) {
+        return false;
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    if (decl.initializer?.kind === SyntaxKind.AwaitExpression) {
+        return goAwaitsMapEndpoint(go, decl.initializer) && go.goAwaitedMapLocal(decl);
+    }
+    return (ccxtGoNilJoinDeclarationType(go, arg) === GO_SAFE_DICT_LOCAL_TYPE) && goAwaitedMapWritesOnlyLocal(go, decl);
+}
+// ===== end h29-A01
