@@ -33798,6 +33798,7 @@ ${tryBodyBlock}
         }
         const h27g33 = this.h27g33StringListLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h27g33 !== undefined) return h27g33;
         const h28g24 = this.h28g24StringParamLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h28g24 !== undefined) return h28g24;
+        const h29g14 = this.h29g14RowParamCellRead(node, baseExpr, keys, containerStr, keyStrs); if (h29g14 !== undefined) return h29g14;
 
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
@@ -54621,3 +54622,21 @@ GoTranspiler.prototype.h29g11CopyNilCompare = function (left, rFam, nilText) {
 };
 // ===== end h29-G11
 
+// ===== h29-G14 =====
+// `rows[i][k]` on a `[][]any` parameter with `i` the counter of a loop over `rows.length`: the row read is the
+// plain index (in range by the loop bound, as goBoundedLoopListRead proves); the cell keeps GetValue (row width unknown)
+export interface GoTranspiler {
+    h29g14RowParamCellRead(node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+GoTranspiler.prototype.h29g14RowParamCellRead = function (node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]) {
+    if ((baseExpr?.kind !== SyntaxKind.Identifier) || (keys.length !== 2) || containerStr.includes('\n') || keyStrs.some((k) => k.includes('\n'))
+        || this.isGoElementAccessAssignmentTarget(node) || (this.goDeclaredTypeOfIdentifier(baseExpr) !== '[][]any')) {
+        return undefined;
+    }
+    const row: any = node.expression;
+    if ((row?.kind !== SyntaxKind.ElementAccessExpression) || (row.expression !== baseExpr) || !this.goBoundedLoopListRead(row)) {
+        return undefined;
+    }
+    return `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${containerStr}[${keyStrs[0]}], ${keyStrs[1]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+};
+// ===== end h29-G14 =====
