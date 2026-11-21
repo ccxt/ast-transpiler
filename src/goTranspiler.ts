@@ -51552,3 +51552,27 @@ GoTranspiler.prototype.h28g16CellNilCompare = function (left, rFam, nilText) {
     return ((d !== undefined) && h28g16Cells.has(d)) ? nilText : undefined;
 };
 // ===== h28-G16 (end) =====
+// ===== h28-H28-G17
+export interface GoTranspiler {
+    h28g17BranchEnsuresEntry(branch, read: { obj: any, key: any }): boolean;
+}
+// an earlier sibling `if (c) { <ensures> } else <ensures>` whose arms both END with the guard
+// `if (!(key in obj)) { obj[key] = <book> | exit }` (no else): the entry is present after the if/else
+const goOrderBookEntryPresentBaseH28g17 = GoTranspiler.prototype.goOrderBookEntryPresent;
+GoTranspiler.prototype.goOrderBookEntryPresent = function (at, read) {
+    return goOrderBookEntryPresentBaseH28g17.call(this, at, read)
+        || this.goEnclosingBlocksProve(at, [ SyntaxKind.Block, SyntaxKind.CaseClause, SyntaxKind.DefaultClause ], (st) => (st.kind === SyntaxKind.IfStatement)
+            && (st.elseStatement !== undefined) && this.h28g17BranchEnsuresEntry(st.thenStatement, read) && this.h28g17BranchEnsuresEntry(st.elseStatement, read), () => false);
+};
+GoTranspiler.prototype.h28g17BranchEnsuresEntry = function (branch, read) {
+    const guard = (st: any): boolean => {
+        if ((st?.kind !== SyntaxKind.IfStatement) || (st.elseStatement !== undefined) || !this.goConditionIsNegatedPresence(st.expression, read)) {
+            return false;
+        }
+        const body = this.goBlockStatements(st.thenStatement);
+        return this.goStoresBookInCache(body, read) || this.goStatementExits(body[body.length - 1]);
+    };
+    const stmts = this.goBlockStatements(branch);
+    return guard(stmts[stmts.length - 1]);
+};
+// ===== end h28-H28-G17
