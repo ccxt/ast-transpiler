@@ -53250,3 +53250,121 @@ GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
     return h27a09JsonOriginListH29a09.call(this, baseExpr) || this.h29a09EndpointList(baseExpr);
 };
 // ===== end h29-H29-A09 =====
+// ===== h29-H29-A10
+// `const rs = await Promise.all (T)` where every task in T is an un-awaited typed endpoint stub call: promiseAll
+// gathers each stub's EndpointRaw value (the decoded response), so rs holds only decoded JSON documents and the
+// existing JSON-list row reads (bounds-guarded comma-ok, loop rows) apply to it while rs is only read
+export interface GoTranspiler {
+    h29a10EndpointTask(node): boolean;
+    h29a10EndpointTaskList(node): boolean;
+    h29a10PromiseAllList(list): boolean;
+    h29a10Tasks(node): any[];
+}
+GoTranspiler.prototype.h29a10EndpointTask = function (node) {
+    const call: any = this.goUnwrapParenthesizedNode(node);
+    if (call?.kind !== SyntaxKind.CallExpression) {
+        return false;
+    }
+    try {
+        return ccxtGoEndpointElement(this, call) !== undefined;
+    } catch (e) {
+        return false;
+    }
+};
+// an array literal of endpoint tasks, or a never-rebound local seeded with one whose other uses are `.push (task)`
+GoTranspiler.prototype.h29a10EndpointTaskList = function (node) {
+    const list: any = this.goUnwrapParenthesizedNode(node);
+    if (list?.kind === SyntaxKind.ArrayLiteralExpression) {
+        return list.elements.every((e: any) => this.h29a10EndpointTask(e));
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    if ((init?.kind !== SyntaxKind.ArrayLiteralExpression) || !init.elements.every((e: any) => this.h29a10EndpointTask(e))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
+        if (this.goWritesOrRebindsName(n, name, [])) {
+            return false;
+        }
+        const p: any = n.parent;
+        if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && (p.name?.text === 'push')) {
+            const call: any = p.parent;
+            return (call?.kind === SyntaxKind.CallExpression) && (call.expression === p) && (call.arguments.length === 1)
+                && (call.parent?.kind === SyntaxKind.ExpressionStatement) && this.h29a10EndpointTask(call.arguments[0]);
+        }
+        if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && (p.name?.text === 'length')) {
+            return true;
+        }
+        return (n === list);
+    });
+};
+GoTranspiler.prototype.h29a10PromiseAllList = function (list) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const call: any = (init?.kind === SyntaxKind.AwaitExpression) ? this.goUnwrapParenthesizedNode(init.expression) : undefined;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 1) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.Identifier) || (callee.expression.text !== 'Promise') || (callee.name?.text !== 'all')
+        || !this.h29a10EndpointTaskList(call.arguments[0])) {
+        return false;
+    }
+    // one-T task lists the ccxt promiseAll pass already types (PromiseAllTyped): a literal list, or pushes read at a loop counter
+    const keys: any[] = [];
+    const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
+        if (this.h27a09SafeReaderArg(n, name)) {
+            keys.push(n.parent.arguments[1]);
+            return true;
+        }
+        const p: any = n.parent;
+        return (p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && (p.name?.text === 'length') && this.goJsonOriginListUseIsReadOnly(n, name);
+    });
+    const types = new Set(this.h29a10Tasks(call.arguments[0]).map((t: any) => ccxtGoEndpointElement(this, this.goUnwrapParenthesizedNode(t))));
+    const pushed = this.h29a10Tasks(call.arguments[0]).some((t: any) => t.parent?.kind === SyntaxKind.CallExpression);
+    if ((types.size === 1) && (!pushed || keys.every((k: any) => k?.kind === SyntaxKind.Identifier))) {
+        return false;
+    }
+    // the receive is declared `[]any` (ccxtGoAwaitSpecialReceive) only when every use passes ccxtGoPromiseAllUseIsSafe
+    return readOnly && (this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, ccxtGoPromiseAllUseIsSafe) === GO_SAFE_LIST_LOCAL_TYPE);
+};
+// every task expression of an endpoint task list (literal elements and pushed arguments)
+GoTranspiler.prototype.h29a10Tasks = function (node) {
+    const list: any = this.goUnwrapParenthesizedNode(node);
+    if (list?.kind === SyntaxKind.ArrayLiteralExpression) {
+        return [ ...list.elements ];
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    const out: any[] = [ ...this.goUnwrapParenthesizedNode(declaration.initializer).elements ];
+    const scope: any = this.goEnclosingFunction(declaration);
+    this.hasNodeWhere(scope, (n: any) => {
+        const p: any = n.parent;
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === list.text) && (p?.kind === SyntaxKind.PropertyAccessExpression)
+            && (p.name?.text === 'push') && (p.parent?.kind === SyntaxKind.CallExpression)) {
+            out.push(p.parent.arguments[0]);
+        }
+        return false;
+    });
+    return out;
+};
+{
+    const declaredListH29a10 = GoTranspiler.prototype.goDeclaredListIdentifier;
+    GoTranspiler.prototype.goDeclaredListIdentifier = function (node) {
+        return declaredListH29a10.call(this, node) || this.h29a10PromiseAllList(node);
+    };
+    const jsonListH29a10 = GoTranspiler.prototype.h27a08JsonList;
+    GoTranspiler.prototype.h27a08JsonList = function (list) {
+        return jsonListH29a10.call(this, list) || this.h29a10PromiseAllList(list);
+    };
+    const jsonOriginListH29a10 = GoTranspiler.prototype.h27a09JsonOriginList;
+    GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
+        return jsonOriginListH29a10.call(this, baseExpr) || this.h29a10PromiseAllList(baseExpr);
+    };
+}
+// ===== end h29-H29-A10
