@@ -53086,3 +53086,124 @@ GoTranspiler.prototype.h29a07JsonParam = function (node, depth: number): boolean
     };
 }
 // ===== end h29-A07
+// ===== h29-H29-A08
+// a `[]any` parameter of a venue-internal method holds a decoded JSON list when every caller (resolved by
+// declaration, all in this file, by direct `this.m (..)`) passes a JSON-origin list and the body only reads it:
+// the existing JSON-list row reads (comma-ok element assertion, bounds-proven) then apply to it
+export interface GoTranspiler {
+    h29a08JsonListParam(node, depth: number): boolean;
+    h29a08ListParamReadOnly(fn, param): boolean;
+    h29a08ReadOnlyListArg(node): boolean;
+    h29a08JsonListArg(node, depth: number): boolean;
+    h29a08Active: Set<any>;
+    h29a08Cache: Map<any, boolean>;
+}
+GoTranspiler.prototype.h29a08ListParamReadOnly = function (fn, param): boolean {
+    this.h29a08Cache = this.h29a08Cache ?? new Map();
+    this.h29a08Active = this.h29a08Active ?? new Set();
+    if (this.h29a08Cache.has(param)) {
+        return this.h29a08Cache.get(param);
+    }
+    if (this.h29a08Active.has(param)) {
+        return false; // a cycle proves nothing
+    }
+    const outermost = (this.h29a08Active.size === 0);
+    this.h29a08Active.add(param);
+    let result = false;
+    try {
+        result = h29a08ProveListReadOnly(this, fn, param);
+    } finally {
+        this.h29a08Active.delete(param);
+    }
+    if (outermost || result) {
+        this.h29a08Cache.set(param, result);
+    }
+    return result;
+};
+// only direct `this.m (..)` calls of this file reach the method, and the body reads the list: its length, an
+// element nothing writes through, the receiver of a `this.safe*` reader, a nil test, or the `info` value
+function h29a08ProveListReadOnly (go: any, fn: any, param: any): boolean {
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (param.initializer !== undefined)
+        || (param.dotDotDotToken !== undefined) || (param.questionToken !== undefined) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || !/(^|[\\/])ts[\\/]src[\\/]/.test(String(fn.getSourceFile().fileName))) {
+        return false;
+    }
+    const name: string = fn.name.text;
+    if (go.goMethodKeepsBaseSignature(fn) || go.goIsProHandlerMethod(fn) || goHasDynamicCall(fn, name)
+        || (go.goNativeParameterType(param) !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    go.h27a11ElsewhereCache = go.h27a11ElsewhereCache ?? new Map();
+    if (h27a11NamedElsewhere(go, fn, name)) {
+        return false;
+    }
+    const calls: any[] = go.goSameFileCallsOf(fn, name);
+    let mentions = 0;
+    go.hasNodeWhere(fn.getSourceFile(), (n: any) => {
+        mentions += ((n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === name)) ? 1 : 0;
+        return false;
+    });
+    if ((calls.length === 0) || (calls.length !== mentions)
+        || calls.some((c: any) => (c.runner !== undefined) || (c.expression?.expression?.kind !== SyntaxKind.ThisKeyword))) {
+        return false;
+    }
+    return go.goJsonOriginBindingIsReadOnly(param, (n: any, local: string) => go.goJsonOriginListUseIsReadOnly(n, local)
+        || go.h27a09SafeReaderArg(n, local) || (!go.goWritesOrRebindsName(n, local, []) && (go.goIsNilComparisonOperand(n, n.parent)
+            || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.initializer === n) && (n.parent.name?.text === 'info')))));
+}
+// the identifier is an argument of a direct `this.m (..)` call whose list parameter slot is proven read-only
+GoTranspiler.prototype.h29a08ReadOnlyListArg = function (node): boolean {
+    const call: any = node?.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const index: number = call.arguments.indexOf(node);
+    let fn: any;
+    try {
+        fn = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+        fn = undefined;
+    }
+    const param: any = (index >= 0) ? fn?.parameters?.[index] : undefined;
+    return (param !== undefined) && (fn.parameters.length >= call.arguments.length) && this.h29a08ListParamReadOnly(fn, param);
+};
+// a caller argument: a decoded response list local, a read-only safeList cut of a JSON container, or such a parameter
+GoTranspiler.prototype.h29a08JsonListArg = function (node, depth: number): boolean {
+    return (node?.kind === SyntaxKind.Identifier) && (depth <= 5)
+        && (this.goJsonOriginContainer(node, depth + 1) || this.h27a09JsonOriginList(node) || this.h29a08JsonListParam(node, depth + 1)
+            || h29a08CutList(this, node, depth));
+};
+// `const xs = this.safeList (C, k[, []])` on a JSON-origin container, used only as a read-only list or handed to such a slot
+function h29a08CutList (go: any, node: any, depth: number): boolean {
+    const declaration: any = go.goAnyBoxLocalDeclaration(node);
+    const args: any = (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        ? go.goSafeAccessorLocalArgs(go.goUnwrapParenthesizedNode(declaration.initializer), 'safeList') : undefined;
+    return (args !== undefined) && go.goJsonOriginContainer(go.goUnwrapParenthesizedNode(args.container), depth + 1)
+        && go.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => go.goJsonOriginListUseIsReadOnly(n, name)
+            || go.h27a09SafeReaderArg(n, name) || (!go.goWritesOrRebindsName(n, name, []) && go.h29a08ReadOnlyListArg(n)));
+}
+GoTranspiler.prototype.h29a08JsonListParam = function (node, depth: number): boolean {
+    const param: any = this.goAnyBoxLocalDeclaration(node);
+    const fn: any = param?.parent;
+    if ((depth > 5) || (param?.kind !== SyntaxKind.Parameter) || !this.h29a08ListParamReadOnly(fn, param)) {
+        return false;
+    }
+    const index: number = fn.parameters.indexOf(param);
+    return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => this.h29a08JsonListArg(this.goUnwrapParenthesizedNode(call.arguments?.[index]), depth));
+};
+{
+    const h29a08JsonOriginList = GoTranspiler.prototype.h27a09JsonOriginList;
+    GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
+        return h29a08JsonOriginList.call(this, baseExpr) || this.h29a08JsonListParam(baseExpr, 0);
+    };
+    const h29a08JsonList = GoTranspiler.prototype.h27a08JsonList;
+    GoTranspiler.prototype.h27a08JsonList = function (list) {
+        return h29a08JsonList.call(this, list) || this.h29a08JsonListParam(list, 0);
+    };
+    const h29a08UseIsReadOnly = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        return h29a08UseIsReadOnly.call(this, node, name) || (!this.goWritesOrRebindsName(node, name, []) && this.h29a08ReadOnlyListArg(node));
+    };
+}
+// ===== end h29-H29-A08
