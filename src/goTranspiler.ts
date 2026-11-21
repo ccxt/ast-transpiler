@@ -25905,6 +25905,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return `${containerStr}[${keyStr}] = ${valueStr}`;
         }
         const h27g21 = compound ? undefined : this.h27g21SliceIndexStore(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode); if (h27g21 !== undefined) return h27g21;
+        const h28g15 = compound ? undefined : this.h28g15LastIndexExtendStore(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode); if (h28g15 !== undefined) return h28g15;
         return undefined;
     }
 
@@ -51396,3 +51397,38 @@ GoTranspiler.prototype.h28g14AwaitedMapStore = function (containerNode, containe
     return head + this.goNilGuardedKeyWrite(containerStr, keyStr, `${holder}.Value`, identation);
 };
 // ===== end h28-H28-G14
+
+// ===== h28-H28-G15 =====
+export interface GoTranspiler {
+    h28g15LastIndexExtendStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode): string | undefined;
+    h28g15ConstLastIndex(containerNode, keyNode): boolean;
+}
+// `xs[last] = this.extend (..)` on a never-shrunk `[]any` local, `last` a const `n - 1` (n a const `xs.length`) under an
+// `n > 0` guard: in range, and Extend always returns a fresh non-nil map, so the native store is the intended write
+GoTranspiler.prototype.h28g15LastIndexExtendStore = function (containerNode, containerStr, keyNode, keyStr, valueStr, valueNode) {
+    const value: any = this.goUnwrapParenthesizedNode(valueNode);
+    if ((containerNode?.kind !== SyntaxKind.Identifier) || (this.goElementAssignmentContainerType(containerNode, containerStr) !== '[]any')
+        || (value?.kind !== SyntaxKind.CallExpression) || (value.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (value.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (value.expression.name?.text !== 'extend')
+        || !valueStr.startsWith('this.Extend(') || !this.h27g21SliceKeepsLength(containerNode)
+        || !this.h28g15ConstLastIndex(containerNode, this.goUnwrapParenthesizedNode(keyNode))) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStr}] = ${valueStr}`;
+};
+GoTranspiler.prototype.h28g15ConstLastIndex = function (containerNode, keyNode) {
+    if ((keyNode?.kind !== SyntaxKind.Identifier) || ![ 'int', 'int64' ].includes(this.goDeclaredTypeOfIdentifier(keyNode) ?? '')) {
+        return false;
+    }
+    const decl: any = this.goDeclarationOfIdentifier(keyNode);
+    const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+    if ((decl === undefined) || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (init?.kind !== SyntaxKind.BinaryExpression)
+        || (init.operatorToken.kind !== SyntaxKind.MinusToken) || (init.right.kind !== SyntaxKind.NumericLiteral) || (init.right.text !== '1')
+        || (init.left.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode);
+    return (symbol !== undefined) && this.h27g21IsLengthOf(init.left, symbol) && this.h27g21LengthGuarded(containerNode, containerNode, init.left)
+        && this.h27g21LengthGuarded(containerNode, decl, init.left);
+};
+// ===== end h28-H28-G15
