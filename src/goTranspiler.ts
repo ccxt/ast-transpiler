@@ -47921,3 +47921,65 @@ GoTranspiler.prototype.h27a12JsonNestedRead = function (node, printed: string): 
     };
 }
 // ===== end h27-A12 =====
+// ===== h27-A14 =====
+// a `const x = await this.<typed endpoint>(..)` local whose only same-name rivals are block-scoped bindings in
+// disjoint sibling blocks (if / else branches): Go scopes each branch's local apart, so each takes its own type
+const goDeclaredLocalTypeIfSafeBaseH27a14 = GoTranspiler.prototype.goDeclaredLocalTypeIfSafe;
+GoTranspiler.prototype.goDeclaredLocalTypeIfSafe = function (declaration, goType: string, readsTheValue: (n: Node) => boolean, skipUse?: (n: Node) => boolean): string | undefined {
+    const shipped = goDeclaredLocalTypeIfSafeBaseH27a14.call(this, declaration, goType, readsTheValue, skipUse);
+    if ((shipped !== undefined) || (skipUse === undefined) || ((goType !== 'map[string]any') && (goType !== '[]any'))) {
+        return shipped;
+    }
+    return this.h27a14SiblingEndpointLocal(declaration, goType, readsTheValue, skipUse);
+};
+export interface GoTranspiler {
+    h27a14SiblingEndpointLocal(declaration, goType: string, readsTheValue: (n: Node) => boolean, skipUse: (n: Node) => boolean): string | undefined;
+}
+GoTranspiler.prototype.h27a14SiblingEndpointLocal = function (declaration, goType, readsTheValue, skipUse) {
+    const init = declaration?.initializer;
+    if (!go87g8BlockScoped(declaration) || (init?.kind !== SyntaxKind.AwaitExpression) || (declaration.parent.declarations.length !== 1)) {
+        return undefined;
+    }
+    let element = undefined;
+    try {
+        element = ccxtGoEndpointElement(this, init.expression);
+    } catch (e) {
+        return undefined;
+    }
+    const sourceName = declaration.name.text as string;
+    const scope = this.goEnclosingFunction(declaration);
+    const ownBlock = go87g8EnclosingBlock(declaration);
+    if ((element !== goType) || (scope === undefined) || (ownBlock === undefined) || (ownBlock === scope)) {
+        return undefined;
+    }
+    let siblings = 0;
+    const unsafe = this.hasNodeWhere(scope, (n) => {
+        if ((n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
+            return true;
+        }
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
+            const otherBlock = go87g8EnclosingBlock(n);
+            if (!go87g8BlockScoped(n) || (otherBlock === undefined) || (otherBlock === scope)
+                || go87g8Contains(otherBlock, ownBlock) || go87g8Contains(ownBlock, otherBlock)) {
+                return true;
+            }
+            siblings += 1;
+            return false;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== sourceName) || (n === declaration.name)) {
+            return false;
+        }
+        if ((n.parent?.kind === SyntaxKind.VariableDeclaration) && (n.parent.name === n)) {
+            return false;
+        }
+        if (skipUse(n)) {
+            return false;
+        }
+        return !go87g8Contains(ownBlock, n) || !readsTheValue(n);
+    });
+    if (unsafe || (siblings === 0) || this.goTypeNameIsShadowed(scope, goType)) {
+        return undefined;
+    }
+    return goType;
+};
+// ===== end h27-A14 =====
