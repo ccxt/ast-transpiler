@@ -41710,3 +41710,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
     // ===== end h29-T01
 }
+
+// ===== h28-H28-T02: safeStringList borrows its container like the other generated safe readers (impl KeyRead)
+(RustTranspiler as any).RUST_BY_REF_GENERATED_READERS = new RegExp((RustTranspiler as any).RUST_BY_REF_GENERATED_READERS.source + '|^safeStringList$');
+// ===== end h28-H28-T02

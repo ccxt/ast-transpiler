@@ -55301,3 +55301,111 @@ GoTranspiler.prototype.h29p03PositionRow = function (declaration): boolean {
     };
 }
 // ===== end h29-H29-P03 =====
+
+// ===== h28-H28-T02: safeStringList locals (a string or a string list by API contract, read once as []string) =====
+// `const xs = this.safeStringList (c, [keys])` is the []string BaseExchange.SafeStringList returns (nil exactly where
+// no key holds a value). Uses: nil tests, `xs.length`, `xs[i]` / `this.safeString (xs, i)` inside `for (.. i < xs.length ..)`,
+// and a store or assignment of `xs` only under a non-nil guard of xs, so no typed nil reaches an `any` slot.
+function h28t02IsReaderCall (initializer): boolean {
+    const callee = initializer?.expression;
+    return (initializer?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'safeStringList')
+        && (initializer.arguments.length === 2) && (initializer.arguments[1].kind === SyntaxKind.ArrayLiteralExpression);
+}
+// `use` sits in the branch of an if that runs only when the local is not undefined
+function h28t02UnderNonNilGuard (goTranspiler: GoTranspiler, use, declaration): boolean {
+    for (let child = use, up = use.parent; up !== undefined; child = up, up = up.parent) {
+        if ((up.kind === SyntaxKind.IfStatement) && (child !== up.expression)) {
+            const cond = up.expression;
+            const op = cond?.operatorToken?.kind;
+            const side = (cond?.kind === SyntaxKind.BinaryExpression) && (cond.left?.kind === SyntaxKind.Identifier)
+                && goTranspiler.goIdentifierRefersToDeclaration(cond.left, declaration) && goTranspiler.goIsNilComparisonOperand(cond.left, cond);
+            if (side && ((op === SyntaxKind.ExclamationEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) && (child === up.thenStatement)) {
+                return true;
+            }
+            if (side && ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsToken)) && (child === up.elseStatement)) {
+                return true;
+            }
+        }
+        if ((up === declaration.parent?.parent?.parent) || (up.kind === SyntaxKind.FunctionExpression) || (up.kind === SyntaxKind.ArrowFunction)) {
+            return false;
+        }
+    }
+    return false;
+}
+// a use inside the block that holds the declaration (where a namesake would shadow it)
+function h28t02NestedIn (n, declaration): boolean {
+    const block = declaration.parent?.parent?.parent;
+    for (let up = n.parent; up !== undefined; up = up.parent) {
+        if (up === block) {
+            return true;
+        }
+    }
+    return false;
+}
+const h28t02Verdicts = new WeakMap<object, boolean>();
+function h28t02StringListLocal (goTranspiler: GoTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations.length !== 1)
+        || ((declaration.parent.flags & NodeFlags.Const) === 0) || !h28t02IsReaderCall(declaration.initializer)) {
+        return false;
+    }
+    if (h28t02Verdicts.has(declaration)) {
+        return h28t02Verdicts.get(declaration);
+    }
+    h28t02Verdicts.set(declaration, false);
+    const scope = goTranspiler.goEnclosingFunction(declaration);
+    if ((scope === undefined) || goTranspiler.goTypeNameIsShadowed(scope, GO_STRING_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    const name = declaration.name.text;
+    const unsafe = goTranspiler.hasNodeWhere(scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        const parent = n.parent;
+        if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) || (parent?.name === n)) {
+            return false;   // a member name, or the name of a sibling-block declaration
+        }
+        if (!goTranspiler.goIdentifierRefersToDeclaration(n, declaration)) {
+            return h28t02NestedIn(n, declaration);   // a namesake inside this local's scope shadows it
+        }
+        if (goTranspiler.goIsNilComparisonOperand(n, parent)) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) {
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
+            const write = (parent.parent?.kind === SyntaxKind.BinaryExpression) && (parent.parent.left === parent);
+            return write || !go92g2LoopIndexOver(goTranspiler, parent.argumentExpression, declaration, parent);
+        }
+        if (go93g2StringListElementRead(n, parent)) {
+            return !go92g2LoopIndexOver(goTranspiler, parent.arguments[1], declaration, parent);
+        }
+        // `target = xs;` / `request[k] = xs;` under a non-nil guard
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            return !h28t02UnderNonNilGuard(goTranspiler, parent, declaration);
+        }
+        return true;
+    });
+    h28t02Verdicts.set(declaration, !unsafe);
+    return !unsafe;
+}
+{
+    const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        return h28t02StringListLocal(this, declaration) ? GO_STRING_LIST_LOCAL_TYPE : getGoLocalType.call(this, declaration, parsedValue);
+    };
+    const printVariableDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration = node?.declarations?.[0];
+        if ((node?.declarations?.length === 1) && h28t02StringListLocal(this, declaration)) {
+            const args = declaration.initializer.arguments.map((a) => this.printNode(a, 0).trim()).join(', ');
+            return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} ${GO_STRING_LIST_LOCAL_TYPE} = this.SafeStringList(${args})`;
+        }
+        return printVariableDeclarationList.call(this, node, identation);
+    };
+}
+// ===== end h28-H28-T02
