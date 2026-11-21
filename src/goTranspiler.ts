@@ -11287,6 +11287,7 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
 // one returned slot of a venue tuple: bare when already printed with the slot type, else unwrapped
 function ccxtGoVenueSlotText (goTranspiler, e, type, wrap) {
     {
+        const h28a18 = h28a18StringSlotAddress (goTranspiler, e, type, wrap); if (h28a18 !== undefined) { return h28a18; }
         const text = goTranspiler.printNode (e, 0).trim ();
         let decl;
         try {
@@ -50734,3 +50735,26 @@ GoTranspiler.prototype.h28a17HolderName = function (declaration: any): string {
     };
 }
 // ===== end h28-H28-A17 =====
+// ===== h28-H28-A18
+// a `*string` tuple slot filled from a never-rebound identifier the printer types Go `string` (a native
+// string parameter or local): SafeStringPtr would copy that non-nil string, `&v` is the same answer
+function h28a18StringSlotAddress (goTranspiler, e, type, wrap) {
+    if ((type !== '*string') || (wrap !== 'SafeStringPtr') || (e?.kind !== ts.SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    let decl;
+    try {
+        const symbol = goTranspiler.getChecker ().getSymbolAtLocation (e);
+        decl = symbol?.valueDeclaration?.resolve () ?? symbol?.declarations?.map ((d) => d.resolve ())?.[0];
+    } catch (err) {
+        return undefined;
+    }
+    const declared = (decl?.kind === ts.SyntaxKind.Parameter)
+        ? (((decl.dotDotDotToken === undefined) && (decl.initializer === undefined) && (decl.questionToken === undefined)) ? goTranspiler.goNativeParameterType?.(decl) : undefined)
+        : ((decl?.kind === ts.SyntaxKind.VariableDeclaration) ? goTranspiler.goDeclaredTypeOfIdentifier?.(e) : undefined);
+    if (declared !== 'string') {
+        return undefined;
+    }
+    return goStringAddressArg (goTranspiler, e, String (goTranspiler.printNode (e, 0)).trim ());
+}
+// ===== end h28-H28-A18
