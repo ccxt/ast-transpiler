@@ -52757,3 +52757,19 @@ GoTranspiler.prototype.h29a02EndpointDefaultedRead = function (node, identation:
     };
 }
 // ===== end h29-H29-A02
+// ===== h29-H29-A03
+// a JSON-origin value handed to a hand-written scalar reader (safeString, safeInteger, ..) stays JSON-origin:
+// those readers only copy a scalar out of their first argument, so nothing is written through or kept
+export interface GoTranspiler {
+    h29a03ScalarReaderArg(node, name: string): boolean;
+}
+GoTranspiler.prototype.h29a03ScalarReaderArg = function (node, name: string): boolean {
+    return (node?.kind === SyntaxKind.Identifier) && !this.goWritesOrRebindsName(node, name, []) && this.h27a02ScalarReaderUse(node);
+};
+{
+    const goJsonOriginUseIsReadOnlyH29a03 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        return goJsonOriginUseIsReadOnlyH29a03.call(this, node, name) || this.h29a03ScalarReaderArg(node, name);
+    };
+}
+// ===== end h29-H29-A03
