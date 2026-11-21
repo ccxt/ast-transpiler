@@ -50108,3 +50108,71 @@ function installH28a07ConfigMapNilFill (goTranspiler) {
     };
 }
 // ===== end h28-H28-A07 =====
+// ===== h28-H28-A08 =====
+// widens the h27-A08 literal-index row read: the list (or the container it is cut from) may also be
+// an awaited endpoint list itself, read by `this.safe*` readers, or stored into the literal a `return`
+// hands back (nothing runs after the return, so no write can reach the row read)
+export interface GoTranspiler {
+    h28a08JsonList(list): boolean;
+    h28a08JsonContainer(node, depth: number): boolean;
+    h28a08AwaitedEndpoint(init): boolean;
+    h28a08ReturnedLiteralValue(node): boolean;
+}
+GoTranspiler.prototype.h28a08AwaitedEndpoint = function (init) {
+    return (init?.kind === SyntaxKind.AwaitExpression)
+        && (this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression));
+};
+GoTranspiler.prototype.h28a08ReturnedLiteralValue = function (node) {
+    const prop: any = node.parent;
+    if ((prop?.kind !== SyntaxKind.PropertyAssignment) || (prop.initializer !== node) || (prop.parent?.kind !== SyntaxKind.ObjectLiteralExpression)) {
+        return false;
+    }
+    let up: any = prop.parent;
+    while ((up.parent?.kind === SyntaxKind.AsExpression) || (up.parent?.kind === SyntaxKind.ParenthesizedExpression)) {
+        up = up.parent;
+    }
+    return (up.parent?.kind === SyntaxKind.ReturnStatement) && (up.parent.expression === up);
+};
+GoTranspiler.prototype.h28a08JsonContainer = function (node, depth: number) {
+    if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    if (this.goJsonOriginContainer(node)) {
+        return true;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    let fromJson = this.h28a08AwaitedEndpoint(init);
+    if (!fromJson) {
+        const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
+            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
+            && this.h28a08JsonContainer(this.goUnwrapParenthesizedNode(args.container), depth + 1);
+    }
+    return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name)
+        || this.h27a09SafeReaderArg(n, name) || (!this.goWritesOrRebindsName(n, name, []) && this.h28a08ReturnedLiteralValue(n)));
+};
+GoTranspiler.prototype.h28a08JsonList = function (list) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
+    if (!this.h28a08AwaitedEndpoint(init) && ((args === undefined) || !this.h28a08JsonContainer(this.goUnwrapParenthesizedNode(args.container), 0))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name)
+        || this.goIsNilComparisonOperand(n, n.parent) || this.h27a09SafeReaderArg(n, name)
+        || (!this.goWritesOrRebindsName(n, name, []) && this.h28a08ReturnedLiteralValue(n)));
+};
+const h27a08JsonListH28a08 = GoTranspiler.prototype.h27a08JsonList;
+GoTranspiler.prototype.h27a08JsonList = function (list) {
+    return h27a08JsonListH28a08.call(this, list) || this.h28a08JsonList(list);
+};
+// ===== end h28-H28-A08 =====
