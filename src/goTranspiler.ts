@@ -57669,3 +57669,41 @@ GoTranspiler.prototype.h30m03IsPlainString = function (node: any): boolean {
     };
 }
 // ===== end h30-M03
+// ===== h30-M04
+// `row['symbol']` on a struct-held `this.market (..)` binder handed on as a call argument or a list element is the
+// plain string field: market() throws instead of answering a row without a symbol, so the boxed value the map read
+// gave is that same string (never nil). The binder then needs no map form for this use.
+export interface GoTranspiler {
+    h30M04SymbolArgRead(node: any): { text: string, goType: string } | undefined;
+}
+GoTranspiler.prototype.h30M04SymbolArgRead = function (node: any) {
+    if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (node?.kind !== SyntaxKind.ElementAccessExpression)
+        || this.isGoElementAccessAssignmentTarget(node)) {
+        return undefined;
+    }
+    const key: any = node.argumentExpression;
+    const base: any = this.goUnwrapParenthesizedNode(node.expression);
+    if ((key?.kind !== SyntaxKind.StringLiteral) || (key.text !== 'symbol') || (base?.kind !== SyntaxKind.Identifier)
+        || (this.goTypedRowTable(base, key.text) !== GO_TYPED_ROW_FIELDS['MarketInterface']) || !this.h28m02MarketBound(base)) {
+        return undefined;
+    }
+    let outer: any = node;
+    while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        outer = outer.parent;
+    }
+    const parent: any = outer.parent;
+    const argument = (parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== outer) && parent.arguments.includes(outer);
+    const element = (parent?.kind === SyntaxKind.ArrayLiteralExpression);
+    if ((!argument && !element) || !this.h27m01RowBaseIsStruct(base)) {
+        return undefined;
+    }
+    return { text: `${base.text}.Symbol`, goType: 'string' };
+};
+{
+    const goTypedRowFieldReadH30M04 = GoTranspiler.prototype.goTypedRowFieldRead;
+    GoTranspiler.prototype.goTypedRowFieldRead = function (node) {
+        const h = this.h30M04SymbolArgRead(node); if (h !== undefined) return h;
+        return goTypedRowFieldReadH30M04.call(this, node);
+    };
+}
+// ===== end h30-M04
