@@ -7740,6 +7740,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installH26G23StringTernaryHoist (goTranspiler);
     installH28G23MapEntryTernaryStore (goTranspiler);
     installH29G19ReturnedLiteralTernaryStore (goTranspiler);
+    installH30G13PureArmTernaryStore (goTranspiler);
     installH27a07ConfigMapReads (goTranspiler);
     installH28a07ConfigMapNilFill (goTranspiler);
     installH28g10StrPtrTernaryDecl (goTranspiler);
@@ -57018,3 +57019,188 @@ GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | unde
 };
 Object.assign (CCXT_GO_HELPER_RETURN_TYPES, { 'this.GetListFromObjectValues': '[]any', 'this.DerivedExchange.GetListFromObjectValues': '[]any' });
 // ===== end h30-H30-G11 =====
+
+// ===== h30-G13
+// The h28-G23 / h29-G19 ternary-entry stores, with arms and condition that may also read a map element (`m[k]`)
+// or call a base reader without side effects or throws: the safe* readers, parseNumber, numberToString, parse8601,
+// iso8601, shortenSlug, Precise string math. The if / else runs the same arm under the same condition as the closure;
+// the h28 / h29 rules are switched off while printing (a non-empty skip map), so the base text here is the raw literal.
+const H30G13_PURE_READERS = new Set ([ 'safeString', 'safeStringLower', 'safeStringUpper', 'safeString2', 'safeBool', 'safeInteger', 'safeInteger2',
+    'safeNumber', 'safeNumber2', 'safeValue', 'safeDict', 'safeList', 'safeTimestamp', 'parseNumber', 'numberToString', 'parse8601', 'iso8601', 'shortenSlug' ]);
+function h30g13PureRead (node: any): boolean {
+    const n: any = node;
+    switch (n?.kind) {
+    case SyntaxKind.ParenthesizedExpression:
+        return h30g13PureRead (n.expression);
+    case SyntaxKind.Identifier:
+    case SyntaxKind.StringLiteral:
+    case SyntaxKind.NumericLiteral:
+    case SyntaxKind.NoSubstitutionTemplateLiteral:
+    case SyntaxKind.TrueKeyword:
+    case SyntaxKind.FalseKeyword:
+    case SyntaxKind.NullKeyword:
+        return true;
+    case SyntaxKind.ArrayLiteralExpression:
+        return n.elements.length === 0;
+    case SyntaxKind.PrefixUnaryExpression:
+        return ((n.operator === SyntaxKind.ExclamationToken) || (n.operator === SyntaxKind.MinusToken)) && h30g13PureRead (n.operand);
+    case SyntaxKind.PropertyAccessExpression:
+        return (n.expression?.kind === SyntaxKind.Identifier) && (n.name?.kind === SyntaxKind.Identifier);
+    case SyntaxKind.ElementAccessExpression:
+        return ((n.expression?.kind === SyntaxKind.Identifier) || (n.expression?.kind === SyntaxKind.ElementAccessExpression)) && h30g13PureRead (n.expression)
+            && h30g13PureRead (n.argumentExpression);
+    case SyntaxKind.BinaryExpression: {
+        const ok = [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.EqualsEqualsToken, SyntaxKind.ExclamationEqualsToken,
+            SyntaxKind.AmpersandAmpersandToken, SyntaxKind.BarBarToken, SyntaxKind.PlusToken, SyntaxKind.MinusToken,
+            SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken ].includes (n.operatorToken?.kind);
+        return ok && h30g13PureRead (n.left) && h30g13PureRead (n.right);
+    }
+    case SyntaxKind.CallExpression: {
+        const callee: any = n.expression;
+        const pure = (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && (((callee.expression?.kind === SyntaxKind.ThisKeyword) && H30G13_PURE_READERS.has (callee.name?.text))
+                || ((callee.expression?.kind === SyntaxKind.Identifier) && (callee.expression.text === 'Precise') && /^string\w+$/.test (callee.name?.text ?? '')));
+        return pure && n.arguments.every ((a) => h30g13PureRead (a));
+    }
+    default:
+        return false;
+    }
+}
+function h30g13Entries (literal: any): any[] {
+    return literal.properties.filter ((p: any) => (p.kind === SyntaxKind.PropertyAssignment)
+        && ((p.name?.kind === SyntaxKind.StringLiteral) || (p.name?.kind === SyntaxKind.Identifier)) && /^[\w.-]+$/.test (p.name.text)
+        && (ral90g5UnwrapNode (p.initializer)?.kind === SyntaxKind.ConditionalExpression)
+        && [ 'condition', 'whenTrue', 'whenFalse' ].every ((k) => h30g13PureRead (ral90g5UnwrapNode (p.initializer)[k])));
+}
+function h30g13Stores (goTranspiler: any, name: string, entries: any[], identation: number): string[] | undefined {
+    const stores: string[] = [];
+    for (const p of entries) {
+        const store = goTranspiler.goTernaryStatementIfElse (`${name}[${JSON.stringify (p.name.text)}]`, ral90g5UnwrapNode (p.initializer), identation);
+        if ((store === undefined) || store.includes ('func()')) {
+            return undefined;
+        }
+        stores.push (store);
+    }
+    return stores;
+}
+const h30g13Count = (s: string) => s.split ('func() any {').length - 1;
+function h30g13Busy (goTranspiler: any): boolean {
+    return (goTranspiler.h28g23Skip.size !== 0) || (goTranspiler.h29g19Name.size !== 0);
+}
+// `const x = { .. }` (the h28-G23 shape)
+function h30g13PrintDeclaration (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const base = print ();
+    const declarations = node?.declarationList?.declarations ?? [];
+    const parentKind = node?.parent?.kind;
+    if ((typeof base !== 'string') || !base.includes ('func() any {') || h30g13Busy (goTranspiler) || (declarations.length !== 1)
+        || (declarations[0].name?.kind !== SyntaxKind.Identifier) || (ral90g5UnwrapNode (declarations[0].initializer)?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause))) {
+        return base;
+    }
+    const literal: any = ral90g5UnwrapNode (declarations[0].initializer);
+    const entries = h30g13Entries (literal);
+    if (entries.length === 0) {
+        return base;
+    }
+    const name = goTranspiler.printNode (declarations[0].name, 0).trim ();
+    let raw: string;
+    let printed: string;
+    try {
+        goTranspiler.h28g23Skip.set (literal, new Set ());
+        raw = print ();
+        goTranspiler.h28g23Skip.set (literal, new Set (entries));
+        printed = print ();
+    } finally {
+        goTranspiler.h28g23Skip.clear ();
+    }
+    const head = new RegExp (`(^|\\n)[ \\t]*var ${name} map\\[string\\]any = map\\[string\\]any\\{`);
+    if ((h30g13Count (printed) !== h30g13Count (raw) - entries.length) || !head.test (printed) || !printed.trimEnd ().endsWith ('}')) {
+        return base;
+    }
+    const stores = h30g13Stores (goTranspiler, name, entries, identation);
+    return (stores === undefined) ? base : printed.trimEnd () + '\n' + stores.join ('\n');
+}
+// `return { .. }` / `return recv.f(.., { .. }, ..)` / `recv.f(.., { .. }, ..);` (the h29-G19 shape)
+function h30g13Literal (node: any): any {
+    const e: any = ral90g5UnwrapNode (((node?.kind === SyntaxKind.ReturnStatement) || (node?.kind === SyntaxKind.ExpressionStatement)) ? node.expression : undefined);
+    if (e?.kind === SyntaxKind.ObjectLiteralExpression) {
+        return (node.kind === SyntaxKind.ReturnStatement) ? e : undefined;
+    }
+    if ((e?.kind !== SyntaxKind.CallExpression) || (e.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || ((e.expression.expression?.kind !== SyntaxKind.ThisKeyword) && (e.expression.expression?.kind !== SyntaxKind.Identifier))) {
+        return undefined;
+    }
+    const literals = e.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind === SyntaxKind.ObjectLiteralExpression);
+    const others = e.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind !== SyntaxKind.ObjectLiteralExpression);
+    return ((literals.length === 1) && others.every ((a: any) => h30g13PureRead (a))) ? ral90g5UnwrapNode (literals[0]) : undefined;
+}
+function h30g13PrintStatement (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const base = print ();
+    const parentKind = node?.parent?.kind;
+    if ((typeof base !== 'string') || !base.includes ('func() any {') || h30g13Busy (goTranspiler)
+        || ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause))) {
+        return base;
+    }
+    const literal = h30g13Literal (node);
+    const entries = (literal === undefined) ? [] : h30g13Entries (literal);
+    if (entries.length === 0) {
+        return base;
+    }
+    const name = 'literal' + goTranspiler.getLineBasedSuffix (literal);
+    const level = goTranspiler.goStatementLevel;
+    const printLiteral = () => {
+        goTranspiler.goStatementLevel = identation;
+        try {
+            return goTranspiler.printNode (literal, 0).trim ();
+        } finally {
+            goTranspiler.goStatementLevel = level;
+        }
+    };
+    let whole: string;
+    let reduced: string;
+    let statement: string;
+    let raw: string;
+    try {
+        goTranspiler.h28g23Skip.set (literal, new Set ());
+        raw = print ();
+        whole = printLiteral ();
+        goTranspiler.h28g23Skip.set (literal, new Set (entries));
+        reduced = printLiteral ();
+        goTranspiler.h28g23Skip.clear ();
+        goTranspiler.h29g19Name.set (literal, name);
+        statement = print ();
+    } finally {
+        goTranspiler.h28g23Skip.clear ();
+        goTranspiler.h29g19Name.clear ();
+    }
+    if (!whole.startsWith ('map[string]any{') || !reduced.startsWith ('map[string]any{') || (h30g13Count (reduced) !== h30g13Count (whole) - entries.length)
+        || (raw.split (whole).length !== 2) || (raw.replace (whole, name) !== statement) || raw.includes (name)) {
+        return base;
+    }
+    const stores = h30g13Stores (goTranspiler, name, entries, identation);
+    const lead = statement.match (/^\s*/)[0];
+    const iden = goTranspiler.getIden (identation);
+    if ((stores === undefined) || !lead.endsWith (iden)) {
+        return base;
+    }
+    const comments = lead.substring (0, lead.length - iden.length);
+    return `${comments}${iden}var ${name} map[string]any = ${reduced}\n${stores.join ('\n')}\n${iden}${statement.substring (lead.length)}`;
+}
+function installH30G13PureArmTernaryStore (goTranspiler: any) {
+    if ((goTranspiler.h28g23Skip === undefined) || (goTranspiler.h29g19Name === undefined) || !goInstallOnce (goTranspiler, '__h30g13Installed', 'printVariableStatement')) {
+        return;
+    }
+    const variableStatement = goTranspiler.printVariableStatement;
+    goTranspiler.printVariableStatement = function (node, identation) {
+        return h30g13PrintDeclaration (this, node, identation, () => variableStatement.call (this, node, identation));
+    };
+    const returnStatement = goTranspiler.printReturnStatement;
+    goTranspiler.printReturnStatement = function (node, identation) {
+        return h30g13PrintStatement (this, node, identation, () => returnStatement.call (this, node, identation));
+    };
+    const expressionStatement = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return h30g13PrintStatement (this, node, identation, () => expressionStatement.call (this, node, identation));
+    };
+}
+// ===== end h30-G13
