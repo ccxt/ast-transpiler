@@ -49478,3 +49478,29 @@ GoTranspiler.prototype.h27g33StringListLiteralRead = function (node, baseExpr, k
     };
 }
 // ===== end h27-G33
+// ===== h27-H27-G36 =====
+// `client.url === p` with `client: Client` (Url is a Go string) and p a `*string` local: IsEqual derefs p, so a nil p
+// answers false and any other p compares its string; the native form repeats p, a plain local read
+export interface GoTranspiler {
+    h27g36ClientUrlPointerCompare(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined;
+}
+GoTranspiler.prototype.h27g36ClientUrlPointerCompare = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+    const sides: [any, string, any, string][] = [[left, leftText, right, rightText], [right, rightText, left, leftText]];
+    for (const [urlNode, urlText, ptrNode, ptrText] of sides) {
+        const ptr = this.goUnwrapParenthesizedNode(ptrNode);
+        if (!this.goIsClientUrl(this.goUnwrapParenthesizedNode(urlNode)) || (ptr?.kind !== SyntaxKind.Identifier)
+            || (this.goDeclaredTypeOfIdentifier(ptr) !== '*string') || !this.goDerefRepeatableOperand(ptr, ptrText)) {
+            continue;
+        }
+        return isEq ? `(${ptrText} != nil && ${urlText} == *${ptrText})` : `(${ptrText} == nil || ${urlText} != *${ptrText})`;
+    }
+    return undefined;
+};
+{
+    const printInlineEquality = GoTranspiler.prototype.printInlineEquality;
+    GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+        const h = this.h27g36ClientUrlPointerCompare(left, right, leftText, rightText, isEq); if (h !== undefined) return h;
+        return printInlineEquality.call(this, left, right, leftText, rightText, isEq);
+    };
+}
+// ===== end h27-H27-G36 =====
