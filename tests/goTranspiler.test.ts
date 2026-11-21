@@ -12065,7 +12065,7 @@ describe ('goPrinterHooks', () => {
             expect (base).not.toContain ('var h string');
             expect (hooked).toContain ('var h string');
             expect (hooked).toContain ('var b string');
-            expect (hooked).not.toContain ('var r string');
+            expect (hooked).toContain ('var r string = this.Hash(m, m, "hex")');
             expect (hooked).not.toContain ('var q string');
         });
         test('installCcxtGoHooks installs every hook once (idempotent)', () => {

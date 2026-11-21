@@ -48234,3 +48234,25 @@ GoTranspiler.prototype.goDefaultedSafeStringCall = function (node): boolean {
     return h27g02ShippedDefaultedSafeStringCall.call (this, node) || this.h27g02StringIdentDefault (node);
 };
 // ===== end h27-G02 =====
+// ===== h27-H27-G04 =====
+// `this.hash (x, h)` takes the declared default digest 'hex' (functions/crypto.ts overload: string), the same default the
+// Go Hash applies; print the digest explicitly so the call is the text-digest form, typed `string` like the 3-arg one
+export function h27g04DefaultDigestHashCall (node: any): boolean {
+    const callee = node?.expression;
+    return (node?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'hash') && (node.arguments.length === 2)
+        && node.arguments.every ((a: any) => a.kind !== SyntaxKind.SpreadElement);
+}
+const printCallExpressionH27g04 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    if (!h27g04DefaultDigestHashCall (node)) {
+        return printCallExpressionH27g04.call (this, node, identation);
+    }
+    const args = node.arguments.map ((a: any) => this.printNode (a, 0).trim ());
+    return this.printNode (node.expression, 0).trim () + '(' + args.join (', ') + ', "hex")';
+};
+const goTypeOfInitializerH27g04 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (node, printed: string) {
+    return h27g04DefaultDigestHashCall (node) ? 'string' : goTypeOfInitializerH27g04.call (this, node, printed);
+};
+// ===== end h27-H27-G04 =====
