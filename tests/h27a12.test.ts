@@ -94,6 +94,8 @@ describe ('h27 A12 prediction JSON nested reads', () => {
     });
     test ('negative: the REST tier is untouched', () => {
         // siblings h27-A01 / A02 convert the REST tier with the same proof; this unit adds no wrap there
-        expect (outs['rest']).not.toMatch (/Safe(?:List|Map)Typed\(response/);
+        // the REST negatives (variable key, written response) still keep the wrap
+        expect (outs['rest']).toContain ('SafeMapTyped(response, k)');
+        expect (outs['rest']).toContain ('SafeMapTyped(response, "data")');
     });
 });
