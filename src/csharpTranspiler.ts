@@ -702,6 +702,9 @@ function csharpMultiMapAdd(table: Map<string, any[]>, key: string, value: any) {
 
 // Base-tier members whose declared array is a dictionary at run time in an override the base program
 // cannot see (btcturk.parseOHLCVs reads its `any` parameter with string keys): they keep `object`
+// list-taking halves of the base parse splits whose dispatcher tests Array.isArray (h30-T01)
+const H30_T01_BOUND_LIST_CALLEES = [ 'parseTickersList', 'parseLastPricesList' ];
+
 const CSHARP_BASE_LIST_PARAM_DICT_OVERRIDES: { [name: string]: number[] } = {
     parseOHLCVs: [ 0 ],
 };
@@ -2497,6 +2500,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (!this.csharpArgumentMayBeList(this.getChecker().getTypeAtLocation(inner))) {
                 return printed;
             }
+            const h30t01 = this.h30t01BoundListArg(node, inner); if (h30t01 !== undefined) return h30t01;
             // toArray keeps a List<object> as is and re-boxes a typed list (a hard cast would throw)
             return `this.toArray(${printed})`;
         });
@@ -8042,6 +8046,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // check this out later
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
+        const h30t01 = this.h30t01IsArrayBinding(node, parsedArg); if (h30t01 !== undefined) return h30t01;
         // a non-name argument (guarded element read, cast) is evaluated once and bound, not printed three times
         if (!/^[\w.]+$/.test(String(parsedArg).trim())) {
             const v = 'hxArr' + node.pos;
@@ -10113,4 +10118,94 @@ export class CSharpTranspiler extends BaseTranspiler {
         const index = argumentExpression.text;
         return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : (Int64?)null)`;
     }
+
+    // ===== h30-T01
+    // `if (Array.isArray (x)) { return this.parseTickersList (x, ..) }`: the test binds `x is IList<object> xAsList`
+    // and the call passes that binding instead of toArray (x is a parameter or local never written in the branch)
+    h30t01GuardedIf(listName: Node, call: any): any {
+        let walk: any = call;
+        while (walk !== undefined && walk.parent !== undefined) {
+            const parent: any = walk.parent;
+            if (isIfStatement(parent) && parent.thenStatement === walk) {
+                let test: any = parent.expression;
+                while (isParenthesizedExpression(test)) {
+                    test = test.expression;
+                }
+                if (isCallExpression(test) && test.getText().replace(/\s+/g, '').startsWith('Array.isArray(') && test.arguments.length === 1
+                        && isIdentifier(test.arguments[0]) && test.arguments[0].text === (listName as any).text) {
+                    return parent;
+                }
+                return undefined;
+            }
+            if (isFunctionLike(parent)) {
+                return undefined;
+            }
+            walk = parent;
+        }
+        return undefined;
+    }
+
+    h30t01BindingCall(ifStatement: any): any {
+        let test: any = ifStatement.expression;
+        while (isParenthesizedExpression(test)) {
+            test = test.expression;
+        }
+        const name = test.arguments[0].text;
+        let found: any = undefined;
+        let written = false;
+        const visit = (n: any) => {
+            if (isBinaryExpression(n) && n.operatorToken.kind >= SyntaxKind.FirstAssignment && n.operatorToken.kind <= SyntaxKind.LastAssignment
+                    && isIdentifier(n.left) && n.left.text === name) {
+                written = true;
+            }
+            if ((isPrefixUnaryExpression(n) || isPostfixUnaryExpression(n)) && isIdentifier(n.operand) && n.operand.text === name) {
+                written = true;
+            }
+            if (isFunctionLike(n)) {
+                written = written || n.getText().includes(name);
+                return;
+            }
+            if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
+                    && isIdentifier(n.expression.name) && H30_T01_BOUND_LIST_CALLEES.includes(n.expression.name.text)
+                    && n.arguments.length > 0 && isIdentifier(n.arguments[0]) && n.arguments[0].text === name) {
+                found = n;
+            }
+            n.forEachChild(visit);
+        };
+        visit(ifStatement.thenStatement);
+        return (written || found === undefined) ? undefined : found;
+    }
+
+    h30t01BindingName(name: string): string {
+        return name + 'AsList';
+    }
+
+    h30t01BoundListArg(call: any, argument: any): string | undefined {
+        if (!isIdentifier(argument) || call.arguments[0] !== argument) {
+            return undefined;
+        }
+        const ifStatement = this.h30t01GuardedIf(argument, call);
+        if (ifStatement === undefined || this.h30t01BindingCall(ifStatement) !== call) {
+            return undefined;
+        }
+        return this.h30t01BindingName(argument.text);
+    }
+
+    h30t01IsArrayBinding(node: any, parsedArg: any): string | undefined {
+        const printed = String(parsedArg ?? '').trim();
+        let top: any = node;
+        while (isParenthesizedExpression(top.parent)) {
+            top = top.parent;
+        }
+        const ifStatement: any = top.parent;
+        if (!/^\w+$/.test(printed) || !isIfStatement(ifStatement) || ifStatement.expression !== top || node.arguments?.length !== 1
+                || !isIdentifier(node.arguments[0]) || node.arguments[0].text !== printed) {
+            return undefined;
+        }
+        if (this.h30t01BindingCall(ifStatement) === undefined) {
+            return undefined;
+        }
+        return `(${printed} is IList<object> ${this.h30t01BindingName(printed)})`;
+    }
+    // ===== end h30-T01
 }
