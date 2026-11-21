@@ -51672,3 +51672,21 @@ function h28g20ElementReadStoredBack (node) {
     return found;
 }
 // ===== end h28-H28-G20
+
+// ===== h28-H28-G21
+// a `string[]` local handed whole as the list of `this.inArray (x, list)` or the value of `this.json (list)`: both
+// take `any` and answer the same for a []string as for the []any box (reflect walk / json.Marshal of the elements)
+const H28G21_STRING_LIST_ANY_SLOTS: { [callee: string]: number } = { 'inArray': 1, 'json': 0 };
+const goStringListUseReadsAsH28G21 = GoTranspiler.prototype.goStringListUseReadsAs;
+GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
+    const call: any = node?.parent;
+    const callee: any = call?.expression;
+    if ((call?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (H28G21_STRING_LIST_ANY_SLOTS[callee.name?.text] !== undefined)
+        && (call.arguments.length === H28G21_STRING_LIST_ANY_SLOTS[callee.name.text] + 1)
+        && (call.arguments[H28G21_STRING_LIST_ANY_SLOTS[callee.name.text]] === node)) {
+        return true;
+    }
+    return goStringListUseReadsAsH28G21.call(this, node);
+};
+// ===== end h28-H28-G21
