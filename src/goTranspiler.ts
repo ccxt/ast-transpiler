@@ -23148,6 +23148,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return true;
         }
         const h27g19 = this.h27g19RequestStubAwait(expr); if (h27g19 !== undefined) { return h27g19; }
+        const h28g13 = this.h28g13ProvenDefaultSafeRead(expr); if (h28g13 !== undefined) { return h28g13; }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -51304,3 +51305,49 @@ GoTranspiler.prototype.h28g12NullableBoolTruthy = function (node) {
     };
 }
 // ===== end h28-H28-G12 =====
+// ===== h28-G13
+// a base safeValue / safeDict / safeList read (2 / N forms too) whose default is a local or parameter that is
+// itself a proven non-pointer source, or the local being proven (`x = this.safeValue2 (q, a, b, x)`): the read
+// returns the stored JSON value or that default, so the result never holds a nil *T either
+export interface GoTranspiler {
+    h28g13ProvenDefaultSafeRead(expr): boolean | undefined;
+    h28g13Proving: Set<any>;
+}
+const H28G13_SAFE_KEYS: { [name: string]: number } = { 'safeValue': 2, 'safeValue2': 3, 'safeValueN': 2, 'safeDict': 2, 'safeList': 2, 'safeDict2': 3, 'safeList2': 3, 'safeListN': 2 };
+GoTranspiler.prototype.h28g13ProvenDefaultSafeRead = function (expr) {
+    const callee: any = (expr?.kind === SyntaxKind.CallExpression) ? expr.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const keys = H28G13_SAFE_KEYS[callee.name.text];
+    const dflt: any = (keys !== undefined) && (expr.arguments.length === keys + 1) ? this.goUnwrapParenthesizedNode(expr.arguments[keys]) : undefined;
+    if ((dflt?.kind !== SyntaxKind.Identifier) || (dflt.text === 'undefined') || !this.goIsBaseExchangeMethod(callee.name)) {
+        return undefined;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(dflt);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) && (decl?.kind !== SyntaxKind.Parameter)) {
+        return undefined;
+    }
+    // the local whose writes are being scanned: every other write is proven separately
+    const write: any = expr.parent;
+    const self = (write?.kind === SyntaxKind.BinaryExpression) && (write.right === expr) && this.goAssignmentWritesName(write.left, dflt.text)
+        && (this.goAnyBoxLocalDeclaration(write.left) === decl);
+    if (self && (decl.kind === SyntaxKind.VariableDeclaration)) {
+        return true;
+    }
+    this.h28g13Proving = this.h28g13Proving ?? new Set<any>();
+    if (this.h28g13Proving.has(decl)) {
+        return false;
+    }
+    this.h28g13Proving.add(decl);
+    try {
+        if (decl.kind === SyntaxKind.Parameter) {
+            return this.goIsNonPointerValueSource(dflt) ? true : undefined;
+        }
+        return this.goAnyLocalHoldsNonPointer(decl) ? true : undefined;
+    } finally {
+        this.h28g13Proving.delete(decl);
+    }
+};
+// ===== end h28-G13
