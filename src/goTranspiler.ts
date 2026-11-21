@@ -53554,3 +53554,68 @@ function h29a12ProveFrameParam (go: any, param: any): boolean {
     return valueRefsOk && (uses > 0) && (cuts > 0);
 }
 // ===== end h29-A12 =====
+// ===== h29-H29-A13
+// a frame-origin receiver C (h27a11JsonContainer: the decoded ws frame or a read-only literal-key cut of it, typed
+// map[string]any) holds JSON values only, never a *sync.Map: `SafeMapTyped(C, "k")` and `SafeDictMap(C, "k", C)`
+// are the comma-ok read (the latter with C as the nil fallback), answering nil / C exactly as the wraps did
+export interface GoTranspiler {
+    h29a13FrameDictRead(declaration, printed: string): string | undefined;
+    h29a13FrameMap(container): boolean;
+}
+GoTranspiler.prototype.h29a13FrameMap = function (container): boolean {
+    if (container?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(container);
+    const goType = (decl?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType(decl) : this.goResolvedLocalGoType(container);
+    return (goType === GO_SAFE_DICT_LOCAL_TYPE) && this.h27a11JsonContainer(container);
+};
+GoTranspiler.prototype.h29a13FrameDictRead = function (declaration, printed: string): string | undefined {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string') || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return undefined;
+    }
+    let init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const callee: any = init?.expression;
+    if ((init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeDict') || (init.arguments.length < 2) || (init.arguments.length > 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    const selfDefault = (fallback !== undefined);
+    if ((key?.kind !== SyntaxKind.StringLiteral) || !/^[^"\\\n]*$/.test(key.text) || (selfDefault && ((fallback.kind !== SyntaxKind.Identifier) || (fallback.text !== container?.text)))
+        || !this.h29a13FrameMap(container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const lit = `"${key.text}"`;
+    const shipped = selfDefault ? `var ${name} map[string]any = this.SafeDictMap(${container.text}, ${lit}, ${container.text})`
+        : `var ${name} map[string]any = SafeMapTyped(${container.text}, ${lit})`;
+    const m = /^(\n*)(\t*)(.*)$/s.exec(printed);
+    if ((m === null) || (m[3] !== shipped)) {
+        return undefined;
+    }
+    const read = `${container.text}[${lit}].(map[string]any)`;
+    if (!selfDefault) {
+        return `${m[1]}${m[2]}var ${name}, _ = ${read}`;
+    }
+    // the result may alias the frame: nothing may write through it or rebind it
+    const scope: any = this.goEnclosingFunction(declaration);
+    if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        && (((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent)) || this.goWritesOrRebindsName(n, name, [])))) {
+        return undefined;
+    }
+    const ind = m[2];
+    return `${m[1]}${ind}var ${name} map[string]any\n${ind}${name}, _ = ${read}\n${ind}if ${name} == nil {\n${ind}\t${name} = ${container.text}\n${ind}}`;
+};
+{
+    const printVariableDeclarationListH29a13 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH29a13.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h29a13FrameDictRead(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h29-H29-A13
