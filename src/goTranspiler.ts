@@ -20571,6 +20571,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goNilInitStrDeclaredReadOk(n): boolean {
         const { current, parent } = goReadClimb(n);
+        const h29g02 = this.h29g02SlotRead(n); if (h29g02 !== undefined) return h29g02;
         if (this.goNilInitStrLiteralTernaryArmRead(current, parent)) {
             return true;
         }
@@ -54019,3 +54020,80 @@ GoTranspiler.prototype.h29a20JsonMap = function (container): boolean {
     };
 }
 // ===== end h29-H29-A20
+// ===== h29-H29-G02
+export interface GoTranspiler {
+    h29g02SlotRead(n): boolean | undefined;
+    h29g02PointerEntries(node): any[];
+    h29g02Nil: Set<any> | undefined;
+}
+// `const m = { .., 'k': x, .. }` with x a `*string` nil-init local: the slot prints `nil` and a guarded
+// `if x != nil { m["k"] = *x }` follows the statement, so a nil x leaves the untyped nil the box held.
+function h29g02SlotEntry (n: any): any {
+    const { current, parent } = goReadClimb (n);
+    if ((n?.kind !== SyntaxKind.Identifier) || (parent?.kind !== SyntaxKind.PropertyAssignment) || (parent.initializer !== current)
+        || ((parent.name?.kind !== SyntaxKind.StringLiteral) && (parent.name?.kind !== SyntaxKind.Identifier)) || !/^[\w.-]+$/.test (parent.name.text)) {
+        return undefined;
+    }
+    const declaration: any = parent.parent?.parent;
+    const statement: any = declaration?.parent?.parent;
+    const holder: any = statement?.parent?.kind;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== parent.parent) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((declaration.type !== undefined) && (declaration.type.getText () !== 'Dict'))
+        || (statement?.kind !== SyntaxKind.VariableStatement) || (statement.declarationList.declarations.length !== 1)
+        || ((holder !== SyntaxKind.Block) && (holder !== SyntaxKind.CaseClause) && (holder !== SyntaxKind.DefaultClause))) {
+        return undefined;
+    }
+    return parent;
+}
+GoTranspiler.prototype.h29g02SlotRead = function (n): boolean | undefined {
+    return (h29g02SlotEntry (n) !== undefined) ? true : undefined;
+};
+GoTranspiler.prototype.h29g02PointerEntries = function (node): any[] {
+    const declaration: any = node?.declarationList?.declarations?.[0];
+    const literal: any = declaration?.initializer;
+    if ((node?.kind !== SyntaxKind.VariableStatement) || (literal?.kind !== SyntaxKind.ObjectLiteralExpression)) {
+        return [];
+    }
+    return literal.properties.filter ((p: any) => {
+        const value: any = ral90g5UnwrapNode (p.initializer);
+        if ((p.kind !== SyntaxKind.PropertyAssignment) || (value?.kind !== SyntaxKind.Identifier) || (h29g02SlotEntry (value) !== p)) {
+            return false;
+        }
+        const local: any = this.goAnyBoxLocalDeclaration (value);
+        return (local?.kind === SyntaxKind.VariableDeclaration) && (local.type?.typeName?.text === 'Str')
+            && (this.goEnclosingFunction (local) === this.goEnclosingFunction (node)) && (this.goNilInitLocalType (local) === '*string');
+    });
+};
+{
+    const h29g02Identifier = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        if ((this.h29g02Nil !== undefined) && this.h29g02Nil.has (node)) {
+            return 'nil';
+        }
+        return h29g02Identifier.call (this, node);
+    };
+    const h29g02Statement = GoTranspiler.prototype.printVariableStatement;
+    GoTranspiler.prototype.printVariableStatement = function (node, identation) {
+        const entries = this.h29g02PointerEntries (node);
+        if (entries.length === 0) {
+            return h29g02Statement.call (this, node, identation);
+        }
+        const name: string = node.declarationList.declarations[0].name.text;
+        const previous = this.h29g02Nil;
+        this.h29g02Nil = new Set ([ ...(previous ?? []), ...entries.map ((p: any) => ral90g5UnwrapNode (p.initializer)) ]);
+        let printed: string;
+        try {
+            printed = h29g02Statement.call (this, node, identation);
+        } finally {
+            this.h29g02Nil = previous;
+        }
+        // the local was typed `*string` on the strength of this store: never fall back to storing the pointer
+        const iden = this.getIden (identation);
+        const stores = entries.map ((p: any) => {
+            const value = ral90g5UnwrapNode (p.initializer).text;
+            return `${iden}if ${value} != nil {\n${this.getIden (identation + 1)}${name}[${JSON.stringify (p.name.text)}] = *${value}\n${iden}}`;
+        });
+        return printed.trimEnd () + '\n' + stores.join ('\n');
+    };
+}
+// ===== end h29-H29-G02
