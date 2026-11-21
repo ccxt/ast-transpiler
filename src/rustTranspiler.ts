@@ -9454,6 +9454,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  condition of a ternary whose branch holds the use, and the target of `x = f(.., x, ..)` (written after). */
     rustOwnedLastUse(node, declaration): boolean {
         if (this.rustLocalLastUse(node, declaration)) return true;
+        if (this.h28t01ReturnedCallArgLastUse(node, declaration)) return true;
         if (this.rustOwnedSelfWrite(node)) return true;
         let statement: any = node;
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
@@ -17671,6 +17672,7 @@ export class RustTranspiler extends BaseTranspiler {
             return isIdentifier(arg) && node.arguments.slice(0, at).some((e: any) => isIdentifier(e) && e.text === arg.text);
         };
         const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustStrListSliceLent(node.arguments[at]) ? RustTranspiler.rustLentMark(a) : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
+        this.h28t01ReturnedSliceMoves(node, cloned);
         if (optName !== undefined) {
             // ral-62o: the `Option<String>` twin of the reader, chosen from the call node (`_k` when the key is a plain literal)
             this.rustOptReaderPrinted.add(node);
@@ -41664,4 +41666,47 @@ export class RustTranspiler extends BaseTranspiler {
         return n.parent?.kind === SyntaxKind.PropertyAssignment && n.parent.initializer === n && isObjectLiteralExpression(n.parent.parent);
     }
     // ===== end h29-R08
+    // ===== h29-T01
+    /** A bare argument of the call a `return` hands back: nothing after that statement runs, so a later mention of the
+     *  local does not read it again. The statement holds no other mention; no loop, closure or try lies between. */
+    h28t01ReturnedCallArgLastUse(node: any, declaration: any): boolean {
+        const call: any = node?.parent;
+        if (declaration === undefined || !isIdentifier(declaration.name) || !isIdentifier(node) || !isCallExpression(call) || call.expression === node || !Array.from(call.arguments).includes(node)) return false;
+        const statement: any = call.parent;
+        if (!isReturnStatement(statement) || statement.expression !== call) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(node);
+        if (own === undefined || scope === undefined || isSourceFile(scope) || this.rustEnclosingFunction(node) !== scope) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (this.rustEnclosingFunction(n) !== scope) return false;
+            if (n.pos >= statement.pos && n.end <= statement.end) return false;
+            // other reads only in the guarding `if` condition or as the bare argument of another returned call
+            const guard: any = findAncestor(statement, (a: any) => isIfStatement(a) || a === scope);
+            const inGuard = guard !== undefined && isIfStatement(guard) && n.pos >= guard.expression.pos && n.end <= guard.expression.end;
+            const up: any = n.parent;
+            if (!inGuard && !(isCallExpression(up) && up.expression !== n && isReturnStatement(up.parent) && up.parent.expression === up)) return false;
+        }
+        for (let up: any = statement.parent; up !== undefined && up !== scope; up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.TryStatement || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement
+                || up.kind === SyntaxKind.ForInStatement || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+    /** Hooked from printOptionalArgsSliceCall: the by-value arguments of such a returned call (fixed ones and `&[x]`
+     *  elements) move instead of cloning; the clone text becomes the owned mark. */
+    h28t01ReturnedSliceMoves(node: any, cloned: string[]): void {
+        cloned.forEach((text, at) => {
+            const arg: any = node.arguments[at];
+            if (arg === undefined || !isIdentifier(arg) || text !== `${String(arg.text)}.clone()`) return;
+            const declaration: any = this.rustDeclarationOfIdentifier(arg);
+            if (declaration === undefined || (!isVariableDeclaration(declaration) && !isParameterDeclaration(declaration))) return;
+            const header: any = declaration.parent?.parent;
+            if (header !== undefined && (isForStatement(header) || isForOfStatement(header) || isForInStatement(header))) return;
+            if (this.h28t01ReturnedCallArgLastUse(arg, declaration)) cloned[at] = `\u0004${String(arg.text)}`;
+        });
+    }
+    // ===== end h29-T01
 }

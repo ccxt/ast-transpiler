@@ -27042,7 +27042,7 @@ describe('rust shadow safeString read keyed by a declared string parameter', () 
     });
     test('negative: a safeDict read keyed by a string parameter keeps the helper', () => {
         const out = transpiler.transpileRust(D + "    f (key: Str, mapping: Dict = {}): any {\n        if (key in mapping) { return this.safeDict (mapping, key); }\n        return Object.keys (mapping);\n    }\n}").content;
-        expect(out).toContain('self.safeDict(mapping.clone(), key');
+        expect(out).toContain('self.safeDict(mapping, key');
         expect(out).toContain('object_keys(&mapping)');
     });
 });
