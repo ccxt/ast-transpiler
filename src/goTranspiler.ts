@@ -49699,3 +49699,110 @@ GoTranspiler.prototype.h27m01RowBaseIsStruct = function (base: any): boolean {
 CCXT_GO_HELPER_RETURN_TYPES['this.ParseOrderBookBidsAsks'] = '[]any';
 CCXT_GO_HELPER_RETURN_TYPES['this.DerivedExchange.ParseOrderBookBidsAsks'] = '[]any';
 // ===== end h27-H27-P11
+// ===== h28-A01
+// a `map[string]any` parameter of a venue-internal method holds decoded JSON when every caller (resolved by
+// declaration, all in this file, none by name) hands it a JSON-origin container and the body only reads it:
+// goJsonOriginContainer then admits it, so the existing comma-ok reads apply (nil map, missing key answer nil)
+export interface GoTranspiler {
+    h28a01JsonParam(node, depth: number): boolean;
+    h28a01ParamReadOnly(fn, param): boolean;
+    h28a01ReadOnlyArg(node): boolean;
+    h28a01Active: Set<any>;
+    h28a01ReadOnlyCache: Map<any, boolean>;
+}
+GoTranspiler.prototype.h28a01ParamReadOnly = function (fn, param): boolean {
+    this.h28a01ReadOnlyCache = this.h28a01ReadOnlyCache ?? new Map();
+    this.h28a01Active = this.h28a01Active ?? new Set();
+    if (this.h28a01ReadOnlyCache.has(param)) {
+        return this.h28a01ReadOnlyCache.get(param);
+    }
+    if (this.h28a01Active.has(param)) {
+        return false; // a cycle proves nothing
+    }
+    const outermost = (this.h28a01Active.size === 0);
+    this.h28a01Active.add(param);
+    let result = false;
+    try {
+        result = h28a01ProveReadOnly(this, fn, param);
+    } finally {
+        this.h28a01Active.delete(param);
+    }
+    if (outermost || result) {
+        this.h28a01ReadOnlyCache.set(param, result);
+    }
+    return result;
+};
+// a venue-internal method reached only by direct `this.m (..)` calls of this file, whose body only reads the
+// parameter: as a JSON container, through a scalar reader, in a nil test, as `info`, or handed to another such slot
+function h28a01ProveReadOnly (go: any, fn: any, param: any): boolean {
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (param.initializer !== undefined)
+        || (param.dotDotDotToken !== undefined) || (param.questionToken !== undefined) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || !/(^|[\\/])ts[\\/]src[\\/]/.test(String(fn.getSourceFile().fileName))) {
+        return false;
+    }
+    const name: string = fn.name.text;
+    if (go.goMethodKeepsBaseSignature(fn) || go.goIsProHandlerMethod(fn) || goHasDynamicCall(fn, name)
+        || (go.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    go.h27a11ElsewhereCache = go.h27a11ElsewhereCache ?? new Map();
+    if (h27a11NamedElsewhere(go, fn, name)) {
+        return false; // a subclass, parent or string reference could reach it with another value
+    }
+    const calls: any[] = go.goSameFileCallsOf(fn, name);
+    let mentions = 0;
+    go.hasNodeWhere(fn.getSourceFile(), (n: any) => {
+        mentions += ((n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === name)) ? 1 : 0;
+        return false;
+    });
+    if ((calls.length === 0) || (calls.length !== mentions)
+        || calls.some((c: any) => (c.runner !== undefined) || (c.expression?.expression?.kind !== SyntaxKind.ThisKeyword))) {
+        return false; // a method reference, or a call the checker resolves elsewhere
+    }
+    return go.goJsonOriginBindingIsReadOnly(param, (n: any, local: string) => go.goJsonOriginUseIsReadOnly(n, local)
+        || (!go.goWritesOrRebindsName(n, local, []) && (go.h27a02ScalarReaderUse(n)
+            || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.initializer === n) && (n.parent.name?.text === 'info')))));
+}
+// the identifier is an argument of a direct `this.m (..)` call whose parameter slot is proven read-only
+GoTranspiler.prototype.h28a01ReadOnlyArg = function (node): boolean {
+    const call: any = node?.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const index: number = call.arguments.indexOf(node);
+    let fn: any;
+    try {
+        fn = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+    } catch (e) {
+        fn = undefined;
+    }
+    const param: any = (index >= 0) ? fn?.parameters?.[index] : undefined;
+    return (param !== undefined) && (fn.parameters.length >= call.arguments.length) && this.h28a01ParamReadOnly(fn, param);
+};
+GoTranspiler.prototype.h28a01JsonParam = function (node, depth: number): boolean {
+    const param: any = this.goAnyBoxLocalDeclaration(node);
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || !this.h28a01ParamReadOnly(fn, param)) {
+        return false;
+    }
+    const index: number = fn.parameters.indexOf(param);
+    return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => {
+        const arg: any = this.goUnwrapParenthesizedNode(call.arguments?.[index]);
+        return (arg?.kind === SyntaxKind.Identifier) && this.goJsonOriginContainer(arg, depth + 1);
+    });
+};
+{
+    const goJsonOriginContainerH28a01 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0) {
+        if (goJsonOriginContainerH28a01.call(this, node, depth)) {
+            return true;
+        }
+        return (depth <= 5) && (node?.kind === SyntaxKind.Identifier) && this.h28a01JsonParam(node, depth);
+    };
+    const goJsonOriginUseIsReadOnlyH28a01 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        return goJsonOriginUseIsReadOnlyH28a01.call(this, node, name) || (!this.goWritesOrRebindsName(node, name, []) && this.h28a01ReadOnlyArg(node));
+    };
+}
+// ===== end h28-A01
