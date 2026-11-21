@@ -33803,6 +33803,7 @@ ${tryBodyBlock}
         const h27g33 = this.h27g33StringListLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h27g33 !== undefined) return h27g33;
         const h28g24 = this.h28g24StringParamLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h28g24 !== undefined) return h28g24;
         const h29g14 = this.h29g14RowParamCellRead(node, baseExpr, keys, containerStr, keyStrs); if (h29g14 !== undefined) return h29g14;
+        const h29g28 = this.h29g28AsCastLoopRead(node, baseExpr, keys, containerStr, keyStrs); if (h29g28 !== undefined) return h29g28;
 
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
@@ -55090,3 +55091,65 @@ function installH29g25MapLiteralAddChain (goTranspiler) {
     };
 }
 // ===== end h29-H29-G25
+// ===== h29-H29-G28
+// loop bound `n` seeded `let n = 0` whose every write is `n = 0` or `n = xs.length` while xs itself is a never-written
+// const (or param): n never exceeds len(xs), so `xs[i]` under `i < n` is in range; `(xs as T[])[i]` reads xs
+export interface GoTranspiler {
+    h29g28LengthAliasBound(bound, baseExpr, loop): boolean;
+    h29g28AsCastLoopRead(node, baseExpr, keys, containerStr: string, keyStrs: string[]): string | undefined;
+}
+GoTranspiler.prototype.h29g28LengthAliasBound = function (bound, baseExpr, loop): boolean {
+    if ((bound?.kind !== SyntaxKind.Identifier) || (baseExpr?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const declaration: any = checker?.getSymbolAtLocation(bound)?.valueDeclaration?.resolve?.();
+    const listDeclaration: any = checker?.getSymbolAtLocation(baseExpr)?.valueDeclaration?.resolve?.();
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((listDeclaration?.kind !== SyntaxKind.Parameter) && (listDeclaration?.kind !== SyntaxKind.VariableDeclaration))) {
+        return false;
+    }
+    const scope = this.goEnclosingFunction(loop);
+    if ((scope === undefined) || (this.goEnclosingFunction(declaration) !== scope) || (this.goEnclosingFunction(listDeclaration) !== scope)) {
+        return false;
+    }
+    const isLength = (n: any) => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length')
+        && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === baseExpr.text)
+        && (checker.getSymbolAtLocation(n.expression)?.valueDeclaration?.resolve?.() === listDeclaration);
+    const safeValue = (n: any) => ((n?.kind === SyntaxKind.NumericLiteral) && (n.text === '0')) || isLength(n);
+    if (!safeValue(declaration.initializer)) {
+        return false;
+    }
+    const mutators = [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ];
+    const own = (n: any) => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+    return !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || isFunctionLike(n.parent)) {
+            return false;
+        }
+        if ((n !== listDeclaration.name) && (n.text === baseExpr.text) && this.goWritesOrRebindsName(n, baseExpr.text, mutators) && (own(n) === listDeclaration)) {
+            return true;
+        }
+        if ((n === declaration.name) || (n.text !== bound.text) || !this.goWritesOrRebindsName(n, bound.text, []) || (own(n) !== declaration)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        return !((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.EqualsToken) && safeValue(parent.right));
+    });
+};
+{
+    const goBoundIsLengthOfH29g28 = GoTranspiler.prototype.goBoundIsLengthOf;
+    GoTranspiler.prototype.goBoundIsLengthOf = function (bound, baseExpr, loop): boolean {
+        return goBoundIsLengthOfH29g28.call(this, bound, baseExpr, loop) || this.h29g28LengthAliasBound(bound, baseExpr, loop);
+    };
+}
+GoTranspiler.prototype.h29g28AsCastLoopRead = function (node, baseExpr, keys, containerStr: string, keyStrs: string[]) {
+    let inner: any = baseExpr;
+    while ((inner?.kind === SyntaxKind.ParenthesizedExpression) || (inner?.kind === SyntaxKind.AsExpression) || (inner?.kind === SyntaxKind.NonNullExpression)) {
+        inner = inner.expression;
+    }
+    if ((keys.length !== 1) || (inner === baseExpr) || (inner?.kind !== SyntaxKind.Identifier) || (containerStr !== inner.text)) {
+        return undefined;
+    }
+    return this.goLoopBoundedSliceRead(node, inner, keys[0], containerStr, keyStrs[0]);
+};
+// ===== end h29-H29-G28
