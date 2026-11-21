@@ -56088,3 +56088,145 @@ GoTranspiler.prototype.h30a09FrameDerived = function (node, holderFrame, depth: 
     };
 }
 // ===== end h30-H30-A09
+// ===== h30-H30-A10 =====
+// a handler fed by a dispatcher that hands over a read-only const alias of its own proven frame: a ternary whose
+// arms are the frame, or literal-key safeDict cuts of it (`this.safeDict (F, 'data', F)`), still receives decoded JSON
+export interface GoTranspiler {
+    h30a10FrameAlias(node, frame, depth?: number): boolean;
+}
+GoTranspiler.prototype.h30a10FrameAlias = function (node, frame, depth = 0) {
+    node = this.goUnwrapParenthesizedNode(node);
+    if (depth > 6) {
+        return false;
+    }
+    if (node?.kind === SyntaxKind.ConditionalExpression) {
+        return this.h30a10FrameAlias(node.whenTrue, frame, depth + 1) && this.h30a10FrameAlias(node.whenFalse, frame, depth + 1);
+    }
+    if (node?.kind === SyntaxKind.CallExpression) {
+        const callee: any = node.expression;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')) {
+            return false;
+        }
+        const args: any[] = node.arguments ?? [];
+        if (((args.length !== 2) && (args.length !== 3)) || (args[1]?.kind !== SyntaxKind.StringLiteral)) {
+            return false;
+        }
+        const fallback: any = args[2];
+        const emptyDict = (fallback?.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0);
+        if ((fallback !== undefined) && !emptyDict && !this.h30a10FrameAlias(fallback, frame, depth + 1)) {
+            return false;
+        }
+        return this.h30a10FrameAlias(args[0], frame, depth + 1);
+    }
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(node);
+    if (decl === frame) {
+        return true;
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & 2) === 0) || (this.goEnclosingFunction(decl) !== frame.parent)
+        || h27a11WritesInto(this, this.goEnclosingFunction(decl), decl.name.text, decl)) {
+        return false;
+    }
+    return this.h30a10FrameAlias(decl.initializer, frame, depth + 1);
+};
+function h30a10ProveFrameParam (go: any, param: any): boolean {
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.parameters.indexOf(param) !== 1) || !go.goIsProHandlerMethod(fn)
+        || (fn.name.text === 'handleMessage') || (go.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    const methodName: string = fn.name.text;
+    if (h27a11WritesInto(go, fn.body, param.name.text, param) || goHasDynamicCall(fn, methodName) || h27a11NamedElsewhere(go, fn, methodName)) {
+        return false;
+    }
+    // the caller's frame, proven, and the argument is that frame or a const alias of it; at least one alias
+    let aliases = 0;
+    const frameOrAlias = (arg: any, holder: any): boolean => {
+        const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
+        if ((frame === undefined) || (arg === undefined) || !go.h27a11FrameParam(frame) || !go.h30a10FrameAlias(arg, frame)) {
+            return false;
+        }
+        if (go.goAnyBoxLocalDeclaration(go.goUnwrapParenthesizedNode(arg)) !== frame) {
+            aliases++;
+        }
+        return true;
+    };
+    let uses = 0;
+    for (const call of go.goSameFileCallsOf(fn, methodName)) {
+        if ((call.runner !== undefined) || !frameOrAlias(call.arguments?.[1], go.goEnclosingFunction(call))) {
+            return false;
+        }
+        uses++;
+    }
+    // `this.handleX` held in a local table: every dynamic call in the holder hands the frame or an alias of it
+    const sourceFile = fn.getSourceFile();
+    const refsOk = !go.hasNodeWhere(sourceFile, (n: any) => {
+        if ((n.kind !== SyntaxKind.PropertyAccessExpression) || (n.name?.text !== methodName) || (n.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        if ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression === n)) {
+            return false;
+        }
+        uses++;
+        let up: any = n.parent;
+        while ((up !== undefined) && ((up.kind === SyntaxKind.PropertyAssignment) || (up.kind === SyntaxKind.ObjectLiteralExpression) || (up.kind === SyntaxKind.ParenthesizedExpression))) {
+            up = up.parent;
+        }
+        if ((up?.kind !== SyntaxKind.VariableDeclaration) || (up.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return true;
+        }
+        const holder: any = go.goEnclosingFunction(n);
+        let dynamic = 0;
+        const bad = go.hasNodeWhere(holder?.body, (c: any) => {
+            if (c.kind !== SyntaxKind.CallExpression) {
+                return false;
+            }
+            const callee: any = c.expression;
+            if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply'))
+                && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+                dynamic++;
+                return (callee.name.text === 'apply') || !frameOrAlias(c.arguments?.[2], holder);
+            }
+            if ((callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration)) {
+                dynamic++;
+                return !frameOrAlias(c.arguments?.[1], holder);
+            }
+            return false;
+        });
+        return bad || (holder === undefined) || (dynamic === 0);
+    });
+    return refsOk && (uses > 0) && (aliases > 0);
+}
+{
+    const h27a11FrameParamH30a10 = GoTranspiler.prototype.h27a11FrameParam;
+    GoTranspiler.prototype.h27a11FrameParam = function (param) {
+        if (h27a11FrameParamH30a10.call(this, param)) {
+            return true;
+        }
+        this.h30a10Cache = this.h30a10Cache ?? new Map();
+        this.h30a10Active = this.h30a10Active ?? new Set();
+        if (this.h30a10Cache.has(param)) {
+            return this.h30a10Cache.get(param);
+        }
+        if (this.h30a10Active.has(param)) {
+            return false;
+        }
+        const outermost = (this.h30a10Active.size === 0);
+        this.h30a10Active.add(param);
+        let result = false;
+        try {
+            result = h30a10ProveFrameParam(this, param);
+        } finally {
+            this.h30a10Active.delete(param);
+        }
+        if (outermost || result) {
+            this.h30a10Cache.set(param, result);
+        }
+        return result;
+    };
+}
+// ===== end h30-H30-A10 =====
