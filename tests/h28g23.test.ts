@@ -48,6 +48,6 @@ describe ('h28g23 ternary entry of a map literal local', () => {
     });
     test ('an entry of a returned literal is not moved', () => {
         const out = print ('    f (o: Dict, flag: boolean) {\n        const a = this.safeString (o, \'a\');\n        return { \'x\': flag ? a : undefined };\n    }');
-        expect (out).not.toMatch (/\["x"\] = /);
+        expect (out).toMatch (/var (literal\d+) map\[string\]any = map\[string\]any\{\}\n\s*if EvalTruthy\(flag\) \{\n\s*\1\["x"\] = a\n\s*\} else \{\n\s*\1\["x"\] = nil\n\s*\}\n\s*return \1\n/);
     });
 });

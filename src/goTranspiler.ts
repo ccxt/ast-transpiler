@@ -7737,6 +7737,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoTypedTernaryDeclaration (goTranspiler);
     installH26G23StringTernaryHoist (goTranspiler);
     installH28G23MapEntryTernaryStore (goTranspiler);
+    installH29G19ReturnedLiteralTernaryStore (goTranspiler);
     installH27a07ConfigMapReads (goTranspiler);
     installH28a07ConfigMapNilFill (goTranspiler);
     installH28g10StrPtrTernaryDecl (goTranspiler);
@@ -54688,3 +54689,107 @@ GoTranspiler.prototype.h29g15RebindGuardProves = function (id) {
     }, () => false);
 };
 // ===== end h29-H29-G15
+// ===== h29-G19
+// `return f({ .., 'k': c ? a : b })` / `xs.push({ .. })` with local-read arms: the literal is bound first to
+// `var literalN map[string]any`, the entry becomes the h28-G23 if / else store, then the statement uses the name.
+// Only when the base print holds the literal verbatim at that spot, so swapping it for the name is all that changes.
+function h29g19Literal (node: any): any {
+    let e: any = (node?.kind === SyntaxKind.ReturnStatement) ? node.expression : (node?.kind === SyntaxKind.ExpressionStatement) ? node.expression : undefined;
+    e = ral90g5UnwrapNode (e);
+    if (e?.kind === SyntaxKind.ObjectLiteralExpression) {
+        return (node.kind === SyntaxKind.ReturnStatement) ? e : undefined;
+    }
+    if ((e?.kind !== SyntaxKind.CallExpression) || (e.expression?.kind !== SyntaxKind.PropertyAccessExpression)) {
+        return undefined;
+    }
+    const receiver = e.expression.expression?.kind;
+    if ((receiver !== SyntaxKind.ThisKeyword) && (receiver !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const literals = e.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind === SyntaxKind.ObjectLiteralExpression);
+    const others = e.arguments.filter ((a: any) => ral90g5UnwrapNode (a)?.kind !== SyntaxKind.ObjectLiteralExpression);
+    return ((literals.length === 1) && others.every ((a: any) => h28g23LocalRead (a))) ? ral90g5UnwrapNode (literals[0]) : undefined;
+}
+function h29g19Entries (literal: any): any[] {
+    return literal.properties.filter ((p: any) => (p.kind === SyntaxKind.PropertyAssignment)
+        && ((p.name?.kind === SyntaxKind.StringLiteral) || (p.name?.kind === SyntaxKind.Identifier)) && /^[\w.-]+$/.test (p.name.text)
+        && (ral90g5UnwrapNode (p.initializer)?.kind === SyntaxKind.ConditionalExpression)
+        && [ 'condition', 'whenTrue', 'whenFalse' ].every ((k) => h28g23LocalRead (ral90g5UnwrapNode (p.initializer)[k])));
+}
+function h29g19PrintStatement (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const base = print ();
+    const parentKind = node?.parent?.kind;
+    if ((typeof base !== 'string') || !base.includes ('func() any {') || (goTranspiler.h28g23Skip.size !== 0) || (goTranspiler.h29g19Name.size !== 0)
+        || ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause))) {
+        return base;
+    }
+    const literal = h29g19Literal (node);
+    const entries = (literal === undefined) ? [] : h29g19Entries (literal);
+    if (entries.length === 0) {
+        return base;
+    }
+    const name = 'literal' + goTranspiler.getLineBasedSuffix (literal);
+    const level = goTranspiler.goStatementLevel;
+    const printLiteral = () => {
+        goTranspiler.goStatementLevel = identation;
+        try {
+            return goTranspiler.printNode (literal, 0).trim ();
+        } finally {
+            goTranspiler.goStatementLevel = level;
+        }
+    };
+    let whole: string;
+    let reduced: string;
+    let statement: string;
+    try {
+        whole = printLiteral ();
+        goTranspiler.h28g23Skip.set (literal, new Set (entries));
+        reduced = printLiteral ();
+        goTranspiler.h28g23Skip.clear ();
+        goTranspiler.h29g19Name.set (literal, name);
+        statement = print ();
+    } finally {
+        goTranspiler.h28g23Skip.clear ();
+        goTranspiler.h29g19Name.clear ();
+    }
+    const count = (s: string) => s.split ('func() any {').length - 1;
+    if (!whole.startsWith ('map[string]any{') || !reduced.startsWith ('map[string]any{') || (count (reduced) !== count (whole) - entries.length)
+        || (base.split (whole).length !== 2) || (base.replace (whole, name) !== statement) || base.includes (name)) {
+        return base;
+    }
+    const stores: string[] = [];
+    for (const p of entries) {
+        const store = goTranspiler.goTernaryStatementIfElse (`${name}[${JSON.stringify (p.name.text)}]`, ral90g5UnwrapNode (p.initializer), identation);
+        if ((store === undefined) || store.includes ('func()')) {
+            return base;
+        }
+        stores.push (store);
+    }
+    const lead = statement.match (/^\s*/)[0];
+    const iden = goTranspiler.getIden (identation);
+    if (!lead.endsWith (iden)) {
+        return base;
+    }
+    const comments = lead.substring (0, lead.length - iden.length);
+    return `${comments}${iden}var ${name} map[string]any = ${reduced}\n${stores.join ('\n')}\n${iden}${statement.substring (lead.length)}`;
+}
+function installH29G19ReturnedLiteralTernaryStore (goTranspiler: any) {
+    if (!goInstallOnce (goTranspiler, '__h29g19Installed', 'printObjectLiteralExpression')) {
+        return;
+    }
+    goTranspiler.h29g19Name = new Map<any, string> ();
+    const literalExpression = goTranspiler.printObjectLiteralExpression;
+    goTranspiler.printObjectLiteralExpression = function (node, identation) {
+        const name = this.h29g19Name.get (node);
+        return (name !== undefined) ? name : literalExpression.call (this, node, identation);
+    };
+    const returnStatement = goTranspiler.printReturnStatement;
+    goTranspiler.printReturnStatement = function (node, identation) {
+        return h29g19PrintStatement (this, node, identation, () => returnStatement.call (this, node, identation));
+    };
+    const expressionStatement = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return h29g19PrintStatement (this, node, identation, () => expressionStatement.call (this, node, identation));
+    };
+}
+// ===== end h29-G19
