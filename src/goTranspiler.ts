@@ -28815,6 +28815,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const native = isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         const h28g16 = this.h28g16CellNilCompare(left, rFam, nilTest(leftText)); if (h28g16 !== undefined) return h28g16;
         const h29g11 = this.h29g11CopyNilCompare(left, rFam, nilTest(leftText)); if (h29g11 !== undefined) return h29g11;
+        const h30g15 = this.h30g15SafeReadNilCompare(left, rFam, nilTest(leftText)); if (h30g15 !== undefined) return h30g15;
         if (rFam === 'nil' && lPtr) {
             return nilTest(leftText);
         }
@@ -57204,3 +57205,86 @@ function installH30G13PureArmTernaryStore (goTranspiler: any) {
     };
 }
 // ===== end h30-G13
+// ===== h30-G15 =====
+// `x === undefined` on an `any` local initialised by the base safeDict / safeList (no default or a literal one), at a
+// point no write of x can reach: the base reader returns the default or a value IsDictionary / IsArray accepted, which
+// derefScalar never folds to nil, so the box is nil exactly when IsEqual(x, nil) answered true
+export interface GoTranspiler {
+    h30g15SafeReadNilCompare(left, rFam: string | undefined, nilText: string): string | undefined;
+    h30g15BaseSafeReadInit(init): boolean;
+    h30g15NoWriteReaches(decl, use): boolean;
+}
+GoTranspiler.prototype.h30g15SafeReadNilCompare = function (left, rFam, nilText) {
+    const n: any = this.goUnwrapParenthesizedNode(left);
+    if ((rFam !== 'nil') || (n?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(n) !== undefined)) {
+        return undefined;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(n);
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || !this.h30g15BaseSafeReadInit(decl.initializer) || !this.h30g15NoWriteReaches(decl, n)) {
+        return undefined;
+    }
+    return nilText;
+};
+GoTranspiler.prototype.h30g15BaseSafeReadInit = function (init) {
+    const call: any = this.goUnwrapParenthesizedNode(init);
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !/^safe(Dict|List)$/.test(`${callee.name?.text}`)) {
+        return false;
+    }
+    const args = call.arguments ?? [];
+    if ((args.length < 2) || (args.length > 3) || ((args.length === 3) && !this.goLiteralDefaultArg(args[2]))) {
+        return false;
+    }
+    const declarations = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve());
+    const baseFile = /(^|\/)ts\/src\/base\/Exchange(\.[\w.-]+)?\.ts$/;
+    return (declarations?.length > 0) && declarations.every((d) => baseFile.test(String(d.getSourceFile()?.fileName ?? '').replace(/\\/g, '/')));
+};
+// every write of the local sits after the use in the same function body, and no loop around the use holds one
+GoTranspiler.prototype.h30g15NoWriteReaches = function (decl, use) {
+    const scope = this.goEnclosingFunction(decl);
+    if ((scope === undefined) || (this.goEnclosingFunction(use) !== scope)) {
+        return false;
+    }
+    const name = decl.name.text;
+    const writes: any[] = [];
+    let unknown = false;
+    const visit = (n) => {
+        if (unknown) { return; }
+        const isFn = (n !== scope) && [ SyntaxKind.FunctionExpression, SyntaxKind.ArrowFunction, SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration ].includes(n.kind);
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
+            && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)) {
+            writes.push(n);
+        }
+        if (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression))
+            && (n.operand?.kind === SyntaxKind.Identifier) && (n.operand.text === name)) {
+            writes.push(n);
+        }
+        if (isFn) {
+            const mentions = (m) => ((m.kind === SyntaxKind.Identifier) && (m.text === name)) || (m.forEachChild((c) => (mentions(c) ? true : undefined)) === true);
+            if (mentions(n)) {
+                unknown = true; // a closure may capture and write the local
+                return;
+            }
+        }
+        n.forEachChild(visit);
+    };
+    scope.forEachChild(visit);
+    if (unknown) {
+        return false;
+    }
+    const loops = [ SyntaxKind.ForStatement, SyntaxKind.ForOfStatement, SyntaxKind.ForInStatement, SyntaxKind.WhileStatement, SyntaxKind.DoStatement ];
+    for (const w of writes) {
+        if (w.pos < use.end) {
+            return false;
+        }
+        for (let p: any = use.parent; (p !== undefined) && (p !== scope); p = p.parent) {
+            if (loops.includes(p.kind) && (w.pos >= p.pos) && (w.end <= p.end)) {
+                return false;
+            }
+        }
+    }
+    return true;
+};
+// ===== end h30-G15 =====
