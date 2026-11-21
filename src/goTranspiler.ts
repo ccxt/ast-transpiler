@@ -11101,6 +11101,7 @@ function ccxtGoVenuePairOf (method) {
     const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
     const slot0 = (type?.kind === ts.SyntaxKind.TupleType) && (type.elements.length === 2) && (ref (type.elements[1]) === 'Dict')
         ? (CCXT_GO_VENUE_PAIR_SLOT_0[ref (type.elements[0])] ?? h26g39VenueStringSlot0 (method)) : ccxtGoVenueTripleOf (type);
+    const h28 = h28g11BoolSlotRejected (method, slot0); if (h28) return undefined;
     if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.body === undefined) || (slot0 === undefined)
         || !/(?:^|[\\/])ts[\\/]src[\\/]/.test (file) || /[\\/](?:base|test|abstract)[\\/]/.test (file)
         || (method.modifiers ?? []).some ((m) => (m.kind === ts.SyntaxKind.AsyncKeyword) || (m.kind === ts.SyntaxKind.StaticKeyword))
@@ -51177,3 +51178,69 @@ function installH28g10StrPtrTernaryDecl (goTranspiler) {
     };
 }
 // ===== end h28-H28-G10
+// ===== h28-G11
+// a venue `[ Bool, Dict ]` pair prints `(bool, map[string]any)` when every own return's slot 0 is a bool literal or a
+// local the printer declares Go `bool` (never nil); destructuring callers then bind a plain bool
+CCXT_GO_VENUE_PAIR_SLOT_0['Bool'] = { 'type': 'bool', 'first': 'SafeBoolPtr' };
+function h28g11BoolSlotRejected (method, slot0) {
+    if ((slot0?.type !== 'bool') || (method?.body === undefined)) {
+        return false;
+    }
+    const go = CCXT_GO_VENUE_PAIR_STATE.go;
+    let ok = true;
+    const visit = (n) => {
+        if (!ok || ts.isFunctionLike (n) || (n.kind === ts.SyntaxKind.ClassDeclaration) || (n.kind === ts.SyntaxKind.ClassExpression)) {
+            return;
+        }
+        if (n.kind === ts.SyntaxKind.ReturnStatement) {
+            const e = n.expression?.elements?.[0];
+            ok = (e?.kind === ts.SyntaxKind.TrueKeyword) || (e?.kind === ts.SyntaxKind.FalseKeyword)
+                || ((e?.kind === ts.SyntaxKind.Identifier) && (go?.goDeclaredTypeOfIdentifier?.(e) === 'bool'));
+            return;
+        }
+        n.forEachChild (visit);
+    };
+    method.body.forEachChild (visit);
+    return !ok;
+}
+const h28g11IsBoolPairCall = (call) => (call?.kind === ts.SyntaxKind.CallExpression) && (ccxtGoVenuePairOfCall (call)?.type === 'bool');
+// `[ x, p ] = this.m (..)` of a bool pair: slot 0 is a bool write (x joins as Go bool) and the pair assigns as is
+const h28g11BoolSlotWrite = GoNilDeclaredValueAssignmentScan.prototype.boolSlotWrite;
+GoNilDeclaredValueAssignmentScan.prototype.boolSlotWrite = function (node) {
+    const shipped = h28g11BoolSlotWrite.call (this, node);
+    const assignment = node?.parent?.parent;
+    if ((shipped !== undefined) || (node.parent.kind !== ts.SyntaxKind.ArrayLiteralExpression) || (node.parent.elements[0] !== node)
+        || (assignment?.kind !== ts.SyntaxKind.BinaryExpression) || (assignment.left !== node.parent) || (assignment.parent?.kind !== ts.SyntaxKind.ExpressionStatement)
+        || !h28g11IsBoolPairCall (assignment.right) || this.inNestedFunction (node)) {
+        return shipped;
+    }
+    this.sawWrite = true;
+    if ((this.joinType !== undefined) && (this.joinType !== 'bool')) {
+        this.rejected = true;
+        return false;
+    }
+    this.joinType = 'bool';
+    return true;
+};
+const h28g11Binary = GoTranspiler.prototype.printCustomBinaryExpressionIfAny;
+GoTranspiler.prototype.printCustomBinaryExpressionIfAny = function (node, identation) {
+    const left = node?.left;
+    if ((left?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (node.operatorToken?.kind === ts.SyntaxKind.EqualsToken) && (left.elements.length === 2)
+        && left.elements.every ((e) => ts.isIdentifier (e)) && h28g11IsBoolPairCall (node.right) && (node.parent?.kind === ts.SyntaxKind.ExpressionStatement)
+        && (this.goDeclaredTypeOfIdentifier (left.elements[0]) === 'bool')) {
+        const call = ccxtGoTupleResultUnwrap (this.printNode (node.right, 0)) ?? String (this.printNode (node.right, 0)).trim ();
+        return left.elements.map ((e) => this.printNode (e, 0)).join (', ') + ' = ' + call;
+    }
+    return h28g11Binary.call (this, node, identation);
+};
+// a joined bool slot local (`hf, p := pair (..)`) is a Go bool: `hf === true` is the native compare
+const h28g11Equality = GoTranspiler.prototype.printInlineEquality;
+GoTranspiler.prototype.printInlineEquality = function (left, right, leftText, rightText, isEq) {
+    const lit = (n) => (n?.kind === ts.SyntaxKind.TrueKeyword) || (n?.kind === ts.SyntaxKind.FalseKeyword);
+    const joinedBool = (n) => (n?.kind === ts.SyntaxKind.Identifier) && (ccxtGoVenuePairElementType (this, n) === 'bool');
+    if ((lit (right) && joinedBool (left)) || (lit (left) && joinedBool (right))) {
+        return isEq ? '(' + leftText + ' == ' + rightText + ')' : '(' + leftText + ' != ' + rightText + ')';
+    }
+    return h28g11Equality.call (this, left, right, leftText, rightText, isEq);
+};
+// ===== end h28-G11
