@@ -5564,6 +5564,7 @@ function installCcxtGoArrayLiteralWrites (goTranspiler) {
         && ccxtGoArrayLiteralLocalIsSafe (go, scope, declaration, varName));
     const shippedBinary = goTranspiler.printBinaryExpression;
     goTranspiler.printBinaryExpression = function (node, identation) {
+        const h = h28a19ArrayIdentityWrite (this, node); if (h !== undefined) return h;
         if ((node?.operatorToken?.kind === ts.SyntaxKind.EqualsToken) && ts.isIdentifier (node.left)
             && (ccxtGoArrayLiteralDeclarationOf (this, node.left) !== undefined)
             && (this.goDeclaredTypeOfIdentifier (node.left) === '[]any')
@@ -50758,3 +50759,29 @@ function h28a18StringSlotAddress (goTranspiler, e, type, wrap) {
     return goStringAddressArg (goTranspiler, e, String (goTranspiler.printNode (e, 0)).trim ());
 }
 // ===== end h28-H28-A18
+// ===== h28-H28-A19
+// `x = y` into a `[]`-seeded `[]any` local where y's own declaration prints `var y []any`: ArrayTyped of a
+// []any is that slice (a nil slice stays nil), so the write prints the operand as is
+function h28a19ListTyped (go, ident) {
+    if (go.goDeclaredTypeOfIdentifier (ident) === '[]any') {
+        return true;
+    }
+    const declaration = ccxtGoParamDeclarationOf (go, ident);
+    const list = declaration?.parent;
+    if ((declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (list?.kind !== ts.SyntaxKind.VariableDeclarationList)
+        || (list.declarations.length !== 1) || !ts.isIdentifier (declaration.name)) {
+        return false;
+    }
+    const printed = go.printNode (list, 0);
+    const head = (typeof printed === 'string') ? printed.trimStart ().split ('\n')[0].trimEnd () : '';
+    return (head === 'var ' + declaration.name.text + ' []any') || head.startsWith ('var ' + declaration.name.text + ' []any = ');
+}
+function h28a19ArrayIdentityWrite (go, node) {
+    if ((node?.operatorToken?.kind !== ts.SyntaxKind.EqualsToken) || !ts.isIdentifier (node.left) || !ts.isIdentifier (node.right)
+        || (ccxtGoArrayLiteralDeclarationOf (go, node.left) === undefined) || (go.goDeclaredTypeOfIdentifier (node.left) !== '[]any')
+        || !h28a19ListTyped (go, node.right)) {
+        return undefined;
+    }
+    return go.printNode (node.left, 0) + ' = ' + go.printNode (node.right, 0).trim ();
+}
+// ===== end h28-H28-A19
