@@ -4164,6 +4164,7 @@ function ccxtGoContainerNeverNil (goTranspiler, expression) {
     if ((callee === 'extend') || (callee === 'deepExtend')) {
         return true; // ExtendMap / DeepExtend always build a fresh map
     }
+    const h27g14 = h27g14NeverNilMethodCall (goTranspiler, expression, callee); if (h27g14 !== undefined) { return h27g14; }
     let declaration;
     try {
         declaration = goTranspiler.getChecker ().getResolvedSignature (expression)?.declaration;
@@ -48709,3 +48710,30 @@ function h27g13LocalReadDerefs (n) {
     return (verdict === '*') || (verdict === 'deref');
 }
 // ===== end h27-H27-G13 =====
+// ===== h27-H27-G14
+// `this.m (..)` of a venue method whose own Go return the annotated-return proof already types as a never-nil
+// map / slice: the checker hands a NodeHandle, so resolve it to the live declaration before reading it
+function h27g14NeverNilMethodCall (goTranspiler, expression, callee) {
+    let declaration;
+    try {
+        declaration = goTranspiler.getChecker ().getResolvedSignature (expression)?.declaration?.resolve?. ();
+    } catch (e) {
+        return undefined;
+    }
+    if ((declaration?.kind !== ts.SyntaxKind.MethodDeclaration) || CCXT_GO_PARSE_METHOD.test (callee)) {
+        return undefined;
+    }
+    const goType = ccxtGoAnnotatedMethodReturnType (goTranspiler, declaration);
+    if (((goType !== 'map[string]any') && (goType !== '[]any')) || H27G14_IN_PROGRESS.has (declaration)) {
+        return undefined;
+    }
+    // every path of the callee itself is never nil (a returned map parameter could be nil)
+    H27G14_IN_PROGRESS.add (declaration);
+    try {
+        return collectReturnStatements (declaration.body).every ((r) => ccxtGoContainerNeverNil (goTranspiler, r.expression)) ? true : undefined;
+    } finally {
+        H27G14_IN_PROGRESS.delete (declaration);
+    }
+}
+const H27G14_IN_PROGRESS = new Set ();
+// ===== end h27-H27-G14
