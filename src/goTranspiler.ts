@@ -52698,3 +52698,62 @@ function h29a01EndpointMapLocal (go: any, arg: any): boolean {
     return (ccxtGoNilJoinDeclarationType(go, arg) === GO_SAFE_DICT_LOCAL_TYPE) && goAwaitedMapWritesOnlyLocal(go, decl);
 }
 // ===== end h29-A01
+// ===== h29-H29-A02
+// `const x = this.safeList (R, 'lit', [])` / `this.safeDict (R, 'lit', {})` on an awaited map endpoint receive (the
+// h28-A02 receiver proof): the member is a decoded JSON value, so the comma-ok read plus the empty default when it
+// fails answers exactly what SafeListSlice / SafeDictMap did (the member container, else a fresh empty one)
+export interface GoTranspiler {
+    h29a02EndpointDefaultedRead(node, identation: number, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h29a02EndpointDefaultedRead = function (node, identation: number, printed: string) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;                 // `safeDict (..) as Dict` prints the bare call
+    }
+    if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression)
+        || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const accessor = init.expression?.name?.text;
+    if ((accessor !== 'safeList') && (accessor !== 'safeDict')) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, accessor);
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier)
+        || !/^[A-Za-z0-9_]+$/.test(args.key.text)) {
+        return undefined;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(args.container);
+    if ((this.goUnwrapParenthesizedNode(source?.initializer)?.kind !== SyntaxKind.AwaitExpression)
+        || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !(this.h27a02JsonOrigin(args.container, 0)
+            || ((declaration.initializer === init) && this.h27a02JsonOriginBeforeRead(args.container, declaration)))) {
+        return undefined;
+    }
+    const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    const name = this.printNode(declaration.name, 0).trim();
+    const container = this.printNode(args.container, 0).trim();
+    const iden = this.getIden(identation);
+    const call = `(${container}, "${args.key.text}", ${goType}{})`;
+    // the printed forms the ccxt passes turn into SafeListSlice / SafeDictMap
+    const forms = (accessor === 'safeList')
+        ? [ `this.SafeListSlice${call}`, `SafeListTypedDefault${call}`, `ListTyped(this.SafeList${call})` ]
+        : [ `this.SafeDictMap${call}`, `MapTyped(this.SafeDict${call})` ];
+    const lead = /^\n*/.exec(printed)[0];
+    if (!forms.some((form) => printed.substring(lead.length) === `${iden}var ${name} ${goType} = ${form}`)) {
+        return undefined;
+    }
+    const inner = this.getIden(identation + 1);
+    return `${lead}${iden}var ${name} ${goType}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${goType})\n`
+        + `${iden}if ${name} == nil {\n${inner}${name} = ${goType}{}\n${iden}}`;
+};
+{
+    const printVariableDeclarationListH29a02 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH29a02.call(this, node, identation);
+        const h = this.h29a02EndpointDefaultedRead(node, identation, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h29-H29-A02
