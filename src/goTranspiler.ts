@@ -49925,3 +49925,82 @@ GoTranspiler.prototype.h28a03JoinedEndpointLocal = function (node: any): boolean
     };
 }
 // ===== end h28-A03
+// ===== h28-H28-A05
+// `const d = this.safeDict (R, 'k', R)` on a decoded JSON map R (goJsonOriginContainer, R's own default use admitted):
+// the member is a map, another JSON value or absent, so the comma-ok read with R as the nil fallback answers what
+// SafeDictMap did (a non-map or missing member gave R, a nil R map reads nil and falls back to the same nil R)
+export interface GoTranspiler {
+    h28a05SelfDefaultSite(node): { name: any, container: any, key: any } | undefined;
+}
+GoTranspiler.prototype.h28a05SelfDefaultSite = function (node) {
+    if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
+        return undefined;
+    }
+    const decl: any = node.declarations[0];
+    let init: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const callee: any = init?.expression;
+    if ((decl.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    if ((key?.kind !== SyntaxKind.StringLiteral) || (container?.kind !== SyntaxKind.Identifier) || (fallback?.kind !== SyntaxKind.Identifier)
+        || (fallback.text !== container.text)) {
+        return undefined;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(container);
+    if ((source?.kind !== SyntaxKind.VariableDeclaration) || (source.name?.kind !== SyntaxKind.Identifier)
+        || (source.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return undefined;
+    }
+    const sourceInit: any = this.goUnwrapParenthesizedNode(source.initializer);
+    let fromJson = false;
+    let isMap = false;
+    // an awaited endpoint receiver is left out: the ccxt endpoint pass may bind it `r.Raw` (any) once it is used as a value
+    {
+        const args: any = this.goSafeAccessorLocalArgs(sourceInit, 'safeDict');
+        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && this.goJsonOriginContainer(args.container, 1);
+        isMap = this.goSafeDictLocalUnbox(source) === GO_SAFE_DICT_LOCAL_TYPE;
+    }
+    // R itself: bound once, read-only, except that it is the fallback of this very read
+    // either operand of another `this.safeDict (R, k, R)` read: it only reads R
+    const selfFallback = (n: any): boolean => (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.arguments.length === 3)
+        && ((n.parent.arguments[2] === n) || (n.parent.arguments[0] === n))
+        && (n.parent.arguments[0]?.kind === SyntaxKind.Identifier) && (n.parent.arguments[0].text === n.text)
+        && (n.parent.arguments[2]?.kind === SyntaxKind.Identifier) && (n.parent.arguments[2].text === n.text)
+        && (n.parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.expression.expression?.kind === SyntaxKind.ThisKeyword)
+        && (n.parent.expression.name?.text === 'safeDict');
+    const readOnly = fromJson && isMap && this.goJsonOriginBindingIsReadOnly(source, (n, name) => selfFallback(n)
+        || this.goJsonOriginUseIsReadOnly(n, name));
+    // the result may alias R: nothing may write through it, so R keeps holding decoded JSON only
+    const scope: any = this.goEnclosingFunction(decl);
+    if (!readOnly || (scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
+        && (n !== decl.name) && ((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent)
+            || this.goWritesOrRebindsName(n, n.text, [])))) {
+        return undefined;
+    }
+    return { name: decl.name, container, key };
+};
+{
+    const h28a05Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed: string = h28a05Upstream.call(this, node, identation);
+        const site = (typeof printed === 'string') ? this.h28a05SelfDefaultSite(node) : undefined;
+        if (site === undefined) {
+            return printed;
+        }
+        const name = this.printNode(site.name, 0);
+        const container = this.printNode(site.container, 0);
+        const key = this.printNode(site.key, 0);
+        const ind = this.getIden(identation);
+        const wrap = `${ind}var ${name} map[string]any = this.SafeDictMap(${container}, ${key}, ${container})`;
+        if (printed.replace(/^\n+/, '') !== wrap) {
+            return printed;
+        }
+        return `${/^\n*/.exec(printed)[0]}${ind}var ${name} map[string]any\n${ind}${name}, _ = ${container}[${key}].(map[string]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = ${container}\n${ind}}`;
+    };
+}
+// ===== end h28-H28-A05
