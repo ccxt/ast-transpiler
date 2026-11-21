@@ -20931,6 +20931,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const kind = this.rustScalarLocalOf(outerKey)?.kind;
                 if (kind === 'str' || kind === 'ostr') { acc = `get_value(&${acc}, ${super.printIdentifier(outerKey)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`; continue; }
             }
+            const h30r08 = !nativeAllowed && chain.length === 1 ? this.h30r08ListRowRead(acc, receiver, key, node) : undefined; if (h30r08 !== undefined) { acc = h30r08; continue; }
             const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key)
                 : (this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node));
             const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
@@ -41819,6 +41820,26 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
     }
     // ===== end h30-R07
+    // ===== h30-R08
+    /** `xs[i]` read inside the value of a statement-level write into the same list local (`xs[i] = f (xs[i])`,
+     *  `xs[j]['k'] = g (xs[j])`): that write binds its value first (`let __be_tmp = ..`), so the read runs before `&mut xs`. */
+    h30r08ListRowRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
+        if (!isIdentifier(receiver) || this.isTestSource(chain) || this.isNativeWriteTargetBase(chain)) return undefined;
+        const parent: any = chain.parent;
+        if (parent !== undefined && (isPropertyAccessExpression(parent) || isCallExpression(parent)) && parent.expression === chain) return undefined;
+        let host: any;
+        for (let current: any = chain.parent; current; current = current.parent) {
+            if (isStatement(current) || isSourceFile(current) || isFunctionLike(current)) break;
+            if (isBinaryExpression(current) && rustIsAssignmentOperator(current.operatorToken.kind)) { if (host !== undefined) return undefined; host = current; }
+        }
+        if (host === undefined || host.operatorToken.kind !== SyntaxKind.EqualsToken || host.parent?.kind !== SyntaxKind.ExpressionStatement || !isElementAccessExpression(host.left)
+            || !this.isNodeInsideNode(chain, host.right) || this.rootPlaceText(host.left) !== String((receiver as any).text)) return undefined;
+        // a nested row write (`xs[j]['k'] = ..`) belongs to the bounded-row insert rules
+        const base: any = host.left.expression;
+        if (!isIdentifier(base) || !this.rustHelperWriteReadsRoot(host.left, host.right) || !this.isNativeAccessPositionSafe(chain, host)) return undefined;
+        return this.printNativeDynamicListIndex(acc, receiver, key);
+    }
+    // ===== end h30-R08
 }
 
 // ===== h28-H28-T02: safeStringList borrows its container like the other generated safe readers (impl KeyRead)
