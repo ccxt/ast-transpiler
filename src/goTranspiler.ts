@@ -36868,18 +36868,6 @@ GoTranspiler.prototype.printCustomBinaryExpressionIfAny = function (node, identa
     }).join ('\n');
 };
 
-// `a && b` / `a || b` used only as a condition (both arms print EvalTruthy)
-function ccxtGoNilJoinIsCondition (node) {
-    let parent = node.parent;
-    while ((parent?.kind === SyntaxKind.ParenthesizedExpression) || ((parent?.kind === SyntaxKind.BinaryExpression)
-        && [ SyntaxKind.AmpersandAmpersandToken, SyntaxKind.BarBarToken ].includes (parent.operatorToken.kind))) {
-        node = parent;
-        parent = parent.parent;
-    }
-    return ((parent?.kind === SyntaxKind.IfStatement) && (parent.expression === node))
-        || ((parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator === SyntaxKind.ExclamationToken));
-}
-
 // R3: `let x: Bool = undefined` whose every write is a true/false literal and whose every read is a truthiness
 // test (`if (x)`, `!x`, `x === true`, an `&&`/`||` condition, a ternary condition). Those reads answer an untyped
 // nil exactly as a Go false, so `var x bool` (zero value false) keeps every answer even where a read precedes the
@@ -36903,9 +36891,6 @@ function ccxtGo87TruthyRead (node) {
         const op = parent.operatorToken.kind;
         if (COMPARISON_TOKENS.includes (op)) {
             return ((parent.left === current) ? parent.right : parent.left)?.kind === SyntaxKind.TrueKeyword;
-        }
-        if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
-            return ccxtGoNilJoinIsCondition (parent);
         }
         return false;
     }
