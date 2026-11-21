@@ -7723,6 +7723,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoNestedSafeDictRead (goTranspiler);
     installCcxtGoTypedTernaryDeclaration (goTranspiler);
     installH26G23StringTernaryHoist (goTranspiler);
+    installH27a07ConfigMapReads (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
@@ -47420,3 +47421,57 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return printed;
 };
 // ===== end h27-A06 =====
+// ===== h27-A07 =====
+// `const x = this.safeDict (R, k[, {}])` where R is `this.urls` / `this.fees` (config maps built from describe
+// literals and their clones: only JSON-shaped values, never a sync.Map) or a const local read from them that
+// is printed `map[string]any`, and k a Go string: the comma-ok assertion answers nil exactly as SafeMapTyped.
+function h27a07ConfigMapReceiver (goTranspiler, node, depth = 0): boolean {
+    const expr = goTranspiler.goUnwrapParenthesizedNode (node);
+    if ((expr === undefined) || (depth > 4)) {
+        return false;
+    }
+    if ((expr.kind === SyntaxKind.PropertyAccessExpression) && (expr.expression?.kind === SyntaxKind.ThisKeyword)) {
+        const name = expr.name?.text;
+        return ((name === 'urls') || (name === 'fees')) && (goTranspiler.goFieldContainerTypeNative (expr) === 'map[string]any');
+    }
+    if (expr.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration = goTranspiler.goDeclarationOfIdentifier (expr);
+    if ((declaration === undefined) || (declaration.name?.kind !== SyntaxKind.Identifier) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+        || (goTranspiler.goSafeDictLocalUnbox (declaration) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return false;
+    }
+    const args = h25g05UrlsSafeDictArgs (goTranspiler, declaration.initializer);
+    return (args !== undefined) && h27a07ConfigMapReceiver (goTranspiler, args.container, depth + 1);
+}
+
+function installH27a07ConfigMapReads (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h27a07ConfigMapReadsInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const shipped = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const printed = shipped.call (this, node, identation);
+        const declaration = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || ((node.flags & NodeFlags.Const) === 0)) {
+            return printed;
+        }
+        const args = h25g05UrlsSafeDictArgs (this, declaration.initializer);
+        if ((args === undefined) || !h27a07ConfigMapReceiver (this, args.container)) {
+            return printed;
+        }
+        const key = this.printNode (args.key, 0);
+        if (!this.goKeyIsString (args.key, key)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const container = this.printNode (args.container, 0);
+        const match = /^(\n*)(\t*)var (\w+) map\[string\]any = (?:ccxt\.)?SafeMapTyped\((.*)\)$/.exec (printed);
+        if ((match === null) || (match[3] !== name) || (match[4] !== container + ', ' + key)) {
+            return printed;
+        }
+        return match[1] + match[2] + 'var ' + name + ', _ = ' + container + '[' + key + '].(map[string]any)';
+    };
+}
+// ===== end h27-A07 =====

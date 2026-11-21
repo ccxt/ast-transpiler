@@ -35,11 +35,11 @@ describe('go urls api dict locals read the urls views', () => {
     test('a urls api local used only for its ws entry keeps that read (no unused Go local)', () => {
         const out = print ("const apiUrls = this.safeDict (this.urls, 'api', {});\nconst wsUrls = this.safeDict (apiUrls, 'ws', {});\nreturn this.safeString (wsUrls, 'public');");
         expect (out).toContain ('var apiUrls map[string]any = this.UrlsApi');
-        expect (out).toContain ('SafeMapTyped(apiUrls, "ws")');
+        expect (out).toContain ('var wsUrls, _ = apiUrls["ws"].(map[string]any)');
     });
     test('another urls entry keeps SafeMapTyped', () => {
         const out = print ("const t = this.safeDict (this.urls, 'test', {});\nreturn this.safeString (t, 'public');");
-        expect (out).toContain ('SafeMapTyped(this.Urls, "test")');
+        expect (out).toContain ('var t, _ = this.Urls["test"].(map[string]any)');
     });
     test('a non-urls container keeps SafeMapTyped', () => {
         const out = print ("const a = this.safeDict (this.options, 'api', {});\nconst w = this.safeDict (a, 'ws', {});\nreturn this.safeString (w, 'public');");
