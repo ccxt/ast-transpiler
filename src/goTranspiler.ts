@@ -56356,3 +56356,47 @@ GoTranspiler.prototype.h30a15IndexByMap = function (node): boolean {
     };
 }
 // ===== end h30-H30-A15
+// ===== h30-H30-A16 =====
+// `const xs = this.toArray (response)` where response is an awaited endpoint result nothing writes: ToArray of a
+// decoded value answers the list itself or the map's values, so every element is still decoded JSON
+export interface GoTranspiler {
+    h30a16ToArrayList(baseExpr: any): boolean;
+    h30a16ToArrayCall(n: any): any;
+}
+GoTranspiler.prototype.h30a16ToArrayCall = function (n: any): any {
+    const call: any = this.goUnwrapParenthesizedNode(n);
+    const callee: any = call?.expression;
+    return ((call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'toArray')) ? call : undefined;
+};
+GoTranspiler.prototype.h30a16ToArrayList = function (baseExpr: any): boolean {
+    const declaration: any = (baseExpr?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(baseExpr) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const call: any = this.h30a16ToArrayCall(declaration.initializer);
+    const source: any = this.goUnwrapParenthesizedNode(call?.arguments?.[0]);
+    const sourceDeclaration: any = (source?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(source) : undefined;
+    if ((sourceDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (sourceDeclaration.name?.kind !== SyntaxKind.Identifier)
+        || (sourceDeclaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const awaited: any = this.goUnwrapParenthesizedNode(sourceDeclaration.initializer);
+    if ((awaited?.kind !== SyntaxKind.AwaitExpression)
+        || !(this.goAwaitedCallIsImplicitEndpoint(awaited.expression) || this.goAwaitedCallIsRequestStub(awaited.expression))) {
+        return false;
+    }
+    // the response is only read, or converted by this one call; the list is only read (length, elements, safe readers)
+    const sourceReadOnly = this.goJsonOriginBindingIsReadOnly(sourceDeclaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name)
+        || ((n.parent === call) && !this.goWritesOrRebindsName(n, name, [])));
+    return sourceReadOnly && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name)
+        || this.h27a09SafeReaderArg(n, name));
+};
+{
+    const jsonOriginListH30a16 = GoTranspiler.prototype.h27a09JsonOriginList;
+    GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
+        return jsonOriginListH30a16.call(this, baseExpr) || this.h30a16ToArrayList(baseExpr);
+    };
+}
+// ===== end h30-H30-A16 =====
