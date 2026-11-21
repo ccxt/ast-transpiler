@@ -53651,3 +53651,58 @@ GoTranspiler.prototype.h29a15DefaultedFrameDict = function (node, depth: number)
     };
 }
 // ===== end h29-H29-A15 =====
+// ===== h29-H29-A16
+// JSON origin by resolved declaration: an endpoint receive (or safeDict chain from one) whose name is also declared
+// in a sibling or nested scope of the same function; the other binding's identifiers are not uses of this one.
+export interface GoTranspiler {
+    h29A16JsonOrigin(node, depth: number): boolean;
+}
+GoTranspiler.prototype.h29A16JsonOrigin = function (node, depth: number): boolean {
+    if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    let fromJson = false;
+    if (init?.kind === SyntaxKind.AwaitExpression) {
+        fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
+    } else {
+        const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
+            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
+            && this.goJsonOriginContainer(args.container, depth + 1);
+    }
+    const name: string = declaration.name.text;
+    const scope: any = this.goEnclosingFunction(declaration);
+    if (!fromJson || (scope === undefined)) {
+        return false;
+    }
+    let shadowed = false;
+    const leaks = this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            shadowed = true;
+            return false;
+        }
+        return (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && (n.parent?.name !== n)
+            && this.goIdentifierRefersToDeclaration(n, declaration) && !this.goJsonOriginUseIsReadOnly(n, name);
+    });
+    return shadowed && !leaks;
+};
+{
+    const jsonOriginH29A16 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        const upstream = jsonOriginH29A16.call(this, node, depth);
+        if (upstream) {
+            return upstream;
+        }
+        return this.h29A16JsonOrigin(node, depth);
+    };
+}
+// ===== end h29-H29-A16
