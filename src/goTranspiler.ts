@@ -52276,3 +52276,52 @@ function installH28g33AddChainAnyDeclaration (goTranspiler) {
     };
 }
 // ===== end h28-H28-G33
+// ===== h28-H28-G37
+// `const x = this.m (..)` where the checker-resolved ts/src method prints a non-nil Go scalar return
+// (string / bool / int64 / float64), or a map / list that every return path proves never nil: the local
+// takes that type. getGoLocalType still runs its write / use safety scan on the answer.
+const H28G37_SCALARS = [ 'string', 'bool', 'int64', 'float64' ];
+const goTypeOfInitializerBaseH28G37 = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goTypeOfInitializerBaseH28G37.call(this, initializer, printedValue);
+    if (known !== undefined) {
+        return known;
+    }
+    // the callee's retyped signature is printed only once the ccxt local-type hooks are installed
+    return (this.__ccxtGoLocalTypesInstalled === true) ? h28g37MethodCallType(this, initializer, printedValue) : undefined;
+};
+function h28g37MethodCallType (goTranspiler, initializer, printedValue: string): string | undefined {
+    const declaration: any = initializer?.parent;
+    const callee: any = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer !== initializer) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const name = callee.name.text;
+    const value = (printedValue ?? '').trim();
+    if (!value.startsWith('this.' + name.charAt(0).toUpperCase() + name.slice(1) + '(')) {
+        return undefined; // renamed / delegated / DerivedExchange dispatch: not the resolved method
+    }
+    let method: any;
+    try {
+        method = goTranspiler.getChecker().getResolvedSignature(initializer)?.declaration?.resolve();
+    } catch (e) {
+        return undefined;
+    }
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || !/(^|[\\/])ts[\\/]src[\\/]/.test(String(method.getSourceFile?.()?.fileName ?? ''))) {
+        return undefined;
+    }
+    const goType = ccxtGoFamilyMethodReturnType(goTranspiler, method);
+    if (H28G37_SCALARS.includes(goType)) {
+        return goType;
+    }
+    if (((goType === 'map[string]any') || (goType === '[]any')) && (method.body?.kind === SyntaxKind.Block)) {
+        const returns = collectReturnStatements(method.body);
+        if ((returns.length > 0) && returns.every((r) => ccxtGoContainerNeverNil(goTranspiler, r.expression))) {
+            return goType;
+        }
+    }
+    return undefined;
+}
+// ===== end h28-H28-G37

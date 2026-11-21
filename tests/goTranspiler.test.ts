@@ -15859,7 +15859,7 @@ describe('ral-87g4 R1b: an inherited-method local with no native read stays boxe
             const t = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
             installCcxtGoLocalTypes(t.goTranspiler);
             const out = t.transpileGoByPath(file).content;
-            expect(out).toContain('var subAccountId any = this.GetSubAccountId(id)');
+            expect(out).toContain('var subAccountId string = this.GetSubAccountId(id)');
         } finally {
             fs.rmSync(tmp, { recursive: true, force: true });
         }
