@@ -13733,6 +13733,9 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'safeOrder': [ 0 ],
     // its two callers pass featuresGenerator's map copy of this.features and its own parameter
     'featuresMapper': [ 0 ],
+    // tuple-returning param handlers: callers pass maps, tuple slots or GetArgMap params (block h30-H30-A18)
+    'handleParamString': [ 0 ], 'handleParamString2': [ 0 ], 'handleParamInteger': [ 0 ], 'handleParamInteger2': [ 0 ],
+    'handleParamBool': [ 0 ], 'handleParamBool2': [ 0 ], 'handleNetworkCodeAndParams': [ 0 ], 'handleTriggerDirectionAndParams': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -13886,6 +13889,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         const arg = call.arguments?.[index];
         if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) { return false; }
         if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
+        if (h30a18MapArg (go, name, call, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)) { return false; }
     }
     const tree = go.goTsSrcTree (fn.getSourceFile ());
@@ -13965,6 +13969,7 @@ function goDictParamSiblingSiteProven (go: any, tree: any, name: string, site: a
     const saved = go.context;
     go.setContext ({ src, 'checker': entry.batch['checker'], program });
     try {
+        if (h30a18MapArg (go, name, call, arg)) { return true; }
         return (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) || goDictParamAwaitedMapArg (go, arg) || goDictParamTabledSafeDictArg (go, call, arg);
     } catch (e) {
         return false;
@@ -56417,3 +56422,50 @@ GoTranspiler.prototype.h30A17JsonMap = function (container): boolean {
     };
 }
 // ===== end h30-H30-A17
+// ===== h30-H30-A18 =====
+// call-site proofs for the tuple-returning param handlers: slot 1 of a const `[ a, p ] = this.<base pair twin> (..)` prints
+// `a, p := this.HandleX(..)` whose second Go result is map[string]any; a `params = {}` parameter is bound by GetArgMap;
+// base handleOptionAndParams' handleParamString call prints inline (ccxtGoCallerMethodProbe), so it is no Go call
+const H30A18_METHODS = new Set<string> ([ 'handleParamString', 'handleParamString2', 'handleParamInteger', 'handleParamInteger2',
+    'handleParamBool', 'handleParamBool2', 'handleNetworkCodeAndParams', 'handleTriggerDirectionAndParams' ]);
+function h30a18MapArg (go: any, name: string, call: any, arg: any): boolean {
+    if (!H30A18_METHODS.has (name) || (arg?.kind !== SK.Identifier)) { return false; }
+    if (h30a18InlinedProbeCall (go, call)) { return true; }
+    let decl: any;
+    try {
+        decl = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
+    } catch (e) {
+        return false;
+    }
+    if (decl?.kind === SK.Parameter) {
+        return (go.goEnclosingFunction (arg) === decl.parent) && !go.goLocalIsRebound (decl.parent, decl.name)
+            && (go.goGetArgParameterType (decl) === GO_BASE_DICT_PARAM_TYPE);
+    }
+    return h30a18PairSlot1 (go, decl);
+}
+function h30a18PairSlot1 (go: any, element: any): boolean {
+    const pattern: any = element?.parent;
+    const declaration: any = pattern?.parent;
+    if ((element?.kind !== SK.BindingElement) || (pattern?.kind !== SK.ArrayBindingPattern) || (pattern.elements.indexOf (element) !== 1)
+        || (element.dotDotDotToken !== undefined) || (element.initializer !== undefined) || (element.name?.kind !== SK.Identifier)
+        || (pattern.elements.length !== 2) || (declaration?.kind !== SK.VariableDeclaration)
+        || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const call: any = declaration.initializer;
+    if (!ccxtGoTupleResultCall (call) || (ccxtGoVenuePairOfCall (call) !== undefined)) { return false; }
+    try {
+        const signature: any = go.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
+        return CCXT_GO_ELEMENT_1_BASE_FILE.test (String (signature?.getSourceFile?.()?.fileName ?? ''));
+    } catch (e) {
+        return false;
+    }
+}
+function h30a18InlinedProbeCall (go: any, call: any): boolean {
+    const declaration: any = call?.parent;
+    if ((declaration?.kind !== SK.VariableDeclaration) || (declaration.initializer !== call) || (declaration.name?.kind !== SK.ArrayBindingPattern)) {
+        return false;
+    }
+    return ccxtGoCallerMethodProbe (go, call, declaration, 0) !== undefined;
+}
+// ===== end h30-H30-A18 =====
