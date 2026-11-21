@@ -22,11 +22,10 @@ describe ('go typed ternary declaration prints var x T plus if/else', () => {
         expect (out).not.toContain ('func() int {');
     });
     test ('a boxed arm keeps the literal', () => {
-        expect (out).toMatch (/var mixedValue any = func\(\) any \{/);
-        expect (out).not.toMatch (/mixedValue = a\n/);
+        expect (out).toMatch (/var mixedValue any\n/);
+        expect (out).toMatch (/\n\s*mixedValue = a\n\s*\} else \{\n\s*mixedValue = 2\n/);
     });
     test ('a nil arm read by a nil test keeps its literal', () => {
-        expect (out).not.toMatch (/\n\s*bid = nil\n/);
-        expect (out).toMatch (/var bid \w+ = func\(\)/);
+        expect (out).toMatch (/var bid any\n\s*if [^\n]*\{\n[^\n]*\n\s*\} else \{\n\s*bid = nil\n/);
     });
 });

@@ -5263,7 +5263,7 @@ describe('go ternary func literal typing', () => {
         "    return b;\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("\tvar b any = func() any {\n\t\tif EvalTruthy(a) {\n\t\t\treturn \"x\"\n\t\t}\n\t\treturn c\n\t}()");
+        expect(output).toContain("\tvar b any\n\tif EvalTruthy(a) {\n\t\tb = \"x\"\n\t} else {\n\t\tb = c\n\t}");
         expect(output).not.toContain('func() string');
     });
     test('an arm that is an any-returning helper call keeps the any box', () => {
@@ -5281,8 +5281,8 @@ describe('go ternary func literal typing', () => {
         "    }\n" +
         "}\n";
         const output = ternaryGo(input);
-        expect(output).toContain("var start any = func() any {");
-        expect(output).toContain("return (Subtract(now, year))");
+        expect(output).toContain("var start any\n");
+        expect(output).toContain("start = (Subtract(now, year))");
     });
     test('a later write of another type demotes the declaration back to any', () => {
         const input =
@@ -14803,7 +14803,7 @@ describe('77g7 typed ternary locals', () => {
         expect(output).toContain('\tif EvalTruthy(flag) {\n\t\tk = "x"\n\t} else {\n\t\tk = "y"\n\t}');
         expect(output).not.toContain('var k any = func() any {');
         // two arms of different Go types keep the boxed literal
-        expect(output).toContain('var w any = func() any {');
+        expect(output).toContain('var w any\n');
     });
 });
 

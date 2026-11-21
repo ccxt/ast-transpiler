@@ -51690,3 +51690,65 @@ GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
     return goStringListUseReadsAsH28G21.call(this, node);
 };
 // ===== end h28-H28-G21
+// ===== h28-G22 =====
+// `const x = c ? a : b` still printed `var x any = func() any {..}()` (no rule found a common arm type): declare the
+// same `any` box and fill it with if/else, each branch storing what the literal returned (nil arm as untyped nil).
+export interface GoTranspiler {
+    h28g22AnyBoxTernaryDeclaration(node, identation: number, upstream: string): string | undefined;
+}
+GoTranspiler.prototype.h28g22AnyBoxTernaryDeclaration = function (node, identation: number, upstream: string) {
+    const declarations = node?.declarationList?.declarations ?? [];
+    const declaration: any = declarations[0];
+    const ternary: any = (declarations.length === 1) ? this.goUnwrapParenthesizedNode(declaration.initializer) : undefined;
+    if ((ternary?.kind !== SyntaxKind.ConditionalExpression) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((node.parent?.kind !== SyntaxKind.Block) && (node.parent?.kind !== SyntaxKind.SourceFile) && (node.parent?.kind !== SyntaxKind.CaseClause) && (node.parent?.kind !== SyntaxKind.DefaultClause))) {
+        return undefined;
+    }
+    // a local another rule types (a later pass reads the literal text) keeps the literal
+    const declared = this.goDeclaredTypeOfIdentifier(declaration.name);
+    if ((declared !== undefined) && (declared !== 'any')) {
+        return undefined;
+    }
+    // arms of one Go type are typed by the join rules; a pointer arm is unwrapped by the box-store rules
+    const pointerArm = [ ternary.whenTrue, ternary.whenFalse ].some((arm) => String(this.goTernaryJoinArmType(arm) ?? '').startsWith('*'));
+    // a `this.field` arm is left to the ccxt field-type table, which reads the literal
+    const fieldArm = [ ternary.whenTrue, ternary.whenFalse ].some((arm) => {
+        const a: any = this.goUnwrapParenthesizedNode(arm);
+        return (a?.kind === SyntaxKind.PropertyAccessExpression) && (a.expression?.kind === SyntaxKind.ThisKeyword);
+    });
+    // two typed identifier / container-literal arms are joined by the ccxt declared-type table, which reads the literal
+    const typedArm = (arm: any) => {
+        const a: any = this.goUnwrapParenthesizedNode(arm);
+        const t = (a?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(a) : undefined;
+        return (a?.kind === SyntaxKind.ObjectLiteralExpression) || (a?.kind === SyntaxKind.ArrayLiteralExpression) || (a?.kind === SyntaxKind.Parameter)
+            || ((a?.kind === SyntaxKind.Identifier) && (t !== 'any') && (a.text !== 'undefined'));
+    };
+    const joinable = typedArm(ternary.whenTrue) && typedArm(ternary.whenFalse);
+    if (pointerArm || fieldArm || joinable || (this.goTernaryStatementArms(ternary) !== undefined)) {
+        return undefined;
+    }
+    const name = this.printNode(declaration.name, 0).trim();
+    const iden = this.getIden(identation);
+    const head = upstream.indexOf(`${iden}var ${name} any = func() any {\n`);
+    if ((head < 0) || ((head > 0) && (upstream[head - 1] !== '\n')) || !upstream.trimEnd().endsWith(`\n${iden}}()`)) {
+        return undefined;
+    }
+    // reuse the literal's own condition and return values, so each branch stores exactly what it returned
+    const lines = upstream.substring(head, upstream.trimEnd().length).split('\n');
+    const body = iden + '\t';
+    if ((lines.length !== 6) || !lines[1].startsWith(body + 'if ') || !lines[1].endsWith(' {') || !lines[2].startsWith(body + '\treturn ')
+        || (lines[3] !== body + '}') || !lines[4].startsWith(body + 'return ') || (lines[5] !== iden + '}()')) {
+        return undefined;
+    }
+    const whenTrue = lines[2].substring(body.length + 8);
+    const whenFalse = lines[4].substring(body.length + 7);
+    const printed = `${iden}var ${name} any\n${iden}${lines[1].substring(body.length)}\n${body}${name} = ${whenTrue}\n${iden}} else {\n${body}${name} = ${whenFalse}\n${iden}}`;
+    return `${upstream.substring(0, head)}${printed}${upstream.substring(upstream.trimEnd().length)}`;
+};
+const h28g22UpstreamVariableStatement = GoTranspiler.prototype.printVariableStatement;
+GoTranspiler.prototype.printVariableStatement = function (node, identation) {
+    const upstream = h28g22UpstreamVariableStatement.call(this, node, identation);
+    const h = (typeof upstream === 'string') ? this.h28g22AnyBoxTernaryDeclaration(node, identation, upstream) : undefined;
+    return (h !== undefined) ? h : upstream;
+};
+// ===== end h28-G22 =====

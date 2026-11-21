@@ -26,7 +26,7 @@ describe ('go ternary with an omit-of-map arm joins as map[string]any', () => {
         expect (out).not.toContain ('var letOmitted any');
     });
     test ('an omit of an any parameter keeps the literal', () => {
-        expect (out).toMatch (/var boxedOmitted any = func\(\) any \{/);
+        expect (out).toMatch (/var boxedOmitted any\n/);
     });
     test ('a nil arm read by a nil test keeps the literal', () => {
         expect (out).toMatch (/var nilOmitted any = func\(\) any \{/);

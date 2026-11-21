@@ -78,14 +78,14 @@ describe ('go response-or-safeList ternary into a Dict[] local', () => {
     });
 
     test ('negative: a safeList without a [] default can be nil and is nil-tested: keeps the box', () => {
-        expect (out).toMatch (/var maybe any = func\(\) any/);
+        expect (out).toMatch (/var maybe any\n/);
     });
 
     test ('negative: an unannotated local keeps the box', () => {
-        expect (out).toMatch (/var loose any = func\(\) any/);
+        expect (out).toMatch (/var loose any\n/);
     });
 
     test ('negative: a list arm the condition does not test keeps the box', () => {
-        expect (out).toMatch (/var mixed any = func\(\) any/);
+        expect (out).toMatch (/var mixed any\n/);
     });
 });

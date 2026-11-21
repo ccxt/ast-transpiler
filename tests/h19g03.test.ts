@@ -52,7 +52,7 @@ describe ('go nil-seeded map read as the map arm of a nil-arm ternary', () => {
     });
     test ('a ternary local handed to a call keeps the box (nil arm can reach it)', () => {
         const out = print (variant ('return {', 'this.watch (requestHeaders);\n        return {'));
-        expect (out).toContain ('var requestHeaders any = func() any {');
+        expect (out).toContain ('var requestHeaders any\n');
         expect (out).toContain ('var privateHeaders any = nil');
     });
     test ('outside sign() the seed keeps its box', () => {
@@ -109,11 +109,11 @@ describe ('go *string symbol join read by nil-safe callee slots', () => {
     });
     test ('a slot of a callee that is not proven nil-safe keeps the box', () => {
         const out = print (WATCH.replace ('return this.filterBySymbolSinceLimit (orders, symbolResolved', 'return this.watch (symbolResolved) || this.filterBySymbolSinceLimit (orders, symbolResolved'));
-        expect (out).toContain ('var symbolResolved any = func() any {');
+        expect (out).toContain ('var symbolResolved any\n');
     });
     test ('a value stored into a list keeps the box', () => {
         const out = print (WATCH.replace ('const url =', 'const hashes = [ symbolResolved ];\n        const url ='));
-        expect (out).toContain ('var symbolResolved any = func() any {');
+        expect (out).toContain ('var symbolResolved any\n');
     });
     test ('a non-Str first parameter keeps the box', () => {
         const out = print (WATCH.replace ('getUrlByMarketType (symbol: Str = undefined', 'getUrlByMarketType (symbol: any = undefined'));
