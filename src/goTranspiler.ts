@@ -23125,6 +23125,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goNonPointerAccessorSource(expr) || h25g16BaseContainerSource(this, expr) || h26g30GetArgParameterSource(this, expr) || this.h26g31NonPointerMethodSource(expr)) {
             return true;
         }
+        const h27g19 = this.h27g19RequestStubAwait(expr); if (h27g19 !== undefined) { return h27g19; }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -48860,3 +48861,16 @@ GoTranspiler.prototype.h27g17HandleOptionCompare = function (node) {
     };
 }
 // ===== end h27-G17 =====
+// ===== h27-G19 =====
+// `await this.<endpoint>(..)` on a generated abstract stub (`return this.request(..)`): Go reads the
+// receive's Raw (or its typed Value), decoded JSON or nil from Fetch2Async, never a nil *T
+export interface GoTranspiler {
+    h27g19RequestStubAwait(expr): boolean | undefined;
+}
+GoTranspiler.prototype.h27g19RequestStubAwait = function (expr) {
+    if ((expr?.kind !== SyntaxKind.AwaitExpression) || !this.goAwaitedCallIsRequestStub(expr.expression)) {
+        return undefined;
+    }
+    return true;
+};
+// ===== end h27-G19 =====
