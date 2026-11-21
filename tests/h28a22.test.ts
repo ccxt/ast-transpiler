@@ -45,13 +45,13 @@ describe('h28a22: indexBy / groupBy of a JSON-origin list is a JSON-origin conta
         const out = print ('async handle ()', BODY.replace ('PRODUCER', 'indexBy').replace ('EXTRA', "byId['BTC'] = 1;"));
         expect (out).not.toContain ('byId["BTC"].(map[string]any)');
     });
-    test('an index of a parameter list is not JSON-origin', () => {
+    test('an index of a parameter list holds only map rows (h30a15: IndexBy copies map elements only)', () => {
         const out = print ('async handle (rows: List)', "const byId = this.indexBy (rows, 'id');\nconst entry = this.safeDict (byId, 'BTC');\nreturn this.safeString (entry, 'x');");
-        expect (out).not.toContain ('byId["BTC"].(map[string]any)');
+        expect (out).toContain ('var entry, _ = byId["BTC"].(map[string]any)');
     });
-    test('a source list written through is not JSON-origin', () => {
+    test('a source list written through still indexes map rows only (h30a15)', () => {
         const out = print ('async handle ()', BODY.replace ('PRODUCER', 'indexBy').replace ('EXTRA', "rows.push ({});"));
-        expect (out).not.toContain ('byId["BTC"].(map[string]any)');
+        expect (out).toContain ('var entry, _ = byId["BTC"].(map[string]any)');
     });
     test('a nil test on the read row keeps the nil answer (typed nil map compares nil)', () => {
         const out = print ('async handle ()', BODY.replace ('PRODUCER', 'indexBy').replace ('EXTRA', '').replace ("return this.safeString (entry, 'x');", "if (entry === undefined) {\n    return 'none';\n}\nreturn this.safeString (entry, 'x');"));

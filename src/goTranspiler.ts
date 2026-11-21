@@ -56317,3 +56317,42 @@ GoTranspiler.prototype.h30a12ListSliceRead = function (declaration, declaredType
     return `${iden}var ${varName} []any\n${iden}if ${k} < len(${xs}) {\n${inner}${varName}, _ = ${xs}[${k}].([]any)\n${iden}}${empty}`;
 };
 // ===== end h30-H30-A12
+// ===== h30-H30-A15
+// `const m = this.indexBy (xs, 'lit')`: the hand-written IndexBy (exchange_generic.go) builds a fresh map and, for a
+// string key, stores only the map[string]any elements of xs, whatever xs holds; a read-only m therefore holds no
+// sync.Map, list pointer or cache, so the existing comma-ok readers apply to it (missing key / non-map read nil)
+export interface GoTranspiler {
+    h30a15IndexByMap(node): boolean;
+}
+GoTranspiler.prototype.h30a15IndexByMap = function (node): boolean {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const callee: any = init?.expression;
+    if ((init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'indexBy')
+        || (init.arguments.length !== 2) || (init.arguments[1].kind !== SyntaxKind.StringLiteral)) {
+        return false;
+    }
+    // literal keys only: every reader call on m names its member by a string literal
+    const literalKeys = (n: any): boolean => (n.parent?.kind !== SyntaxKind.CallExpression) || (n.parent.arguments[0] !== n)
+        || n.parent.arguments.slice(1).every((a: any) => (a.kind === SyntaxKind.StringLiteral) || (a.kind === SyntaxKind.ObjectLiteralExpression));
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => literalKeys(n) && (this.goJsonOriginUseIsReadOnly(n, name)
+        || (!this.goWritesOrRebindsName(n, name, []) && (this.h27a02ScalarReaderUse(n)
+            || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword) && (n.parent.right === n))
+            || ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.arguments[0] === n) && (n.parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (n.parent.expression.expression?.kind === SyntaxKind.ThisKeyword) && /^safeDict2?$/.test(String(n.parent.expression.name?.text)))))));
+};
+{
+    const goJsonOriginContainerH30a15 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0) {
+        return goJsonOriginContainerH30a15.call(this, node, depth) || this.h30a15IndexByMap(node);
+    };
+}
+// ===== end h30-H30-A15
