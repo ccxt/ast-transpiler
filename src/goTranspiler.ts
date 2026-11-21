@@ -7735,6 +7735,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installH26G23StringTernaryHoist (goTranspiler);
     installH27a07ConfigMapReads (goTranspiler);
     installH28a07ConfigMapNilFill (goTranspiler);
+    installH28g10StrPtrTernaryDecl (goTranspiler);
 }
 
 // An `any` local fed by a destructured call element (`const [ x, p ] = this.handleOptionIntegerAndParams (…)`
@@ -51117,3 +51118,62 @@ function h28g08StrParamDerefArg (n) {
     return (verdict === '*') || (verdict === 'deref');
 }
 // ===== end h28-H28-G08
+// ===== h28-H28-G10
+// `const x = c ? a : b` that the printer already types `*string` (each arm a Go string, a `*string` or nil) prints
+// `var x *string` and an if/else instead of the func literal; same condition, same arms, a nil arm stays a typed nil
+// exactly as the literal returned it, and a string arm takes its address from a branch-scoped temp
+export interface GoTranspiler {
+    h28g10StrPtrTernaryDecl(node, identation: number, upstream: string): string | undefined;
+}
+GoTranspiler.prototype.h28g10StrPtrTernaryDecl = function (node, identation: number, upstream: string) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const ternary: any = ccxtGoUnwrapParens(declaration?.initializer);
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (ternary?.kind !== SyntaxKind.ConditionalExpression)) {
+        return undefined;
+    }
+    const scopeText = this.goEnclosingFunction(declaration)?.getText?.() ?? 'retStr';
+    // a member read (`x.toLowerCase ()`) keeps the literal: the printer's non-nil proof reads its shape
+    if (/\bretStr\b/.test(scopeText) || new RegExp('(?<![.\\w])' + declaration.name.text + '\\s*\\.').test(scopeText)) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const name = this.printNode(declaration.name, 0).trim();
+    const opening = `${iden}var ${name} *string = func() *string {\n`;
+    const head = upstream.indexOf(opening);
+    const tail = /\}\(\)( \/\/[^\n]*)?$/.exec(upstream.trimEnd());
+    if ((head < 0) || ((head > 0) && (upstream[head - 1] !== '\n')) || (tail === null)) {
+        return undefined;
+    }
+    const arm = (node2): string | undefined => {
+        const armType = this.goTernaryJoinArmType(node2);
+        const printed = this.goPrintTernaryBranch(node2, 1).trim();
+        if (printed.includes('\n')) {
+            return undefined;
+        }
+        if ((armType === 'nil') || (armType === '*string')) {
+            return `${iden}\t${name} = ${printed}`;
+        }
+        return (armType === 'string') ? `${iden}\tretStr := ${printed}\n${iden}\t${name} = &retStr` : undefined;
+    };
+    const condition = this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0));
+    const whenTrue = arm(ternary.whenTrue);
+    const whenFalse = arm(ternary.whenFalse);
+    if ((whenTrue === undefined) || (whenFalse === undefined) || condition.includes('\n')) {
+        return undefined;
+    }
+    const comment = (tail[1] === undefined) ? '' : tail[1];
+    return upstream.substring(0, head) + `${iden}var ${name} *string${comment}\n${iden}if ${this.goStripControlClauseParens(condition)} {\n${whenTrue}\n${iden}} else {\n${whenFalse}\n${iden}}`
+        + upstream.substring(upstream.trimEnd().length);
+};
+function installH28g10StrPtrTernaryDecl (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h28g10StrPtrTernaryDeclInstalled', 'printVariableDeclarationList')) {
+        return;
+    }
+    const shipped = goTranspiler.printVariableDeclarationList;
+    goTranspiler.printVariableDeclarationList = function (node, identation) {
+        const upstream = shipped.call (this, node, identation);
+        const h = this.h28g10StrPtrTernaryDecl (node, identation, upstream); if (h !== undefined) return h;
+        return upstream;
+    };
+}
+// ===== end h28-H28-G10

@@ -12283,7 +12283,7 @@ describe ('goStringCallPointerLocal', () => {
                 + '        return { \'a\': a, \'b\': b };\n'
                 + '    }\n');
             expect (out).toContain ('\t\tjsonText := this.Json(params)\n\t\ta = &jsonText\n');
-            expect (out).toContain ('\t\t\tjsonText2 := this.Json(query)\n\t\t\treturn &jsonText2\n');
+            expect (out).toContain ('\t\tretStr := this.Json(query)\n\t\tb = &retStr\n');
             expect (out).not.toContain ('SafeStringPtr(this.Json');
         });
         test('keyed on the callee type, not the name: hmac gets its own hmacText local', () => {
