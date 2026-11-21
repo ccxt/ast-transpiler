@@ -53850,3 +53850,114 @@ GoTranspiler.prototype.h29a17Site = function (node: any) {
     };
 }
 // ===== end h29-H29-A17
+// ===== h29-H29-A18 =====
+// `const row = xs[i]` in a bounded loop over a JSON-origin list, read by safe readers with literal keys and then
+// stored as a value (`'info': row`, a call argument): the reads go through `var row, _ = xs[i].(map[string]any)`
+// and every value use prints the raw element `xs[i]`, so a non-map element is stored exactly as before
+export interface GoTranspiler {
+    h29a18Row(declaration: any): boolean;
+    h29a18RawUse(n: any): boolean;
+}
+const h29a18Proven = new WeakMap<any, boolean>();
+const H29A18_READERS = new Set([ ...H27A02_SCALAR_READERS, 'safeDict', 'safeList' ]);
+const printVariableDeclarationListH29a18 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.h29a18RawUse = function (n: any): boolean {
+    const parent: any = n?.parent;
+    const callee: any = parent?.expression;
+    if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29A18_READERS.has(callee.name?.text)) {
+        return false;
+    }
+    return ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === n) && (parent.parent?.kind === SyntaxKind.ObjectLiteralExpression))
+        || ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && parent.arguments.includes(n));
+};
+GoTranspiler.prototype.h29a18Row = function (declaration: any): boolean {
+    if (h29a18Proven.has(declaration)) {
+        return h29a18Proven.get(declaration) === true;
+    }
+    h29a18Proven.set(declaration, false);
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    const list: any = init?.expression;
+    const key: any = init?.argumentExpression;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.declarations?.length !== 1) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || (init?.kind !== SyntaxKind.ElementAccessExpression) || (list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+        || (list.text === key.text) || !this.goDeclaredListIdentifier(list) || !this.h27a09JsonOriginList(list)
+        || (this.goLoopBoundedIndexRead(init, list, key, list.text, key.text) === undefined)) {
+        return false;
+    }
+    const name: string = declaration.name.text;
+    const printed: string = printVariableDeclarationListH29a18.call(this, declaration.parent, 0);
+    if (!new RegExp(`^\\s*var ${name} any = ${list.text}\\[${key.text}\\]$`).test(printed)) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(declaration);
+    let lastRead = -1;
+    let firstRaw = Number.MAX_SAFE_INTEGER;
+    const vetoed = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n !== declaration)
+            && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        if ((this.goEnclosingFunction(n) !== scope) || this.goWritesOrRebindsName(n, name, [])) {
+            return true;
+        }
+        const call: any = n.parent;
+        const callee: any = call?.expression;
+        const k: any = call?.arguments?.[1];
+        if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+            && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29A18_READERS.has(callee.name?.text)
+            && (k?.kind === SyntaxKind.StringLiteral) && !/^\d+$/.test(k.text)) {
+            lastRead = Math.max(lastRead, n.pos);
+            return false;
+        }
+        if (this.h29a18RawUse(n)) {
+            firstRaw = Math.min(firstRaw, n.pos);
+            return false;
+        }
+        return true;
+    });
+    const proven = !vetoed && (lastRead >= 0) && (firstRaw < Number.MAX_SAFE_INTEGER) && (lastRead < firstRaw);
+    h29a18Proven.set(declaration, proven);
+    return proven;
+};
+{
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const printed: string = printVariableDeclarationListH29a18.call(this, node, identation);
+        if ((declaration === undefined) || !this.h29a18Row(declaration)) {
+            return printed;
+        }
+        const m = /^(\s*)var (\w+) any = (\w+\[\w+\])$/.exec(printed);
+        return (m === null) ? printed : `${m[1]}var ${m[2]}, _ = ${m[3]}.(${GO_SAFE_DICT_LOCAL_TYPE})`;
+    };
+    const printIdentifierH29a18 = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        if (this.h29a18RawUse(node)) {
+            const declaration: any = this.goAnyBoxLocalDeclaration(node);
+            if ((declaration !== undefined) && (declaration.name !== node) && this.h29a18Row(declaration)) {
+                const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+                return `${this.printNode(init.expression, 0)}[${this.printNode(init.argumentExpression, 0)}]`;
+            }
+        }
+        return printIdentifierH29a18.call(this, node);
+    };
+    const receiverTypeH29a18 = GoTranspiler.prototype.h27a01ReceiverType;
+    GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+        const declaration: any = this.goAnyBoxLocalDeclaration(container);
+        return ((declaration !== undefined) && this.h29a18Row(declaration)) ? GO_SAFE_DICT_LOCAL_TYPE : receiverTypeH29a18.call(this, container);
+    };
+    // the row holds one decoded JSON element and every read runs before any value use hands it on
+    const jsonOriginH29a18 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        if (jsonOriginH29a18.call(this, node, depth)) {
+            return true;
+        }
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+        return (declaration !== undefined) && this.h29a18Row(declaration);
+    };
+}
+// ===== end h29-H29-A18 =====
