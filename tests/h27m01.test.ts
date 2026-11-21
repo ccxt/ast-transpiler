@@ -46,9 +46,9 @@ const M = 'market: MarketInterface';
 
 describe ('h27m01: market rows bound typed only where every use is a native field read', () => {
     test ('positive: a binder read only through struct fields is the typed row', () => {
-        const go = print (fn ('symbol: string', '        const market = this.market (symbol);\n        const s = market["symbol"];\n        return [ s, market["spot"] ];\n'));
+        const go = print (fn ('symbol: string', '        const market = this.market (symbol);\n        const s = market["symbol"];\n        return [ "a:" + s, market["spot"] ];\n'));
         expect (go).toContain ('var market MarketInterface = MarketInterfaceFromMap(this.Market(symbol))');
-        expect (go).toContain ('var s *string = market.Symbol');
+        expect (go).toContain ('var s string = market.Symbol');
         expect (go).not.toContain ('ToMap(');
     });
     test ('positive: currency binder with a pointer field local', () => {

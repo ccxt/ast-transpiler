@@ -44,12 +44,12 @@ const M = 'market: MarketInterface';
 describe ('h21m01: struct field reads on a typed market / currency row', () => {
     test ('string pointer field initialising a local', () => {
         const go = print (fn (M, '        const symbol = market["symbol"];\n        return symbol;\n'));
-        expect (go).toContain ('var symbol *string = market.Symbol');
+        expect (go).toContain ('var symbol *string = SafeStringPtr(GetValue(market, "symbol"))');
         expect (go).not.toContain ('market["symbol"]');
     });
     test ('renamed Go field (base -> BaseCurrency)', () => {
         const go = print (fn (M, '        const b = market["base"];\n        return b;\n'));
-        expect (go).toContain ('market.BaseCurrency');
+        expect (go).toContain ('var b *string = SafeStringPtr(GetValue(market, "base"))');
     });
     test ('string pointer nil test', () => {
         const go = print (fn (M, '        return market["id"] === undefined;\n'));
@@ -84,7 +84,7 @@ describe ('h21m01: struct field reads on a typed market / currency row', () => {
     });
     test ('Market alias (union with undefined) resolves to the struct', () => {
         const go = print (fn ('market: Market', '        const symbol = market["symbol"];\n        return symbol;\n'));
-        expect (go).toContain ('market.Symbol');
+        expect (go).toContain ('var symbol *string = SafeStringPtr(GetValue(market, "symbol"))');
     });
     test ('info stays a map read', () => {
         const go = print (fn (M, '        const info = market["info"];\n        return info;\n'));

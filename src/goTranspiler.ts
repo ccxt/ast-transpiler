@@ -55409,3 +55409,186 @@ function h28t02StringListLocal (goTranspiler: GoTranspiler, declaration): boolea
     };
 }
 // ===== end h28-H28-T02
+// ===== h27-M02 =====
+// the market row's `symbol` / `base` / `quote` are declared `string` in types.ts and the Go struct holds them as
+// plain `string` ("" when absent): a read under the typed-row rule is a value field, never nil
+const GO_H27M02_STRING_ROW_FIELDS: { [key: string]: string } = { 'symbol': 'Symbol', 'base': 'BaseCurrency', 'quote': 'QuoteCurrency' };
+export interface GoTranspiler {
+    h27m02StringRowFieldRead(node): { text: string, goType: string } | undefined;
+}
+GoTranspiler.prototype.h27m02StringRowFieldRead = function (node) {
+    if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (node?.kind !== SyntaxKind.ElementAccessExpression)
+        || this.isGoElementAccessAssignmentTarget(node) || ((node.parent?.kind === SyntaxKind.ElementAccessExpression) && (node.parent.expression === node))) {
+        return undefined;
+    }
+    const key: any = node.argumentExpression;
+    const base: any = this.goUnwrapParenthesizedNode(node.expression);
+    const field = ((key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) ? GO_H27M02_STRING_ROW_FIELDS[key.text] : undefined;
+    if ((field === undefined) || (base?.kind !== SyntaxKind.Identifier) || (this.goTypedRowTable(base, key.text) !== GO_TYPED_ROW_FIELDS['MarketInterface'])
+        || !this.h27m01RowBaseIsStruct(base)) {
+        return undefined;
+    }
+    // a nil test of the read keeps the map form: "" is not the nil the test asks about
+    let outer: any = node;
+    while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        outer = outer.parent;
+    }
+    if (this.goIsNilComparisonOperand(outer, outer.parent)) {
+        return undefined;
+    }
+    // only where the consumer is a string operand: a concat with a string, or a string-typed declaration
+    const parent: any = outer.parent;
+    const checker: any = this.checkerOrUndefined();
+    const isString = (n) => (checker !== undefined) && ((checker.getTypeAtLocation(n)?.flags & TypeFlags.StringLike) !== 0);
+    const concat = (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.PlusToken)
+        && isString((parent.left === outer) ? parent.right : parent.left);
+    return (concat || this.h28m02StringOnlyLocal(outer)) ? { text: `${base.text}.${field}`, goType: 'string' } : undefined;
+};
+const goTypedRowFieldReadH27m02 = GoTranspiler.prototype.goTypedRowFieldRead;
+GoTranspiler.prototype.goTypedRowFieldRead = function (node) {
+    const h = this.h27m02StringRowFieldRead(node); if (h !== undefined) return h;
+    // the base table's `*string` entry no longer matches these value fields: every other read keeps the map
+    const key: any = (node?.kind === SyntaxKind.ElementAccessExpression) ? node.argumentExpression : undefined;
+    if ((node?.parent?.kind !== SyntaxKind.ElementAccessExpression) && (GO_H27M02_STRING_ROW_FIELDS[key?.text] !== undefined)
+        && ((key.kind === SyntaxKind.StringLiteral) || (key.kind === SyntaxKind.NoSubstitutionTemplateLiteral))) {
+        return undefined;
+    }
+    return goTypedRowFieldReadH27m02.call(this, node);
+};
+// ===== end h27-M02 =====
+// ===== h28-M02
+// `const s = row['symbol']` is a Go `string` local when every use of s is a `+` operand whose other side is a string:
+// no use can see nil (the concat consumer already dereferenced the old `*string`), so "" for absent is never observed
+export interface GoTranspiler {
+    h28m02StringOnlyLocal(init: any): boolean;
+    h28m02MarketBound(row: any): boolean;
+    h28m02PointerLocalRead(node: any): { text: string, goType: string } | undefined;
+}
+GoTranspiler.prototype.h28m02StringOnlyLocal = function (init: any): boolean {
+    const declaration: any = init?.parent;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== init) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type !== undefined) || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const isString = (n) => (checker !== undefined) && ((checker.getTypeAtLocation(n)?.flags & TypeFlags.StringLike) !== 0);
+    let used = false;
+    const ok = this.goJsonOriginBindingIsReadOnly(declaration, (n: any) => {
+        let outer: any = n;
+        while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+            outer = outer.parent;
+        }
+        const parent: any = outer.parent;
+        used = true;
+        return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.PlusToken)
+            && isString((parent.left === outer) ? parent.right : parent.left);
+    });
+    return ok && used;
+};
+// the row local is bound by `this.market (..)` itself (not safeMarket, whose fallback row may lack a symbol)
+GoTranspiler.prototype.h28m02MarketBound = function (row: any): boolean {
+    const declaration: any = (row?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(row) : undefined;
+    const call: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && ((declaration.parent?.flags & NodeFlags.Const) !== 0)
+        && (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'market');
+};
+// any other `const s = row['symbol' | 'base' | 'quote']` keeps its `*string` local: on a `this.market (..)` row the
+// field is never absent, so its address answers what SafeStringPtr did; on a safeMarket row "" (absent) stays nil
+const goTypedRowFieldReadH28m02 = GoTranspiler.prototype.goTypedRowFieldRead;
+GoTranspiler.prototype.goTypedRowFieldRead = function (node) {
+    const h = this.h28m02PointerLocalRead(node); if (h !== undefined) return h;
+    return goTypedRowFieldReadH28m02.call(this, node);
+};
+GoTranspiler.prototype.h28m02PointerLocalRead = function (node) {
+    if ((this.nativeStoreFields?.['markets']?.['rowStructReads'] !== true) || (node?.kind !== SyntaxKind.ElementAccessExpression)) {
+        return undefined;
+    }
+    const key: any = node.argumentExpression;
+    const base: any = this.goUnwrapParenthesizedNode(node.expression);
+    const field = (key?.kind === SyntaxKind.StringLiteral) ? GO_H27M02_STRING_ROW_FIELDS[key.text] : undefined;
+    const declaration: any = node.parent;
+    if ((field === undefined) || (base?.kind !== SyntaxKind.Identifier) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer !== node) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (this.goTypedRowTable(base, key.text) !== GO_TYPED_ROW_FIELDS['MarketInterface']) || !this.h27m01RowBaseIsStruct(base)
+        || this.h28m02StringOnlyLocal(node)) {
+        return undefined;
+    }
+    const binder: any = this.goDeclarationOfIdentifier(base);
+    const call: any = this.goUnwrapParenthesizedNode(binder?.initializer);
+    const name = (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) ? call.expression.name?.text : undefined;
+    if ((key.text === 'symbol') && this.h28m02MarketBound(base)) {
+        return { text: `&${base.text}.${field}`, goType: '*string' };
+    }
+    return (((name === 'safeMarket') || (name === 'market')) && (declaration.type === undefined)) ? { text: `&${base.text}.${field}`, goType: '*string', h28m02Guard: true } as any : undefined;
+};
+{
+    const printVariableDeclarationListH28m02 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH28m02.call(this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const read: any = (typeof printed === 'string') ? this.h28m02PointerLocalRead(declaration?.initializer) : undefined;
+        if (read?.h28m02Guard !== true) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const iden = this.getIden(identation);
+        const shipped = `var ${name} *string = ${read.text}`;
+        const lead = /^\n*/.exec(printed)[0];
+        if (printed.substring(lead.length) !== `${iden}${shipped}`) {
+            return printed;
+        }
+        const value = read.text.substring(1);
+        return `${lead}${iden}var ${name} *string\n${iden}if ${value} != "" {\n${iden}${this.getIden(1)}${name} = ${read.text}\n${iden}}`;
+    };
+}
+// ===== end h28-M02
+
+// ===== h29-M02
+// `const s = this.safeString (row, 'symbol' | 'base' | 'quote')` on a typed market row: the field is a Go `string`
+// ("" when absent), so the local keeps `*string` as the guarded field address (nil for absent); other uses keep the map
+export interface GoTranspiler {
+    h29m02AccessorDeclaration(call: any): { text: string, value: string } | undefined;
+}
+GoTranspiler.prototype.h29m02AccessorDeclaration = function (call: any) {
+    const declaration: any = call?.parent;
+    const key: any = call?.arguments?.[1];
+    const field = ((call?.arguments?.length === 2) && (key?.kind === SyntaxKind.StringLiteral)) ? GO_H27M02_STRING_ROW_FIELDS[key.text] : undefined;
+    if ((field === undefined) || (call.expression?.name?.text !== 'safeString') || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer !== call) || (declaration.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)) {
+        return undefined;
+    }
+    const value = `${call.arguments[0].text}.${field}`;
+    return { text: `&${value}`, value };
+};
+{
+    const h28m03AccessorFieldH29m02 = GoTranspiler.prototype.h28m03AccessorField;
+    GoTranspiler.prototype.h28m03AccessorField = function (call: any) {
+        const found = h28m03AccessorFieldH29m02.call(this, call);
+        const key: any = call?.arguments?.[1];
+        if ((found === undefined) || (key?.kind !== SyntaxKind.StringLiteral) || (GO_H27M02_STRING_ROW_FIELDS[key.text] === undefined)) {
+            return found;
+        }
+        const read = this.h29m02AccessorDeclaration(call);
+        return (read !== undefined) ? { text: read.text, goType: '*string' } : undefined;
+    };
+    const printVariableDeclarationListH29m02 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH29m02.call(this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const call: any = declaration?.initializer;
+        const read = ((typeof printed === 'string') && (call?.kind === SyntaxKind.CallExpression)) ? this.h29m02AccessorDeclaration(call) : undefined;
+        if ((read === undefined) || (this.h28m03AccessorField(call)?.text !== read.text)) {
+            return printed;
+        }
+        const name = declaration.name.text;
+        const iden = this.getIden(identation);
+        const lead = /^\n*/.exec(printed)[0];
+        if (printed.substring(lead.length) !== `${iden}var ${name} *string = ${read.text}`) {
+            return printed;
+        }
+        return `${lead}${iden}var ${name} *string\n${iden}if ${read.value} != "" {\n${iden}${this.getIden(1)}${name} = ${read.text}\n${iden}}`;
+    };
+}
+// ===== end h29-M02

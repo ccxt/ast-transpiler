@@ -48,7 +48,7 @@ describe ('h23m01: typed row binder for market / currency locals', () => {
     test ('market binder prints the typed row, field reads native, other uses converted once', () => {
         const go = print (fn ('symbol: string', '        const market = this.market (symbol);\n        const s = market["symbol"];\n        const r = { "pair": market["id"] };\n        return [ s, r, this.parseX (r, market), this.safeString (market, "type") ];\n'));
         expect (go).toContain ('var market MarketInterface = MarketInterfaceFromMap(this.Market(symbol))');
-        expect (go).toContain ('var s *string = market.Symbol');
+        expect (go).toContain ('var s *string = &market.Symbol');
         expect (go).toContain ('MarketInterfaceToMap(market)["id"]');
         expect (go).toContain ('this.ParseX(r, MarketInterfaceToMap(market))');
         expect (go).toContain ('this.SafeString(MarketInterfaceToMap(market), "type")');
