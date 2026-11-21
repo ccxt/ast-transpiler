@@ -71,7 +71,7 @@ describe ('h20g04 empty-default rebind of a nil-join map local', () => {
     test ('a copy read elsewhere keeps the box', () => {
         const out = print (BYBIT.replace ('requestHeaders[\'Referer\'] = brokerId;', 'requestHeaders[\'Referer\'] = brokerId;\n            this.safeString (headersBase, \'x\');'));
         expect (out).toContain ('var headersBase any = requestHeaders');
-        expect (out).toContain ('func() any');
+        expect (out).toContain ('if IsEqual(headersBase, nil) {\n\t\t\trequestHeaders = map[string]any{}\n\t\t} else {\n\t\t\trequestHeaders = headersBase\n');
     });
     test ('a non-empty default literal keeps the box', () => {
         const out = print (BYBIT.replace ('? {} :', '? { \'a\': 1 } :'));

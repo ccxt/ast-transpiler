@@ -49299,3 +49299,59 @@ GoTranspiler.prototype.h27g28ElementReadOfMap = function (n) {
     };
 }
 // ===== end h27-H27-G28
+// ===== h27-G31 =====
+// `slot = c ? a : b` where slot is an `any` box (an element of a `map[string]any` local under a literal or
+// local key, or a local the printer declares `any`) and the arms have no common Go type: each branch stores
+// the value the `func() any` literal returned (the same box, nil arm included); only the taken arm runs.
+export interface GoTranspiler {
+    h27g31AnyBoxTernaryStore(node, identation: number, upstream: string): string | undefined;
+}
+GoTranspiler.prototype.h27g31AnyBoxTernaryStore = function (node, identation: number, upstream: string) {
+    const write: any = node?.expression;
+    if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken) || this.goIsUrlsWrite(node)) {
+        return undefined;
+    }
+    const ternary: any = this.goUnwrapParenthesizedNode(write.right);
+    const left: any = write.left;
+    if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
+        return undefined;
+    }
+    let target: string | undefined = undefined;
+    if (left.kind === SyntaxKind.Identifier) {
+        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(left)?.valueDeclaration?.resolve();
+        // the base store `x = func() any {..}()` only compiles when x is an `any` local
+        const declared = this.goDeclaredTypeOfIdentifier(left);
+        target = ((decl?.kind === SyntaxKind.VariableDeclaration) && ((declared === undefined) || (declared === 'any'))) ? this.printNode(left, 0).trim() : undefined;
+    } else if ((left.kind === SyntaxKind.ElementAccessExpression) && (left.expression?.kind === SyntaxKind.Identifier)
+        && (this.goDeclaredTypeOfIdentifier(left.expression) === 'map[string]any')) {
+        const key: any = left.argumentExpression;
+        const keyText = this.printNode(key, 0).trim();
+        const literal = (key?.kind === SyntaxKind.StringLiteral) || (key?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
+        const stringLocal = (key?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(key) === 'string');
+        target = (literal || stringLocal) ? `${this.printNode(left.expression, 0).trim()}[${keyText}]` : undefined;
+    }
+    if (target === undefined) {
+        return undefined;
+    }
+    const head = upstream.indexOf(`${this.getIden(identation)}${target} = func() any {`);
+    if ((head < 0) || ((head > 0) && (upstream[head - 1] !== '\n')) || !upstream.trimEnd().endsWith('}()')) {
+        return undefined;
+    }
+    // `x = c ? v : x` keeps x when c is false: one branch, no self-assignment
+    const self = (arm: any) => this.printNode(this.goUnwrapParenthesizedNode(arm), 0).trim() === target;
+    if (self(ternary.whenTrue)) {
+        return undefined;
+    }
+    let printed = this.goTernaryStatementIfElse(target, ternary, identation);
+    if ((printed !== undefined) && self(ternary.whenFalse)) {
+        printed = printed.substring(0, printed.lastIndexOf('} else {')) + '}';
+    }
+    return (printed === undefined) ? undefined : upstream.substring(0, head) + printed + upstream.substring(upstream.trimEnd().length);
+};
+const h27g31UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const upstream = h27g31UpstreamExpressionStatement.call(this, node, identation);
+    const h = (typeof upstream === 'string') ? this.h27g31AnyBoxTernaryStore(node, identation, upstream) : undefined;
+    return (h !== undefined) ? h : upstream;
+};
+// ===== end h27-G31 =====

@@ -63,11 +63,11 @@ describe ('go statement ternary into a nil-seeded string box', () => {
     });
     test ('an arm that is not a string keeps the literal', () => {
         const out = print (variant (TERNARY, "            type = (subType === \'inverse\') ? \'inverse\' : this.request (1);\n"));
-        expect (out).not.toContain ('\t\t\ttypeVar = "inverse"\n\t\t} else {');
+        expect (out).toContain ('\t\t\ttypeVar = "inverse"\n\t\t} else {\n\t\t\ttypeVar = this.Request(1)\n');
     });
     test ('a nil arm (a nil the box would be compared with) keeps the literal', () => {
         const out = print (variant (TERNARY, "            type = (subType === \'inverse\') ? \'inverse\' : undefined;\n"));
-        expect (out).not.toContain ('\t\t\ttypeVar = "inverse"\n\t\t} else {');
+        expect (out).toContain ('\t\t\ttypeVar = "inverse"\n\t\t} else {\n\t\t\ttypeVar = nil\n');
     });
     test ('a local seeded with a value, not nil, keeps the literal', () => {
         const out = print (variant ('        let type: Str = undefined;\n', '        let type: any = this.request (0);\n'));

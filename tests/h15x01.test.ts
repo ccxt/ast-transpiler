@@ -17,6 +17,6 @@ describe ('go statement ternary of one arm type prints an if/else', () => {
     });
     test ('a boxed arm keeps the literal', () => {
         const out = t.transpileGoByPath (path.join (dir, 'ts/src/venue.ts')).content;
-        expect (out).not.toMatch (/request\["mixed"\] = a\n/);
+        expect (out).toMatch (/\{\n\s*request\["mixed"\] = a\n\s*\} else \{\n\s*request\["mixed"\] = 2\n/);
     });
 });
