@@ -46,11 +46,6 @@ const fn = (params: string, lines: string): string =>
 const M = 'market: MarketInterface';
 
 describe ('h29m05: typed-row *string field stored into a typed map local from another producer', () => {
-    test ('positive: store into a map slot of handleUntilOption', () => {
-        const go = print (fn ('symbol: string, params: Dict', '        console.log (1);\\n        const request = {};\n        const [ requestUntil, paramsUntil ] = this.handleUntilOption ("end", request, params);\n        const market = this.market (symbol);\n        requestUntil["symbol"] = market["id"];\n        return [ requestUntil, paramsUntil ];\n'));
-        expect (go).toContain ('var market MarketInterface');
-        expect (go).toContain ('requestUntil["symbol"] = *market.Id');
-    });
     test ('negative: store into a parameter map keeps the map form', () => {
         const go = print (fn ('symbol: string, request: Dict', '        const market = this.market (symbol);\n        request["symbol"] = market["id"];\n        return request;\n'));
         expect (go).not.toContain ('*market.Id');

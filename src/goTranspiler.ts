@@ -41015,7 +41015,6 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 // Add / mathMin derefScalar it and answer the same int64, so the call prints `*a + b` / `min(*a, b)`.
 export interface GoTranspiler {
     go93g4PointerOperands(call, self?: Node): string[] | undefined;
-    go93g4HasNumericUse(declaration): boolean;
 }
 
 // `self` is the local a write `x = this.sum (x, p)` is deciding: its own read is the int64 being proven
@@ -41063,33 +41062,6 @@ GoTranspiler.prototype.go93g4PointerOperands = function (call, self = undefined)
     return parts.map((p) => p.text);
 };
 
-// the 92g7 numeric uses, plus a sum / min / max hand-off whose call prints native through a pointer partner
-GoTranspiler.prototype.go93g4HasNumericUse = function (declaration): boolean {
-    if (this.go92g7HasNumericUse(declaration)) {
-        return true;
-    }
-    const scope = this.goEnclosingFunction(declaration);
-    const checker: Checker | undefined = this.checkerOrUndefined();
-    if ((scope === undefined) || (checker === undefined) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
-        return false;
-    }
-    return this.hasNodeWhere(scope, (n) => {
-        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
-            || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
-            return false;
-        }
-        const call = n.parent;
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2) || (call.arguments.indexOf(n) < 0)
-            || (!this.go92g7IsBaseSum(call) && (this.go92g7MinMaxName(call) === undefined))) {
-            return false;
-        }
-        const other = this.goUnwrapPrintedAssertions(call.arguments[1 - call.arguments.indexOf(n)]);
-        if (other?.kind === SyntaxKind.Identifier) {
-            return (this.goDeclaredTypeOfIdentifier(other) === '*int64') && this.goPointerNumberIsNonNil(other);
-        }
-        return this.goDefaultedSafeIntegerCall(other);
-    });
-};
 
 const printCallExpressionBase93g4 = GoTranspiler.prototype.printCallExpression;
 GoTranspiler.prototype.printCallExpression = function (node, identation) {
@@ -41133,7 +41105,7 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
     if ((initializer?.kind === SyntaxKind.CallExpression) && (declaration?.kind === SyntaxKind.VariableDeclaration)
         && (declaration.initializer === initializer) && (declaration.name?.kind === SyntaxKind.Identifier)
         && !(printedValue ?? '').trim().startsWith('this.Sum(') && !(printedValue ?? '').trim().startsWith('mathM')
-        && (((this.go93g4PointerOperands(initializer) !== undefined) && (this.go92g7IsBaseSum(initializer) || this.go93g4HasNumericUse(declaration)))
+        && (((this.go93g4PointerOperands(initializer) !== undefined) && this.go92g7IsBaseSum(initializer))
             || (this.go92g7IsBaseSum(initializer) && (this.go92g7Int64Operands(initializer) !== undefined)))) {
         // a native sum is the int64 the boxed call held (the ccxt pass typed `this.Sum(..).(int64)` the same way)
         return 'int64';
@@ -55478,7 +55450,6 @@ GoTranspiler.prototype.h29m01EntryUse = function (n: any) {
 }
 export interface GoTranspiler {
     h29m05TypedMapStore(n: any): { field: string, goType: string, kind: 'compare' | 'store', literal: any } | undefined;
-    h29m05MapTupleSlot(id: any): boolean;
 }
 GoTranspiler.prototype.h29m05TypedMapStore = function (n: any) {
     const access: any = n?.parent;
@@ -55499,30 +55470,12 @@ GoTranspiler.prototype.h29m05TypedMapStore = function (n: any) {
         || (target.argumentExpression?.kind !== SyntaxKind.StringLiteral) || (target.expression?.kind !== SyntaxKind.Identifier)) {
         return undefined;
     }
-    if (this.h29m05MapTupleSlot(target.expression)) {
-        return { field: entry[0], goType: entry[1], kind: 'store', literal: undefined };
-    }
     const declaration: any = this.goDeclarationOfIdentifier(target.expression);
     if ((declaration === undefined) || (declaration.kind === SyntaxKind.Parameter)
         || (this.goDeclaredTypeOfIdentifier(target.expression) !== 'map[string]any')) {
         return undefined;
     }
     return { field: entry[0], goType: entry[1], kind: 'store', literal: undefined };
-};
-// `const [ a, b ] = this.handleUntilOption (..)`: both slots of the Go twin are `map[string]any` results
-GoTranspiler.prototype.h29m05MapTupleSlot = function (id: any): boolean {
-    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve();
-    const pattern: any = decl?.parent;
-    const holder: any = pattern?.parent;
-    const call: any = holder?.initializer;
-    if ((decl?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern)
-        || (holder?.kind !== SyntaxKind.VariableDeclaration) || (call?.kind !== SyntaxKind.CallExpression)
-        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
-        return false;
-    }
-    const name = call.expression.name?.text;
-    const slots = Object.prototype.hasOwnProperty.call(GO_TUPLE_JOIN_MAP_SLOTS, name) ? GO_TUPLE_JOIN_MAP_SLOTS[name] : undefined;
-    return (name === 'handleUntilOption') && Array.isArray(slots) && slots.includes(pattern.elements.indexOf(decl));
 };
 // ===== end h29-M05
 // ===== h29-H29-A14 =====
