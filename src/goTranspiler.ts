@@ -21323,6 +21323,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         const h26g49Clients = this.h26g49ClientsReadDeclaration(node, declaration, identation); if (h26g49Clients !== undefined) { return h26g49Clients; }
         const h27a11 = this.h27a11FrameReadDeclaration(node, declaration, identation); if (h27a11 !== undefined) { return h27a11; }
         const h28a11 = this.h28a11DefaultedFrameList(node, declaration, identation); if (h28a11 !== undefined) { return h28a11; }
+        const h28g16 = this.h28g16RowAccumulatorRead(declaration, identation); if (h28g16 !== undefined) { return h28g16; }
         const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
             () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
             () => this.goTypedRowBinderDeclaration(declaration, identation)]);
@@ -28783,6 +28784,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const rFam = this.goScalarFamily(right);
         const nilTest = (text: string): string => (isEq ? `(${text} == nil)` : `(${text} != nil)`);
         const native = isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
+        const h28g16 = this.h28g16CellNilCompare(left, rFam, nilTest(leftText)); if (h28g16 !== undefined) return h28g16;
         if (rFam === 'nil' && lPtr) {
             return nilTest(leftText);
         }
@@ -51432,3 +51434,121 @@ GoTranspiler.prototype.h28g15ConstLastIndex = function (containerNode, keyNode) 
         && this.h27g21LengthGuarded(containerNode, decl, init.left);
 };
 // ===== end h28-H28-G15
+
+// ===== h28-G16 =====
+export interface GoTranspiler {
+    h28g16RowAccumulatorRead(declaration, identation: number): string | undefined;
+    h28g16CellNilCompare(left, rFam: string | undefined, nilText: string): string | undefined;
+}
+const h28g16Cells = new WeakSet<object>();
+// an element the helper would return as is: a literal, a plain-typed local, or a const holding arithmetic
+function h28g16PlainElement(t: any, node: any): boolean {
+    const n: any = t.goUnwrapParenthesizedNode(node);
+    if ((n?.kind === SyntaxKind.NumericLiteral) || (n?.kind === SyntaxKind.StringLiteral)) {
+        return true;
+    }
+    if (n?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    if (/^(?:int|int64|float64|string|bool)$/.test(t.goDeclaredTypeOfIdentifier(n) ?? '')) {
+        return true;
+    }
+    const d: any = t.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+    if ((d?.kind !== SyntaxKind.VariableDeclaration) || (((d.parent?.flags ?? 0) & NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const init: any = t.goUnwrapParenthesizedNode(d.initializer);
+    return (init?.kind === SyntaxKind.BinaryExpression)
+        && [ SyntaxKind.AsteriskToken, SyntaxKind.SlashToken, SyntaxKind.MinusToken ].includes(init.operatorToken.kind);
+}
+// column c of every pushed row literal is plain; column writes store a derefed or plain value (h26g27RowWrite)
+function h28g16PlainColumn(t: any, accumulator: any, column: number): boolean {
+    const checker: any = t.checkerOrUndefined();
+    const symbol: any = checker?.getSymbolAtLocation(accumulator.name);
+    const scope: any = t.goEnclosingFunction(accumulator);
+    let ok = (symbol !== undefined) && (scope?.body !== undefined);
+    const visit = (n: any): void => {
+        if (!ok) {
+            return;
+        }
+        const call: any = n.parent?.parent;
+        if ((n.kind === SyntaxKind.Identifier) && (checker.getSymbolAtLocation(n) === symbol) && (n.parent?.kind === SyntaxKind.PropertyAccessExpression)
+            && (n.parent.name.text === 'push') && (call?.kind === SyntaxKind.CallExpression)) {
+            ok = h28g16PlainElement(t, call.arguments[0]?.elements?.[column]);
+        }
+        n.forEachChild(visit);
+    };
+    if (ok) {
+        scope.body.forEachChild(visit);
+    }
+    return ok;
+}
+// `const v = xs[r][c]` / `const row = this.safeList (xs, r)` on a row accumulator (h26-G27: every row a pushed []any of
+// N slots, never replaced) with r an int/int64 local: the in-range read is the plain index (c < N, column plain),
+// out of range the local keeps the nil the helper answered; the guard is a statement, not a closure
+GoTranspiler.prototype.h28g16RowAccumulatorRead = function (declaration, identation) {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.declarations?.length !== 1)
+        || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0)) {
+        return undefined;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    let rows: any;
+    let index: any;
+    let column: any;
+    const callee: any = init?.expression;
+    if ((init?.kind === SyntaxKind.ElementAccessExpression) && (init.expression?.kind === SyntaxKind.ElementAccessExpression)) {
+        rows = init.expression.expression;
+        index = init.expression.argumentExpression;
+        column = init.argumentExpression;
+    } else if ((init?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'safeList') && (init.arguments.length === 2)) {
+        rows = init.arguments[0];
+        index = init.arguments[1];
+    } else {
+        return undefined;
+    }
+    const accumulator: any = this.h26g27RowAccumulatorOf(rows);
+    index = this.goUnwrapParenthesizedNode(index);
+    const indexType = (index?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(index) : undefined;
+    if ((accumulator === undefined) || ((indexType !== 'int') && (indexType !== 'int64'))) {
+        return undefined;
+    }
+    const goType = this.goDeclaredTypeOfIdentifier(declaration.name);
+    let value: string;
+    const list = this.printNode(rows, 0);
+    const r = this.printNode(index, 0);
+    if (column === undefined) {
+        if (goType !== '[]any') {
+            return undefined;
+        }
+        value = `${list}[${r}]`;
+    } else {
+        const width = h26g27Width0(this, accumulator);
+        const key: any = this.goUnwrapParenthesizedNode(column);
+        const keyDecl: any = (key?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve?.() : undefined;
+        const literal: any = (keyDecl !== undefined) ? this.goUnwrapParenthesizedNode(keyDecl.initializer) : key;
+        if (((goType !== undefined) && (goType !== 'any')) || !h26g27ColumnBelow(this, column, width) || !h28g16PlainColumn(this, accumulator, Number(literal.text))) {
+            return undefined;
+        }
+        value = `${list}[${r}][${this.printNode(column, 0)}]`;
+        h28g16Cells.add(declaration);
+    }
+    const declared = goType ?? 'any';
+    const name = this.printNode(declaration.name, 0);
+    if (![ list, r, name ].every((s) => /^\w+$/.test(s))) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const bound = (indexType === 'int') ? `len(${list})` : `int64(len(${list}))`;
+    return `${iden}var ${name} ${declared}\n${iden}if ${r} >= 0 && ${r} < ${bound} {\n${this.getIden(identation + 1)}${name} = ${value}\n${iden}}`;
+};
+// a cell local printed above holds a plain pushed value or nil (never a scalar pointer): `== nil` is IsEqual's answer
+GoTranspiler.prototype.h28g16CellNilCompare = function (left, rFam, nilText) {
+    const n: any = this.goUnwrapParenthesizedNode(left);
+    if ((rFam !== 'nil') || (n?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const d: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+    return ((d !== undefined) && h28g16Cells.has(d)) ? nilText : undefined;
+};
+// ===== h28-G16 (end) =====
