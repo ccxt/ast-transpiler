@@ -3191,6 +3191,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-67a: a string nil local as a lent `Precise.<op>` operand passes as is (`&impl PreciseArg`: `&Option<String>`
         // reads `None` as the `Null` box and `Some(s)` as its `Str`): no box, no copy
         if (kind === 'str' && this.rustPreciseLentOperand(n)) return 'lend';
+        const h28r07 = this.h28R07ResolveBox(n, kind); if (h28r07 !== undefined) return h28r07;
+        const h28r07s = this.h28R07SubscriptionBox(n, kind); if (h28r07s !== undefined) return h28r07s;
         if (isCallExpression(parent) && parent.expression !== n && parent.arguments.some((a) => a === n)) {
             // ral-68b: an `Int` nil local in an `Option<i64>` slot of a typed unified call passes its own `Option` (no box)
             if (kind === 'int' && this.rust68bNilIntTypedArg(parent, n)) return 'targ';
@@ -41271,4 +41273,24 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     // ===== end h28-R05
+    // ===== h28-H28-R07
+    /** `client.resolve (x, hash)` of a string nil local: every ws client `resolve` takes `impl Into<Value>`, so the
+     *  local boxes into that slot (`None` -> Null, as the `Value` local held). Receiver must be a plain identifier. */
+    h28R07ResolveBox(n: any, kind: string): string | undefined {
+        const call: any = n?.parent;
+        if (kind !== 'str' || call === undefined || !isCallExpression(call) || call.arguments.length < 1 || call.arguments[0] !== n) return undefined;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || String(callee.name.text) !== 'resolve' || !isIdentifier(callee.expression)) return undefined;
+        return String(callee.expression.text) === 'client' ? 'box' : undefined;
+    }
+
+    /** `client.subscriptions[k] = x` of a string nil local: the handle's `add_subscription` takes a `Value`. */
+    h28R07SubscriptionBox(n: any, kind: string): string | undefined {
+        const write: any = n?.parent;
+        if (kind !== 'str' || write === undefined || !isBinaryExpression(write) || write.right !== n || write.operatorToken.kind !== SyntaxKind.EqualsToken
+            || write.parent?.kind !== SyntaxKind.ExpressionStatement || !isElementAccessExpression(write.left)) return undefined;
+        const access = this.rustClientHandleAccess(write.left.expression);
+        return access !== undefined && access.key === 'subscriptions' ? 'box' : undefined;
+    }
+    // ===== end h28-H28-R07
 }
