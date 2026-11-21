@@ -16808,10 +16808,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     // a base string-pointer family method (decided from its AST) returns `*string`
-    goStrPtrFamilyReturnType(node): string | undefined {
-        return undefined;
-    }
-
     printMethodParameters(node) {
         const params = node.parameters.map(param => this.printParameter(param));
         const required = params.filter(param => param !== 'optional');
