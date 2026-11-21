@@ -18226,10 +18226,15 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `this[name](args)`: `call_dynamic_checked` snake-cases the name, dispatches, and raises
     // NotSupported when no arm or implicit endpoint matches. Args are cloned: pagination reuses them.
+    rustDynamicSelfCallee(callee: any): boolean {
+        return isElementAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(callee.argumentExpression);
+    }
+
     printDynamicSelfCall(node, identation): string | undefined {
         const callee = node.expression;
-        if (!isElementAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(callee.argumentExpression)) return undefined;
-        const args = Array.from(node.arguments).map((a: any) => `(${this.printNode(a, identation).trim()}).clone()`);
+        if (!this.rustDynamicSelfCallee(callee)) return undefined;
+        // a boxed map (`Value::from(&x)` / `Value::Dict(x)`) is already an owned value
+        const args = Array.from(node.arguments).map((a: any) => { const t = this.printNode(a, identation).trim(); return /^Value::(?:from\(&|Dict\()\w+\)$/.test(t) ? t : `(${t}).clone()`; });
         return `self.call_dynamic_checked(${this.printNode(callee.argumentExpression, 0)}.clone(), vec![${args.join(', ')}])`;
     }
 
@@ -34110,7 +34115,7 @@ export class RustTranspiler extends BaseTranspiler {
             const init: any = this.rustAwaitedCall(owner.initializer);
             const callee: any = init?.expression;
             if (!allSlot && !this.rust66s1SuperHandleParamsSlot(declaration) && (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration))) return false;
+                || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) && !this.rustLentSlotSource(init, declaration) && !this.rustDeclaredDictSlot(declaration) && !this.rustBaseHandleLastDictSlot(declaration))) return false;
         } else {
             const list: any = declaration.parent;
             if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations?.length !== 1) return false;
@@ -34183,7 +34188,9 @@ export class RustTranspiler extends BaseTranspiler {
         // a params slot only handed back to `Value` slots shares its map there (moved at the last use, lent before it)
         if (nilSlot) return safe && !longBox && (uses > 0 || boxes > 0);
         if (slotWrites > 0 && (longBox || !this.rustHandedMapInit(declaration))) return false;
-        return safe && (uses > 0 || ((declaration.kind === SyntaxKind.BindingElement || this.rustHandedTernaryLocal(declaration)) && boxes > 0 && !longBox));
+        // a slot the callee's own tuple type declares `Dict` is that map even when nothing reads it
+        const declared = declaration.kind === SyntaxKind.BindingElement && uses === 0 && boxes === 0 && (this.rustDeclaredDictSlot(declaration) || this.rustBaseHandleLastDictSlot(declaration));
+        return safe && (uses > 0 || declared || ((declaration.kind === SyntaxKind.BindingElement || this.rustHandedTernaryLocal(declaration)) && boxes > 0 && !longBox));
     }
 
     // ── ral-ra: reassigned handed maps ──
@@ -35659,6 +35666,8 @@ export class RustTranspiler extends BaseTranspiler {
         // in between) that no typed rule claims: y keeps its `Value` box (`Value::from(&x)`, or `Value::Dict(x)` at the last use)
         if (isVariableDeclaration(up) && up.initializer === n && isVariableDeclaration(declaration) && this.rustHandedTernaryLocal(declaration)
             && this.rustEnclosingFunction(up) === this.rustEnclosingFunction(declaration) && this.rustAliasInitOutsideLoop(up, declaration)) return this.rustSlotTargetStaysValue(up);
+        // an argument of a by-name `this[m] (..)` call takes a `Value`: the map boxes there
+        if (isCallExpression(up) && up.expression !== n && this.rustDynamicSelfCallee(up.expression)) return true;
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)
             || (up.expression.expression.kind !== SyntaxKind.ThisKeyword && up.expression.expression.kind !== SyntaxKind.SuperKeyword)) return false;
         const callee = String(up.expression.name.text);
@@ -36040,23 +36049,22 @@ export class RustTranspiler extends BaseTranspiler {
         return at >= 0 && arm(init.whenTrue) && arm(init.whenFalse);
     }
 
-    /** ral-54f: the last slot of a base `this.handle*AndParams (..)` whose own tuple return declares it a bare `Dict`
-     *  (`handleTriggerPricesAndParams`: `[Str, Str, Str, Dict]`) is the params map handed back, exactly as slot 1 of the
-     *  two-slot helpers. Non-test sources only (the caller checks the tier). */
+    /** The last slot of a base-tier `this.handle* (..)` reader whose own tuple return declares it a bare `Dict` (`[Str, Dict]`,
+     *  `[Str, Str, Str, Dict]`) is that map (the readers the port returns as a native pair). Non-test sources only. */
     rustBaseHandleLastDictSlot(element: any): boolean {
         const owner: any = element?.parent?.parent;
         if (element?.parent?.kind !== SyntaxKind.ArrayBindingPattern || !isVariableDeclaration(owner) || owner.name !== element.parent) return false;
         const init: any = this.rustAwaitedCall(owner.initializer);
         const callee: any = init?.expression;
         if (!isCallExpression(init) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword
-            || !/^handle\w*AndParams\d*$/.test(String(callee.name.text)) || !this.rustNativeListSource(init)) return false;
+            || !/^handle\w+$/.test(String(callee.name.text)) || !this.rustNativeListSource(init)) return false;
         const declaration: any = this.rustCalleeDeclaration(init);
         if (declaration === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName))) return false;
         const type: any = declaration.type;
         if (type?.kind !== SyntaxKind.TupleType) return false;
         const at = element.parent.elements.indexOf(element);
         const slot: any = type.elements?.[at];
-        return at >= 2 && at === type.elements.length - 1 && slot?.kind === SyntaxKind.TypeReference && isIdentifier(slot.typeName)
+        return at >= 1 && at === type.elements.length - 1 && slot?.kind === SyntaxKind.TypeReference && isIdentifier(slot.typeName)
             && slot.typeName.text === 'Dict' && slot.typeArguments === undefined;
     }
 
