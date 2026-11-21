@@ -15150,6 +15150,7 @@ export function installNumParams (goTranspiler: any) {
         for (const site of tree.callIndex.get (name) ?? []) {
             if ((site.file === myFile) || !this.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
             if (!siblingNumIdentifier (tree.fileText.get (site.file) ?? '', site.at, site.args[index])) { return false; }
+            if (!h28g07SiblingNumBound (this, tree, name, site, index)) { return false; }
         }
         return true;
     };
@@ -51053,3 +51054,36 @@ GoTranspiler.prototype.h28G05GetArgSliceCopy = function (initializer, goType: st
     return (this.goGetArgParameterType(decl) === goType) ? 'direct' : undefined;
 };
 // ===== h28-G05 (end) =====
+
+// ===== h28-H28-G07
+// A sibling-file site of a `*float64` Num parameter must pass an identifier the checker resolves to a parameter of the
+// calling method that the printer binds with GetArgFloat64Ptr (a plain GetArg binding stays `any` and fails closed).
+function h28g07SiblingNumBound (go: any, tree: any, name: string, site: any, index: number): boolean {
+    const entry = goDictParamSiblingProgram (tree, name);
+    const abs = entry.absOf.get (site.file);
+    const program: any = entry.batch?.getProgram ();
+    const src: any = (abs === undefined) ? undefined : program?.getSourceFile (abs);
+    if (src === undefined) { return false; }
+    let call: any;
+    const find = (n: any): void => {
+        if ((call !== undefined) || (n.pos > site.at) || (n.end <= site.at)) { return; }
+        if ((n.kind === SK.CallExpression) && (n.arguments?.pos === site.at + 1) && (n.expression?.name?.text === name)) { call = n; return; }
+        n.forEachChild (find);
+    };
+    find (src);
+    const arg: any = call?.arguments?.[index];
+    if (arg?.kind !== SK.Identifier) { return false; }
+    const saved = go.context;
+    go.setContext ({ src, 'checker': entry.batch['checker'], program });
+    try {
+        const decl: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
+        if (decl?.kind !== SK.Parameter) { return false; }
+        // a binding already being proven `*float64` up the stack (the same assumption goNumPtrFlowsIntoProvenParam makes)
+        return (GO_NUM_PTR_ASSUMED.get (decl) === '*float64') || (go.goGetArgParameterType (decl) === '*float64');
+    } catch (e) {
+        return false;
+    } finally {
+        go.setContext (saved);
+    }
+}
+// ===== end h28-H28-G07
