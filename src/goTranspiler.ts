@@ -50604,3 +50604,133 @@ GoTranspiler.prototype.h28a16DeltasArgument = function (node, identation: number
     };
 }
 // ===== end h28-H28-A16
+// ===== h28-H28-A17 =====
+// `const r = await this.<Dict endpoint>(..)` whose uses are typed-receive reads plus `'info': r` slots: the receive binds
+// a holder, reads go through `var r map[string]any = rReply.Value` (MapTyped(Raw)) and every info slot stores
+// `rReply.Raw`, the exact box Fetch2Async delivered, so a nil or non-map body reaches info unchanged.
+export interface GoTranspiler {
+    h28a17InfoUse(n: any): boolean;
+    h28a17InfoReceive(declaration: any): boolean;
+    h28a17HolderName(declaration: any): string;
+}
+const h28a17Proven = new WeakMap<any, boolean>();
+const h28a17Names = new WeakMap<any, string>();
+const h28a17Taken = new WeakMap<any, Set<string>>();
+GoTranspiler.prototype.h28a17InfoUse = function (n: any): boolean {
+    const slot: any = n?.parent;
+    const key: any = slot?.name;
+    return (n?.kind === SyntaxKind.Identifier) && (slot?.kind === SyntaxKind.PropertyAssignment) && (slot.initializer === n)
+        && (slot.parent?.kind === SyntaxKind.ObjectLiteralExpression)
+        && ((key?.kind === SyntaxKind.Identifier) || (key?.kind === SyntaxKind.StringLiteral)) && (String(key.text) === 'info');
+};
+GoTranspiler.prototype.h28a17InfoReceive = function (declaration: any): boolean {
+    if (h28a17Proven.has(declaration)) {
+        return h28a17Proven.get(declaration) === true;
+    }
+    h28a17Proven.set(declaration, false);
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.AwaitExpression) || (declaration.parent?.declarations?.length !== 1)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    let element = undefined;
+    try {
+        element = ccxtGoEndpointElement(this, init.expression);
+    } catch (e) {
+        return false;
+    }
+    const printed = (element === GO_SAFE_DICT_LOCAL_TYPE) ? this.printNode(init, 0).trim() : '';
+    if (!printed.startsWith('(<-this.') || !printed.endsWith(').Raw') || printed.includes('\n')) {
+        return false;                           // one-line typed Dict stub receive only (the build pass hoists it)
+    }
+    let infos = 0;
+    let reads = 0;
+    const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
+        if (this.h28a17InfoUse(n)) {
+            infos += 1;
+            return true;
+        }
+        reads += 1;
+        return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
+    }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
+    const proven = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (infos > 0) && (reads > 0);
+    h28a17Proven.set(declaration, proven);
+    return proven;
+};
+// `<name>Reply`, numbered past every identifier of the function and every holder this rule already named there
+GoTranspiler.prototype.h28a17HolderName = function (declaration: any): string {
+    const cached = h28a17Names.get(declaration);
+    if (cached !== undefined) {
+        return cached;
+    }
+    const scope: any = this.goEnclosingFunction(declaration);
+    const taken = h28a17Taken.get(scope) ?? new Set<string>();
+    h28a17Taken.set(scope, taken);
+    this.hasNodeWhere(scope, (n: any) => {
+        if (n.kind === SyntaxKind.Identifier) {
+            taken.add(String(n.text));
+        }
+        return false;
+    });
+    const base = String(declaration.name.text) + 'Reply';
+    let name = base;
+    for (let k = 2; taken.has(name); k++) {
+        name = base + k;
+    }
+    taken.add(name);
+    h28a17Names.set(declaration, name);
+    return name;
+};
+{
+    const printVariableDeclarationListH28a17 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((declaration !== undefined) && this.h28a17InfoReceive(declaration)) {
+            const holder = this.h28a17HolderName(declaration);
+            const recv = this.printNode(declaration.initializer, identation).trim().slice(0, -'.Raw'.length);
+            const iden = this.getIden(identation);
+            return `\n${iden}${holder} := ${recv}\n${iden}PanicOnError(${holder}.Raw)\n${iden}var ${declaration.name.text} map[string]any = ${holder}.Value`;
+        }
+        return printVariableDeclarationListH28a17.call(this, node, identation);
+    };
+    const printIdentifierH28a17 = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        if (this.h28a17InfoUse(node)) {
+            const declaration: any = this.goAnyBoxLocalDeclaration(node);
+            if ((declaration !== undefined) && (declaration.name !== node) && this.h28a17InfoReceive(declaration)) {
+                return this.h28a17HolderName(declaration) + '.Raw';
+            }
+        }
+        return printIdentifierH28a17.call(this, node);
+    };
+    // the read-side proofs see the typed map receive
+    const receiverTypeH28a17 = GoTranspiler.prototype.h27a01ReceiverType;
+    GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+        const declaration: any = this.goAnyBoxLocalDeclaration(container);
+        return ((declaration !== undefined) && this.h28a17InfoReceive(declaration)) ? GO_SAFE_DICT_LOCAL_TYPE : receiverTypeH28a17.call(this, container);
+    };
+    // JSON origin: the info slots come after every other use, so a callee writing through info cannot reach a read
+    const jsonOriginH28a17 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        if (jsonOriginH28a17.call(this, node, depth)) {
+            return true;
+        }
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+        if ((declaration === undefined) || !this.h28a17InfoReceive(declaration)) {
+            return false;
+        }
+        let lastRead = -1;
+        let firstInfo = Number.MAX_SAFE_INTEGER;
+        const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
+            if (this.h28a17InfoUse(n)) {
+                firstInfo = Math.min(firstInfo, n.pos);
+                return true;
+            }
+            lastRead = Math.max(lastRead, n.pos);
+            return this.goJsonOriginUseIsReadOnly(n, name);
+        });
+        return readOnly && (lastRead < firstInfo);
+    };
+}
+// ===== end h28-H28-A17 =====
