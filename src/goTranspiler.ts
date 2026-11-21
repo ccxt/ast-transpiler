@@ -50843,3 +50843,58 @@ GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0) {
     return goJsonOriginContainerH28a22.call(this, node, depth) || this.h28a22IndexedJsonContainer(node, depth);
 };
 // ===== end h28-A22
+// ===== h28-H28-A24
+// `this.safeDict (cache, 0 | i)` in a `getCacheIndex` override, `cache: any[]` its unwritten second parameter: every caller
+// (base loadOrderBook, hand-written ApplyOrderBookSnapshot) passes the order book's delta buffer, which only holds decoded
+// ws frames. Row 0 reads under a length check, row i only inside a loop bounded by the buffer length; a non-map row is nil.
+export interface GoTranspiler {
+    h28a24CacheDeltaRead(node): { name: string, cache: string, key: string, zero: boolean } | undefined;
+}
+GoTranspiler.prototype.h28a24CacheDeltaRead = function (node) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments[0].kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const cacheNode: any = call.arguments[0];
+    const keyNode: any = call.arguments[1];
+    const method: any = this.goEnclosingFunction(declaration);
+    const param: any = this.checkerOrUndefined()?.getSymbolAtLocation(cacheNode)?.valueDeclaration?.resolve();
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.name?.text !== 'getCacheIndex') || (method.parameters?.length !== 2)
+        || (param === undefined) || (param !== method.parameters[1]) || (param.type?.kind !== SyntaxKind.ArrayType)
+        || (param.type.elementType?.kind !== SyntaxKind.AnyKeyword)
+        || this.hasNodeWhere(method.body, (n: any) => this.goWritesOrRebindsName(n, cacheNode.text, [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ]))) {
+        return undefined;
+    }
+    const name = declaration.name.text as string;
+    const cache = cacheNode.text as string;
+    if ((keyNode.kind === SyntaxKind.NumericLiteral) && (keyNode.text === '0')) {
+        return { name, cache, key: '0', zero: true };
+    }
+    if ((keyNode.kind !== SyntaxKind.Identifier)
+        || (this.goLoopBoundedIndexRead(call, cacheNode, keyNode, cache, keyNode.text) !== `${cache}[${keyNode.text}]`)) {
+        return undefined;
+    }
+    return { name, cache, key: keyNode.text, zero: false };
+};
+const h28a24ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = h28a24ShippedPrintDeclarationList.call(this, node, identation);
+    const site = (typeof printed === 'string') ? this.h28a24CacheDeltaRead(node) : undefined;
+    if ((site === undefined) || (printed.trim() !== `var ${site.name} map[string]any = SafeMapTyped(${site.cache}, ${site.key})`)) {
+        return printed;
+    }
+    const iden = this.getIden(identation);
+    const lead = printed.startsWith('\n') ? '\n' : '';
+    if (!site.zero) {
+        return `${lead}${iden}var ${site.name}, _ = ${site.cache}[${site.key}].(map[string]any)`;
+    }
+    return `${lead}${iden}var ${site.name} map[string]any\n`
+        + `${iden}if len(${site.cache}) > 0 {\n`
+        + `${iden}\t${site.name}, _ = ${site.cache}[0].(map[string]any)\n`
+        + `${iden}}`;
+};
+// ===== end h28-H28-A24
