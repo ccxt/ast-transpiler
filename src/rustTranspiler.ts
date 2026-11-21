@@ -9681,6 +9681,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustClientHandlePlanUncached(method: any): any {
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const h27r07 = this.h27r07BaseHandlePlan(method, file); if (h27r07 !== undefined) return h27r07;
         if (!/ts\/src\//.test(file) || /ts\/src\/(?:.*\/)?(?:base|test)\//.test(file)) return undefined;
         const nodes: any[] = this.rustScopeNameNodes(method, 'client');
         const params = Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client');
@@ -9777,6 +9778,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(key)) return undefined;
         const plan = this.rustClientHandlePlan(node);
         if (plan === undefined || node.pos < plan.bindPos || (!plan.typed && !plan.declOk && !this.rust80bClientDeclPending(plan))) return undefined;
+        if (this.h27r07KeepBoxedKey(node, plan)) return undefined;
         const write = this.isNativeWriteTargetBase(node);
         const first = plan.firstWrite.get(key);
         // `live`: the use prints a handle key method (`has_|get_|*_keys`), which reads the registry, not the snapshot
@@ -40931,4 +40933,46 @@ export class RustTranspiler extends BaseTranspiler {
         }
     }
     // ===== end h27-R06
+    // ===== h27-R07
+    // The base ws helpers `findMessageHashes` / `cleanUnsubscription` take `client: any`, the live ws client the
+    // drive loop hands them. Plan their `client` param like a venue's, so its field reads go through the typed handle.
+    private static readonly H27R07_BASE_HANDLE_METHODS = new Set([ 'findMessageHashes', 'cleanUnsubscription' ]);
+    h27r07BaseHandlePlan(method: any, file: string): any {
+        if (!/ts\/src\/base\/(?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(file) || !isIdentifier(method.name) || !RustTranspiler.H27R07_BASE_HANDLE_METHODS.has(String(method.name.text))) return undefined;
+        const params = Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client');
+        if (params.length !== 1) return undefined;
+        const decl: any = params[0];
+        const type: any = this.getCheckedTypeOf(decl.name);
+        if (type === undefined || (type.flags & TypeFlags.Any) === 0) return undefined;
+        const bindPos = method.body.pos;
+        const refs = this.rustScopeNameNodes(method, 'client').filter((n: any) => n.kind === SyntaxKind.Identifier && n.parent !== decl);
+        if (refs.some((r: any) => isVariableDeclaration(r.parent) || (isBinaryExpression(r.parent) && r.parent.left === r && rustIsAssignmentOperator(r.parent.operatorToken.kind)))) return undefined;
+        const firstWrite = new Map<string, number>();
+        let mut = false;
+        for (const r of refs) {
+            const p: any = r.parent;
+            if (!isPropertyAccessExpression(p) || p.expression !== r || !RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(String(p.name.text)) || !this.isNativeWriteTargetBase(p)) continue;
+            mut = true;
+            const line = this.rustClientHandleLine(p);
+            const key = String(p.name.text);
+            if (!firstWrite.has(key) || line < firstWrite.get(key)) firstWrite.set(key, line);
+        }
+        return { kind: 'param', decl, bindPos, firstWrite, mut, typed: false, touched: false, declOk: true, h27r07: true };
+    }
+    /** On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`)
+     *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
+    h27r07KeepBoxedKey(node: any, plan: any): boolean {
+        if (plan?.h27r07 !== true || !isElementAccessExpression(node.parent) || node.parent.expression !== node) return false;
+        const key: any = this.unwrapParens(node.parent.argumentExpression);
+        const declaration: any = isIdentifier(key) ? this.rustDeclaredNode(key) : undefined;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        let receiver = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
+            const p: any = n.parent;
+            if (isPropertyAccessExpression(p) && p.expression === n && isCallExpression(p.parent) && p.parent.expression === p) receiver = true;
+            return true;
+        });
+        return receiver;
+    }
+    // ===== end h27-R07
 }
