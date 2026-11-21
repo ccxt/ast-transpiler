@@ -54980,3 +54980,13 @@ GoTranspiler.prototype.h29g23LiteralDefaultedConst = function (ident: any): bool
         && (args[2].kind === SyntaxKind.StringLiteral);
 };
 // ===== end h29-H29-G23
+// ===== h29-H29-G24
+// a never-rebound list cut from a ws frame by a literal-key safeList (h28a13FrameList) holds only decoded JSON
+// values, never a Go scalar pointer: DerefScalar on its element is the identity, nil included
+{
+    const pointerFreeH29g24 = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFreeH29g24.call(this, list, depth) || ((list?.kind === SyntaxKind.Identifier) && this.h28a13FrameList(list));
+    };
+}
+// ===== end h29-H29-G24
