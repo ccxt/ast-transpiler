@@ -21727,11 +21727,13 @@ export class RustTranspiler extends BaseTranspiler {
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
+        const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
         return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'values'); if (h27 !== undefined) return h27;
+        const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'values'); if (h28 !== undefined) return h28;
         return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
@@ -41143,4 +41145,130 @@ export class RustTranspiler extends BaseTranspiler {
         return e !== undefined && isNumericLiteral(e) && /^\d+$/.test(String(e.text)) ? Number(e.text) : undefined;
     }
     // ===== end h28-R04
+
+    // ===== h28-R05: `Object.keys/values (p)` on a read-only `Dict` parameter of a base method that every caller fills
+    /** with a const bound to a fresh `this.parse*|index*|fetch* (..)` map (one const alias hop): never a ws-tagged snapshot, so
+     *  the map's own iterators list what the helper listed; a non-map (Null) lists nothing, as before. */
+    private h28r05Decisions = new WeakMap<any, boolean>();
+    h28r05BaseDictParamEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const text = parsedArg?.trim();
+        if (arg === undefined || text === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== undefined) return undefined;
+        const param: any = this.rustDeclarationOfIdentifier(arg);
+        if (param === undefined || !isParameterDeclaration(param)) return undefined;
+        let ok = this.h28r05Decisions.get(param);
+        if (ok === undefined) {
+            this.h28r05Decisions.set(param, false);
+            try { ok = this.h28r05ParamProven(param); } catch (e) { ok = false; }
+            this.h28r05Decisions.set(param, ok);
+        }
+        if (!ok) return undefined;
+        const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
+        return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+
+    h28r05ParamProven(param: any): boolean {
+        const method: any = param.parent;
+        if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isIdentifier(param.name)) return false;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(this.provenDictFieldPath(method)) || param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        const type: any = param.type;
+        if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
+        const pname = String(param.name.text);
+        if (this.rustLocalIsReassigned(param, pname) || this.rustMethodReferencedAsValue(method)) return false;
+        // read-only in the body: no keyed write, no delete, never handed on except to Object.keys / values / `in`
+        for (const id of this.rustScopeNameNodes(method.body, pname) as any[]) {
+            const up: any = id.parent;
+            if (up === undefined || this.rustDeclarationOfIdentifier(id) !== param) continue;
+            if (isElementAccessExpression(up) && up.expression === id) {
+                const top: any = up.parent;
+                if (top?.kind === SyntaxKind.DeleteExpression || (isBinaryExpression(top) && top.left === up && rustIsAssignmentOperator(top.operatorToken.kind))) return false;
+                continue;
+            }
+            if (isCallExpression(up) && this.bearerEnumArg(up) === id) continue;
+            if (isBinaryExpression(up) && up.right === id && up.operatorToken.kind === SyntaxKind.InKeyword) continue;
+            return false;
+        }
+        const name = String(method.name.text);
+        const at = Array.from(method.parameters).indexOf(param);
+        return this.h28r05CallersProven(method, name, at);
+    }
+
+    // Map-returning producers by declared return text in the base (`indexBy` is the generic helper, `Dictionary<any>`).
+    private static readonly H28R05_MAP_RETURNS = /^(?:Promise<)?(?:Dict|Dictionary<[A-Za-z]+>|Tickers|DepositAddresses|LastPrices|Currencies|AllGreeks)>?$/;
+
+    /** Every `this.name (..)` in ts/src (parsed, no other spelling, no override, no quoted use) passes at `at` a const bound
+     *  in its method to `[await] this.p (..)` whose base declaration returns a map (one const alias hop). */
+    h28r05CallersProven(method: any, name: string, at: number): boolean {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const cut = file.search(/\/ts\/src\/base\//);
+        if (cut < 0) return false;
+        const root = file.slice(0, cut) + '/ts/src';
+        const api: any = (RustTranspiler.rustSignProofApi ??= new (tsSync as any).API({ cwd: process.cwd() }));
+        const baseText = readRustTsIndexSource(root + '/base/Exchange.ts') ?? '';
+        const genericText = readRustTsIndexSource(root + '/base/functions/generic.ts') ?? '';
+        const returns = (p: string): string | undefined => {
+            const m = new RegExp('^ {4}(?:async\\s+)?' + p + '\\s*\\([^\\n]*\\)\\s*:\\s*([^{]+?)\\s*\\{\\s*$', 'm').exec(baseText)
+                ?? new RegExp('^const ' + p + ' = \\([^\\n]*\\)\\s*:\\s*([^=]+?)\\s*=>', 'm').exec(genericText);
+            return m === null ? undefined : m[1].replace(/\s+/g, '');
+        };
+        const declares = (t: string, n: string) => new RegExp('^ {4}(?:(?:override|async|public|protected|private)\\s+)*' + n + '\\s*\\(', 'm').test(t);
+        let total = 0;
+        for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(root + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+            for (const f of entries) {
+                if (dir === '/base' && f !== 'Exchange.ts') continue;
+                const text = readRustTsIndexSource(`${root}${dir}/${f}`) ?? '';
+                if (!text.includes(name)) continue;
+                if (new RegExp('[\'"`]' + name + '[\'"`]').test(text)) return false;
+                const textCalls = (text.match(new RegExp('\\.' + name + '\\s*\\(', 'g')) ?? []).length;
+                if (textCalls === 0) continue;
+                if (dir !== '/base' && declares(text, name)) return false;
+                const sf: any = api.createSourceFile(`${root}${dir}/${f}`, text);
+                const found: any[] = [];
+                const visit = (n: any) => {
+                    if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && String((n.expression.name as any).text) === name) found.push(n);
+                    n.forEachChild(visit);
+                };
+                sf.forEachChild(visit);
+                if (found.length !== textCalls) return false;
+                for (const call of found) {
+                    if (call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+                    const a: any = this.rustSkipWrappers(call.arguments?.[at]);
+                    if (a === undefined || !this.h28r05FreshMapIdent(a, call, 1, returns)) return false;
+                }
+                total += found.length;
+            }
+        }
+        return total > 0;
+    }
+
+    /** `a` names a const of the enclosing function bound to `[await] this.p (..)` with a map return, or (one hop) to such a const. */
+    h28r05FreshMapIdent(a: any, site: any, hops: number, returns: (p: string) => string | undefined): boolean {
+        if (!isIdentifier(a)) return false;
+        let fn: any = site;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        if (fn === undefined) return false;
+        const decls: any[] = [];
+        let writes = 0;
+        const visit = (n: any) => {
+            if (isVariableDeclaration(n) && isIdentifier(n.name) && n.name.text === a.text) decls.push(n);
+            if (isBinaryExpression(n) && isIdentifier(n.left) && n.left.text === a.text && rustIsAssignmentOperator(n.operatorToken.kind)) writes++;
+            if (isParameterDeclaration(n) && isIdentifier(n.name) && n.name.text === a.text) writes++;
+            n.forEachChild(visit);
+        };
+        fn.forEachChild(visit);
+        if (decls.length !== 1 || writes !== 0) return false;
+        const d: any = decls[0];
+        const list: any = d.parent;
+        if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos) return false;
+        let init: any = this.rustSkipWrappers(d.initializer);
+        if (init?.kind === SyntaxKind.AwaitExpression) init = this.rustSkipWrappers(init.expression);
+        if (init !== undefined && isIdentifier(init)) return hops > 0 && this.h28r05FreshMapIdent(init, d, hops - 1, returns);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const ret = returns(String((init.expression.name as any).text));
+        return ret !== undefined && RustTranspiler.H28R05_MAP_RETURNS.test(ret);
+    }
+
+    // ===== end h28-R05
 }
