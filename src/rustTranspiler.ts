@@ -19267,6 +19267,7 @@ export class RustTranspiler extends BaseTranspiler {
         const dictRead = this.rustBearerDictDynamicRead(receiverText, receiverNode, keyNode) ?? this.printNativeDynamicMapAccess(receiverText, receiverNode, keyNode) ?? this.printNativeThisFieldDynamicMapAccess(receiverText, receiverNode, keyNode)
             ?? this.rustDynamicRead(receiverText, receiverNode, keyNode) ?? this.rustFieldDynamicRead(receiverText, receiverNode, keyNode)
             ?? this.rustLocalDictRead(receiverText, receiverNode, keyNode);
+        const h29r06 = dictRead === undefined ? this.h29r06ConfigDictRead(receiverText, receiverNode, keyNode) : undefined; if (h29r06 !== undefined) return h29r06;
         if (dictRead !== undefined) return dictRead;
         // A non-literal index (the `for (let i = 0; …)` counter) into a
         // checker-proven list reads natively too.
@@ -41495,4 +41496,153 @@ export class RustTranspiler extends BaseTranspiler {
         return this.h29r05OptionsValue(d.initializer, d, hops - 1);
     }
     // ===== end h29-R05
+    // ===== h29-R06: `X[k]` on a local or `Dict` parameter whose every value derives from the untagged base config maps
+    /** (`this.features` / `this.markets` / `this.markets_by_id`) through safeDict / omit / extend / deepExtend, the method's
+     *  own result, or nullish: no marker key can sit in such a map, so `get_value` is the map's own `get` (Null on a miss). */
+    private static readonly H29R06_FIELDS = new Set([ 'features', 'markets', 'markets_by_id' ]);
+    private static readonly H29R06_CALLEES = new Set([ 'safeDict', 'omit', 'extend', 'deepExtend' ]);
+    private static readonly H29R06_MARKER_KEYS = /^(?:__\w*|url|subscriptions|futures|cache|hashmap)$/;
+    private h29r06Memo = new WeakMap<any, boolean>();
+    h29r06ConfigDictRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined {
+        const recv: any = this.rustSkipWrappers(receiverNode);
+        if (recv === undefined || !isIdentifier(recv) || this.isTestSource(recv) || !RUST_PLAIN_PLACE.test(receiverText)) return undefined;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(recv.getSourceFile().fileName).replace(/\\/g, '/'))) return undefined;
+        if (!this.h29r06Binding(this.rustDeclarationOfIdentifier(recv), new Set())) return undefined;
+        const key = this.rustDictKeyText(keyNode);
+        if (key === undefined) return undefined;
+        return this.rustDictRead(receiverText, key, recv, true);
+    }
+
+    h29r06Binding(decl: any, seen: Set<any>): boolean {
+        if (decl === undefined || !isIdentifier(decl.name)) return false;
+        const memo = this.h29r06Memo.get(decl);
+        if (memo !== undefined) return memo;
+        if (seen.has(decl)) return true;
+        seen.add(decl);
+        let ok = false;
+        try { ok = this.h29r06BindingUncached(decl, seen); } catch (e) { ok = false; }
+        if (seen.size === 1) this.h29r06Memo.set(decl, ok);
+        seen.delete(decl);
+        return ok;
+    }
+
+    h29r06BindingUncached(decl: any, seen: Set<any>): boolean {
+        const scope: any = this.rustEnclosingFunction(decl);
+        if (scope === undefined || isSourceFile(scope) || !isMethodDeclaration(scope) || !isIdentifier(scope.name)) return false;
+        const name = String(decl.name.text);
+        if (isParameterDeclaration(decl)) {
+            if (!this.h29r06ParamProven(scope, decl, seen)) return false;
+        } else if (!isVariableDeclaration(decl) || decl.initializer === undefined || !this.h29r06Origin(decl.initializer, scope, seen)) {
+            return false;
+        }
+        const symbol = this.rustSymbolOf(decl.name);
+        if (symbol === undefined) return false;
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n === decl.name || n.kind !== SyntaxKind.Identifier) continue;
+            if (this.rustSymbolOf(n) !== symbol) {
+                if (this.rustBindsName(n.parent, name)) return false;
+                continue;
+            }
+            if (this.rustEnclosingFunction(n) !== scope) return false;
+            let target: any = n;
+            while (target.parent !== undefined && (isParenthesizedExpression(target.parent) || isNonNullExpression(target.parent) || isAsExpression(target.parent))) target = target.parent;
+            const up: any = target.parent;
+            if (up === undefined) continue;
+            if (isBinaryExpression(up) && up.left === target && rustIsAssignmentOperator(up.operatorToken.kind)) {
+                if (up.operatorToken.kind !== SyntaxKind.EqualsToken || !this.h29r06Origin(up.right, scope, seen)) return false;
+                continue;
+            }
+            if (up.kind === SyntaxKind.PrefixUnaryExpression || up.kind === SyntaxKind.PostfixUnaryExpression || up.kind === SyntaxKind.DeleteExpression
+                || ((isForOfStatement(up) || isForInStatement(up)) && up.initializer === target)) return false;
+            if (up.kind === SyntaxKind.ArrayLiteralExpression || up.kind === SyntaxKind.ShorthandPropertyAssignment) return false;
+            // a keyed write adds only a literal non-marker key
+            if (isElementAccessExpression(up) && up.expression === target) {
+                let top: any = up;
+                while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
+                const w: any = top.parent;
+                const written = (w !== undefined && isBinaryExpression(w) && w.left === top && rustIsAssignmentOperator(w.operatorToken.kind)) || w?.kind === SyntaxKind.DeleteExpression;
+                if (written && (!isStringLiteral(up.argumentExpression) || RustTranspiler.H29R06_MARKER_KEYS.test(String(up.argumentExpression.text)))) return false;
+            }
+        }
+        return true;
+    }
+
+    /** An expression whose map value derives only from the config fields (or is nullish). */
+    h29r06Origin(node: any, scope: any, seen: Set<any>): boolean {
+        const n: any = this.rustSkipWrappers(node);
+        if (n === undefined) return false;
+        if (n.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && String(n.text) === 'undefined')) return true;
+        if (isPropertyAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword) {
+            const f = this.rustDictField(n);
+            return f !== undefined && RustTranspiler.H29R06_FIELDS.has(f);
+        }
+        if (isIdentifier(n)) {
+            const d: any = this.rustDeclarationOfIdentifier(n);
+            return d !== undefined && this.rustEnclosingFunction(d) === scope && this.h29r06Binding(d, seen);
+        }
+        if (isObjectLiteralExpression(n)) return n.properties.length === 0;
+        if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression) || n.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee = String(n.expression.name.text);
+        if (callee === String(scope.name.text) && !this.rustMethodReferencedAsValue(scope)) return this.h29r06OwnResult(scope, seen);
+        if (!RustTranspiler.H29R06_CALLEES.has(callee) || !this.rustCalleeIsBase(n) || n.arguments.length === 0) return false;
+        // safeDict / omit: the map argument; extend / deepExtend: every argument
+        const maps = callee === 'safeDict' || callee === 'omit' ? [ n.arguments[0] ] : Array.from(n.arguments);
+        if (callee === 'safeDict' && n.arguments.length > 2) return false;
+        return maps.every((a: any) => this.h29r06Origin(a, scope, seen));
+    }
+
+    /** The method's own result: every `return` gives an origin value (a recursive call holds by induction). */
+    h29r06OwnResult(method: any, seen: Set<any>): boolean {
+        if (seen.has(method)) return true;
+        seen.add(method);
+        let ok = true;
+        const visit = (x: any): void => {
+            if (!ok || x === undefined) return;
+            if (x !== method.body && isFunctionLike(x)) return;
+            if (isReturnStatement(x) && (x.expression === undefined || !this.h29r06Origin(x.expression, method, seen))) ok = false;
+            x.forEachChild(visit);
+        };
+        method.body?.forEachChild(visit);
+        seen.delete(method);
+        return ok;
+    }
+
+    /** A `Dict` parameter of a base method no venue declares or names, every `this.m (..)` call in its own file passing an
+     *  origin value (its own parameter forwarded counts by induction). */
+    h29r06ParamProven(method: any, param: any, seen: Set<any>): boolean {
+        if (param.dotDotDotToken !== undefined || param.initializer !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        const t: any = param.type;
+        if (t === undefined || !isTypeReferenceNode(t) || !isIdentifier(t.typeName) || String(t.typeName.text) !== 'Dict') return false;
+        const name = String(method.name.text);
+        const at = Array.from(method.parameters).indexOf(param);
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const cut = file.search(/\/ts\/src\/base\//);
+        if (cut < 0) return false;
+        const root = file.slice(0, cut) + '/ts/src';
+        for (const dir of [ '', '/pro', '/prediction' ]) {
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(root + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+            for (const f of entries) {
+                if ((readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').includes(name)) return false;
+            }
+        }
+        let calls = 0;
+        let ok = true;
+        const visit = (x: any): void => {
+            if (!ok) return;
+            if (isPropertyAccessExpression(x) && isIdentifier(x.name) && String(x.name.text) === name) {
+                const call: any = x.parent;
+                if (x.expression.kind !== SyntaxKind.ThisKeyword || call === undefined || !isCallExpression(call) || call.expression !== x || call.arguments.length <= at) { ok = false; return; }
+                calls++;
+                const fn: any = this.rustEnclosingFunction(call);
+                if (fn === undefined || isSourceFile(fn) || !this.h29r06Origin(call.arguments[at], fn, seen)) { ok = false; return; }
+            } else if (isStringLiteralLikeNode(x) && String((x as any).text) === name) {
+                ok = false; return;
+            }
+            x.forEachChild(visit);
+        };
+        method.getSourceFile().forEachChild(visit);
+        return ok && calls > 0;
+    }
+    // ===== end h29-R06
 }
