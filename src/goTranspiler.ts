@@ -49193,3 +49193,71 @@ GoTranspiler.prototype.h27g23IsIntLoopCounter = function (key) {
         || (n.parent?.kind === SyntaxKind.PostfixUnaryExpression) || (n.parent?.kind === SyntaxKind.PrefixUnaryExpression)));
 };
 // ===== h27-G23 (end) =====
+// ===== h27-H27-G27 =====
+// A `[]map[string]any` request-row slot also holds when the parameter is declared `List` (the table row is the
+// declaration; Go compiles every caller against it) and when it is handed whole to another such slot; an array
+// literal at such a slot whose elements the printer types `map[string]any` opens as `[]map[string]any`.
+export interface GoTranspiler {
+    h27g27RowParamType(fn, param): string | undefined;
+    h27g27MapElement(node): boolean;
+    h27g27RowSlotOf(node): boolean;
+}
+GoTranspiler.prototype.h27g27RowSlotOf = function (node): boolean {
+    const call: any = node?.parent;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const index = call.arguments.indexOf(node);
+    const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, callee.name?.text) ? this.unifiedSliceParams[callee.name.text] : undefined;
+    return (index >= 0) && (entry?.[index] === GO_REQUEST_ROW_LIST_TYPE);
+};
+GoTranspiler.prototype.h27g27RowParamType = function (fn, param): string | undefined {
+    const annotation = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
+    if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || !(GO_REQUEST_ROW_ANNOTATIONS.includes(annotation) || (annotation === 'List'))) {
+        return undefined;
+    }
+    const name = param.name.text;
+    const unsafe = this.hasNodeWhere(fn.body, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (this.goRequestRowParamOf(n) !== param)) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            return parent.name?.text !== 'length';
+        }
+        if (this.h27g27RowSlotOf(n)) {
+            return false;
+        }
+        const read = ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) ? parent
+            : (((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments?.[0] === n)) ? parent : undefined);
+        return (read === undefined) || (this.goRequestRowRead(read) === undefined);
+    });
+    return unsafe ? undefined : GO_REQUEST_ROW_LIST_TYPE;
+};
+// an element the printer already declares `map[string]any` (a typed local, a venue `[Dict, Dict]` pair slot)
+GoTranspiler.prototype.h27g27MapElement = function (node): boolean {
+    let e: any = node;
+    while ((e?.kind === SyntaxKind.AsExpression) || (e?.kind === SyntaxKind.ParenthesizedExpression)) {
+        e = e.expression;
+    }
+    return (e?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(e) === 'map[string]any');
+};
+const goUnifiedSliceParameterTypeH27g27 = GoTranspiler.prototype.goUnifiedSliceParameterType;
+GoTranspiler.prototype.goUnifiedSliceParameterType = function (fn, param): string | undefined {
+    const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, fn.name.text) ? this.unifiedSliceParams[fn.name.text] : undefined;
+    const h = (entry?.[fn.parameters.indexOf(param)] === GO_REQUEST_ROW_LIST_TYPE) ? this.h27g27RowParamType(fn, param) : undefined;
+    if (h !== undefined) return h;
+    return goUnifiedSliceParameterTypeH27g27.call(this, fn, param);
+};
+const printArrayLiteralExpressionH27g27 = GoTranspiler.prototype.printArrayLiteralExpression;
+GoTranspiler.prototype.printArrayLiteralExpression = function (node, identation = 0) {
+    if ((node?.elements?.length > 0) && this.h27g27RowSlotOf(node) && node.elements.every((e: any) => this.h27g27MapElement(e))) {
+        this.goSliceLiteralTypes.delete(node);
+        const elements = node.elements.map((e: any) => this.goWithExprDepth(1, () => this.printNode(e, identation)).trim()).join(', ');
+        return `${GO_REQUEST_ROW_LIST_TYPE}{${elements}}`;
+    }
+    return printArrayLiteralExpressionH27g27.call(this, node, identation);
+};
+// ===== end h27-H27-G27 =====
