@@ -33786,6 +33786,7 @@ ${tryBodyBlock}
             return shapedRead;
         }
         const h27g33 = this.h27g33StringListLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h27g33 !== undefined) return h27g33;
+        const h28g24 = this.h28g24StringParamLiteralRead(node, baseExpr, keys, containerStr, keyStrs); if (h28g24 !== undefined) return h28g24;
 
         // GetValue(m, "k") is a read of a Go map[string]any already: a missing key
         // and a nil element both come back as the `any` nil, so the native index
@@ -51832,3 +51833,157 @@ function installH28G23MapEntryTernaryStore (goTranspiler: any) {
     };
 }
 // ===== end h28-G23
+// ===== h28-H28-G24
+export interface GoTranspiler {
+    h28g24ExtraLiteralProof(node): boolean;
+    h28g24NonNilStringReceiver(receiver, split): boolean;
+    h28g24StringSlice(list): boolean;
+    h28g24StringParamLiteralRead(node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+// Two more in-range proofs for `xs[K]`, K a literal: (a) K === 0 on a const `s.split ('<non-empty literal>')` whose
+// receiver the checker types `string` (Split of a string returns at least one part); (b) a never-written list behind an
+// if/else where every arm exits or ends with an exiting length guard that proves K (h26g24GuardProves).
+GoTranspiler.prototype.h28g24ExtraLiteralProof = function (node) {
+    const list: any = node?.expression;
+    const key: any = node?.argumentExpression;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)) {
+        return false;
+    }
+    const checker: any = this.checkerOrUndefined();
+    const declaration: any = checker?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    const scope: any = this.goEnclosingFunction(node);
+    if ((declaration === undefined) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)) {
+        return false;
+    }
+    const index = Number(key.text);
+    // a write into a local whose Go type is not (yet) the `any` box keeps the old proof set: its type inference reads this site
+    const parent: any = node.parent;
+    const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
+        : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
+    if (target !== undefined) {
+        const declared = (target.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(target) : 'none';
+        const targetType: any = (declared === undefined) ? checker?.getTypeAtLocation(target) : undefined;
+        if (((declared !== undefined) && (declared !== 'any')) || ((declared === undefined) && ((targetType === undefined) || ((targetType.flags & TypeFlags.Union) === 0)))) {
+            return false;
+        }
+    }
+    if ((index === 0) && (declaration.kind === SyntaxKind.VariableDeclaration) && ((declaration.parent?.flags ?? 0) & ts.NodeFlags.Const)) {
+        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+        const sep: any = init?.arguments?.[0];
+        if ((init?.kind === SyntaxKind.CallExpression) && (init.expression?.kind === SyntaxKind.PropertyAccessExpression) && (init.expression.name?.text === 'split')
+            && (init.arguments.length === 1) && (sep?.kind === SyntaxKind.StringLiteral) && (sep.text.length > 0)) {
+            if (this.h28g24NonNilStringReceiver(init.expression.expression, init)) {
+                return true;
+            }
+        }
+    }
+    if (![ SyntaxKind.VariableDeclaration, SyntaxKind.Parameter ].includes(declaration.kind) || (this.goNameWriteSites(scope, list.text, declaration).length > 0)) {
+        return false;
+    }
+    const names = new Set<string>();
+    const bind = (n: any): void => {
+        if ((n.kind === SyntaxKind.VariableDeclaration) && (n.name?.kind === SyntaxKind.Identifier) && ((n.parent?.flags ?? 0) & ts.NodeFlags.Const)) {
+            const init: any = this.goUnwrapParenthesizedNode(n.initializer);
+            if ((init?.kind === SyntaxKind.PropertyAccessExpression) && (init.name?.text === 'length') && (init.expression?.kind === SyntaxKind.Identifier)
+                && (init.expression.text === list.text)) {
+                names.add('L:' + n.name.text);
+            }
+        }
+        n.forEachChild(bind);
+    };
+    scope.forEachChild(bind);
+    const exits = (s: any): boolean => [ SyntaxKind.ReturnStatement, SyntaxKind.ThrowStatement ].includes(s?.kind);
+    const armProves = (arm: any): boolean => {
+        const body: any[] = (arm?.kind === SyntaxKind.Block) ? (arm.statements ?? []) : [ arm ];
+        const last: any = body[body.length - 1];
+        if (exits(last)) {
+            return true;
+        }
+        if ((last?.kind !== SyntaxKind.IfStatement) || (last.elseStatement !== undefined)) {
+            return false;
+        }
+        const inner: any[] = (last.thenStatement?.kind === SyntaxKind.Block) ? (last.thenStatement.statements ?? []) : [ last.thenStatement ];
+        return exits(inner[inner.length - 1]) && this.h26g24GuardProves(last.expression, list, index, names, false);
+    };
+    let child: any = node;
+    for (let up: any = node.parent; (up !== undefined) && (up !== scope); child = up, up = up.parent) {
+        if (isFunctionLike(up)) {
+            return false;
+        }
+        if (up.kind === SyntaxKind.Block) {
+            const statements: any[] = up.statements ?? [];
+            for (let i = statements.indexOf(child) - 1; i >= 0; i--) {
+                const s: any = statements[i];
+                if ((s?.kind === SyntaxKind.IfStatement) && (s.elseStatement !== undefined) && (s.elseStatement.kind !== SyntaxKind.IfStatement)
+                    && armProves(s.thenStatement) && armProves(s.elseStatement)) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+};
+// the split receiver is a Go `string` local, or a local
+// the checker types `string` inside an enclosing `if (x !== undefined)` with no write to x between test and split
+GoTranspiler.prototype.h28g24NonNilStringReceiver = function (receiver, split) {
+    const r: any = this.goUnwrapParenthesizedNode(receiver);
+    if (r?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    if (this.goDeclaredTypeOfIdentifier(r) === 'string') {
+        return true;
+    }
+    const type: any = this.checkerOrUndefined()?.getTypeAtLocation(r);
+    if ((type === undefined) || ((type.flags & TypeFlags.String) === 0)) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(split);
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(r)?.valueDeclaration?.resolve?.();
+    let child: any = split;
+    for (let up: any = split.parent; (up !== undefined) && (up !== scope); child = up, up = up.parent) {
+        if (isFunctionLike(up) || GO_ITERATION_STATEMENT_KINDS.has(up.kind)) {
+            return false;
+        }
+        const c: any = (up.kind === SyntaxKind.IfStatement) && (child === up.thenStatement) ? this.goUnwrapParenthesizedNode(up.expression) : undefined;
+        if ((c?.kind === SyntaxKind.BinaryExpression) && [ SyntaxKind.ExclamationEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken ].includes(c.operatorToken?.kind)
+            && (((c.left?.kind === SyntaxKind.Identifier) && (c.left.text === r.text) && (c.right?.kind === SyntaxKind.Identifier) && (c.right.text === 'undefined'))
+                || ((c.right?.kind === SyntaxKind.Identifier) && (c.right.text === r.text) && (c.left?.kind === SyntaxKind.Identifier) && (c.left.text === 'undefined')))) {
+            return this.goNameWriteSites(scope, r.text, declaration).every((w: any) => (w.end < up.pos) || (w.pos >= split.pos));
+        }
+    }
+    return false;
+};
+// a local or defaulted parameter bound as a Go `[]string`: its elements are strings, never scalar pointers
+GoTranspiler.prototype.h28g24StringSlice = function (list) {
+    if (list?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+    return (this.goGetArgParameterType(declaration) === GO_STRING_LIST_LOCAL_TYPE) || (this.goDeclaredTypeOfIdentifier(list) === GO_STRING_LIST_LOCAL_TYPE);
+};
+// `xs[K]` on a defaulted `[]string` parameter (GetArgStringSlice) proven in range: the plain slice index, read as
+// in h27g33 (a typed non-any target keeps its old form)
+GoTranspiler.prototype.h28g24StringParamLiteralRead = function (node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]) {
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(baseExpr)?.valueDeclaration?.resolve?.();
+    if ((keys.length !== 1) || (baseExpr?.kind !== SyntaxKind.Identifier) || containerStr.includes('\n') || this.isGoElementAccessAssignmentTarget(node)
+        || (this.goGetArgParameterType(declaration) !== GO_STRING_LIST_LOCAL_TYPE) || !this.h26g24GuardedLiteralRead(node, true)) {
+        return undefined;
+    }
+    const parent: any = node.parent;
+    const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
+        : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
+    if ((target?.kind === SyntaxKind.Identifier) && (this.goResolvedLocalGoType(target) !== 'any')) {
+        return undefined;
+    }
+    return `${containerStr}[${keyStrs[0]}]`;
+};
+{
+    const guardedLiteralRead = GoTranspiler.prototype.h26g24GuardedLiteralRead;
+    GoTranspiler.prototype.h26g24GuardedLiteralRead = function (node, writeContainer = false) {
+        if (guardedLiteralRead.call(this, node, writeContainer)) {
+            return true;
+        }
+        return (writeContainer || this.goListElementsArePointerFree(node?.expression) || this.h28g24StringSlice(node?.expression)) && this.h28g24ExtraLiteralProof(node);
+    };
+}
+// ===== end h28-H28-G24
