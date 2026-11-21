@@ -47040,3 +47040,48 @@ export function goIsOwnTsSourceName (name: string): boolean {
     return name.endsWith ('.ts') && !name.endsWith ('.d.ts') && !name.startsWith ('.') && ((temp === null) || (temp[1] === String (process.pid)));
 }
 // ===== h26-g60 (end) =====
+// ===== h27-A01 =====
+// `const d = this.safeDict (doc, 'k')` (or `{}` default, which SafeMapTyped drops) on a decoded JSON document local
+// typed map[string]any: the member is a JSON value (never a *sync.Map), so the comma-ok map assertion answers
+// exactly what SafeMapTyped does (nil for a missing key, a nil/"" member, a value of another type, a nil map)
+export interface GoTranspiler {
+    h27a01JsonDictRead(declaration, printed: string): string | undefined;
+    h27a01ReceiverType(container): string | undefined;
+}
+GoTranspiler.prototype.h27a01JsonDictRead = function (declaration, printed: string): string | undefined {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string')) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeDict');
+    const container: any = args?.container;
+    if ((container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral)
+        || !this.goJsonOriginContainer(container) || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const key = this.printNode(args.key, 0);
+    const shipped = `var ${name} map[string]any = SafeMapTyped(${container.text}, ${key})`;
+    if (!/^"[^"\\\n]*"$/.test(key) || (printed.split(shipped).length !== 2) || !new RegExp(`(^|\\n)\\t*${shipped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`).test(printed)) {
+        return undefined;
+    }
+    return printed.replace(shipped, `var ${name}, _ = ${container.text}[${key}].(map[string]any)`);
+};
+// the Go type the receiver local is declared with: an awaited endpoint receive is declared by its unboxed Value type
+GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if (init?.kind === SyntaxKind.AwaitExpression) {
+        const unbox = this.goAwaitReceiveUnbox(init, this.printNode(init, 0));
+        return ((unbox !== undefined) && (unbox.holder !== true)) ? unbox.goType : undefined;
+    }
+    return this.goResolvedLocalGoType(container);
+};
+{
+    const printVariableDeclarationListH27a01 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH27a01.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h27a01JsonDictRead(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h27-A01 =====
