@@ -598,5 +598,12 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h27J06FutureListDeclaration(declaration: any, indent: string): string | undefined;
     h27J06FutureListPush(node: any, name: any, parsedArg: any): string | undefined;
     h27J06FutureListJoin(node: any): string | undefined;
+    h28J06Cache: WeakMap<any, boolean>;
+    h28J06SeededList(declaration: any): boolean;
+    h28J06SeededListProof(declaration: any): boolean;
+    h28J06Declaration(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h28J06SeededListDeclaration(declaration: any, indent: string): string | undefined;
+    h28J06SeededListPush(node: any, name: any, parsedArg: any): string | undefined;
+    h28J06SeededListJoin(node: any): string | undefined;
 }
 export {};

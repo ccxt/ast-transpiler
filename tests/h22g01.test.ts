@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { Transpiler, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoIndexableTypes, installCcxtGoParamTypes, installCcxtGoDictParams, installCcxtGoGb05ParamTypes, installCcxtGoGb11HandleErrorsCode, installCcxtGoSignTyping, installRfGo5OwnedTables, installFmGo5G01, installFmGo5G04, installCcxtGoTupleSlotReads, installCcxtGoFeeTierLiterals, installFmGo5GP08, installFmGo5OG02 } from '../src/transpiler';
 
-const root = path.join (__dirname, 'files', 'tmp-h22g01', 'ts', 'src');
+// one tree per jest worker: suites importing printVenue run in parallel
+const tmp = path.join (__dirname, 'files', 'tmp-h22g01-' + (process.env.JEST_WORKER_ID || '0'));
+const root = path.join (tmp, 'ts', 'src');
 const BASE =
     'export type Dict = { [key: string]: any };\n' +
     'export class Exchange {\n' +
@@ -29,7 +31,7 @@ const fetch = (decl: string, use: string) =>
     "        const data" + decl + " = this.safeList (response, 'data', []);\n" + use + '\n    }\n';
 
 describe ('h22g01: guarded first-row read on a declared dict list', () => {
-    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01'), { recursive: true, force: true }));
+    afterAll (() => fs.rmSync (tmp, { recursive: true, force: true }));
     test ('a returned row read prints a length branch without the closure', () => {
         const out = printVenue (fetch (': Dict[]', '        return this.parseTicker (data[0], symbol);'));
         expect (out).toContain ('\tif len(data) > 0 {\n\t\tch <- this.ParseTicker(data[0], symbol)\n\t} else {\n\t\tch <- this.ParseTicker(nil, symbol)\n\t}\n\treturn nil\n');

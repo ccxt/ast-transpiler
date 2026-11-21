@@ -2283,3 +2283,173 @@ export interface GoTranspiler {
     h27m01RowBaseIsStruct(base: any): boolean;
     h27m01Proving: Set<any> | undefined;
 }
+export interface GoTranspiler {
+    h28a01JsonParam(node: any, depth: number): boolean;
+    h28a01ParamReadOnly(fn: any, param: any): boolean;
+    h28a01ReadOnlyArg(node: any): boolean;
+    h28a01Active: Set<any>;
+    h28a01ReadOnlyCache: Map<any, boolean>;
+}
+export interface GoTranspiler {
+    h28a02EndpointListRead(node: any, identation: number, printed: string | undefined, proofOnly?: boolean): string | undefined;
+    h28a02EndpointListPrint(declaration: any, args: any, identation: number, printed: string): string | undefined;
+    h28a02EndpointList(list: any): boolean;
+}
+export interface GoTranspiler {
+    h28a03EndpointWrite(n: any, name: string): boolean;
+    h28a03JoinedEndpointLocal(node: any): boolean;
+}
+export interface GoTranspiler {
+    h28a05SelfDefaultSite(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h28a06OptionsDefaultedDictRead(node: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28a08JsonList(list: any): boolean;
+    h28a08JsonContainer(node: any, depth: number): boolean;
+    h28a08AwaitedEndpoint(init: any): boolean;
+    h28a08ReturnedLiteralValue(node: any): boolean;
+}
+export interface GoTranspiler {
+    h28a09JsonRowReadDefault(declaration: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h28a10JsonList(node: any): boolean;
+    h28a10RowRead(declaration: any, printed: string, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h28a11DefaultedFrameList(node: any, declaration: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h28a13FrameList(list: any): boolean;
+}
+export interface GoTranspiler {
+    h28a14RowRead(node: any, printed: string): string | undefined;
+    h28a14JsonList(list: any): boolean;
+    h28a14JsonOrigin(node: any, depth: number): boolean;
+    h28a14InfoHolderUse(n: any): boolean;
+}
+export interface GoTranspiler {
+    h28a15OutcomeMemberRead(declaration: any, printed: string): string | undefined;
+    h28a15OutcomeCacheLocal(container: any): boolean;
+}
+export interface GoTranspiler {
+    h28a16DeltasArgument(node: any, identation: number, printed: string): string | undefined;
+    h28a16JsonMap(container: any): boolean;
+}
+export interface GoTranspiler {
+    h28a17InfoUse(n: any): boolean;
+    h28a17InfoReceive(declaration: any): boolean;
+    h28a17HolderName(declaration: any): string;
+}
+export interface GoTranspiler {
+    h28a22IndexedJsonContainer(node: any, depth: number): boolean;
+    h28a22JsonList(node: any, depth: number, producer: any): boolean;
+}
+export interface GoTranspiler {
+    h28a24CacheDeltaRead(node: any): {
+        name: string;
+        cache: string;
+        key: string;
+        zero: boolean;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h28g04WatchMultipleHashesArg(node: any): boolean;
+}
+export interface GoTranspiler {
+    h28G05StringSliceCopyUse(n: any, param: any, goType: string, nilable: boolean, boxed: boolean, seen: Set<any>): boolean | undefined;
+}
+export interface GoTranspiler {
+    h28G05StringListNilTest(node: any): boolean | undefined;
+    h28G05StringListUse(node: any, goType: string): boolean | undefined;
+}
+export interface GoTranspiler {
+    h28G05GetArgSliceLength(expression: any, printedText: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28G05GetArgSliceCopy(initializer: any, goType: string): 'direct' | undefined;
+}
+export interface GoTranspiler {
+    h28g10StrPtrTernaryDecl(node: any, identation: number, upstream: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28g12NullableBoolTruthy(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    h28g13ProvenDefaultSafeRead(expr: any): boolean | undefined;
+    h28g13Proving: Set<any>;
+}
+export interface GoTranspiler {
+    h28g14AwaitedMapStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, rhs: string, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h28g15LastIndexExtendStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any): string | undefined;
+    h28g15ConstLastIndex(containerNode: any, keyNode: any): boolean;
+}
+export interface GoTranspiler {
+    h28g16RowAccumulatorRead(declaration: any, identation: number): string | undefined;
+    h28g16CellNilCompare(left: any, rFam: string | undefined, nilText: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28g17BranchEnsuresEntry(branch: any, read: {
+        obj: any;
+        key: any;
+    }): boolean;
+}
+export interface GoTranspiler {
+    h28g19RowLiteralLocal(declaration: any): boolean;
+}
+export interface GoTranspiler {
+    h28g22AnyBoxTernaryDeclaration(node: any, identation: number, upstream: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28g24ExtraLiteralProof(node: any): boolean;
+    h28g24NonNilStringReceiver(receiver: any, split: any): boolean;
+    h28g24StringSlice(list: any): boolean;
+    h28g24StringParamLiteralRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+export interface GoTranspiler {
+    h28g27ClientIdentityOperand(node: any): boolean;
+    h28g27ClientIdentityCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+}
+export interface GoTranspiler {
+    h28g30JsonListRead(node: any, identation: number, printed: string): string | undefined;
+    h28g30OriginAtRead(container: any, read: any, depth: number): boolean;
+}
+export interface GoTranspiler {
+    h28g31DerefedReaderValue(valueNode: any): boolean;
+}
+export interface GoTranspiler {
+    h28m01RowPointerUse(n: any): {
+        field: string;
+        goType: string;
+        kind: 'compare' | 'store';
+        literal: any;
+    } | undefined;
+    h28m01RowFieldBinary(node: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h28m03AccessorField(call: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+    h28m03BinderAccessorUse(n: any): boolean | undefined;
+}
+export interface GoTranspiler {
+    h28t03ConstNilTest(node: any): boolean | undefined;
+    h28t03NeverNilInt(node: any): boolean;
+}
+export interface GoTranspiler {
+    h28t05ObjectRowSliceParameterType(fn: any, param: any, goType: string): string | undefined;
+}
+export interface GoTranspiler {
+    h28t07AwaitedJsonLet(container: any): boolean;
+    h28t07DictEndpointCall(expression: any): boolean;
+    h28t07JsonLetRead(declaration: any, printed: string): string | undefined;
+}

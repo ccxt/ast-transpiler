@@ -50747,15 +50747,22 @@ GoTranspiler.prototype.h28a17HolderName = function (declaration: any): string {
         }
         let lastRead = -1;
         let firstInfo = Number.MAX_SAFE_INTEGER;
+        // rows cut from the response are read after the info store, so the info literal may only leave through a return
+        let infoEscapesLate = true;
         const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
             if (this.h28a17InfoUse(n)) {
+                let top: any = n.parent.parent;
+                while ((top.parent !== undefined) && (top.parent.kind !== SyntaxKind.ReturnStatement) && (top.parent.kind !== SyntaxKind.Block)) {
+                    top = top.parent;
+                }
+                infoEscapesLate = infoEscapesLate && ((top.parent?.kind === SyntaxKind.ReturnStatement) || (this.h28a14InfoHolderUse?.(n) === true));
                 firstInfo = Math.min(firstInfo, n.pos);
                 return true;
             }
             lastRead = Math.max(lastRead, n.pos);
             return this.goJsonOriginUseIsReadOnly(n, name);
         });
-        return readOnly && (lastRead < firstInfo);
+        return readOnly && (lastRead < firstInfo) && infoEscapesLate;
     };
 }
 // ===== end h28-H28-A17 =====

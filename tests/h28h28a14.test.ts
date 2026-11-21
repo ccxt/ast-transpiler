@@ -154,6 +154,8 @@ describe ('h28 A14 prediction JSON loop rows', () => {
         expect (fn ('pred', 'escaped')).not.toContain ('rows[i].(map[string]any)');
     });
     test ('negative: the REST tier gets no list-row assertion from this rule', () => {
-        expect (outs['rest']).not.toContain ('var lvl, _ = rows[i].([]any)');
+        // merged with H28-A10, which owns REST loop rows of a decoded JSON list: the list row prints its comma-ok form there
+        expect (outs['rest']).toContain ('var lvl, _ = rows[i].([]any)');
+        expect (outs['rest']).not.toContain ('SafeListTyped(rows, i)');
     });
 });
