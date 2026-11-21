@@ -21738,6 +21738,7 @@ export class RustTranspiler extends BaseTranspiler {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
         const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'keys'); if (h29 !== undefined) return h29;
+        const h30r07 = this.h30r07ConfigDictEnum(node, parsedArg, 'keys'); if (h30r07 !== undefined) return h30r07;
         return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
     }
 
@@ -21745,6 +21746,7 @@ export class RustTranspiler extends BaseTranspiler {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'values'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'values'); if (h28 !== undefined) return h28;
         const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'values'); if (h29 !== undefined) return h29;
+        const h30r07 = this.h30r07ConfigDictEnum(node, parsedArg, 'values'); if (h30r07 !== undefined) return h30r07;
         return this.printShadowEnum(node, 'values') ?? this.printBorrowedKeys(node, 'values') ?? this.bearerEnum(node, 'values') ?? this.provenDictFieldEnum(node, parsedArg, 'values') ?? this.predictionEnum(node, parsedArg, 'values') ?? this.baseEnum(node, parsedArg, 'values') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'values') ?? `object_values(&${parsedArg})`;
     }
 
@@ -41803,6 +41805,20 @@ export class RustTranspiler extends BaseTranspiler {
         return sound ? String(index.text) : undefined;
     }
     // ===== end h30-R06
+    // ===== h30-R07: `Object.keys/values (x)` on a base-tier local whose every value derives from the untagged config
+    /** maps (h29-R06 proof: features / markets / markets_by_id through safeDict / omit / extend / deepExtend, literal
+     *  non-marker keyed writes only): no ws tag can sit in it, so the map's own iterators list what the helper listed. */
+    h30r07ConfigDictEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined {
+        const arg = this.bearerEnumArg(node);
+        const text = parsedArg?.trim();
+        if (arg === undefined || text === undefined || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || text !== String(arg.text)) return undefined;
+        if (this.isTestSource(arg) || this.rustParamShadowOf(arg) !== undefined) return undefined;
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(arg.getSourceFile().fileName).replace(/\\/g, '/'))) return undefined;
+        if (!this.h29r06Binding(this.rustDeclarationOfIdentifier(arg), new Set())) return undefined;
+        const iter = kind === 'keys' ? 'keys).cloned().map(Value::from)' : 'values).cloned()';
+        return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
+    }
+    // ===== end h30-R07
 }
 
 // ===== h28-H28-T02: safeStringList borrows its container like the other generated safe readers (impl KeyRead)
