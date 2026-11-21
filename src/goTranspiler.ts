@@ -13731,6 +13731,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'invertFlatStringDictionary': [ 0 ],
     // every tree caller passes an object literal or a proven map local
     'safeOrder': [ 0 ],
+    // its two callers pass featuresGenerator's map copy of this.features and its own parameter
+    'featuresMapper': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -13883,6 +13885,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
     for (const call of go.goSameFileCallsOf (fn, name)) {
         const arg = call.arguments?.[index];
         if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) { return false; }
+        if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)) { return false; }
     }
     const tree = go.goTsSrcTree (fn.getSourceFile ());
@@ -13893,6 +13896,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
     if (sites.length === 0) { return true; }
     for (const site of sites) {
         if (site.file === myFile) { continue; }  // proven above off the checker
+        if (h29g22SameSourceCopy (site.file, myFile)) { continue; }
         // a tabled base method has no override, so every venue call reaches it (an abstract `Exchange extends _Exchange` hides the chain)
         const tabledBase = goIsBaseExchangeFile (fn) && Object.prototype.hasOwnProperty.call (GO_BASE_DICT_PARAMS, name);
         if (!tabledBase && !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
@@ -55709,3 +55713,22 @@ GoTranspiler.prototype.h29a14DefaultedFrameRead = function (node, printed: strin
     };
 }
 // ===== end h29-H29-A14 =====
+// ===== h29-H29-G22 =====
+// a recursive call that hands the method its own never-reassigned parameter in the same slot passes whatever
+// the outer call passed, so it holds the type the other call sites prove
+function h29g22OwnParamPassedThrough (go: any, fn: any, index: number, arg: any): boolean {
+    const param: any = fn?.parameters?.[index];
+    if ((arg?.kind !== SyntaxKind.Identifier) || (param?.name?.kind !== SyntaxKind.Identifier) || (arg.text !== param.name.text)) {
+        return false;
+    }
+    const symbol: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg);
+    const decl: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.valueDeclaration;
+    return (decl === param) && (go.goEnclosingFunction (arg) === fn) && !go.goLocalIsRebound (fn, param.name);
+}
+// the base printer reads a `<name>.nooverloads.<pid>.ts` copy of the file: its call sites are the same-file
+// sites the checker already proved, not sibling-file sites
+function h29g22SameSourceCopy (siteFile: string, myFile: string): boolean {
+    const strip = (f: string) => String (f ?? '').replace (/\.nooverloads\.\d+\.ts$/, '.ts');
+    return (siteFile !== myFile) && (strip (siteFile) === strip (myFile));
+}
+// ===== end h29-H29-G22 =====
