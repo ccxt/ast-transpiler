@@ -50218,3 +50218,66 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${m[1]}var ${name}, _ = ${value}\n${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = map[string]any{}\n${iden}}`;
 };
 // ===== end h28-H28-A09 =====
+// ===== h28-H28-A10 =====
+// `const row = this.safeList (xs, k)` printed `SafeListTyped(xs, k)` where xs is a `[]any` local cut by a
+// literal-key safeList from decoded JSON (response chain or ws frame): elements are only maps, []any, scalars or
+// nil, so the comma-ok read answers what the wrap did; k is a loop-bounded counter or a constant behind `k < len`
+export interface GoTranspiler {
+    h28a10JsonList(node): boolean;
+    h28a10RowRead(declaration, printed: string, identation: number): string | undefined;
+}
+GoTranspiler.prototype.h28a10JsonList = function (node): boolean {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !this.goDeclaredListIdentifier(node)) {
+        return false;
+    }
+    let initializer: any = declaration.initializer;
+    while ((initializer?.kind === SyntaxKind.AsExpression) || (initializer?.kind === SyntaxKind.NonNullExpression)
+        || (initializer?.kind === SyntaxKind.ParenthesizedExpression)) {
+        initializer = initializer.expression;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(initializer, 'safeList');
+    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral)
+        || !(this.goJsonOriginContainer(container) || this.h27a11JsonContainer(container))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name) || this.h27a09SafeReaderArg(n, name)
+        || this.goIsNilComparisonOperand(n, n.parent));
+};
+GoTranspiler.prototype.h28a10RowRead = function (declaration, printed: string, identation: number) {
+    const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
+    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
+    const key: any = args?.key;
+    if ((args === undefined) || (container?.kind !== SyntaxKind.Identifier) || (key === undefined)) {
+        return undefined;
+    }
+    const name = this.printNode(declaration.name, 0);
+    const m = /^(\s*)var (\w+) \[\]any = (?:ccxt\.)?SafeListTyped\((\w+), (\w+)\)$/.exec(printed);
+    if ((m === null) || (m[2] !== name) || (m[3] !== container.text) || !this.h28a10JsonList(container)) {
+        return undefined;
+    }
+    if ((key.kind === SyntaxKind.Identifier) && (m[4] === key.text) && (key.text !== container.text)) {
+        if (this.goLoopBoundedIndexRead(init, container, key, m[3], m[4]) === undefined) {
+            return undefined;
+        }
+        return `${m[1]}var ${name}, _ = ${m[3]}[${m[4]}].([]any)`;
+    }
+    if ((key.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(key.text) && (m[4] === key.text)) {
+        const ind = this.getIden(identation);
+        return `${m[1]}var ${name} []any\n${ind}if ${key.text} < len(${m[3]}) {\n${ind}${this.getIden(1)}${name}, _ = ${m[3]}[${key.text}].([]any)\n${ind}}`;
+    }
+    return undefined;
+};
+const printVariableDeclarationListH28a10 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH28a10.call(this, node, identation);
+    const declaration: any = node?.declarations?.[0];
+    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return printed;
+    }
+    return this.h28a10RowRead(declaration, printed, identation) ?? printed;
+};
+// ===== end h28-H28-A10 =====
