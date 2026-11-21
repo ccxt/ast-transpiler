@@ -496,9 +496,6 @@ function goReadIsInitializer (parent, current) {
     return parent.initializer === current;
 }
 
-function goReadIsShorthandName (parent, current) {
-    return parent.name === current;
-}
 
 // `request['type'] = x` stores the value in an `any` slot
 function goReadIsElementSlot (parent, current) {
@@ -1711,7 +1708,7 @@ function ccxtGoTypeOfUrlsInitializer (goTranspiler, initializer, printedValue) {
     let unproven = false;
     const visit = (n) => {
         if (!unproven && (n.kind === ts.SyntaxKind.Identifier) && (n.text === varName) && (n !== declaration.name)) {
-            unproven = !goReadRuleAccepts (CCXT_GO_CLOSURE_READ_RULE, goTranspiler, n, varName) && !ccxtGoUrlsStringEqualityRead (goTranspiler, n);
+            unproven = !goReadRuleAccepts (CCXT_GO_CLOSURE_READ_RULE, goTranspiler, n, varName);
         } else if (!unproven) {
             n?.forEachChild (visit);
         }
@@ -1720,24 +1717,6 @@ function ccxtGoTypeOfUrlsInitializer (goTranspiler, initializer, printedValue) {
     return unproven ? undefined : typeNameIsUsable (goTranspiler, initializer, '*string') ? '*string' : undefined;
 }
 
-// `client.url === gatewayUrl` inlined as a native `==`: printInlineEquality never compares the *string
-// pointer itself, so the other side must be a proven Go string and the local a bare identifier
-function ccxtGoUrlsStringEqualityRead (goTranspiler, node) {
-    let current = node;
-    while (current.parent?.kind === ts.SyntaxKind.ParenthesizedExpression) {
-        current = current.parent;
-    }
-    const parent = current.parent;
-    if ((parent?.kind !== ts.SyntaxKind.BinaryExpression) || (typeof goTranspiler.goScalarFamily !== 'function')) {
-        return false;
-    }
-    const op = parent.operatorToken?.kind;
-    if ((op !== ts.SyntaxKind.EqualsEqualsEqualsToken) && (op !== ts.SyntaxKind.ExclamationEqualsEqualsToken)) {
-        return false;
-    }
-    const other = (parent.left === current) ? parent.right : parent.left;
-    return goTranspiler.goScalarFamily (other) === 'string';
-}
 
 // `var s *string = SafeStringPtr(Add(Add(base, "/"), quote))`: Add's only non-numeric arm is
 // `case string`, so a chain whose leftmost leaf is a Go string or *string boxes a string or nil,
@@ -13212,8 +13191,6 @@ class TupleSlots {
             }
         } else if ((decl.kind === SK.VariableDeclaration) && (decl.name?.kind === SK.Identifier)) {
             result = this.printedDeclaration (decl);
-        } else if ((decl.kind === SK.BindingElement) && (decl.name?.kind === SK.Identifier)) {
-            result = this.printedBinding (decl);
         }
         this.declLines.set (decl, result);
         return result;
@@ -13248,27 +13225,6 @@ class TupleSlots {
         return (short !== null) ? { 'kind': 'short', 'type': undefined, 'init': short[1], fn } : undefined;
     }
 
-    // a destructured element: the typed pair `a, b := this.m (..)`, or the holder read it printed
-    printedBinding (element: any): any {
-        const pattern = element.parent;
-        const declaration = pattern?.parent;
-        const statement = declaration?.parent?.parent;
-        if ((pattern?.kind !== SK.ArrayBindingPattern) || (statement?.kind !== SK.VariableStatement)) { return undefined; }
-        const text = this.printed (statement);
-        if (text === undefined) { return undefined; }
-        const name = element.name.text;
-        const fn = this.enclosingFunction (element);
-        for (const line of text.split ('\n')) {
-            // eslint-disable-next-line no-useless-escape
-            const pair = /^\s*([\w\[\].]*(?:\s*,\s*[\w\[\].]*)+)\s*:=\s*(.*)$/.exec (line);
-            if ((pair !== null) && pair[1].split (',').some ((p) => p.trim () === name)) {
-                return { 'kind': 'multi', 'type': undefined, 'init': null, 'index': pair[1].split (',').map ((p) => p.trim ()).indexOf (name), 'call': declaration.initializer, fn };
-            }
-            const found = this.declaredLine (line, name, fn);
-            if (found !== undefined) { return found; }
-        }
-        return undefined;
-    }
 
     // `this.omit (m, ..)` of a map-typed identifier is a fresh map[string]any (the Go OmitDict twin)
     omitClass (fn: any, init: any, depth: number): string {
@@ -15439,7 +15395,6 @@ function goNilInitAnyArgByPrint (parent, current, goTranspiler) {
 const GO_STRING_READ_ARMS = {
     [ts.SyntaxKind.BinaryExpression]: goStringReadOperand,
     [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
-    [ts.SyntaxKind.ShorthandPropertyAssignment]: goReadIsShorthandName,
     [ts.SyntaxKind.TemplateSpan]: goReadAccepts,
 };
 
@@ -15498,7 +15453,6 @@ const GO_NIL_INIT_POINTER_READ_RULE = {
         [ts.SyntaxKind.ConditionalExpression]: goReadIsCondition,
         [ts.SyntaxKind.CallExpression]: goNilInitAnyArgByPrint,
         [ts.SyntaxKind.PropertyAssignment]: goReadIsInitializer,
-        [ts.SyntaxKind.ShorthandPropertyAssignment]: goReadIsShorthandName,
     },
 };
 
