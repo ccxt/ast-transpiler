@@ -5684,20 +5684,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${this.ARRAY_OPENING_TOKEN}${elements}${this.ARRAY_CLOSING_TOKEN}`;
     }
 
-    // literals and identifiers have nothing an array-literal wrapper could skip by dropping
-    javaArrayLiteralDropsNothing(node, depth = 0): boolean {
-        if (depth > 4) {
-            return false;
-        }
-        return node.elements.every((element) => isStringLiteral(element)
-            || isNumericLiteral(element)
-            || element.kind === SyntaxKind.TrueKeyword
-            || element.kind === SyntaxKind.FalseKeyword
-            || element.kind === SyntaxKind.NullKeyword
-            || element.kind === SyntaxKind.Identifier
-            || (isArrayLiteralExpression(element) && this.javaArrayLiteralDropsNothing(element, depth + 1)));
-    }
-
     printArrayPushCall(_node, _identation, name = undefined, parsedArg = undefined) {
         const h30j06 = this.h30J06ListPush(_node, name, parsedArg); if (h30j06 !== undefined) return h30j06;
         const h28j06 = this.h28J06SeededListPush(_node, name, parsedArg); if (h28j06 !== undefined) return h28j06;
@@ -6266,26 +6252,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // operand usability for `>=` / `<` / `<=`, which route through the helper's isEqual. Two integral
-    // operands are always exact; once a double is involved, toLong saturates and BigDecimal throws on
-    // ±Infinity, so a double or long is accepted only as a finite literal within ±2^53.
-    javaComparisonOperandIsExactAgainstDouble(node, kind) {
-        if (kind === 'int') {
-            return true;
-        }
-        if ((kind !== 'long' && kind !== 'double') || !isNumericLiteral(node)) {
-            return false;
-        }
-        const text = node.text;
-        if (/^[0-9]+$/.test(text)) {
-            // the text is what the printer emits, and JS Number() rounds above 2^53 —
-            // compare the literal's exact value instead
-            return BigInt(text) <= 9007199254740992n;
-        }
-        const value = Number(text);
-        return Number.isFinite(value) && Math.abs(value) <= 9007199254740992;
-    }
-
     // destructuring: [a,b] = this.method()
     printJavaArrayDestructuring(left, right, identation) {
         const arrayBindingPatternElements = left.elements;
@@ -6500,8 +6466,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const leftKind = this.javaPrimitiveOperandKind(left);
             const rightKind = this.javaPrimitiveOperandKind(right);
             const orderingSafe = op === SyntaxKind.GreaterThanToken
-                || (leftKind !== 'double' && rightKind !== 'double')
-                || (this.javaComparisonOperandIsExactAgainstDouble(left, leftKind) && this.javaComparisonOperandIsExactAgainstDouble(right, rightKind));
+                || (leftKind !== 'double' && rightKind !== 'double');
             if (leftKind !== undefined && rightKind !== undefined && orderingSafe) {
                 return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
             }
@@ -9277,7 +9242,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // a side-effect-free array literal prints as a fresh ArrayList (never null), so the
         // answer is true without evaluating anything the helper would have to keep
         if (isArrayLiteralExpression(operand)) {
-            return this.javaArrayLiteralDropsNothing(operand) ? 'true' : undefined;
+            return undefined;
         }
         // a primary print only: `instanceof` binds tighter than low-precedence operators, and a
         // constructor or cast print can be a final class on which `instanceof List` does not compile
@@ -10858,7 +10823,7 @@ export class JavaTranspiler extends BaseTranspiler {
             || (container.parent.flags & NodeFlags.Const) === 0) {
             return false;
         }
-        return this.javaLocalUsesKeepContainerType(declaration.name) && this.h29J04RowUsesByKey(declaration.name)
+        return this.javaLocalUsesKeepContainerType(declaration.name)
             && this.h29J04RowContainer(container);
     }
 
@@ -10883,30 +10848,6 @@ export class JavaTranspiler extends BaseTranspiler {
             && isElementAccessExpression(write.left) && isIdentifier(write.left.expression) && write.left.expression.text === containerName
             && isIdentifier(write.left.argumentExpression) && write.left.argumentExpression.text === keyName
             && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(write.right));
-    }
-
-    // every mention of the row local is `e['lit']` (read or plain write) or a call argument
-    h29J04RowUsesByKey(name): boolean {
-        const checker: any = this.getChecker();
-        const symbol = checker.getSymbolAtLocation(name);
-        const scope = this.javaFunctionOrFile(name);
-        return !!symbol && !!scope && !this.javaTreeSome(scope, (current) => {
-            if (!isIdentifier(current) || current === name || checker.getSymbolAtLocation(current) !== symbol) {
-                return undefined;
-            }
-            const parent: any = current.parent;
-            if (isCallExpression(parent) && parent.arguments.includes(current)) {
-                return false;
-            }
-            if (!isElementAccessExpression(parent) || parent.expression !== current || !isStringLiteralLikeNode(parent.argumentExpression)) {
-                return true;
-            }
-            const grand: any = parent.parent;
-            if (grand?.kind === SyntaxKind.DeleteExpression) {
-                return true;
-            }
-            return isBinaryExpression(grand) && grand.left === parent && grand.operatorToken.kind !== SyntaxKind.EqualsToken;
-        });
     }
 
     h29J04RowMapDeclaration(declaration, indent: string): string | undefined {

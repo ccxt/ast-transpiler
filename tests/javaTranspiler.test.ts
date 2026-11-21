@@ -4049,18 +4049,6 @@ describe('helper removal: native comparison / containsKey / size', () => {
         expect(output).toContain("Helpers.isGreaterThanOrEqual((Math.floor(Double.parseDouble(Helpers.toString(x)))), 5)");
     });
 
-    test('a small finite double literal compares natively under `<`', () => {
-        const input =
-        "class T {\\n" +
-        "    f(s: any): boolean {\\n" +
-        "        return s.search(\"x\") < 1.5;\\n" +
-        "    }\\n" +
-        "}"
-        const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('((String)s).indexOf("x") < 1.5');
-        expect(output).not.toContain("Helpers.isLessThan");
-    });
-
     test('a long literal above 2^53 keeps the helper once a double is involved', () => {
         const input =
         "class T {\\n" +
@@ -5745,18 +5733,6 @@ describe('helper removal: Array.isArray -> native instanceof java.util.List', ()
         "}\n"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("return (this.getItems() instanceof java.util.List);");
-    });
-
-    test('a side-effect-free array literal is the constant true', () => {
-        const input =
-        "class T {\n" +
-        "    f() {\n" +
-        "        return Array.isArray([1, 2]);\n" +
-        "    }\n" +
-        "}\n"
-        const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("return true;");
-        expect(output).not.toContain("Helpers.isArray(");
     });
 
     test('an array literal with an evaluated element keeps the helper', () => {
