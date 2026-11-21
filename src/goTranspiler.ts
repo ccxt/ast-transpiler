@@ -47298,6 +47298,7 @@ export interface GoTranspiler {
     h27a05TypedMapRead(declaration, declaredType: string, unboxValue: string | undefined, varName: string, identation: number): string | undefined;
     h27a05KeyText(keyNode): string | undefined;
     h27a05JsonOriginContainer(node): boolean;
+    goTypedMapDictRead(args, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
 }
 // goJsonOriginContainer, also admitting `Object.keys (x)` (a read of the key set) as a read-only use of the local
 GoTranspiler.prototype.h27a05JsonOriginContainer = function (node) {
@@ -47337,11 +47338,16 @@ GoTranspiler.prototype.h27a05TypedMapRead = function (declaration, declaredType:
         return undefined;
     }
     const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, accessor);
-    if ((args === undefined) || (declaration.initializer.arguments.length !== 2) || (args.container?.kind !== SyntaxKind.Identifier)) {
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier)
+        || ((declaration.initializer.arguments.length !== 2) && (accessor !== 'safeDict'))) {
         return undefined;
     }
     const container = this.printNode(args.container, 0);
     const key = this.printNode(args.key, 0);
+    const dictRead = (accessor === 'safeDict') ? this.goTypedMapDictRead(args, unboxValue, container, key, varName, identation) : undefined;
+    if (dictRead !== undefined) {
+        return dictRead;
+    }
     const wrap = (accessor === 'safeDict') ? 'SafeMapTyped' : 'SafeListTyped';
     if (unboxValue.trim().replace(/^ccxt\./, '') !== `${wrap}(${container}, ${key})`) {
         return undefined;
@@ -47354,6 +47360,44 @@ GoTranspiler.prototype.h27a05TypedMapRead = function (declaration, declaredType:
     return `${this.getIden(identation)}var ${varName}, _ = ${container}[${keyText}].(${declaredType})`;
 };
 // ===== end h27-A05 =====
+// a dict read on a receiver whose static Go type is map[string]any, with a literal, Go string or nil-guarded *string key:
+// the comma-ok map assertion answers what SafeMapTyped / SafeDictMap do (nil for a missing key, nil map, nil or
+// non-map member); the `{}` default is restored after the read
+GoTranspiler.prototype.goTypedMapDictRead = function (args, unboxValue: string, container: string, key: string, varName: string, identation: number) {
+    const keyText = (args.key?.kind === SyntaxKind.StringLiteral) ? key : this.h27a05KeyText(args.key);
+    if ((keyText === undefined) || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        return undefined;
+    }
+    // other rules print writes into the local, stores of it and its Object.keys natively only from the helper declaration
+    const scope: any = this.goEnclosingFunction(args.key);
+    const outer = (n: any) => {
+        while ((n.parent?.kind === SyntaxKind.AsExpression) || (n.parent?.kind === SyntaxKind.ParenthesizedExpression)) { n = n.parent; }
+        return n;
+    };
+    const assigned = (n: any) => (n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.EqualsToken);
+    const keyed = (scope !== undefined) && this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== varName)) {
+            return false;
+        }
+        const o = outer(n);
+        const access = o.parent;
+        return ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === o) && assigned(access) && (access.parent.left === access))
+            || (assigned(o) && (o.parent.right === o) && (o.parent.left?.kind === SyntaxKind.ElementAccessExpression))
+            || ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression?.getText?.() === 'Object.keys'));
+    });
+    if (keyed) {
+        return undefined;
+    }
+    const value = unboxValue.trim().replace(/^ccxt\./, '');
+    const plain = (value === `SafeMapTyped(${container}, ${key})`) || (value === `this.SafeDictMap(${container}, ${key})`);
+    if (!plain && (value !== `this.SafeDictMap(${container}, ${key}, map[string]any{})`)) {
+        return undefined;
+    }
+    const iden = this.getIden(identation);
+    const read = `${container}[${keyText}].(${GO_SAFE_DICT_LOCAL_TYPE})`;
+    return plain ? `${iden}var ${varName}, _ = ${read}` : `${iden}var ${varName} ${GO_SAFE_DICT_LOCAL_TYPE}\n${iden}${varName}, _ = ${read}\n`
+        + `${iden}if ${varName} == nil {\n${this.getIden(identation + 1)}${varName} = ${GO_SAFE_DICT_LOCAL_TYPE}{}\n${iden}}`;
+};
 // ===== h27-A06 =====
 // `const x = this.safeDict (this.options, k)` with k a Go string prints the comma-ok read of the typed
 // Options map: every Options writer stores JSON-shaped values (no *sync.Map, no pointer box), so a missing
