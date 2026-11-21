@@ -9282,6 +9282,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-63k: the key of a one-level statement write `x[n] = v` on a plain non-literal local that no native insert takes:
         // the helper `add_element_to_object(&mut x, &<box>, v)` lends the box (coinbaseexchange pro `previousOrder[key]`)
         if ((kind === 'str' || kind === 'ostr') && this.rust63kLocalFlatHelperKey(n)) return 'mkey';
+        if ((kind === 'str' || kind === 'ostr') && this.h27r10SubscriptionRowKey(n)) return 'mkey';
         // an optional-string local keys a proven map read or an `in` test natively (a `None` key misses, as the `Null` did)
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustOkeyReadUse(n)) return 'okey';
         // ral-84c R3: a nil-declared `let k: Str = undefined` keys a proven map read the same way (`None` misses, as `Null` did)
@@ -28278,7 +28279,7 @@ export class RustTranspiler extends BaseTranspiler {
         const files: string[] = [];
         for (const dir of dirs) {
             if (!fs.existsSync(root + dir)) continue;
-            for (const f of fs.readdirSync(root + dir)) if (f.endsWith('.ts')) files.push(dir + f.slice(0, -3));
+            for (const f of fs.readdirSync(root + dir)) if (isRustTsIndexSource(f)) files.push(dir + f.slice(0, -3));
         }
         // the files whose `sign` is this venue's: the venue, and every descendant with no own `sign` below it
         const owners = files.filter((rel) => {
@@ -31509,7 +31510,7 @@ export class RustTranspiler extends BaseTranspiler {
             parents = new Map();
             let entries: string[] = [];
             try {
-                entries = fs.readdirSync(`${root}/${tier}`).filter((f) => f.endsWith('.ts'));
+                entries = fs.readdirSync(`${root}/${tier}`).filter(isRustTsIndexSource);
             } catch (e) {
                 entries = [];
             }
@@ -41028,4 +41029,31 @@ export class RustTranspiler extends BaseTranspiler {
         return `${text}${this.rustLocalLastUse(node, declaration) ? '' : '.clone()'}.map_or(Value::Null, Value::Dict)`;
     }
     // ===== end h27-H27-R08
+    // ===== h27-R10
+    /** `row[n] = <literal>` on a const `row = this.safeDict (client.subscriptions, k, {})`: no native insert takes that tagged
+     *  ws-store copy, so the write stays `add_element_to_object` and lends the key box exactly as ral-63k does for plain locals. */
+    h27r10SubscriptionRowKey(n: any): boolean {
+        if (!isIdentifier(n) || this.rustTestTierSource(n)) return false;
+        const keyNode: any = this.rustKeyWrapped(n);
+        const access: any = keyNode.parent;
+        if (!isElementAccessExpression(access) || access.argumentExpression !== keyNode || !isIdentifier(access.expression)) return false;
+        const write: any = access.parent;
+        if (!isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const value: any = write.right;
+        if (value.kind !== SyntaxKind.TrueKeyword && value.kind !== SyntaxKind.FalseKeyword && !isNumericLiteral(value) && !isStringLiteral(value)) return false;
+        const rd: any = this.rustDeclarationOfIdentifier(access.expression);
+        if (rd === undefined || !isVariableDeclaration(rd) || (rd.parent.flags & NodeFlags.Const) === 0) return false;
+        const init: any = this.rustSkipWrappers(rd.initializer);
+        if (init === undefined || !isCallExpression(init) || init.arguments.length !== 3) return false;
+        const callee: any = init.expression;
+        const field: any = init.arguments[0];
+        const dflt: any = init.arguments[2];
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || callee.name.text !== 'safeDict') return false;
+        if (!isPropertyAccessExpression(field) || !isIdentifier(field.expression) || field.expression.text !== 'client' || field.name.text !== 'subscriptions') return false;
+        if (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return false;
+        const base: any = access.expression; const key = String(n.text);
+        return (this.rustBearerDictInsert(base, n, key, 'x') ?? this.rustMapParamDictInsert(base, n, key, 'x')
+            ?? this.printNativeDictInsert(base, n, key, 'x') ?? this.rustNativeDictInsert(base, n, key, 'x')) === undefined;
+    }
+    // ===== end h27-R10
 }
