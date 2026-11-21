@@ -1275,6 +1275,10 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
     'this.RlpEncodeList': 'string',
     'this.IntToRlpHex': 'string',
+    // exchange_prediction.go event filters: `: any[]`, no override, retyped `[]any` by build retypeGoMapMethod
+    'this.FilterEventsByStatus': '[]any',
+    'this.FilterEventsByTags': '[]any',
+    'this.FilterEventsBySearchIn': '[]any',
 };
 
 // ---------------------------------------------------------------------------
