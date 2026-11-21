@@ -49806,3 +49806,72 @@ GoTranspiler.prototype.h28a01JsonParam = function (node, depth: number): boolean
     };
 }
 // ===== end h28-A01
+// ===== h28-H28-A02
+// `const rows = this.safeList (R, 'lit')` where R is an awaited map endpoint whose receive the printer declares
+// map[string]any (goAwaitReceiveUnbox, read through h27a01ReceiverType): the h27-A02 comma-ok list read, which
+// skipped it because goResolvedLocalGoType answers `any` for that receive; same JSON-origin proofs, same answer
+export interface GoTranspiler {
+    h28a02EndpointListRead(node, identation: number, printed: string | undefined, proofOnly?: boolean): string | undefined;
+    h28a02EndpointListPrint(declaration, args, identation: number, printed: string): string | undefined;
+    h28a02EndpointList(list): boolean;
+}
+GoTranspiler.prototype.h28a02EndpointListRead = function (node, identation: number, printed: string, proofOnly = false) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;                 // `safeList (..) as List` prints the bare call
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
+    if (((typeof printed !== 'string') && !proofOnly) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (args === undefined)
+        || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier) || !/^[A-Za-z0-9_]+$/.test(args.key.text)) {
+        return undefined;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(args.container);
+    if ((this.goUnwrapParenthesizedNode(source?.initializer)?.kind !== SyntaxKind.AwaitExpression)
+        || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !(this.h27a02JsonOrigin(args.container, 0)
+            || ((declaration.initializer === init) && this.h27a02JsonOriginBeforeRead(args.container, declaration)))) {
+        return undefined;                       // the before-read proof indexes the bare call's arguments
+    }
+    if (proofOnly) {
+        return '';
+    }
+    return this.h28a02EndpointListPrint(declaration, args, identation, printed);
+};
+// the endpoint-list proof above for a `const` local nothing writes: every element is a decoded JSON value, never a pointer
+GoTranspiler.prototype.h28a02EndpointList = function (list): boolean {
+    const declaration: any = (list?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(list) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & NodeFlags.Const) === 0)
+        || (this.goNameWriteSites(this.goEnclosingFunction(declaration), list.text, declaration).length !== 0)) {
+        return false;
+    }
+    return this.h28a02EndpointListRead(declaration.parent, 0, undefined, true) !== undefined;
+};
+GoTranspiler.prototype.h28a02EndpointListPrint = function (declaration, args, identation: number, printed: string) {
+    const name = this.printNode(declaration.name, 0).trim();
+    const container = this.printNode(args.container, 0).trim();
+    const iden = this.getIden(identation);
+    const shipped = `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE} = SafeListTyped(${container}, "${args.key.text}")`;
+    const lead = /^\n*/.exec(printed)[0];
+    if (printed.substring(lead.length) !== shipped) {
+        return undefined;
+    }
+    return `${lead}${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${GO_SAFE_LIST_LOCAL_TYPE})`;
+};
+{
+    const pointerFreeH28a02 = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFreeH28a02.call(this, list, depth) || this.h28a02EndpointList(list);
+    };
+    const guardedValueH28a02 = GoTranspiler.prototype.goGuardedListElementValue;
+    GoTranspiler.prototype.goGuardedListElementValue = function (readBase, containerStr: string, keyStr: string): string {
+        return this.h28a02EndpointList(readBase) ? `${containerStr}[${keyStr}]` : guardedValueH28a02.call(this, readBase, containerStr, keyStr);
+    };
+    const printVariableDeclarationListH28a02 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH28a02.call(this, node, identation);
+        const h = this.h28a02EndpointListRead(node, identation, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h28-H28-A02
