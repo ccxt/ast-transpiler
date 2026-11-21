@@ -47983,3 +47983,54 @@ GoTranspiler.prototype.h27a14SiblingEndpointLocal = function (declaration, goTyp
     return goType;
 };
 // ===== end h27-A14 =====
+// ===== h27-H27-A15 =====
+// `const first = this.safeDict (cache, 0)` on a ws list receive the printer typed ArrayCacheInterface: row 0 is read
+// from the cache's own ToArray() snapshot under a nil-cache and bounds check, then the map assertion; a nil cache,
+// an empty cache and a non-map row all answer a nil map, as SafeMapTyped does (rows hold no *sync.Map).
+export interface GoTranspiler {
+    h27a15CacheRowZero(node): { expected: string, rows: string, name: string, cache: string } | undefined;
+}
+GoTranspiler.prototype.h27a15CacheRowZero = function (node) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const call: any = declaration?.initializer;
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments[0].kind !== SyntaxKind.Identifier)
+        || (call.arguments[1].kind !== SyntaxKind.NumericLiteral) || (call.arguments[1].text !== '0')) {
+        return undefined;
+    }
+    const cacheDecl: any = this.checkerOrUndefined()?.getSymbolAtLocation(call.arguments[0])?.valueDeclaration?.resolve();
+    const awaitNode = cacheDecl?.initializer;
+    if ((cacheDecl?.kind !== SyntaxKind.VariableDeclaration) || (awaitNode?.kind !== SyntaxKind.AwaitExpression)
+        || (this.goEnclosingFunction(cacheDecl) !== this.goEnclosingFunction(declaration))
+        || (ccxtGoWsListStreamReceive(this, awaitNode)?.goType !== 'ArrayCacheInterface')) {
+        return undefined;
+    }
+    const name = declaration.name.text as string;
+    const cache = call.arguments[0].text as string;
+    const rows = name + 'Rows';
+    const expected = `var ${name} map[string]any = SafeMapTyped(${cache}, 0)`;
+    if (scopeMentionsIdentifier(this.goEnclosingFunction(declaration), rows)) {
+        return undefined;
+    }
+    return { expected, rows, name, cache };
+};
+const h27a15ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed = h27a15ShippedPrintDeclarationList.call(this, node, identation);
+    const site = (typeof printed === 'string') ? this.h27a15CacheRowZero(node) : undefined;
+    if ((site === undefined) || (printed.trim() !== site.expected)) {
+        return printed;
+    }
+    const iden = this.getIden(identation);
+    const lead = printed.startsWith('\n') ? '\n' : '';
+    return `${lead}${iden}var ${site.name} map[string]any\n`
+        + `${iden}if ${site.cache} != nil {\n`
+        + `${iden}\tvar ${site.rows} []any = ${site.cache}.ToArray()\n`
+        + `${iden}\tif len(${site.rows}) > 0 {\n`
+        + `${iden}\t\t${site.name}, _ = ${site.rows}[0].(map[string]any)\n`
+        + `${iden}\t}\n`
+        + `${iden}}`;
+};
+// ===== end h27-H27-A15 =====
