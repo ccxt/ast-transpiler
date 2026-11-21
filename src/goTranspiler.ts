@@ -12287,6 +12287,7 @@ function goStrCallBindsNilSafeLocal (id, fileName, seen) {
             return;
         }
         if ((n.kind === ts.SyntaxKind.Identifier) && (n.text === local) && (n !== decl.name)) {
+            if (h27g13LocalReadDerefs (n)) { return; }
             const p = n.parent;
             const binary = (p?.kind === ts.SyntaxKind.BinaryExpression) ? p : undefined;
             const op = binary?.operatorToken.kind;
@@ -48680,3 +48681,31 @@ GoTranspiler.prototype.h27g11GuardedParamRead = function (node, containerStr: st
     return undefined;
 };
 // ===== end h27-G11 =====
+// ===== h27-H27-G13 =====
+// the const local is an argument of a callee that derefScalars that slot at entry (the audited
+// GetArg consumer table, Precise.string*, parseNumber): a nil *string reads there as the nil box did
+function h27g13LocalReadDerefs (n) {
+    const call = n.parent;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression === n)) {
+        return false;
+    }
+    const index = call.arguments.indexOf (n);
+    const callee = call.expression;
+    if ((index < 0) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const name = callee.name.text;
+    if ((callee.expression.kind === ts.SyntaxKind.Identifier) && (callee.expression.text === 'Precise')) {
+        return /^string[A-Z]/.test (name);
+    }
+    if (callee.expression.kind !== ts.SyntaxKind.ThisKeyword) {
+        return false;
+    }
+    if ((name === 'parseNumber') && (index === 0)) {
+        return true;
+    }
+    const entry = CCXT_GO_GETARG_SAFE_CONSUMERS[name.charAt (0).toUpperCase () + name.slice (1)];
+    const verdict = (typeof entry === 'string') ? entry : entry?.[String (index)];
+    return (verdict === '*') || (verdict === 'deref');
+}
+// ===== end h27-H27-G13 =====
