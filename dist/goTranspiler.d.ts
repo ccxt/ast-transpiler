@@ -777,7 +777,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printGoSignature(node: any, identation: any, receiver: string): string;
-    goStrPtrFamilyReturnType(node: any): string | undefined;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): string;

@@ -331,7 +331,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaMapWriteFieldReceiver(expression: any): boolean;
     javaOwnerStoreFieldReceiver(expression: any): boolean;
     printArrayLiteralExpression(node: any): string;
-    javaArrayLiteralDropsNothing(node: any, depth?: number): boolean;
     printArrayPushCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printDeleteExpression(node: any, _identation: any): string;
     javaBaseDeclaredMapCacheField(expression: any): boolean;
@@ -359,7 +358,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
     javaPrintedCallKind(node: any): "double" | "int" | "long";
-    javaComparisonOperandIsExactAgainstDouble(node: any, kind: any): boolean;
     printJavaArrayDestructuring(left: any, right: any, identation: any): string;
     printJavaElementWrite(node: any, left: any, right: any): string;
     printJavaInExpression(left: any, right: any): string;
@@ -611,7 +609,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h29J04ContainerUseOk(node: any): boolean;
     h29J04RowLocal(declaration: any): boolean;
     h29J04SeedGuard(guard: any, containerName: string, keyName: string): boolean;
-    h29J04RowUsesByKey(name: any): boolean;
     h29J04RowMapDeclaration(declaration: any, indent: string): string | undefined;
     h29J06Lists: WeakMap<any, string>;
     h29J06Busy: boolean;

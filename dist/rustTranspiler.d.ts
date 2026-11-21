@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type BinaryExpression, type BindingElement, type Block, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
+import { type BinaryExpression, type BindingElement, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 /** A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no
  *  dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it can vanish or change mid-scan). */
@@ -362,7 +362,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A string-literal operand of a `format!` concat prints as the `&str` literal itself:
      *  `Display` of `Value::Str(s)` is `s`, so the text is identical and the box is gone. */
     rustConcatLiteralText(node: any, text: string, other: any): string;
-    printNativeStringConcat(leftText: string, rightText: string): string;
     rustFormatConcatText(leftText: string, rightText: string): string;
     /** ral-57x: the `format!(..)` a `+` / `.toString()` node took at its latest print (the printer's own arm decision,
      *  recorded where the box is built), cleared whenever that node is printed again; never read back from printed text. */
@@ -398,7 +397,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  (`xs.get(K).unwrap_or(&Value::Null)`): the same element, `Null` where the clone was `Null`. Decided on the AST and the
      *  printer's own Vec decision; nothing is read back from printed text. */
     printRust58eBorrowedElement(declaration: any, indent: string, varName: string): string | undefined;
-    rust58eBorrowedElementLocal(declaration: any): boolean;
     /** Which arm of printNativeContainerAccess prints `xs[k]` as a slice read: a read-only list bearer, or a typed Vec local. */
     rust58eBorrowedElementArm(declaration: any): 'bearer' | 'vec' | undefined;
     private rust57eSideLevels;
@@ -2023,8 +2021,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  and the partner may also be a base `safe*` scalar read off `this` (rust59nValueReaderPartner), which prints a `Value`. */
     rustScalarPayloadPartnerTest(self: any, partner: any, kind: string, sign: string, dry: boolean): string | undefined;
     private static readonly RUST_59N_VALUE_READERS;
-    /** ral-59n: some read of the local is the argument of an element access `m[x]` (decided on the TS AST). */
-    rust59nKeysElementRead(self: any): boolean;
     /** ral-59n: `this.safeString|Integer|Number|Bool(..)` declared in the base tier (no venue override): printed as the
      *  generated `self.safe_*` reader, a `Value`. The boxed compare against it was the payload pair `a.<p>() == r.<p>()`
      *  (printNativeEqualityComparison, both sides `Value`, same checker kind), so the typed side prints its own payload. */
@@ -2291,10 +2287,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueKeptStrArm(node: any): boolean;
     /** A `: Str` method of the table declared in the base tier, or an override of one. */
     rustBaseNativeStrMethod(node: any): boolean;
-    /** Every `return` of the method's own body converts, and the body's last
-     *  statement is one of them (so Rust sees no `()`-valued tail the
-     *  `-> Value` post-passes would have patched with `Value::Null`). */
-    rustStrReturnPathsConvert(body: Block): boolean;
     /** A `return` value of a native-`Str` method: a nullish literal, an
      *  expression already printing an `Option<String>` (a nested retyped call
      *  or a typed string local), or a `Value`-printing expression the checker
@@ -2832,10 +2824,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  prints the `let mut v: Value = ..` line ccxt's write-back pass keys on: a mutation of `v` adds no write-back to `m`. */
     rust90rdTypedRowBind(bind: Node): boolean;
     rustExplicitWriteBackBind(read: any): boolean;
-    /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
-     *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
-     *  the bind alone, so its counter key may print boxed (`get_value(&xs, &Value::Int(i))`, the same helper call and value). */
-    rustWriteBackPassBind(read: any): boolean;
     /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
      *  `x.push(v)`). */
     rustStatementMutatesLocal(node: Node, name: string): boolean;
@@ -3410,8 +3398,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-73a: `this.f = x` (statement, a direct property of `this`, outside the test tier): the field is a `Value` slot that
      *  stores the reference, so a native map moves into it whole as `Value::Map(x)` at x's last use. */
     rust73aThisFieldStore(n: any): boolean;
-    /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
-    rustWsSettleMove(n: any): boolean;
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     private static readonly RUST_PREDICTION_VENUE_FILE;
     /** The declaration behind `node` when it is a local typed as a dict bearer. */
@@ -5004,8 +4990,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUntilHeadReaderUse(n: any): boolean;
     /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
     printExtendHeadArg(node: any, text: string): string | undefined;
-    /** ral-qd: a local initialised from a `this.parse*(..)` call. */
-    rustParseResultLocal(declaration: any): boolean;
     /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
     rustUntilHeadKeyWrite(n: any): string | undefined;
     /** ral-40f: the literal keys of a statement write `n['k1']..['kN'] = v` (N >= 2) rooted at `n`: every key a plain string
@@ -5209,8 +5193,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Promise<List>` endpoint, a non-overridden venue method declared `Promise<List | X[]>`, or a typed unified core
      *  whose `Vec<T>` result boxes through `IntoRaw` as an Arr); `promise_all` hands it back as it came. */
     rustPromiseAllListProducer(element: any): any;
-    /** zf: a venue-private async method (no override, no typed signature) whose every family declaration returns `Promise<Market[]>`. */
-    rustVenueMarketListMethod(declaration: any): boolean;
     private rustPromiseAllListKinds;
     rustPromiseAllListSlotKind(element: any): 'list' | undefined;
     /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */
@@ -5504,12 +5486,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     plainValueOperand(node: any): boolean;
     nativeCoercingArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     nativeLooseOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
-    nativeStrOrNullConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
-    strOrNull(node: any, depth: number): boolean;
-    /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
-    dictFieldStrOrNull(node: any, key: string, depth: number): boolean;
-    /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
-    methodFieldStrOrNull(call: any, key: string, depth: number): boolean;
     private static readonly PARAMS_SLOT_ARG;
     paramsSlot(rhs: Node, selfName: string | undefined, depth: number): boolean;
     looseI64(expr: string): string;
