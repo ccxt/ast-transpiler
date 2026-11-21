@@ -43791,6 +43791,7 @@ GoTranspiler.prototype.goNilInitLocalType = function (declaration): string | und
     if (shipped !== undefined) {
         return shipped;
     }
+    const h27g05 = h27g05NilJoinVerdict(this, declaration); if (h27g05 !== undefined) return h27g05;
     return h18g01NilJoinVerdict(this, declaration) ? '*int64' : undefined;
 };
 // a `let x: Int = since` copy of a *int64 parameter reaches the typing through the safe-to-type check
@@ -48256,3 +48257,165 @@ GoTranspiler.prototype.goTypeOfInitializer = function (node, printed: string) {
     return h27g04DefaultDigestHashCall (node) ? 'string' : goTypeOfInitializerH27g04.call (this, node, printed);
 };
 // ===== end h27-H27-G04 =====
+// ===== h27-H27-G05 (begin): nil-seeded Num locals joined as *float64 =====
+// `let x: Num = undefined` whose every write is nil, a Go *float64 (SafeNumber / ParseNumber, stored as the
+// pointer itself) or a float64 value (stored through `xValue := v; x = &xValue`, so never nil) prints
+// `var x *float64 = nil`. Reads are the h18-g01 pointer reads only (nil tests, deref-aware `any` arguments,
+// object-literal values, element stores), so a nil pointer answers as the nil box did.
+const h27g05Verdicts = new WeakMap<object, boolean>();
+const h27g05Visiting = new Set<object>();
+function h27g05NilJoinFloat64(goTranspiler, declaration, writesOut: any[]): boolean {
+    const declared = declaration?.type;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declared?.kind !== SyntaxKind.TypeReference) || (declared.typeName?.text !== 'Num')
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration.parent.declarations?.length !== 1)
+        || !goTranspiler.goNilInitInitializer(declaration.initializer) || h27g05Visiting.has(declaration)) {
+        return false;
+    }
+    const checker = goTranspiler.checkerOrUndefined();
+    const scope = goTranspiler.goOutermostFunction(declaration);
+    if ((checker === undefined) || (scope === undefined) || goTranspiler.goTypeNameIsShadowed(scope, '*float64')) {
+        return false;
+    }
+    h27g05Visiting.add(declaration);
+    const name = declaration.name.text;
+    const tempSpelled = new RegExp('^' + name + 'Value\\d*$');
+    const valueWrites: any[] = [];
+    const arithmeticWrites: [any, string][] = [];
+    let producerWrites = 0;
+    let unsafe = false;
+    try {
+        goTranspiler.hasNodeWhere(scope, (n) => {
+            if (unsafe || (n.kind !== SyntaxKind.Identifier)) {
+                return false;
+            }
+            if (tempSpelled.test(n.text)) {
+                unsafe = true;
+                return false;
+            }
+            if ((n.text !== name) || (n === declaration.name)) {
+                return false;
+            }
+            const p0 = n.parent;
+            if (((p0?.kind === SyntaxKind.PropertyAccessExpression) && (p0.name === n)) || ((p0?.kind === SyntaxKind.PropertyAssignment) && (p0.name === n))) {
+                return false;
+            }
+            if (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration) {
+                unsafe = true;
+                return false;
+            }
+            const { current, parent } = goReadClimb(n);
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === current)) {
+                if ((current !== n) || (parent.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+                    unsafe = true;
+                } else if (!ral90g5IsNil(parent.right)) {
+                    producerWrites++;
+                    if (!h27g05Float64PtrCall(goTranspiler, parent.right)) {
+                        const arithmetic = h27g05Float64ArithmeticText(goTranspiler, parent.right);
+                        if (arithmetic !== undefined) {
+                            arithmeticWrites.push([ parent, arithmetic ]);
+                            valueWrites.push(parent);
+                        } else if (ral90g5WriteValueKind(goTranspiler, parent.right, 'float64') === undefined) {
+                            unsafe = true;
+                        } else {
+                            valueWrites.push(parent);
+                        }
+                    }
+                }
+                return false;
+            }
+            if (!h27g05PointerRead(goTranspiler, current, parent, n)) {
+                unsafe = true;
+            }
+            return false;
+        });
+    } finally {
+        h27g05Visiting.delete(declaration);
+    }
+    const ok = !unsafe && (producerWrites > 0);
+    if (ok) {
+        writesOut.push(...valueWrites);
+        arithmeticWrites.forEach(([ w, text ]) => h27g05ArithmeticWrites.set(w, text));
+    }
+    return ok;
+}
+// an element store would put a typed nil into a request map: refused. An object-literal value is admitted only
+// when a sibling value of the same literal is already a *float64 (the consumer already handles a typed-nil one).
+function h27g05PointerRead(goTranspiler, current, parent, n): boolean {
+    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+        return false;
+    }
+    if ((parent?.kind === SyntaxKind.PropertyAssignment) || (parent?.kind === SyntaxKind.ShorthandPropertyAssignment)) {
+        const literal = parent.parent;
+        return (literal?.kind === SyntaxKind.ObjectLiteralExpression) && ((parent.kind === SyntaxKind.ShorthandPropertyAssignment) || (parent.initializer === current))
+            && literal.properties.some((p) => (p !== parent) && (p.kind === SyntaxKind.PropertyAssignment) && h27g05ReaderPointer(goTranspiler, p.initializer));
+    }
+    return goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n);
+}
+function h27g05ReaderPointer(goTranspiler, value): boolean {
+    const u = ral90g5UnwrapNode(value);
+    if (u?.kind === SyntaxKind.Identifier) {
+        return goTranspiler.goDeclaredTypeOfIdentifier(u) === '*float64';
+    }
+    return (u?.kind === SyntaxKind.CallExpression) && (u.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (u.expression.expression?.kind === SyntaxKind.ThisKeyword)
+        && ([ 'safeNumber', 'safeNumber2', 'parseNumber' ].indexOf(u.expression.name?.text) >= 0);
+}
+// `a * b` / `a - b` / `a / b` over numeric literals and *float64 locals the checker narrows to number (so non-nil):
+// the Go text of the float64 value, each pointer dereferenced; undefined when any operand is not proven
+const h27g05ArithmeticWrites = new WeakMap<object, string>();
+function h27g05Float64ArithmeticText(goTranspiler, right): string | undefined {
+    const value = ral90g5UnwrapNode(right);
+    if (value?.kind === SyntaxKind.NumericLiteral) {
+        return Number.isFinite(Number(value.text)) ? value.text : undefined;
+    }
+    if (value?.kind === SyntaxKind.Identifier) {
+        const t = goTranspiler.checkerOrUndefined()?.getTypeAtLocation(value);
+        return ((t !== undefined) && ((t.flags & TypeFlags.Number) !== 0) && (goTranspiler.goDeclaredTypeOfIdentifier(value) === '*float64'))
+            ? '*' + goTranspiler.printNode(value, 0).trim() : undefined;
+    }
+    const op = value?.operatorToken?.kind;
+    const sign = (op === SyntaxKind.AsteriskToken) ? '*' : ((op === SyntaxKind.MinusToken) ? '-' : ((op === SyntaxKind.SlashToken) ? '/' : undefined));
+    if ((value?.kind !== SyntaxKind.BinaryExpression) || (sign === undefined)) {
+        return undefined;
+    }
+    const left = h27g05Float64ArithmeticText(goTranspiler, value.left);
+    const rightText = h27g05Float64ArithmeticText(goTranspiler, value.right);
+    return ((left === undefined) || (rightText === undefined) || (!left.startsWith('*') && !left.startsWith('(') && !rightText.startsWith('*') && !rightText.startsWith('(')))
+        ? undefined : `(${left} ${sign} ${rightText})`;
+}
+const goPointerWriteTextBaseH27g05 = GoTranspiler.prototype.goPointerWriteText;
+GoTranspiler.prototype.goPointerWriteText = function (node, identation) {
+    const text = h27g05ArithmeticWrites.get(node);
+    const temp = ral90g5WriteTemps.get(node);
+    if ((text === undefined) || (temp === undefined)) {
+        return goPointerWriteTextBaseH27g05.call(this, node, identation);
+    }
+    return `${temp} := ${text}\n${this.getIden(identation)}${this.printNode(node.left, 0)} = &${temp}`;
+};
+// a `this.m (..)` call the printer already types *float64 (safeNumber, parseNumber, ...): stored as the pointer
+function h27g05Float64PtrCall(goTranspiler, right): boolean {
+    const call = ral90g5UnwrapNode(right);
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || goTranspiler.hasNodeWhere(call, (n) => n.kind === SyntaxKind.AwaitExpression)) {
+        return false;
+    }
+    return goTranspiler.goTypeOfInitializer(call, goTranspiler.printNode(call, 0)) === '*float64';
+}
+function h27g05NilJoinVerdict(goTranspiler, declaration): string | undefined {
+    if (h27g05Verdicts.has(declaration)) {
+        return h27g05Verdicts.get(declaration) ? '*float64' : undefined;
+    }
+    const writes: any[] = [];
+    const ok = h27g05NilJoinFloat64(goTranspiler, declaration, writes);
+    if ((h27g05Visiting.size === 0) && ((goTranspiler.goGetArgTypeComputing?.size ?? 0) === 0)) {
+        h27g05Verdicts.set(declaration, ok);
+        if (ok) {
+            const printedName = goTranspiler.printNode(declaration.name, 0);
+            ral90g5Verdicts.set(declaration, '*float64');
+            writes.sort((x, y) => x.pos - y.pos).forEach((w, i) => ral90g5WriteTemps.set(w, printedName + 'Value' + ((i === 0) ? '' : String(i + 1))));
+        }
+    }
+    return ok ? '*float64' : undefined;
+}
+// ===== h27-H27-G05 (end) =====
