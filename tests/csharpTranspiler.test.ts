@@ -8504,3 +8504,26 @@ describe('csharp fee tier literals', () => {
         expect(output).toContain('this.pickAt(xs,ccxt.BaseExchange.ToInt64ArgRequired(o));');
     });
 });
+
+describe ('csharp ordered comparisons on typed parameters', () => {
+
+    const config: any = { 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0, 'INFER_ARG_TYPE': true } } };
+    const print = (body: string): string => new Transpiler(config).transpileCSharp(
+        "class Exchange {\n    f (since: number = undefined, start: number, other = undefined, price: number = undefined) {\n        const now: number = 5;\n" + body + "    }\n}").content;
+
+    test ('a nullable numeric parameter on the lifted side compares natively', () => {
+        expect(print("        if (since > start) { return 1; }\n")).toContain('since > start');
+    });
+
+    test ('a nullable parameter on the other side keeps the helper (helper is true for (x, null))', () => {
+        expect(print("        if (start > since) { return 1; }\n")).toContain('isGreaterThan(start, since)');
+    });
+
+    test ('an untyped parameter keeps the helper', () => {
+        expect(print("        if (other > start) { return 1; }\n")).toContain('isGreaterThan(other, start)');
+    });
+
+    test ('a nullable right side under >= keeps the helper without a null test', () => {
+        expect(print("        if (0.01 >= price) { return 1; }\n")).toContain('isGreaterThanOrEqual(0.01, price)');
+    });
+});

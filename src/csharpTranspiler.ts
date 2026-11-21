@@ -6223,7 +6223,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((!leftNullable && !rightNullable) || (!integer && !double) || (double && ((token === '<') || (token === '<=')))) {
             return undefined;
         }
-        if ((this.csharpExpressionTypeOf(node.left) === undefined) || (this.csharpExpressionTypeOf(node.right) === undefined)) {
+        const typed = (n) => (this.csharpExpressionTypeOf(n) ?? this.csharpNumericParamKind(n) ?? (isNumericLiteral(n) ? 'double' : undefined)) !== undefined;
+        if (!typed(node.left) || !typed(node.right)) {
             return undefined;
         }
         let leftText = this.printNode(node.left, 0).trim();
@@ -6277,14 +6278,32 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (isPropertyAccessExpression(n) && (n.expression?.kind === SyntaxKind.ThisKeyword)
                 && Object.prototype.hasOwnProperty.call(CSHARP_SCALAR_FIELD_KINDS, n.name?.text)) ? CSHARP_SCALAR_FIELD_KINDS[n.name.text] : undefined;
         };
-        let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left);
-        let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right);
+        let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left) ?? this.csharpNumericParamKind(left);
+        let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right) ?? this.csharpNumericParamKind(right);
+        // a fractional literal is a C# double constant
+        const fraction = (n) => (isNumericLiteral(n) && /^\d*\.\d+$/.test(n.text)) ? 'double' : undefined;
+        leftKind = leftKind ?? fraction(left);
+        rightKind = rightKind ?? fraction(right);
         if ((fieldKind(left) === 'double') && (rightKind === 'int') && isNumericLiteral(right)) {
             rightKind = 'double';
         } else if ((fieldKind(right) === 'double') && (leftKind === 'int') && isNumericLiteral(left)) {
             leftKind = 'double';
         }
         return [ leftKind, rightKind ];
+    }
+
+    // a parameter read whose printed signature names a numeric kind (int / Int64 / double, nullable or not)
+    csharpNumericParamKind(node): string | undefined {
+        let printed = isIdentifier(node) ? this.csharpPrintedParamType(node) : undefined;
+        if ((printed === undefined) || (CSHARP_NUMERIC_VALUE_KINDS.indexOf(printed) < 0)) {
+            return undefined;
+        }
+        // the recorded kind omits the `?` an optional parameter prints with
+        const declaration = this.csharpParameterDeclaration(node);
+        if (!printed.endsWith('?') && ((declaration === undefined) || this.csharpDeclarationPrintsNullComparable(declaration))) {
+            printed += '?';
+        }
+        return (CSHARP_NUMERIC_VALUE_KINDS.indexOf(printed) >= 0) ? printed : undefined;
     }
 
     // `Math.min/max (a, b)`: mathMin/mathMax read both boxes via Convert.ToDouble, return an ORIGINAL
