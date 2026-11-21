@@ -184,6 +184,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         text: string;
         tight: boolean;
     } | undefined;
+    csharpTypedDictionaryArgument(argument: any): string | undefined;
     csharpCallSiteOperand(argument: any): any;
     csharpCallSiteIdentityOperand(argument: any, wanted: string, text: string): string;
     csharpCallSiteDeclaredType(argument: any, printedName: string): string | undefined;
@@ -427,6 +428,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpOperandIsNumberLiteralUnion(operand: any): boolean;
     csharpOperandIsPlainNumber(operand: any): boolean;
     csharpNativeNumericComparison(node: any, identation: any): string | undefined;
+    csharpNativeNullableComparison(node: any, token: string, leftKind: string, rightKind: string): string | undefined;
+    csharpNullTestCount(node: any, identifier: any): number;
+    csharpSameExpressionNullTest(node: any, identifier: any): boolean;
     csharpComparisonOperandKinds(left: any, right: any): [string | undefined, string | undefined];
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
@@ -525,6 +529,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    csharpDeclaredLocalDictType(node: any): string | undefined;
+    csharpDeclaredDictToArray(node: any): string | undefined;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     csharpLocalTypeOf(node: any): string | undefined;
     csharpDeclaredDictReceiverType(node: any): string | undefined;
@@ -542,6 +548,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalResolverRowRead(expression: any, argumentExpression: any): string | undefined;
     csharpDeclaredCollectionRead(node: any, expression: any, argumentExpression: any, isStringKey: any, isNumberKey: any): string | undefined;
     csharpDeclaredStringIndexRead(node: any, expression: any, argumentExpression: any, isNumberKey: any): string | undefined;
+    csharpDeclaredStringIdentifierIndexRead(node: any, expression: any, argumentExpression: any): string | undefined;
     csharpDeclaredCollectionType(expression: any): string | undefined;
     csharpProvenDictionaryRead(node: any, expression: any, argumentExpression: any, isStringKey: any): string | undefined;
     csharpKeyPresenceGuarded(node: any, expression: any, key: any): boolean;
@@ -583,6 +590,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpNativeInExpression(key: any, obj: any): string | undefined;
     csharpDictOrNullInExpression(key: any, obj: any): string | undefined;
+    csharpIsDictionaryNarrowed(obj: any, declaration: any): boolean;
     csharpDictOrNullValue(node: any, depth: number): boolean;
     csharpDictOrNullTupleSlot(node: any, depth: number): boolean;
     csharpMemberInExpression(key: any, obj: any): string | undefined;
@@ -626,4 +634,19 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpObjectKeyCastable(key: any): boolean;
     csharpIsPlainRead(node: any): boolean;
     csharpDeclaredKeyType(key: any): string | undefined;
+    csharpInt64ListLiteralRead(expression: any, argumentExpression: any): string | undefined;
+    h30t01GuardedIf(listName: Node, call: any): any;
+    h30t01BindingCall(ifStatement: any): any;
+    h30t01BindingName(name: string): string;
+    h30t01BoundListArg(call: any, argument: any): string | undefined;
+    h30t01IsArrayBinding(node: any, parsedArg: any): string | undefined;
+    h30c05BoundListTest(call: any): string | undefined;
+    h30c05GuardingIf(call: any): any;
+    h30c05Name(ifStatement: any): string;
+    h30c05BoundListName(expression: any): string | undefined;
+    h30c05BoundListLoopRead(expression: any, argumentExpression: any): string | undefined;
+    h30c05JsonValueLocal(x: any): boolean;
+    h30c05JsonOrigin(receiver: any): boolean;
+    h30c05WritesAll(scope: any, declaration: any, accept: any): boolean;
+    h30c05AssignedBeforeUse(scope: any, declaration: any): boolean;
 }

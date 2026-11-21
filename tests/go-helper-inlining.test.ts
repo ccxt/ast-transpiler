@@ -159,6 +159,17 @@ describe('go .length -> len on a slice', () => {
         expect(output).toContain('for i := 0; i < len(this.Symbols); i++');
         expect(output).not.toContain('GetArrayLength(this.Symbols)');
     });
+    test('this.Accounts (a hand-written []any field) prints len and a loop-bounded index', () => {
+        const mk = (body: string) => "class Test {\n    accounts: any[] = []\n    f () {\n" + body + "    }\n}";
+        const output = transpile(mk("        for (let i = 0; i < this.accounts.length; i++) {\n            const a = this.accounts[i]\n        }\n"));
+        expect(output).toContain('for i := 0; i < len(this.Accounts); i++');
+        expect(output).toContain('this.Accounts[i]');
+        expect(output).not.toContain('GetValue(this.Accounts, i)');
+        const written = transpile(mk("        for (let i = 0; i < this.accounts.length; i++) {\n            const a = this.accounts[i]\n            this.accounts = []\n        }\n"));
+        expect(written).toContain('GetValue(this.Accounts, i)');
+        const outside = transpile(mk("        const a = this.accounts[0]\n        return a\n"));
+        expect(outside).toContain('GetValue(this.Accounts, 0)');
+    });
     test('a hand-written map/interface field keeps GetArrayLength', () => {
         const ts =
         "class Test {\n" +
@@ -273,7 +284,7 @@ describe('go `key in obj` -> map membership', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('var has bool = (func() bool { _, ok := m["a"]; return ok }())');
+        expect(output).toContain('_, has1 := m["a"]\n\tvar has bool = has1');
         expect(output).toContain('for i := 0; func() bool { _, ok := m["a"]; return ok }(); i++ {');
     });
     test('a parenthesized operand inside || stays a bare bool', () => {
@@ -287,7 +298,7 @@ describe('go `key in obj` -> map membership', () => {
         "    }\n" +
         "}";
         const output = transpile(ts);
-        expect(output).toContain('if (func() bool { _, ok := m["a"]; return ok }()) || (func() bool { _, ok := m["b"]; return ok }()) {');
+        expect(output).toContain('_, has1 := m["a"]\n\t_, has2 := m["b"]\n\tif has1 || has2 {');
         expect(output).not.toContain('EvalTruthy((func() bool');
         expect(output).not.toContain('InOp(');
     });
@@ -336,7 +347,7 @@ describe('go `key in obj` -> map membership', () => {
         "            }\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('if func() bool {\n\t\t\tif sym == nil {\n\t\t\t\treturn false\n\t\t\t}\n\t\t\t_, ok := m[*sym]\n\t\t\treturn ok\n\t\t}() {');
+        expect(output).toContain('if sym != nil {\n\t\t\tif _, ok := m[*sym]; ok {');
         expect(output).not.toContain('InOp(');
     });
     test('a *string key keeps the statement indentation in a declaration', () => {
@@ -346,7 +357,7 @@ describe('go `key in obj` -> map membership', () => {
         "        const has = !(k in m)\n" +
         "        return has\n");
         const output = transpile(ts);
-        expect(output).toContain('var has bool = !(func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}())');
+        expect(output).toContain('\tvar has1 bool\n\tif k != nil {\n\t\t_, has1 = m[*k]\n\t}\n\tvar has bool = !has1\n');
         expect(output).not.toContain('InOp(');
     });
     test('a *string key operand of || keeps its parentheses', () => {
@@ -358,7 +369,7 @@ describe('go `key in obj` -> map membership', () => {
         "            return 1\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('if (func() bool {\n\t\tif k == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*k]\n\t\treturn ok\n\t}()) || (func() bool {\n\t\tif other == nil {\n\t\t\treturn false\n\t\t}\n\t\t_, ok := m[*other]\n\t\treturn ok\n\t}()) {');
+        expect(output).toContain('\tvar has1 bool\n\tif k != nil {\n\t\t_, has1 = m[*k]\n\t}\n\tvar has2 bool\n\tif other != nil {\n\t\t_, has2 = m[*other]\n\t}\n\tif has1 || has2 {\n');
         expect(output).not.toContain('InOp(');
     });
     test('a *int64 key keeps InOp', () => {
@@ -460,7 +471,7 @@ describe('go `key in obj` -> map membership', () => {
         expect(output).toContain('InOp(m, k)');
         expect(output).not.toContain('[*k]');
     });
-    test('a guard on another name keeps the closure', () => {
+    test('a guard on another name adds the key nil test before the read', () => {
         const ts = pointerKeyFixture(
         "        const m = { 'a': 1 }\n" +
         "        const k = this.safeString(item, 'k')\n" +
@@ -469,8 +480,8 @@ describe('go `key in obj` -> map membership', () => {
         "            return 1\n" +
         "        }\n");
         const output = transpile(ts);
-        expect(output).toContain('func() bool');
-        expect(output).not.toContain('if _, ok := m[*k]');
+        expect(output).toContain('if (j != nil) && (k != nil) {');
+        expect(output).toContain('if _, ok := m[*k]; ok {');
     });
     test('a hand-written map field outside the table keeps InOp', () => {
         const ts = pointerKeyFixture(

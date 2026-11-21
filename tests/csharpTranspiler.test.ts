@@ -3348,10 +3348,10 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         expect(output).not.toContain('callDynamically(this, "httpProxyCallback"');
         expect(output).not.toContain('callDynamically(this, "https_proxy_callback"');
     });
-    test('a 3-parameter delegate member takes exactly three arguments', () => {
-        // proxyUrlCallback is `Func<object, object, object, object>` (3 parameters):
-        // the matching call goes native, the 4-argument one the TS corpus writes keeps
-        // the helper (a 4-argument call of a 3-parameter delegate does not compile)
+    test('a 4-parameter delegate member takes exactly four arguments', () => {
+        // proxyUrlCallback is `Func<object, object, object, object, object>` (4 parameters):
+        // the 4-argument call the TS corpus writes goes native, any other arity keeps
+        // the helper (a mismatched delegate call does not compile)
         const input =
         "class Exchange {\n" +
         "    proxyUrlCallback: any;\n" +
@@ -3362,8 +3362,8 @@ describe('csharp helper removal: a for-header counter prints the native ++ / --'
         "    }\n" +
         "}";
         const output = transpiler.transpileCSharp(input).content;
-        expect(output).toContain('object three = this.proxyUrlCallback(url, method, headers);');
-        expect(output).toContain('object four = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers, body })');
+        expect(output).toContain('object three = callDynamically(this, "proxyUrlCallback", new object[] { url, method, headers })');
+        expect(output).toContain('object four = this.proxyUrlCallback(url, method, headers, body);');
     });
     test('an awaited delegate-member call or a non-delegate name keeps callDynamically', () => {
         // the delegates return object, not a Task, so an awaited call cannot go native;
@@ -5052,6 +5052,14 @@ describe('ws cache class parameters', () => {
         expect(output).toContain('sign(string path, object api = null)');
         expect(output).not.toContain('pathVar');
     });
+    test('a dictionary core argument with a {} default and no body write keeps no object shadow', () => {
+        const t: any = new Transpiler({ 'verbose': false, 'csharp': { 'coreArgTypes': { 'pick': { 1: 'Dictionary<string, object>' }, 'fill': { 1: 'Dictionary<string, object>' }, 'seeded': { 1: 'Dictionary<string, object>' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
+        const input = 'class Test {\n    pick (key, mapping = {}) {\n        return Object.keys (mapping);\n    }\n    fill (key, mapping = {}) {\n        mapping = { \'a\': 1 };\n        return mapping;\n    }\n    seeded (key, mapping = { \'a\': 1 }) {\n        return mapping;\n    }\n}';
+        const output = t.transpileCSharp(input).content;
+        expect(output).toContain('pick(object key, Dictionary<string, object> mapping = null)');
+        expect(output).not.toContain('object mappingVar = mapping;\n        mappingVar ??= new Dictionary<string, object>();\n        return new List<object>(((IDictionary<string,object>)mappingVar).Keys);');
+        expect(output.split('object mappingVar = mapping;').length - 1).toBe(2); // a body write or a non-empty default keeps the slot
+    });
     test('configured call-site argument types convert this./base. arguments in exchange sources', () => {
         const fs = require('fs');
         const os = require('os');
@@ -5135,6 +5143,18 @@ describe('printed parameter / declaration equality and inOp', () => {
         fs.writeFileSync(src, 'class Test {\n    omit (a, b) { return a; }\n    f (params = {}) {\n        const q: any = (params === undefined) ? this.omit (params, \'x\') : params;\n        if (\'k\' in q) {\n            return 1;\n        }\n        return 0;\n    }\n}');
         const output = t.transpileCSharpByPath(src).content;
         expect(output).toContain('(q is IDictionary<string, object> inOpDict0 && inOpDict0.ContainsKey("k"))');
+    });
+    test('an object local inside an isDictionary branch gets the typed inOp', () => {
+        const t = make();
+        const dir = path.join(fs.mkdtempSync(path.join(require('os').tmpdir(), 'inop-')), 'ts', 'src');
+        fs.mkdirSync(dir, { recursive: true });
+        const src = path.join(dir, 'venue.ts');
+        fs.writeFileSync(src, 'class Test {\n    isDictionary (a) { return true; }\n    sv (a, b) { return a; }\n    f (rs) {\n        let r = this.sv (rs, 0);\n        if (Array.isArray (r)) {\n            return 2;\n        } else if (this.isDictionary (r)) {\n            if (\'k\' in r) {\n                return 1;\n            }\n        }\n        if (\'m\' in r) {\n            return 3;\n        }\n        if (this.isDictionary (r) && (\'n\' in r)) {\n            return 4;\n        }\n        if (this.isDictionary (r)) {\n            r = rs;\n            return (\'w\' in r);\n        }\n        return 0;\n    }\n}');
+        const output = t.transpileCSharpByPath(src).content;
+        expect(output).toContain('(r is IDictionary<string, object> inOpDict0 && inOpDict0.ContainsKey("k"))');
+        expect(output).toContain('inOp(r, "m")'); // outside the branch
+        expect(output).toContain('inOp(r, "n")'); // in the condition, not the branch
+        expect(output).toContain('inOp(r, "w")'); // the branch rewrites the local
     });
     test('the dictionary-or-null inOp stays the helper outside exchange sources', () => {
         const t = make();
@@ -6416,6 +6436,7 @@ describe ('csharp base dictionary views', () => {
             const out = printed('        this.currencies[\'BTC\'] = code;\n        delete this.currencies[\'ETH\'];');
             expect(out).not.toContain('currenciesDict');
         });
+
     });
 });
 
@@ -6437,6 +6458,40 @@ describe ('csharp declared string index reads', () => {
     }
 
     const body = (lines: string) => 'class T {\n    f (id: string, rows: any, i: number) {\n' + lines + '\n    }\n}';
+
+    describe('csharp int-counter read on a declared string local', () => {
+        const loop = (decl: string) => 'class T {\n    f (id: string) {\n' + decl + '\n        for (let i = 0; i < 3; i++) {\n            const c = id[i];\n        }\n    }\n}';
+        const printedWithKey = (source: string, declared: string | undefined, key: string | undefined) => {
+            const transpiler = new Transpiler(config);
+            const cs: any = (transpiler as any).csharpTranspiler;
+            if (declared !== undefined) {
+                cs.csharpStringReceiverType = (receiver: any) => (receiver?.text === 'id' ? declared : undefined);
+            }
+            if (key !== undefined) {
+                cs.csharpLocalTypeOf = (node: any) => (node?.text === 'i' ? key : undefined);
+            }
+            return transpiler.transpileCSharp(source).content;
+        };
+
+        test('an int counter on a string? receiver reads the char with the helper null test', () => {
+            const out = printedWithKey(loop(''), 'string?', 'int');
+            expect(out).toContain('(id != null ? id[i].ToString () : null)');
+            expect(out).not.toContain('getValue(id, i)');
+        });
+
+        test('an Int64? counter on a string? receiver adds the helper null-key test and its Convert.ToInt32', () => {
+            const out = printedWithKey(loop(''), 'string?', 'Int64?');
+            expect(out).toContain('(id != null && i != null ? id[Convert.ToInt32(i.Value)].ToString () : null)');
+            expect(out).not.toContain('getValue(id, i)');
+        });
+
+        test('an object receiver or a non-int key keeps the helper', () => {
+            expect(printedWithKey(loop(''), undefined, 'int')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), 'string?', 'Int64')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), undefined, 'Int64?')).toContain('getValue(id, i)');
+            expect(printedWithKey(loop(''), 'List<object>', 'int')).not.toContain('.ToString ()');
+        });
+    });
 
     describe('csharp literal-index read on a declared string local', () => {
         test('a string? receiver reads through the indexer with the helper null and range tests', () => {
@@ -7355,6 +7410,78 @@ describe ('csharp declared member types', () => {
             expect(noViews).not.toContain('RefreshUrlsViews');
         });
 
+        test('a getter-only entry view declared in Exchange.Options.cs replaces the nested read; a settable one does not', () => {
+            const os = require('os');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csv-'));
+            const file = path.join(dir, 'ts', 'src', 'venue.ts');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.mkdirSync(path.join(dir, 'cs', 'ccxt', 'base'), { recursive: true });
+            fs.writeFileSync(file, 'class Exchange {\n    exceptions: any;\n    options: any;\n    f () { const a = this.exceptions["ws"]["exact"]; const b = this.options["ws"]["x"]; return [ a, b ]; }\n}\n');
+            fs.writeFileSync(path.join(dir, 'cs', 'ccxt', 'base', 'Exchange.Options.cs'), [
+                'public partial class BaseExchange',
+                '{',
+                '    public IDictionary<string, object> exceptions { get; set; } = new dict();',
+                '    public IDictionary<string, object> options { get; set; } = new dict();',
+                '    public IDictionary<string, object> exceptionsWs',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("ws")) ? d["ws"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> optionsWs { get; set; }',
+                '}',
+            ].join('\n'));
+            const out = new Transpiler(config as any).transpileCSharpByPath(file).content;
+            expect(out).toContain('object a = (this.exceptionsWs != null && this.exceptionsWs.ContainsKey("exact") ? this.exceptionsWs["exact"] : null);');
+            expect(out).not.toContain('optionsWs');
+            expect(out).toContain('getValue((this.options != null && this.options.ContainsKey("ws") ? this.options["ws"] : null), "x")');
+        });
+
+        test('a configured dictionary argument passes typed entry views and dictionary members bare', () => {
+            const os = require('os');
+            const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csv-'));
+            const file = path.join(dir, 'ts', 'src', 'venue.ts');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.mkdirSync(path.join(dir, 'cs', 'ccxt', 'base'), { recursive: true });
+            fs.writeFileSync(file, 'class Exchange {\n    exceptions: any;\n    options: any;\n    t (exact, s, m) { }\n    f (s, d) { this.t (this.exceptions["exact"], s, s); this.t (this.exceptions["ws"]["exact"], s, s); this.t (this.exceptions, s, s); this.t (this.options["x"], s, s); this.t (d["exact"], s, s); const w = this.safeDict (this.exceptions, "ws", {}); this.t (w["exact"], s, s); let v = this.safeDict (this.exceptions, "ws", {}); this.t (v["exact"], s, s); }\n    safeDict (d, k, x) { return d; }\n}\n');
+            fs.writeFileSync(path.join(dir, 'cs', 'ccxt', 'base', 'Exchange.Options.cs'), [
+                'public partial class BaseExchange',
+                '{',
+                '    public IDictionary<string, object> exceptions { get; set; } = new dict();',
+                '    public IDictionary<string, object> options { get; set; } = new dict();',
+                '    public IDictionary<string, object> exceptionsWs',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("ws")) ? d["ws"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> exceptionsExact',
+                '    {',
+                '        get { var d = this.exceptions; return (d != null && d.ContainsKey("exact")) ? d["exact"] as IDictionary<string, object> : null; }',
+                '    }',
+                '    public IDictionary<string, object> exceptionsWsExact',
+                '    {',
+                '        get { var d = this.exceptionsWs; return (d != null && d.ContainsKey("exact")) ? d["exact"] as IDictionary<string, object> : null; }',
+                '    }',
+                '}',
+            ].join('\n'));
+            const typed = { ...config, csharp: { ...(config as any).csharp, callSiteArgTypes: { t: { 0: 'IDictionary<string, object>' } } } };
+            const out = new Transpiler(typed as any).transpileCSharpByPath(file).content;
+            expect(out).toContain('this.t(this.exceptionsExact, s, s);');
+            expect(out).toContain('this.t(this.exceptionsWsExact, s, s);');
+            expect(out).toContain('this.t(this.exceptions, s, s);');
+            expect(out).toContain('this.t(((IDictionary<string, object>)(this.options');
+            expect(out).toContain('this.t(((IDictionary<string, object>)getValue(d, "exact")');
+            expect((out.match(/this\.t\(this\.exceptionsWsExact, s, s\);/g) ?? []).length).toBe(2);
+            expect(out).not.toContain('this.t(this.exceptionsWsExact, s, s); let');
+            expect(out).toMatch(/this\.t\(\(\(IDictionary<string, object>\)\(?(getValue\(v|\(v != null)/);
+        });
+
+        test('a section read with a string-declared key carries the helper null-key test', () => {
+            const ts = BASE + '    f (part: string) { return this.urls["api"]["ws"][part]; }\n}';
+            const out = printed(ts, true);
+            expect(out).toContain('(this.urlsApiSections.ContainsKey("ws") && part != null && this.urlsApiSections["ws"].ContainsKey((string)part) ? this.urlsApiSections["ws"][(string)part] : null)');
+            expect(out).not.toContain('getValue(');
+            const numeric = BASE + '    f (part: number) { return this.urls["api"]["ws"][part]; }\n}';
+            expect(printed(numeric, true)).not.toContain('urlsApiSections');
+        });
+
         test('a nested write below an entry owes no refresh and a comparison is no write', () => {
             const ts = BASE + '    f () { this.urls["api"]["ws"] = 1; if (this.urls === undefined) { return 1; } return 0; }\n}';
             const out = printed(ts, true);
@@ -8031,6 +8158,24 @@ describe ('csharp object-key ws cache reads', () => {
             expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
             expect(out).not.toContain('getValue(this.ohlcvs');
         });
+        test('a typed-row routed ws cache keys like the object cache', () => {
+            DECLARED['ohlcvs'] = { type: 'IDictionary<string, IDictionary<string, object>>', initializer: 'null', routed: true };
+            try {
+                const out = printed('        return this.ohlcvs[symbol];', 'string?');
+                expect(out).toContain('(this.ohlcvs != null && symbol != null && this.ohlcvs.ContainsKey(symbol) ? this.ohlcvs[symbol] : null)');
+                expect(out).not.toContain('getValue(this.ohlcvs');
+            } finally {
+                DECLARED['ohlcvs'] = { type: 'IDictionary<string, object>', initializer: 'null', routed: true };
+            }
+        });
+        test('a routed ws cache of another element type keeps the helper', () => {
+            DECLARED['ohlcvs'] = { type: 'IDictionary<string, List<object>>', initializer: 'null', routed: true };
+            try {
+                expect(printed('        return this.ohlcvs[symbol];', 'string?')).toContain('getValue(this.ohlcvs, symbol)');
+            } finally {
+                DECLARED['ohlcvs'] = { type: 'IDictionary<string, object>', initializer: 'null', routed: true };
+            }
+        });
         test('orderbooks keeps the helper the ws transpile maps to getOrderBook', () => {
             expect(printed('        return this.orderbooks[symbol];', 'string?')).toContain('getValue(this.orderbooks, symbol)');
         });
@@ -8238,5 +8383,106 @@ describe('ral-84c8 guarded concat over a build-typed string? local', () => {
         const output = t.transpileCSharp(input).content;
         expect(output).toContain('((object)(head == null ? null : head + "/" + (string)(object)(b)))');
         expect(output).toContain('add(add(other, "/"), b)');
+    });
+});
+
+describe('annotated Dict row read once in the next statement', () => {
+    const src = (decl: string, use = 'return row[tf];', extra = '') => `type Dict = { [key: string]: any };
+class x {
+    conv (m: Dict, s: string, tf: string): any {
+        ${extra}
+        ${decl}
+        ${use}
+    }
+}`;
+    test('POSITIVE prints the m[k] source at the read, no local', () => {
+        const out = transpiler.transpileCSharp(src('const row: Dict = m[s];')).content;
+        expect(out).not.toMatch(/\brow\b/);
+        expect(out).toContain('getValue(getValue(m, s), tf)');
+    });
+    test('a second read, a write, an unannotated or a rebound key keeps the local', () => {
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[s];', 'return [ row[tf], row[s] ];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[s];', 'row[tf] = 1;\n        return row;')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row = m[s];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[s];', 'return row[tf];', 's = s + tf;')).content).toMatch(/\brow\b/);
+    });
+    test('POSITIVE an m[0] row read by literal keys in later statements prints its source, no local', () => {
+        const out = transpiler.transpileCSharp(src('const row: Dict = m[0];', 'const a = row[\'a\'];\n        return [ a, row[\'b\'] ];')).content;
+        expect(out).not.toMatch(/\brow\b/);
+        expect(out).toContain('getValue(getValue(m, 0), "a")');
+    });
+    test('an m[0] row read by a variable key, written, or with m written after it keeps the local', () => {
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[0];', 'return [ row[\'a\'], row[tf] ];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[0];', 'row[\'a\'] = 1;\n        return row[\'b\'];')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[0];', 'const a = row[\'a\'];\n        m = {};\n        return a;')).content).toMatch(/\brow\b/);
+        expect(transpiler.transpileCSharp(src('const row: Dict = m[0];', 'return row;')).content).toMatch(/\brow\b/);
+    });
+});
+
+describe('Int64 index list reads', () => {
+    const source = "class Exchange {\n" +
+        "    main(channels: string[], other: any) {\n" +
+        "        const missing = this.pick ();\n" +
+        "        const index = missing[0];\n" +
+        "        const a = channels[missing[0]];\n" +
+        "        const b = other[0];\n" +
+        "        return [ index, a, b ];\n" +
+        "    }\n" +
+        "}";
+    const withHooks = (listType: string, paramType: string | undefined, run: () => string) => {
+        const printer: any = (transpiler as any).csharpTranspiler;
+        const previousPrinted = printer.csharpPrintedLocalType;
+        const previousResolver = printer.csharpDeclaredLocalTypeResolver;
+        printer.csharpPrintedLocalType = (node: any) => (node?.text === 'missing') ? listType : undefined;
+        printer.csharpDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'channels') ? paramType : undefined;
+        try {
+            return run();
+        } finally {
+            printer.csharpPrintedLocalType = previousPrinted;
+            printer.csharpDeclaredLocalTypeResolver = previousResolver;
+        }
+    };
+    test('a literal read of a declared List<Int64> is an Int64? conditional', () => {
+        const output = withHooks('List<Int64>', 'IList<object>', () => transpiler.transpileCSharp(source).content);
+        expect(output).toContain('(missing != null && 0 < missing.Count ? missing[0] : (Int64?)null)');
+    });
+    test('a List<object> receiver keeps the object conditional', () => {
+        const output = withHooks('List<object>', 'IList<object>', () => transpiler.transpileCSharp(source).content);
+        expect(output).not.toContain('(Int64?)null');
+    });
+    test('an untyped receiver keeps the helper', () => {
+        const output = withHooks('List<Int64>', undefined, () => transpiler.transpileCSharp(source).content);
+        expect(output).toContain('getValue(other, 0)');
+    });
+});
+
+describe('csharp fee tier literals', () => {
+    const wrap = (body: string) => `class A { describe () { return ${body}; } }`;
+    test('tier rows print double constants', () => {
+        const out = transpiler.transpileCSharp(wrap("{ 'tiers': { 'taker': [ [ this.parseNumber ('0'), this.parseNumber ('0.0025') ], [ this.parseNumber ('-5'), this.parseNumber ('500000') ] ] } }")).content;
+        expect(out).toContain('new List<object> {0.0, 0.0025}');
+        expect(out).toContain('new List<object> {-5.0, 500000.0}');
+        expect(out).not.toContain('parseNumber');
+    });
+    test('non-tier, exponent and non-literal calls keep parseNumber', () => {
+        const out = transpiler.transpileCSharp(wrap("{ 'limits': [ this.parseNumber ('0.1') ], 'tiers': [ [ this.parseNumber ('1e-8'), this.parseNumber (x) ] ], 'min': this.parseNumber ('2') }")).content;
+        expect(out.split('parseNumber').length - 1).toBe(4);
+        for (const kept of ['"0.1"', '"1e-8"', ' x ', '"2"']) {
+            expect(out).toContain(`"parseNumber", new object[] {${kept === ' x ' ? ' x ' : ' ' + kept + ' '}}`);
+        }
+    });
+    test('an int local passes bare to a call-site Int64 parameter; an object one keeps the conversion', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csa-'));
+        const file = path.join(dir, 'ts', 'src', 'thing.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'class Test {\n    pickAt (xs, index) {\n        return index;\n    }\n    caller (xs: string[], o) {\n        const n = xs.length;\n        this.pickAt (xs, n);\n        return this.pickAt (xs, o);\n    }\n}\n');
+        const config = { 'verbose': false, 'csharp': { 'callSiteArgTypes': { 'pickAt': { 1: 'Int64' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        const output = new Transpiler(config as any).transpileCSharpByPath(file).content;
+        expect(output).toContain('int n = ');
+        expect(output).toContain('this.pickAt(xs, n);');
+        expect(output).toContain('this.pickAt(xs,ccxt.BaseExchange.ToInt64ArgRequired(o));');
     });
 });

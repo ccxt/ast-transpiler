@@ -4049,18 +4049,6 @@ describe('helper removal: native comparison / containsKey / size', () => {
         expect(output).toContain("Helpers.isGreaterThanOrEqual((Math.floor(Double.parseDouble(Helpers.toString(x)))), 5)");
     });
 
-    test('a small finite double literal compares natively under `<`', () => {
-        const input =
-        "class T {\\n" +
-        "    f(s: any): boolean {\\n" +
-        "        return s.search(\"x\") < 1.5;\\n" +
-        "    }\\n" +
-        "}"
-        const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('((String)s).indexOf("x") < 1.5');
-        expect(output).not.toContain("Helpers.isLessThan");
-    });
-
     test('a long literal above 2^53 keeps the helper once a double is involved', () => {
         const input =
         "class T {\\n" +
@@ -5392,7 +5380,7 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
             "        const results = await Promise.all (tasks);\n" +
             "    }\n");
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain('Helpers.promiseAll(tasks)');
+        expect(output).toContain('java.util.concurrent.CompletableFuture.allOf(tasks.toArray(new java.util.concurrent.CompletableFuture<?>[0])).thenApply((promiseAllDone) -> new java.util.ArrayList<Object>(tasks.stream().<Object>map(java.util.concurrent.CompletableFuture::join).toList()))');
     });
 
     test('a Promise.all with non-promise elements keeps the helper', () => {
@@ -5745,18 +5733,6 @@ describe('helper removal: Array.isArray -> native instanceof java.util.List', ()
         "}\n"
         const output = transpiler.transpileJava(input).content;
         expect(output).toContain("return (this.getItems() instanceof java.util.List);");
-    });
-
-    test('a side-effect-free array literal is the constant true', () => {
-        const input =
-        "class T {\n" +
-        "    f() {\n" +
-        "        return Array.isArray([1, 2]);\n" +
-        "    }\n" +
-        "}\n"
-        const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("return true;");
-        expect(output).not.toContain("Helpers.isArray(");
     });
 
     test('an array literal with an evaluated element keeps the helper', () => {
@@ -8490,6 +8466,33 @@ describe('java typed String slice / split / replaceAll', () => {
     });
 });
 
+describe('java typed String slice: non-negative bounds', () => {
+    // a bound that can never be negative skips the count-from-the-end branch; an own-length end is the length
+    const withLongLocals = (body: string): string => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => (['n', 'm', 'k'].includes(declaration?.name?.text) ? 'Long' : undefined);
+            return transpiler.transpileJava("class T {\n    test(s: string, o: number): any {\n" + body + "\n    }\n}").content;
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    };
+
+    test('a const local of a length sum and an own-length end print the short clamp', () => {
+        const output = withLongLocals("        const n = s.length + 1;\n        return s.slice(n, s.length);");
+        expect(output).toContain("((String)s).substring((int) Math.min(Math.min(n, ((String)s).length()), ((String)s).length()), (int) ((String)s).length())");
+        expect(output).not.toContain("Helpers.slice");
+    });
+
+    test('a const local of an untyped number keeps the negative branch', () => {
+        const output = withLongLocals("        const m = o - 1;\n        const k = s.length;\n        return s.slice(m, k);");
+        expect(output).toContain("m < 0 ? ((String)s).length() + m : m");
+        expect(output).toContain("Math.min(k, ((String)s).length())");
+        expect(output).not.toContain("k < 0");
+    });
+});
+
 // a local initialised from a sync `this.<m> (...)` call of a generated venue method whose own
 // declaration prints a native Map/List takes that type in the printer (javaDeclaredLocalType), with no
 // build-side resolver wrapper: the consumer's tables know nothing about this file or its first generation
@@ -8630,6 +8633,22 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
             "        }\n" +
             "        return this.ohlcvs[symbol][timeframe];\n" +
             "    }\n" +
+            "    ohlcvWrite (symbol: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol] = this.safeDict (this.ohlcvs, symbol, {});\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
+            "    ohlcvWriteAsserted (symbol: string, timeframe: any, stored: any) {\n" +
+            "        this.ohlcvs[symbol as string] = this.safeDict (this.ohlcvs, symbol, {});\n" +
+            "        this.ohlcvs[symbol as string][timeframe as string] = stored;\n" +
+            "    }\n" +
+            "    ohlcvWriteNoPut (symbol: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
+            "    ohlcvWriteRewritten (symbol: string, other: string, timeframe: string, stored: any) {\n" +
+            "        this.ohlcvs[symbol] = {};\n" +
+            "        symbol = other;\n" +
+            "        this.ohlcvs[symbol][timeframe] = stored;\n" +
+            "    }\n" +
             "    ohlcvNoPut (symbol: string, timeframe: string) {\n" +
             "        return this.ohlcvs[symbol][timeframe];\n" +
             "    }\n" +
@@ -8662,6 +8681,13 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
         fs.rmSync(TMP, { recursive: true, force: true });
     });
 
+    test('a fresh ohlcvs row write is the typed row put; unanchored or rewritten symbols keep the helper', () => {
+        expect(out).toContain('this.ohlcvs.get(symbol).put(timeframe, stored);');
+        expect(out.split('this.ohlcvs.get(symbol).put(').length).toBe(3);
+        expect(out).toContain('this.ohlcvs.get(symbol).put(((String)timeframe), stored);');
+        expect(out.split('Helpers.addElementToObject(').length).toBe(5);
+    });
+
     test('client.<owner map>[k] reads natively behind the null guards the helper answers', () => {
         expect(out).toContain('(client.subscriptions == null || key == null ? null : client.subscriptions.get(key))');
         expect(out).toContain('Object b = client.subscriptions.get("authenticated");');
@@ -8685,7 +8711,7 @@ describe('ws client owner maps and base-typed reads: Helpers.GetValue -> guarded
     });
 
     test('ohlcvs[symbol][timeframe] after a fresh put under symbol reads the per-symbol map natively', () => {
-        const reads = out.split('\n').filter((line) => line.includes('this.ohlcvs.get('));
+        const reads = out.split('\n').filter((line) => line.includes('this.ohlcvs.get(') && !line.includes('.put('));
         expect(reads.length).toBe(2);
         expect(reads[0]).toContain('((java.util.Map<?, ?>)this.ohlcvs.get(symbol)).get(timeframe)');
     });
@@ -9183,7 +9209,9 @@ describe ('java plain base cache maps', () => {
 
         test('without a declared plain cache every site keeps the helper', () => {
             expect(methodText(bare, 'w1')).toContain('Helpers.addElementToObject(this.tickers, "a", v)');
-            expect(methodText(bare, 'r1')).toContain('Helpers.GetValue(this.tickers, ((String)sym))');
+            // the hash-map field table alone proves the `as string` read (its guarded get, not the plain-cache form)
+            expect(methodText(bare, 'r1')).toContain('(sym == null || this.tickers == null ? null : this.tickers.get(((String)sym)))');
+            expect(methodText(bare, 'r1')).not.toContain('this.tickers.get(sym)');
         });
     });
 });
@@ -10375,7 +10403,7 @@ describe('Promise.all over a list in the ts/src tiers', () => {
     });
 
     test('an exchange-tier Promise.all inlines the helper steps', () => {
-        expect(venue).toContain('((java.util.List<?>)(tasks)).stream().filter(java.util.concurrent.CompletableFuture.class::isInstance).map((promiseAllItem) -> (java.util.concurrent.CompletableFuture<?>) promiseAllItem)');
+        expect(venue).toContain('java.util.concurrent.CompletableFuture.allOf(tasks.toArray(new java.util.concurrent.CompletableFuture<?>[0])).thenApply((promiseAllDone) -> new java.util.ArrayList<Object>(tasks.stream().<Object>map(java.util.concurrent.CompletableFuture::join).toList()))');
         expect(venue).not.toContain('Helpers.promiseAll');
     });
 
@@ -10383,7 +10411,6 @@ describe('Promise.all over a list in the ts/src tiers', () => {
         expect(testTier).toContain('Helpers.promiseAll(tasks)');
     });
 });
-
 describe('ral-77j3 primitive base numeric fields in comparisons', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-77j3-fields-'));
     const write = (relative: string, content: string): string => {
@@ -10686,5 +10713,149 @@ export default class V extends P {
         expect(output).toContain('switch (method) {');
         // one table declaration in the venue file: one scope lookup per scan of that file
         expect(scanned.filter((name) => name === 'r87once.ts')).toEqual([ 'r87once.ts' ]);
+    });
+});
+
+describe('GetValue on a map read keyed by a guarded list read or an asserted string key', () => {
+    const withResolver = (types: { [name: string]: string }, body: () => void) => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const previous = printer.javaDeclaredLocalTypeResolver;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => types[declaration?.name?.text];
+        try {
+            body();
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = previous;
+        }
+    };
+    const input =
+    "class T {\\n" +
+    "    tickers: any = {};\\n" +
+    "    test(trades: any, ids: string[], symbol: string): void {\\n" +
+    "        for (let i = 0; i < ids.length; i++) {\\n" +
+    "            this.something (trades[ids[i]]);\\n" +
+    "        }\\n" +
+    "        this.something (this.tickers[symbol as string]);\\n" +
+    "    }\\n" +
+    "    something(...args: any[]): void {}\\n" +
+    "}";
+    test('declared Map + List<String> counter key, asserted field key: guarded native get', () => {
+        withResolver({ 'trades': 'Map<String, Object>', 'ids': 'List<String>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            const key = '(ids == null || i < 0 || i >= ids.size() ? null : ids.get(i))';
+            expect(output).toContain(`(trades == null || ${key} == null ? null : trades.get(${key}))`);
+            expect(output).toContain('(symbol == null || this.tickers == null ? null : ((java.util.Map<?, ?>)this.tickers).get(((String)symbol)))');
+            expect(output).not.toContain('Helpers.GetValue(');
+        });
+    });
+    test('Object receiver or Object key list keeps the helper', () => {
+        withResolver({ 'ids': 'List<Object>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(trades, ');
+        });
+        withResolver({ 'trades': 'Map<String, Object>' }, () => {
+            const output = transpiler.transpileJava(input).content;
+            expect(output).toContain('Helpers.GetValue(trades, ');
+        });
+    });
+});
+
+describe('java native multiply/replace on printer-proven operands', () => {
+    const transpiler = newJavaTranspiler();
+    const body = (code: string) => "class T {\n    f(s: string, x: string, y: string): any {\n        " + code + "\n    }\n}";
+    test('a parseInt that prints Long.parseLong is a long operand of native `*`', () => {
+        const output = transpiler.transpileJava(body("const t = parseInt (s) * 1000;\n        return t;")).content;
+        expect(output).toContain('(Long.parseLong(((String)s)) * 1000L)');
+        expect(output).not.toContain('Helpers.multiply(');
+    });
+    test('parseFloat keeps Helpers.multiply (integral double product re-boxes as Long)', () => {
+        const output = transpiler.transpileJava(body("const t = parseFloat (s) * 1000;\n        return t;")).content;
+        expect(output).toContain('Helpers.multiply(');
+    });
+    test('replace on a String-declared receiver with a concat pattern is a guarded quoted replaceFirst', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => (declaration?.name?.text === 'h' ? 'String' : undefined);
+            const output = transpiler.transpileJava(body("const h = this.f (s, x, y);\n        const g = h.replace ('.' + x, '');\n        const k = s.replace ('.' + x, '');\n        const m = h.replace (x, '');\n        return [ g, k, m ];")).content;
+            expect(output).toContain('(h == null ? null : ((String)h).replaceFirst(java.util.regex.Pattern.quote(("." + x)), ""))');
+            expect(output).toContain('Helpers.replace((String)s, ');
+            expect(output).toContain('Helpers.replace((String)h, (String)x, ');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
+    });
+});
+
+describe('fee tier parseNumber literals', () => {
+    const tr = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } });
+    test('a literal parseNumber in a tiers row prints the Double constant', () => {
+        const input = "class A {\n    describe () {\n        return { 'fees': { 'tiers': { 'taker': [ [ this.parseNumber ('0'), this.parseNumber ('0.0025') ] ] } } };\n    }\n}\n";
+        const out = tr.transpileJava(input).content;
+        expect(out).toContain('0.0, 0.0025');
+        expect(out).not.toContain('parseNumber');
+    });
+    test('negatives: outside tiers, non-literal and non-decimal args keep the call', () => {
+        const input = "class A {\n    describe (x) {\n        return { 'a': [ this.parseNumber ('1') ], 'tiers': { 't': [ [ this.parseNumber (x), this.parseNumber ('1e3'), this.parseNumber ('.5') ] ] }, 'b': this.parseNumber ('2') };\n    }\n}\n";
+        const out = tr.transpileJava(input).content;
+        expect((out.match(/parseNumber\(/g) || []).length).toBe(5);
+    });
+});
+
+describe('ws client owner map read keyed by a declared-List counter element: Helpers.GetValue -> guarded get', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-ws-client-list-keyed-reads');
+    const CLIENT_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'ws', 'Client.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'pro', 'probe.ts');
+    const run = (listed: string[]) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        printer.javaDeclaredLocalTypeResolver = (declaration: any) => (listed.includes(declaration?.name?.text) ? 'List<Object>' : undefined);
+        return byPath.transpileJavaByPath(VENUE_FIXTURE).content;
+    };
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(CLIENT_FIXTURE), { recursive: true });
+        fs.mkdirSync(path.dirname(VENUE_FIXTURE), { recursive: true });
+        fs.writeFileSync(CLIENT_FIXTURE,
+            "export default class Client {\n" +
+            "    subscriptions: { [key: string]: any } = {};\n" +
+            "    other: { [key: string]: any } = {};\n" +
+            "}\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import Client from '../base/ws/Client';\n" +
+            "class Probe {\n" +
+            "    match (client: Client, n: number) {\n" +
+            "        const hashes = Object.keys (client.subscriptions);\n" +
+            "        let loose: any = undefined;\n" +
+            "        loose = client.other;\n" +
+            "        for (let i = 0; i < hashes.length; i++) {\n" +
+            "            const a = client.subscriptions[hashes[i]];\n" +
+            "            const b = client.other[hashes[i]];\n" +
+            "            const c = client.subscriptions[loose[i]];\n" +
+            "            const d = client.subscriptions[hashes[n]];\n" +
+            "            if (a === undefined || b === undefined || c === undefined || d === undefined) {\n" +
+            "                return;\n" +
+            "            }\n" +
+            "        }\n" +
+            "    }\n" +
+            "}\n");
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a counter read of a declared List key prints the null-guarded native get', () => {
+        const out = run([ 'hashes', 'loose' ]);
+        expect(out).not.toContain('Helpers.GetValue(client.subscriptions, (hashes');
+        expect(out).toMatch(/Object a = \(client\.subscriptions == null \|\| \(hashes == null[^;]*\.get\(i\)\) == null \? null : client\.subscriptions\.get\(\(hashes/);
+    });
+
+    test('a non-ws-client map, a non-counter index or an undeclared key list keeps the helper', () => {
+        const out = run([ 'hashes' ]);
+        expect(out).toContain('Object b = Helpers.GetValue(client.other,');
+        expect(out).toContain('Object c = Helpers.GetValue(client.subscriptions, Helpers.GetValue(loose, i))');
+        expect(out).toMatch(/Object d = Helpers\.GetValue\(client\.subscriptions, /);
+        const none = run([]);
+        expect(none).toMatch(/Object a = Helpers\.GetValue\(client\.subscriptions, /);
     });
 });

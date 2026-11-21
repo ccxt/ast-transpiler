@@ -822,6 +822,9 @@ export class JavaTranspiler extends BaseTranspiler {
     asyncExecutor = '';
     // static method emitted in place of CompletableFuture.supplyAsync (it owns the executor choice)
     asyncSupplier = '';
+    // regex over source file names whose async methods print a sync core plus a one-line wrapper ('' = off)
+    asyncCoreSplit = '';
+    javaAsyncCores: Map<any, { name: string; coreBody: string; wrapperBody: string }> = new Map();
     // typed ws handler tables: `const methods = { 'ticker': this.handleTicker }` and its single
     // `method.call (this, client, message)` read are proven together (method references + virtual call)
     javaHandlerTables: Map<any, any> = new Map();
@@ -930,6 +933,7 @@ export class JavaTranspiler extends BaseTranspiler {
         this.applyUserOverrides(config);
         this.asyncExecutor = config['asyncExecutor'] ?? '';
         this.asyncSupplier = config['asyncSupplier'] ?? '';
+        this.asyncCoreSplit = config['asyncCoreSplit'] ?? '';
     }
 
     initConfig() {
@@ -1671,6 +1675,34 @@ export class JavaTranspiler extends BaseTranspiler {
         return parameters === undefined ? undefined : this.javaArgumentNativeTypes(node, parameters, 1);
     }
 
+    // a statement `this.spawn(this.m, a..)` into a printed async method is `this.m(a..)`: the method
+    // already hands its body to the async supplier and returns at once, so the spawn lambda adds nothing
+    javaSpawnAsyncDirectCall(node, identation): string | undefined {
+        const callee = node.expression;
+        if (!isExpressionStatement(node.parent) || callee?.kind !== SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== SyntaxKind.ThisKeyword || callee.name?.text !== 'spawn') {
+            return undefined;
+        }
+        const args = node.arguments ?? [];
+        const reference = args[0];
+        if (reference?.kind !== SyntaxKind.PropertyAccessExpression || reference.expression?.kind !== SyntaxKind.ThisKeyword
+            || args.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+            return undefined;
+        }
+        const method = this.javaMethodImplementation(this.javaReferencedDeclaration(reference));
+        // base-tier targets are excluded: the build layer swaps some for hand-written sync bodies
+        if (method === undefined || !this.javaIsPrintedMethod(method) || !this.hasAsyncModifier(method)
+            || /(^|\/)ts\/src\/base\//.test(method.getSourceFile().fileName.replace(/\\/g, '/'))
+            || ((method as any).modifiers ?? []).some((m) => m.kind === SyntaxKind.StaticKeyword)) {
+            return undefined;
+        }
+        const rest = args.slice(1);
+        const types = this.javaSpawnCallParameterTypes(node) ?? [];
+        const forwarded = this.javaFullArityArguments(method, rest, identation)
+            ?? rest.map((a, i) => this.javaCheckcastArgument(a, this.printNode(a, identation).trim(), types[i + 1])).join(', ');
+        return `this.${this.transformMethodNameIfNeeded(reference.name.text)}(${forwarded})`;
+    }
+
     // the declaration a `this.m` reference names (value declaration first)
     javaReferencedDeclaration(reference) {
         return this.javaTry(() => {
@@ -1742,6 +1774,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printExpressionStatement(node, identation) {
+        const h30j04 = this.h30J04FieldStoreStatement(node, identation); if (h30j04 !== undefined) return h30j04;
         const handlerDispatch = this.printJavaHandlerDispatch(node.expression, identation);
         if (handlerDispatch !== undefined) {
             return this.printNodeCommentsIfAny(node, identation, handlerDispatch);
@@ -1750,7 +1783,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printCallExpression(node, identation) {
-        return this.printJavaWsReceiverCall(node, identation) ?? super.printCallExpression(node, identation);
+        return javaFeeTierLiteral(node) ?? this.printJavaWsReceiverCall(node, identation) ?? this.javaSpawnAsyncDirectCall(node, identation) ?? super.printCallExpression(node, identation);
     }
 
     printDynamicCall(node, identation) {
@@ -2564,6 +2597,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const returnNull = lastStmtIsReturn ? "" : (this.getIden(identation + 2) + "return null;\n");
             const supplier = this.asyncSupplier || "java.util.concurrent.CompletableFuture.supplyAsync";
             const executorArg = (!this.asyncSupplier && this.asyncExecutor) ? `, ${this.asyncExecutor}` : "";
+            this.javaStashAsyncCore(node, identation, supplier, executorArg, blockOpen + "\n" + firstStatement + remainingString + "\n" + returnNull.replace(/^ {4}/, '') + blockClose, blockClose);
             const asyncBody = this.getIden(identation + 1) + `return ${supplier}(() -> {\n` +
                     insideWrappers +
                     body + "\n" +
@@ -2634,10 +2668,41 @@ export class JavaTranspiler extends BaseTranspiler {
         const funcBody = this.printFunctionBody(node, identation); // print body first to get var reassignments filled
         // one typed signature: default-valued and `?` parameters are ordinary typed parameters
         let methodDef = this.printMethodDefinition(node, identation, (n) => this.printCoreMethodParameters(n));
-        methodDef += funcBody;
+        methodDef += this.javaAsyncCoreSplit(node, identation, methodDef, funcBody);
         methodDef += this.printOverrideBridges(node, identation);
 
         return methodDef;
+    }
+
+    // an async method prints a private sync `<name>Core` holding the body, and the public method hands it to
+    // the same supplier in one line: same executor and thread; overrides and super calls resolve as before
+    javaStashAsyncCore(node, identation, supplier: string, executorArg: string, coreBody: string, blockClose: string) {
+        if (!isMethodDeclaration(node) || !this.asyncCoreSplit || !new RegExp(this.asyncCoreSplit).test(node.getSourceFile().fileName.replace(/\\/g, '/'))
+            || (node.modifiers ?? []).some((m) => m.kind === SyntaxKind.StaticKeyword) || !isIdentifier(node.name)) {
+            return;
+        }
+        const name = this.transformMethodNameIfNeeded(node.name.text);
+        const members = (node.parent as any)?.members ?? [];
+        if (members.some((m) => (m.name as any)?.text === name + 'Core')) {
+            return;
+        }
+        const args = node.parameters.map((p) => this.printNode(p.name, 0)).join(', ');
+        const wrapper = this.getIden(identation + 1) + `return ${supplier}(() -> this.${name}Core(${args})${executorArg});`;
+        if (wrapper.length > 400) {
+            return;
+        }
+        this.javaAsyncCores.set(node, { name, coreBody, wrapperBody: this.getBlockOpen(identation) + wrapper + blockClose });
+    }
+
+    javaAsyncCoreSplit(node, identation, signature: string, funcBody: string): string {
+        const core = this.javaAsyncCores.get(node);
+        this.javaAsyncCores.delete(node);
+        const future = core === undefined ? null : new RegExp(`CompletableFuture<(.+)> ${core.name}\\(`).exec(signature);
+        if (core === undefined || future === null) {
+            return funcBody;
+        }
+        const params = this.printCoreMethodParameters(node);
+        return core.wrapperBody + "\n\n" + this.getIden(identation) + `private ${future[1]} ${core.name}Core(${params})` + core.coreBody;
     }
 
     printMethodDefinition(node, identation, paramsPrinter = undefined) {
@@ -4028,6 +4093,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // declarations it retypes itself, and a parameter the printer retypes
     // (javaNativeParameterType) answers for itself, so its element reads go native too
     javaDeclaredTypeOfDeclaration(declaration): string | undefined {
+        const h29j04 = this.h29J04RowLocal(declaration) || this.h29J04RowContainer(declaration) ? JAVA_ELEMENT_WRITE_MAP_TYPE : undefined; if (h29j04 !== undefined) return h29j04;
         if (this.javaLongLimitLiteralLocalCached(declaration)) {
             return 'Long';
         }
@@ -4376,6 +4442,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.printNode(declaration.initializer, identation).trimEnd();
         }
         const indent = this.getIden(identation);
+        const h30j06 = this.h30J06Declaration(declaration, indent); if (h30j06 !== undefined) return h30j06;
+        const h29j06 = this.h29J06LiteralJoinDeclaration(node, declaration, identation, indent); if (h29j06 !== undefined) return h29j06;
+        const h28j06 = this.h28J06SeededListDeclaration(declaration, indent); if (h28j06 !== undefined) return h28j06;
+        const h29j04 = this.h29J04RowMapDeclaration(declaration, indent); if (h29j04 !== undefined) return h29j04;
+        const h27j06 = this.h27J06FutureListDeclaration(declaration, indent); if (h27j06 !== undefined) return h27j06;
         // array destructuring in variable declaration
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const elements = declaration.name.elements;
@@ -4725,6 +4796,26 @@ export class JavaTranspiler extends BaseTranspiler {
         return `((java.util.Map<?, ?>)this.ohlcvs.get(${symbolText})).get(${keyText})`;
     }
 
+    // `this.ohlcvs[s][k] = v` on a fresh row: the base declares the rows `Map<String, Map<String, Object>>`
+    // and every writer stores a plain HashMap, so the put is the helper's Map branch (a null value is kept)
+    javaOhlcvsElementWrite(left, rhs: string): string | undefined {
+        const inner = this.unwrapPrintTransparentExpression(left.expression);
+        if (inner === undefined || !isElementAccessExpression(inner) || !this.javaIsOhlcvsField(inner.expression)) {
+            return undefined;
+        }
+        const symbolNode = this.unwrapPrintTransparentExpression(inner.argumentExpression);
+        const key = this.unwrapParenthesized(left.argumentExpression);
+        if (symbolNode === undefined || !isIdentifier(symbolNode) || key === undefined || !this.javaStringProvenKey(key)
+            || this.printNode(symbolNode, 0).trim() !== symbolNode.text) {
+            return undefined;
+        }
+        const isString = (n) => this.javaScalarFamily(n) === 'string' || this.javaDeclaredStringType(n);
+        if (!isString(symbolNode) || !this.javaOhlcvsEntryIsFresh(left, symbolNode)) {
+            return undefined;
+        }
+        return `this.ohlcvs.get(${symbolNode.text}).put(${this.printNode(key, 0).trim()}, ${rhs})`;
+    }
+
     javaIsOhlcvsField(node): boolean {
         const field = this.unwrapPrintTransparentExpression(node);
         return field !== undefined && isPropertyAccessExpression(field)
@@ -4766,7 +4857,10 @@ export class JavaTranspiler extends BaseTranspiler {
 
     javaOhlcvsFreshAnchor(statement, symbol): boolean {
         const checker: any = this.getChecker();
-        const isSymbol = (n) => isIdentifier(n) && checker.getSymbolAtLocation(n) === symbol;
+        const isSymbol = (n) => {
+            const target = this.unwrapPrintTransparentExpression(n);
+            return target !== undefined && isIdentifier(target) && checker.getSymbolAtLocation(target) === symbol;
+        };
         const emptyLiteral = (n) => n !== undefined && isObjectLiteralExpression(n) && n.properties.length === 0;
         const freshPut = (candidate): boolean => {
             if (candidate === undefined || !isExpressionStatement(candidate)) {
@@ -4935,6 +5029,10 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // `client.<map>[k]` with a repeatable non-primitive identifier key: the null-guarded native get
     javaWsClientMapReadText(receiver, key): string | undefined {
+        const listKeyed = this.javaWsClientListKeyedRead(receiver, key);
+        if (listKeyed !== undefined) {
+            return listKeyed;
+        }
         if (this.javaWsClientMapField(receiver) === undefined || !isIdentifier(key)
             || !this.javaRepeatableOperand(key) || this.javaOperandPrintsPrimitiveNumber(key) || this.javaKeyPrintsPrimitive(key)) {
             return undefined;
@@ -4942,6 +5040,22 @@ export class JavaTranspiler extends BaseTranspiler {
         const target = this.printNode(receiver, 0);
         const keyText = this.printNode(key, 0);
         return this.javaNullGuardedGet(target, keyText, keyText);
+    }
+
+    // `client.<map>[keys[i]]`, keys a declared List read at a counter: the key prints the guarded
+    // native list read (side-effect free, printed twice); the String-keyed Map `get` behind both null
+    // tests is the helper's Map branch
+    javaWsClientListKeyedRead(receiver, key): string | undefined {
+        if (this.javaWsClientMapField(receiver) === undefined || !isElementAccessExpression(key)
+            || !this.javaPrimitiveCounterIndex(key.argumentExpression)
+            || !JAVA_DECLARED_LIST_TYPES.test(this.javaDeclaredTypeOf(key.expression) ?? '')) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (!keyText.startsWith('(') || keyText.includes('Helpers.')) {
+            return undefined;
+        }
+        return this.javaNullGuardedGet(this.printNode(receiver, 0), keyText, keyText);
     }
 
     javaWsClientMapRead(node): string | undefined {
@@ -5059,7 +5173,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // and the null test reads the bare name
         const operand = isAsExpression(key) && key.type?.kind === SyntaxKind.StringKeyword ? key.expression : key;
         if (!isIdentifier(operand) || !this.javaRepeatableOperand(operand)) {
-            return undefined; // the guard prints the key twice
+            return this.javaStringListKeyedMapRead(node) ?? this.javaMapLiteralKeyedMapRead(node); // the guard prints the key twice
         }
         if (this.javaKeyPrintsPrimitive(operand)) {
             return undefined; // a java primitive cannot take the `instanceof` test
@@ -5079,6 +5193,56 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
     }
 
+    // `m[keys[i]]` on a declared Map, keys a declared List<String> read at a counter: the key is the
+    // guarded native list read (a String or null, side-effect free), so it can print twice in the
+    // helper's null-key test; a Map get then is the helper's Map branch
+    javaStringListKeyedMapRead(node): string | undefined {
+        const key = node.argumentExpression;
+        if (!isElementAccessExpression(key) || !this.javaPrimitiveCounterIndex(key.argumentExpression)
+            || !/^(java\.util\.)?(List|ArrayList)<String>$/.test(this.javaDeclaredTypeOf(key.expression) ?? '')) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (!keyText.startsWith('(') || keyText.includes('Helpers.')) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        return this.javaNullGuardedGet(target, keyText, keyText);
+    }
+
+    // `m[d['k']]` on a declared Map, d a declared Map name: the key is d's side-effect-free get (any
+    // value), so it prints twice; the helper answers null unless the key is a String, then the get
+    javaMapLiteralKeyedMapRead(node): string | undefined {
+        const key = node.argumentExpression;
+        if (!isElementAccessExpression(key) || !isStringLiteralLikeNode(key.argumentExpression)
+            || !isIdentifier(key.expression) || !this.javaDeclaredMapReceiver(key.expression)) {
+            return undefined;
+        }
+        const keyText = this.printNode(key, 0);
+        if (keyText.includes('Helpers.') || keyText.includes('->')) {
+            return undefined;
+        }
+        const target = this.printNode(node.expression, 0);
+        return `(${target} == null || !(${keyText} instanceof String) ? null : ${target}.get(${keyText}))`;
+    }
+
+    // `this.<hash map field>[k as string]`: the assertion only narrows, so the null test reads the bare name
+    javaAssertedKeyMapFieldRead(receiver, key): string | undefined {
+        const name = receiver?.name?.text;
+        if (typeof name !== 'string' || !Object.prototype.hasOwnProperty.call(JAVA_HASH_MAP_FIELDS, name)
+            || (!isAsExpression(key) && !isParenthesizedExpression(key))) {
+            return undefined;
+        }
+        const operand = this.unwrapParenthesized(key);
+        if (!isAsExpression(operand) || operand.type?.kind !== SyntaxKind.StringKeyword
+            || !isIdentifier(operand.expression) || !this.javaIdentifierPrintsDeclaredName(operand.expression)) {
+            return undefined;
+        }
+        const target = this.printNode(receiver, 0);
+        const read = this.javaBaseDeclaredMapCacheField(receiver) ? target : `((java.util.Map<?, ?>)${target})`;
+        return `(${this.printNode(operand.expression, 0)} == null || ${target} == null ? null : ${read}.get(${this.printNode(key, 0)}))`;
+    }
+
     // `this.<field>[k]` on a hand-written base map field (JAVA_FIELD_TYPES): the helper's Map branch is
     // the native `get`. The helper answers null for a null receiver or key, so both stay guarded; the
     // receiver and key are side-effect free. An unguarded read has no parens so a checkcast binds it.
@@ -5090,7 +5254,8 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = receiver.name?.text;
         const field = (typeof name === 'string') ? JAVA_FIELD_TYPES[name] : undefined;
         if (field === undefined || field.map !== true) {
-            return this.javaHashMapFieldReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key);
+            return this.javaHashMapFieldReadText(receiver, key) ?? this.javaPlainCacheReadText(receiver, key)
+                ?? this.javaAssertedKeyMapFieldRead(receiver, key);
         }
         const keyText = this.printNode(key, 0);
         let keyGuarded = false;
@@ -5519,21 +5684,10 @@ export class JavaTranspiler extends BaseTranspiler {
         return `${this.ARRAY_OPENING_TOKEN}${elements}${this.ARRAY_CLOSING_TOKEN}`;
     }
 
-    // literals and identifiers have nothing an array-literal wrapper could skip by dropping
-    javaArrayLiteralDropsNothing(node, depth = 0): boolean {
-        if (depth > 4) {
-            return false;
-        }
-        return node.elements.every((element) => isStringLiteral(element)
-            || isNumericLiteral(element)
-            || element.kind === SyntaxKind.TrueKeyword
-            || element.kind === SyntaxKind.FalseKeyword
-            || element.kind === SyntaxKind.NullKeyword
-            || element.kind === SyntaxKind.Identifier
-            || (isArrayLiteralExpression(element) && this.javaArrayLiteralDropsNothing(element, depth + 1)));
-    }
-
     printArrayPushCall(_node, _identation, name = undefined, parsedArg = undefined) {
+        const h30j06 = this.h30J06ListPush(_node, name, parsedArg); if (h30j06 !== undefined) return h30j06;
+        const h28j06 = this.h28J06SeededListPush(_node, name, parsedArg); if (h28j06 !== undefined) return h28j06;
+        const h27j06 = this.h27J06FutureListPush(_node, name, parsedArg); if (h27j06 !== undefined) return h27j06;
         return `((java.util.List<Object>)${name}).add(${parsedArg})`;
     }
 
@@ -5547,7 +5701,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaWsClientMapReceiver(node.expression.expression)) {
             return `${object}.remove(${key})`;
         }
-        if (this.javaBaseDeclaredMapCacheField(node.expression.expression)) {
+        if (this.javaBaseDeclaredMapCacheField(node.expression.expression) || this.javaIsOhlcvsField(node.expression.expression)) {
             return `${object}.remove(${key})`;
         }
         return `((java.util.Map<String,Object>)${object}).remove(${key})`;
@@ -6098,26 +6252,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // operand usability for `>=` / `<` / `<=`, which route through the helper's isEqual. Two integral
-    // operands are always exact; once a double is involved, toLong saturates and BigDecimal throws on
-    // ±Infinity, so a double or long is accepted only as a finite literal within ±2^53.
-    javaComparisonOperandIsExactAgainstDouble(node, kind) {
-        if (kind === 'int') {
-            return true;
-        }
-        if ((kind !== 'long' && kind !== 'double') || !isNumericLiteral(node)) {
-            return false;
-        }
-        const text = node.text;
-        if (/^[0-9]+$/.test(text)) {
-            // the text is what the printer emits, and JS Number() rounds above 2^53 —
-            // compare the literal's exact value instead
-            return BigInt(text) <= 9007199254740992n;
-        }
-        const value = Number(text);
-        return Number.isFinite(value) && Math.abs(value) <= 9007199254740992;
-    }
-
     // destructuring: [a,b] = this.method()
     printJavaArrayDestructuring(left, right, identation) {
         const arrayBindingPatternElements = left.elements;
@@ -6184,6 +6318,10 @@ export class JavaTranspiler extends BaseTranspiler {
         const lastKey = keyStrs[keyStrs.length - 1];
         const rhs     = this.printNode(right, 0);
         const keyArg  = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
+        const ohlcvsWrite = keys.length === 2 ? this.javaOhlcvsElementWrite(left, rhs) : undefined;
+        if (ohlcvsWrite !== undefined) {
+            return ohlcvsWrite;
+        }
 
         if (this.elementWriteTargetsMap(left.expression, baseExpr, keys, right)) {
             // a receiver declared as a Map already carries the type the put binds on
@@ -6328,8 +6466,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const leftKind = this.javaPrimitiveOperandKind(left);
             const rightKind = this.javaPrimitiveOperandKind(right);
             const orderingSafe = op === SyntaxKind.GreaterThanToken
-                || (leftKind !== 'double' && rightKind !== 'double')
-                || (this.javaComparisonOperandIsExactAgainstDouble(left, leftKind) && this.javaComparisonOperandIsExactAgainstDouble(right, rightKind));
+                || (leftKind !== 'double' && rightKind !== 'double');
             if (leftKind !== undefined && rightKind !== undefined && orderingSafe) {
                 return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
             }
@@ -6348,7 +6485,8 @@ export class JavaTranspiler extends BaseTranspiler {
 
             const arithmetic = this.printInlineHelperArithmetic(left, right, leftText, rightText, op)
                 ?? this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op)
-                ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op);
+                ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op)
+                ?? this.printParseToIntDoubleProduct(node, left, right, leftText, rightText, op);
             if (arithmetic !== undefined) {
                 return arithmetic;
             }
@@ -6770,6 +6908,10 @@ export class JavaTranspiler extends BaseTranspiler {
             if (this.javaBaseIntCall(node)) {
                 return 'int';
             }
+            const parse = this.javaNativeParseKind(node) ?? (this.javaBaseParseToIntCall(node) ? 'long' : undefined);
+            if (parse !== undefined) {
+                return parse;
+            }
             if (widened) {
                 return undefined;
             }
@@ -6785,6 +6927,33 @@ export class JavaTranspiler extends BaseTranspiler {
             return 'int';
         }
         return undefined;
+    }
+
+    // `parseInt(x)` / `parseFloat(x)` the printer spells Long.parseLong / Double.parseDouble /
+    // `((Number)x).longValue()`: a primitive (the parse throws before any null could reach the operator)
+    javaNativeParseKind(node): string | undefined {
+        const callee = isIdentifier(node?.expression) ? node.expression.text : undefined;
+        if (callee !== 'parseInt' && callee !== 'parseFloat') {
+            return undefined;
+        }
+        const printed = this.javaTry(() => this.printNativeScalarParse(node, callee) ?? this.printStringTypedParse(node, callee));
+        if (typeof printed !== 'string') {
+            return undefined;
+        }
+        if (callee === 'parseInt') {
+            return /^(Long\.parseLong\(|\(\(Number\))/.test(printed) ? 'long' : undefined;
+        }
+        return printed.startsWith('Double.parseDouble(') ? 'double' : undefined;
+    }
+
+    // `this.parseToInt(x)` resolving into the base Exchange: BaseExchange.java returns
+    // `Double.parseDouble(..).longValue()` boxed, which throws rather than answer null
+    javaBaseParseToIntCall(node): boolean {
+        if (this.javaThisCallName(node) !== 'parseToInt') {
+            return false;
+        }
+        const fileName = this.javaTry(() => this.javaCalleeFileName(node)) ?? '';
+        return /(^|[\\/])ts[\\/]src[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(fileName);
     }
 
     // a bare identifier the embedding layer declares `Long`/`Double` prints as a boxed numeric, but a
@@ -8353,8 +8522,41 @@ export class JavaTranspiler extends BaseTranspiler {
         return `(${name} == null ? null : ${cast}.${method}(${argumentsText}))`;
     }
 
-    printReplaceCall(_node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
+    // a never-null Java String argument: a string literal, or a `+` with a string-literal side that
+    // printed as javac concat (not Helpers.add)
+    javaReplaceNonNullStringArgument(node, printed): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || isStringLiteral(n)) {
+            return n !== undefined;
+        }
+        return isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken
+            && (isStringLiteral(this.unwrapParenthesized(n.left)) || isStringLiteral(this.unwrapParenthesized(n.right)))
+            && typeof printed === 'string' && printed.startsWith('(') && !printed.startsWith('((');
+    }
+
+    // `s.replace (a, b)` on a String-declared local: Helpers.replace is a literal first-occurrence
+    // replace with null -> null on the receiver; both arguments must be never-null Strings
+    javaNativeStringReplaceCall(node, name, parsedArg, parsedArg2): string | undefined {
+        const receiver = isPropertyAccessExpression(node?.expression) ? node.expression.expression : undefined;
+        const args = node?.arguments;
+        if (receiver === undefined || !isIdentifier(receiver) || args?.length !== 2 || name !== receiver.text
+            || this.javaDeclaredStringType(receiver) !== true
+            || !this.javaReplaceNonNullStringArgument(args[0], parsedArg) || !this.javaReplaceNonNullStringArgument(args[1], parsedArg2)) {
+            return undefined;
+        }
+        // two literals are the embedding layer's literal-replace passes
+        if (isStringLiteral(this.unwrapParenthesized(args[0])) && isStringLiteral(this.unwrapParenthesized(args[1]))) {
+            return undefined;
+        }
+        const plain = (arg, chars) => isStringLiteral(this.unwrapParenthesized(arg)) && !chars.test(this.unwrapParenthesized(arg).text);
+        const pattern = plain(args[0], /[\\^$.|?*+()[\]{}]/) ? parsedArg : `java.util.regex.Pattern.quote(${parsedArg})`;
+        const replacement = plain(args[1], /[$\\]/) ? parsedArg2 : `java.util.regex.Matcher.quoteReplacement(${parsedArg2})`;
+        return `(${name} == null ? null : ((String)${name}).replaceFirst(${pattern}, ${replacement}))`;
+    }
+
+    printReplaceCall(node, _identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
+        return this.javaNativeStringReplaceCall(node, name, parsedArg, parsedArg2)
+            ?? `Helpers.replace((String)${name}, (String)${parsedArg}, (String)${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -8469,6 +8671,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 return this.javaSliceBoundExpression(value, length);
             }
             const t = bounds[0].text;
+            if (this.javaSliceNonNegativeBound(args[0])) {
+                return `Math.min(${t}, ${length})`;
+            }
             return `Math.min(Math.max(${t} < 0 ? ${length} + ${t} : ${t}, 0), ${length})`;
         };
         // the end clamps to the length but, like the helper, may land below 0 (both forms then throw)
@@ -8480,7 +8685,13 @@ export class JavaTranspiler extends BaseTranspiler {
             if (value !== undefined) {
                 return `${length} - ${-value}`;
             }
+            if (this.javaSliceIsOwnLength(args[1], receiver)) {
+                return length;
+            }
             const t = bounds[1].text;
+            if (this.javaSliceNonNegativeBound(args[1])) {
+                return `Math.min(${t}, ${length})`;
+            }
             return `Math.min(${t} < 0 ? ${length} + ${t} : ${t}, ${length})`;
         };
         const open = args.length === 1;
@@ -8494,6 +8705,55 @@ export class JavaTranspiler extends BaseTranspiler {
         // an open-end form shares its line with the surrounding expression: keep it short
         const budget = open ? 200 : Math.max(220, 392 - identation * 4 - 50);
         return full.length > budget ? undefined : full;
+    }
+
+    // a slice bound that can never be negative: the helper's count-from-the-end branch is dead, so
+    // the native form only clamps it to the length (`x.length`, `++` counters from a literal >= 0,
+    // non-negative literals, `+`/`*` of those, and const locals initialised to one of them)
+    javaSliceNonNegativeBound(node, depth = 0): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || depth > 4) {
+            return false;
+        }
+        switch (n.kind) {
+        case SyntaxKind.NumericLiteral:
+            return !/[.eE]/.test(n.text) && Number(n.text) <= 2147483647;
+        case SyntaxKind.PropertyAccessExpression:
+            return n.name?.text === 'length' && this.javaLengthIntRead(n);
+        case SyntaxKind.BinaryExpression: {
+            const op = n.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.AsteriskToken)
+                && this.javaSliceNonNegativeBound(n.left, depth + 1) && this.javaSliceNonNegativeBound(n.right, depth + 1);
+        }
+        case SyntaxKind.Identifier: {
+            const declaration: any = this.javaDeclarationOfIdentifier(n);
+            if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration) {
+                return false;
+            }
+            const forStatement = this.javaForCounterStatement(declaration);
+            if (forStatement !== undefined) {
+                const symbol = this.getChecker().getSymbolAtLocation(n);
+                const start = this.javaSliceLiteralBound(declaration.initializer);
+                const step = forStatement.incrementor;
+                return start !== undefined && start >= 0 && step?.kind === SyntaxKind.PostfixUnaryExpression
+                    && step.operator === SyntaxKind.PlusPlusToken && isIdentifier(step.operand) && step.operand.text === n.text
+                    && this.javaCounterHasNoBoxWrite(n, symbol);
+            }
+            const list = declaration.parent;
+            return list !== undefined && (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== 0
+                && declaration.initializer !== undefined && this.javaSliceNonNegativeBound(declaration.initializer, depth + 1);
+        }
+        default:
+            return false;
+        }
+    }
+
+    // `s.slice (a, s.length)`: the end bound is the receiver's own length, which is its clamped value
+    javaSliceIsOwnLength(node, receiver): boolean {
+        const n = this.unwrapParenthesized(node);
+        const r = this.unwrapParenthesized(receiver);
+        return n !== undefined && r !== undefined && n.kind === SyntaxKind.PropertyAccessExpression && n.name?.text === 'length'
+            && isIdentifier(r) && isIdentifier(n.expression) && n.expression.text === r.text && this.javaLengthIntRead(n);
     }
 
     // `x.replaceAll (literal, replacement)` -> String.replace for a plain-string replacement
@@ -8709,6 +8969,10 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printPromiseAllCall(node, identation, parsedArg = undefined) {
+        const h30j06 = this.h30J06ListJoin(node); if (h30j06 !== undefined) return h30j06;
+        const h29j06 = this.h29J06LiteralJoin(node); if (h29j06 !== undefined) return h29j06;
+        const h28j06 = this.h28J06SeededListJoin(node); if (h28j06 !== undefined) return h28j06;
+        const h27j06 = this.h27J06FutureListJoin(node); if (h27j06 !== undefined) return h27j06;
         return this.printNativePromiseAllCall(node) ?? this.printJavaPromiseAllStream(node, parsedArg) ?? `Helpers.promiseAll(${parsedArg})`;
     }
 
@@ -8978,7 +9242,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // a side-effect-free array literal prints as a fresh ArrayList (never null), so the
         // answer is true without evaluating anything the helper would have to keep
         if (isArrayLiteralExpression(operand)) {
-            return this.javaArrayLiteralDropsNothing(operand) ? 'true' : undefined;
+            return undefined;
         }
         // a primary print only: `instanceof` binds tighter than low-precedence operators, and a
         // constructor or cast print can be a final class on which `instanceof List` does not compile
@@ -10229,4 +10493,702 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return parts;
     }
+
+    // ===== h26-J08
+    // `this.parseToInt (a * b)` (base) with a double operand: parseToInt reads its argument through
+    // numberToString, so Helpers.multiply's Long re-box of an integral product prints the same digits
+    // as the native double; a null box keeps the helper's null (parseToInt(null) throws either way)
+    printParseToIntDoubleProduct(node, left, right, leftText: string, rightText: string, op): string | undefined {
+        if (op !== SyntaxKind.AsteriskToken || !this.javaProductFeedsBaseParseToInt(node)) {
+            return undefined;
+        }
+        const kindOf = (operand, text: string) => this.javaDeclaredBoxOperandKind(operand, text)
+            ?? (isCallExpression(operand) && this.javaNativeParseKind(operand) === 'double' ? 'doubleprim' : undefined);
+        const kinds = [kindOf(left, leftText), kindOf(right, rightText)];
+        if (kinds.some((kind) => kind === undefined) || !kinds.some((kind) => kind === 'doublebox' || kind === 'doubleprim')) {
+            return undefined;
+        }
+        const texts = [leftText.trim(), rightText.trim()];
+        const asDouble = (i: number) => (kinds[i].startsWith('double') ? texts[i] : `((double) ${texts[i]})`);
+        const expression = `(${asDouble(0)} * ${asDouble(1)})`;
+        const boxes = kinds.map((kind, i) => (kind.endsWith('box') ? texts[i] : undefined))
+            .filter((text, i, all) => text !== undefined && all.indexOf(text) === i);
+        return boxes.length === 0 ? expression : `((${boxes.map((box) => `${box} == null`).join(' || ')}) ? null : ${expression})`;
+    }
+
+    javaProductFeedsBaseParseToInt(node): boolean {
+        let child = node;
+        let parent = node?.parent;
+        while (parent !== undefined && isParenthesizedExpression(parent)) {
+            child = parent;
+            parent = parent.parent;
+        }
+        return parent?.kind === SyntaxKind.CallExpression && parent.arguments?.length === 1
+            && parent.arguments[0] === child && this.javaBaseParseToIntCall(parent);
+    }
+
+    // ===== h27-J06
+    h27J06Cache: WeakMap<any, boolean>;
+    // `const ps = []` used only as `ps.push (<checker-typed Promise>)` statements and `await Promise.all (ps)`:
+    // every element is a future (javac checks the typed add), so the join needs no filter or element cast
+    h27J06FutureList(declaration): boolean {
+        this.h27J06Cache ??= new WeakMap<any, boolean>();
+        if (!this.h27J06Cache.has(declaration)) {
+            let ok = false;
+            try {
+                ok = this.h27J06FutureListProof(declaration);
+            } catch (e) {
+                ok = false;
+            }
+            this.h27J06Cache.set(declaration, ok);
+        }
+        return this.h27J06Cache.get(declaration);
+    }
+
+    h27J06FutureListProof(declaration): boolean {
+        const list = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !isArrayLiteralExpression(declaration.initializer) || declaration.initializer.elements.length !== 0
+            || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (JAVA_TEST_TIER_FILES.test(fileName)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return false;
+        }
+        let pushes = 0;
+        let joins = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            const parent = current.parent;
+            const call = parent?.parent;
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'push'
+                && isCallExpression(call) && call.expression === parent && call.arguments.length === 1
+                && isExpressionStatement(call.parent) && !isSpreadElement(call.arguments[0])
+                && this.isPromiseType(checker.getTypeAtLocation(call.arguments[0]))) {
+                pushes++;
+                return false;
+            }
+            if (isCallExpression(parent) && parent.arguments.length === 1 && parent.arguments[0] === current
+                && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+                && parent.expression.expression.text === 'Promise' && parent.expression.name.text === 'all'
+                && parent.parent?.kind === SyntaxKind.AwaitExpression) {
+                joins++;
+                return false;
+            }
+            return true;
+        });
+        return !rejected && pushes > 0 && joins > 0;
+    }
+
+    h27J06Declaration(identifier) {
+        if (identifier === undefined || !isIdentifier(identifier)) {
+            return undefined;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
+        return declaration !== undefined && this.h27J06FutureList(declaration) ? declaration : undefined;
+    }
+
+    h27J06FutureListDeclaration(declaration, indent: string): string | undefined {
+        if (declaration === undefined || !this.h27J06FutureList(declaration)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        return `${indent}java.util.List<${future}<?>> ${this.printNode(declaration.name, 0)} = new java.util.ArrayList<${future}<?>>()`;
+    }
+
+    h27J06FutureListPush(node, name, parsedArg): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (parsedArg === undefined || this.h27J06Declaration(receiver) === undefined || name !== receiver.text) {
+            return undefined;
+        }
+        return `${name}.add(${parsedArg})`;
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h27J06FutureListJoin(node): string | undefined {
+        const argument = node?.arguments?.[0];
+        if (node?.parent?.kind !== SyntaxKind.AwaitExpression || this.h27J06Declaration(argument) === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const list = this.printNode(argument, 0);
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h27-J06
+    // ===== h28-J06
+    h28J06Cache: WeakMap<any, boolean>;
+    // `const ps = [ call (), .. ]` whose seeds are direct calls the checker types Promise, used only as
+    // `ps.push (<Promise-typed call>)` statements and `await Promise.all (ps)`: every element is a future
+    h28J06SeededList(declaration): boolean {
+        this.h28J06Cache ??= new WeakMap<any, boolean>();
+        if (!this.h28J06Cache.has(declaration)) {
+            let ok = false;
+            try {
+                ok = this.h28J06SeededListProof(declaration);
+            } catch (e) {
+                ok = false;
+            }
+            this.h28J06Cache.set(declaration, ok);
+        }
+        return this.h28J06Cache.get(declaration);
+    }
+
+    h28J06SeededListProof(declaration): boolean {
+        const list = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !isArrayLiteralExpression(declaration.initializer) || declaration.initializer.elements.length === 0
+            || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (JAVA_TEST_TIER_FILES.test(fileName)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        const futureCall = (element) => isCallExpression(element) && this.isPromiseType(checker.getTypeAtLocation(element));
+        if (!(declaration.initializer.elements as unknown as Expression[]).every(futureCall)) {
+            return false;
+        }
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return false;
+        }
+        let joins = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            const parent = current.parent;
+            const call = parent?.parent;
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'push'
+                && isCallExpression(call) && call.expression === parent && call.arguments.length === 1
+                && isExpressionStatement(call.parent) && futureCall(call.arguments[0])) {
+                return false;
+            }
+            if (isCallExpression(parent) && parent.arguments.length === 1 && parent.arguments[0] === current
+                && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+                && parent.expression.expression.text === 'Promise' && parent.expression.name.text === 'all'
+                && parent.parent?.kind === SyntaxKind.AwaitExpression) {
+                joins++;
+                return false;
+            }
+            return true;
+        });
+        return !rejected && joins > 0;
+    }
+
+    h28J06Declaration(identifier) {
+        if (identifier === undefined || !isIdentifier(identifier)) {
+            return undefined;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
+        return declaration !== undefined && this.h28J06SeededList(declaration) ? declaration : undefined;
+    }
+
+    h28J06SeededListDeclaration(declaration, indent: string): string | undefined {
+        if (declaration === undefined || !this.h28J06SeededList(declaration)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const seeds = (declaration.initializer.elements as unknown as Expression[]).map((element) => this.printNode(element, 0).trim());
+        return `${indent}java.util.List<${future}<?>> ${this.printNode(declaration.name, 0)} = `
+            + `new java.util.ArrayList<${future}<?>>(java.util.Arrays.<${future}<?>>asList(${seeds.join(', ')}))`;
+    }
+
+    h28J06SeededListPush(node, name, parsedArg): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (parsedArg === undefined || this.h28J06Declaration(receiver) === undefined || name !== receiver.text) {
+            return undefined;
+        }
+        return `${name}.add(${parsedArg})`;
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h28J06SeededListJoin(node): string | undefined {
+        const argument = node?.arguments?.[0];
+        if (node?.parent?.kind !== SyntaxKind.AwaitExpression || this.h28J06Declaration(argument) === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const list = this.printNode(argument, 0);
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h28-J06
+
+    // ===== h29-J04
+    // `const c: Dict = {}` whose only uses are `k in c`, `c[k] = { .. }` (a fresh non-null map),
+    // `const e = c[k]` row locals, `Object.keys (c)` and plain call arguments: every value is a row
+    // map, so c prints `Map<String, Map<String, Object>>` and its row reads need no cast
+    h29J04RowContainer(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !declaration.initializer || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const init = this.unwrapPrintTransparentExpression(declaration.initializer);
+        if (!isObjectLiteralExpression(init) || init.properties.length !== 0) {
+            return false;
+        }
+        return this.javaMemo(this.h29J04ContainerCache, declaration, () => this.javaTry(() => this.h29J04ContainerUsesOk(declaration), false));
+    }
+
+    h29J04ContainerCache: WeakMap<Node, boolean | typeof JAVA_MEMO_UNDEFINED> = new WeakMap();
+
+    h29J04ContainerUsesOk(declaration): boolean {
+        const checker: any = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || !scope) {
+            return false;
+        }
+        let uses = 0;
+        const bad = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            uses++;
+            return !this.h29J04ContainerUseOk(current);
+        });
+        return !bad && uses > 0;
+    }
+
+    h29J04ContainerUseOk(node): boolean {
+        const parent: any = node.parent;
+        const h30j04 = this.h30J04FieldStoreUse(node); if (h30j04 !== undefined) return h30j04;
+        if (isBinaryExpression(parent) && parent.right === node && parent.operatorToken.kind === SyntaxKind.InKeyword) {
+            return true;
+        }
+        if (isCallExpression(parent) && parent.arguments.includes(node)) {
+            // Object.keys (c) or a `this.m (c, ..)` call taking it as an Object argument
+            const callee = parent.expression;
+            return isPropertyAccessExpression(callee)
+                && ((isIdentifier(callee.expression) && callee.expression.text === 'Object' && callee.name.text === 'keys')
+                    || (callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeDict'));
+        }
+        if (!isElementAccessExpression(parent) || parent.expression !== node) {
+            return false;
+        }
+        const grand: any = parent.parent;
+        if (isBinaryExpression(grand) && grand.left === parent) {
+            return grand.operatorToken.kind === SyntaxKind.EqualsToken
+                && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(grand.right));
+        }
+        // any other read hands out the stored row map (or null) as an Object value
+        return grand?.kind !== SyntaxKind.DeleteExpression && !(isBinaryExpression(grand) && grand.left === parent)
+            && !isPostfixUnaryExpression(grand) && !isPrefixUnaryExpression(grand);
+    }
+
+    // `const e = c[k]` right after `if (!(k in c)) { c[k] = { .. }; }`: e is the stored non-null
+    // row map (k is the same name, nothing runs in between), and e is only read or written by key
+    h29J04RowLocal(declaration): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !declaration.initializer || !isVariableDeclarationList(declaration.parent)
+            || (declaration.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const read = declaration.initializer;
+        if (!isElementAccessExpression(read) || !isIdentifier(read.expression) || !isIdentifier(read.argumentExpression)) {
+            return false;
+        }
+        const statement = declaration.parent.parent;
+        const block = statement?.parent;
+        if (statement?.kind !== SyntaxKind.VariableStatement || !block || !isBlock(block)) {
+            return false;
+        }
+        const index = (block.statements as readonly any[]).indexOf(statement);
+        const guard: any = index > 0 ? block.statements[index - 1] : undefined;
+        if (!this.h29J04SeedGuard(guard, read.expression.text, read.argumentExpression.text)) {
+            return false;
+        }
+        const container = this.javaDeclarationOfIdentifier(read.expression);
+        if (container === undefined || !isVariableDeclaration(container) || this.javaFunctionOrFile(container) !== this.javaFunctionOrFile(declaration)) {
+            return false;
+        }
+        const init = container.initializer ? this.unwrapPrintTransparentExpression(container.initializer) : undefined;
+        if (!init || !isObjectLiteralExpression(init) || init.properties.length !== 0
+            || (container.parent.flags & NodeFlags.Const) === 0) {
+            return false;
+        }
+        return this.javaLocalUsesKeepContainerType(declaration.name)
+            && this.h29J04RowContainer(container);
+    }
+
+    // `if (!(k in c)) { c[k] = { .. }; }` with no else
+    h29J04SeedGuard(guard, containerName: string, keyName: string): boolean {
+        if (!guard || !isIfStatement(guard) || guard.elseStatement !== undefined) {
+            return false;
+        }
+        let test: any = guard.expression;
+        if (!isPrefixUnaryExpression(test) || test.operator !== SyntaxKind.ExclamationToken) {
+            return false;
+        }
+        test = this.unwrapParenthesized(test.operand);
+        if (!isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.InKeyword
+            || !isIdentifier(test.left) || test.left.text !== keyName || !isIdentifier(test.right) || test.right.text !== containerName) {
+            return false;
+        }
+        const body: any = guard.thenStatement;
+        const only: any = isBlock(body) ? (body.statements.length === 1 ? body.statements[0] : undefined) : body;
+        const write: any = only && isExpressionStatement(only) ? only.expression : undefined;
+        return !!write && isBinaryExpression(write) && write.operatorToken.kind === SyntaxKind.EqualsToken
+            && isElementAccessExpression(write.left) && isIdentifier(write.left.expression) && write.left.expression.text === containerName
+            && isIdentifier(write.left.argumentExpression) && write.left.argumentExpression.text === keyName
+            && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(write.right));
+    }
+
+    h29J04RowMapDeclaration(declaration, indent: string): string | undefined {
+        const row = 'Map<String, Object>';
+        if (this.h29J04RowLocal(declaration)) {
+            return `${indent}${row} ${this.printNode(declaration.name, 0)} = ${this.printNode(declaration.initializer, 0).trim()}`;
+        }
+        if (!this.h29J04RowContainer(declaration)) {
+            return undefined;
+        }
+        return `${indent}java.util.Map<String, ${row}> ${this.printNode(declaration.name, 0)} = new java.util.HashMap<String, ${row}>()`;
+    }
+    // ===== end h29-J04
+    // ===== h29-J06
+    h29J06Lists: WeakMap<any, string>;
+    h29J06Busy: boolean;
+
+    // `const x = await Promise.all ([c1, .., cn])` with every element a call the checker types Promise:
+    // the calls go into a typed future list statement first (each runs once, in order), then the join
+    h29J06LiteralCall(declaration) {
+        const awaited = declaration?.initializer;
+        const call = awaited?.kind === SyntaxKind.AwaitExpression ? awaited.expression : undefined;
+        const literal = call?.arguments?.[0];
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || call.expression.name.text !== 'all'
+            || !isArrayLiteralExpression(literal) || literal.elements.length === 0) {
+            return undefined;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (!/(^|\/)ts\/src\//.test(fileName) || JAVA_TEST_TIER_FILES.test(fileName)) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        const ok = (literal.elements as unknown as Expression[]).every((e) => isCallExpression(e) && this.isPromiseType(checker.getTypeAtLocation(e)));
+        return ok ? call : undefined;
+    }
+
+    h29J06LiteralJoinDeclaration(node, declaration, identation, indent: string): string | undefined {
+        if (this.h29J06Busy || node.declarations.length !== 1) {
+            return undefined;
+        }
+        let call;
+        try {
+            call = this.h29J06LiteralCall(declaration);
+        } catch (e) {
+            call = undefined;
+        }
+        if (call === undefined) {
+            return undefined;
+        }
+        const base = isIdentifier(declaration.name) ? declaration.name.text
+            : declaration.name.kind === SyntaxKind.ArrayBindingPattern ? declaration.name.elements.map((e: any) => e.name?.text ?? '').join('') : undefined;
+        const name = `${base}Futures`;
+        if (base === undefined || base === '' || new RegExp(`\\b${name}\\b`).test(declaration.getSourceFile().text)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const calls = call.arguments[0].elements.map((e) => this.printNode(e, 0).trim());
+        const statement = `${indent}java.util.List<${future}<?>> ${name} = `
+            + `new java.util.ArrayList<${future}<?>>(java.util.Arrays.<${future}<?>>asList(${calls.join(', ')}));\n`;
+        this.h29J06Lists ??= new WeakMap<any, string>();
+        this.h29J06Lists.set(call, name);
+        this.h29J06Busy = true;
+        try {
+            return statement + this.printVariableDeclarationList(node, identation);
+        } finally {
+            this.h29J06Busy = false;
+        }
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h29J06LiteralJoin(node): string | undefined {
+        const list = this.h29J06Lists?.get(node);
+        if (list === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h29-J06
+    // ===== h30-J04
+    // `this.f = c;` with f declared `Dict` / `Dictionary<any>`, as the last use of a row container c, in the
+    // block that declares c: the field takes a fresh `Map<String, Object>` holding the same row maps,
+    // and nothing observes the container afterwards, so the copy answers as the alias did
+    h30J04FieldStore(statement): any {
+        if (statement === undefined || !isExpressionStatement(statement)) {
+            return undefined;
+        }
+        const assign: any = statement.expression;
+        if (!isBinaryExpression(assign) || assign.operatorToken.kind !== SyntaxKind.EqualsToken
+            || !isPropertyAccessExpression(assign.left) || assign.left.expression.kind !== SyntaxKind.ThisKeyword
+            || !isIdentifier(assign.right)) {
+            return undefined;
+        }
+        const checker: any = this.getChecker();
+        const field = checker.getSymbolAtLocation(assign.left.name);
+        const fieldDeclaration: any = field?.valueDeclaration?.resolve() ?? field?.declarations?.[0]?.resolve();
+        if (!this.h30J04DictTypeNode(fieldDeclaration?.type)) {
+            return undefined;
+        }
+        const symbol = checker.getSymbolAtLocation(assign.right);
+        const declaration: any = symbol?.valueDeclaration?.resolve();
+        if (declaration === undefined || !isVariableDeclaration(declaration)
+            || declaration.parent?.parent?.parent !== statement.parent) {
+            return undefined;
+        }
+        const scope = this.javaFunctionOrFile(declaration);
+        const later = this.javaTreeSome(scope, (current) => (isIdentifier(current) && current.pos >= statement.end
+            && checker.getSymbolAtLocation(current) === symbol) || undefined);
+        return later ? undefined : { assign, declaration };
+    }
+
+    h30J04DictTypeNode(type): boolean {
+        if (type?.kind === SyntaxKind.UnionType) {
+            const kept = type.types.filter((t) => t.kind !== SyntaxKind.UndefinedKeyword
+                && !(t.kind === SyntaxKind.LiteralType && t.literal?.kind === SyntaxKind.NullKeyword));
+            return kept.length === 1 && this.h30J04DictTypeNode(kept[0]);
+        }
+        if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName)) {
+            return false;
+        }
+        const args = type.typeArguments ?? [];
+        return (type.typeName.text === 'Dict' && args.length === 0)
+            || (type.typeName.text === 'Dictionary' && args.length === 1 && args[0].kind === SyntaxKind.AnyKeyword);
+    }
+
+    h30J04FieldStoreUse(node): boolean | undefined {
+        const store = this.h30J04FieldStore(node.parent?.parent);
+        return store !== undefined && store.assign.right === node ? true : undefined;
+    }
+
+    h30J04FieldStoreStatement(node, identation): string | undefined {
+        const store = this.h30J04FieldStore(node);
+        if (store === undefined || !this.h29J04RowContainer(store.declaration)) {
+            return undefined;
+        }
+        const left = this.printNode(store.assign.left, 0).trim();
+        const right = this.printNode(store.assign.right, 0).trim();
+        return this.printNodeCommentsIfAny(node, identation,
+            `${this.getIden(identation)}${left} = new java.util.HashMap<String, Object>(${right})${this.LINE_TERMINATOR}`);
+    }
+    // ===== end h30-J04
+    // ===== h30-J06
+    h30J06Cache: WeakMap<any, boolean>;
+    // `const ps = [ .. ]` of Promise-typed calls or const future locals, used only as push (Promise call),
+    // `ps.length` reads and `await Promise.all (ps)`; fires only where a `.length` or a local seed blocks h27/h28
+    h30J06List(declaration): boolean {
+        this.h30J06Cache ??= new WeakMap<any, boolean>();
+        if (!this.h30J06Cache.has(declaration)) {
+            let ok = false;
+            try {
+                ok = this.h30J06ListProof(declaration);
+            } catch (e) {
+                ok = false;
+            }
+            this.h30J06Cache.set(declaration, ok);
+        }
+        return this.h30J06Cache.get(declaration);
+    }
+
+    h30J06FutureCall(element): boolean {
+        return isCallExpression(element) && this.isPromiseType(this.getChecker().getTypeAtLocation(element));
+    }
+
+    // a const local initialised by a Promise-typed call whose only use is one seed of `list`
+    h30J06SeedLocal(element, list): boolean {
+        if (!isIdentifier(element)) {
+            return false;
+        }
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(element);
+        const declaration = symbol?.valueDeclaration?.resolve();
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !this.h30J06FutureCall(declaration.initializer) || !isVariableDeclarationList(declaration.parent)
+            || declaration.parent.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const scope = this.javaFunctionOrFile(declaration);
+        if (scope === undefined || scope !== this.javaFunctionOrFile(list)) {
+            return false;
+        }
+        let uses = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            uses++;
+            return current !== element;
+        });
+        return !rejected && uses === 1;
+    }
+
+    h30J06ListProof(declaration): boolean {
+        const list = declaration?.parent;
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
+            || !isArrayLiteralExpression(declaration.initializer)
+            || !isVariableDeclarationList(list) || list.declarations.length !== 1
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== NodeFlags.Const) {
+            return false;
+        }
+        const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        if (JAVA_TEST_TIER_FILES.test(fileName)) {
+            return false;
+        }
+        const elements = declaration.initializer.elements as unknown as Expression[];
+        let seeds = 0;
+        for (const element of elements) {
+            if (this.h30J06SeedLocal(element, declaration)) {
+                seeds++;
+            } else if (!this.h30J06FutureCall(element)) {
+                return false;
+            }
+        }
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return false;
+        }
+        let pushes = 0;
+        let joins = 0;
+        let lengths = 0;
+        const rejected = this.javaTreeSome(scope, (current) => {
+            if (!isIdentifier(current) || current === declaration.name || checker.getSymbolAtLocation(current) !== symbol) {
+                return undefined;
+            }
+            const parent = current.parent;
+            const call = parent?.parent;
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'push'
+                && isCallExpression(call) && call.expression === parent && call.arguments.length === 1
+                && isExpressionStatement(call.parent) && this.h30J06FutureCall(call.arguments[0])) {
+                pushes++;
+                return false;
+            }
+            if (isPropertyAccessExpression(parent) && parent.expression === current && parent.name.text === 'length'
+                && isVariableDeclaration(call) && call.initializer === parent) {
+                lengths++;
+                return false;
+            }
+            if (isCallExpression(parent) && parent.arguments.length === 1 && parent.arguments[0] === current
+                && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+                && parent.expression.expression.text === 'Promise' && parent.expression.name.text === 'all'
+                && parent.parent?.kind === SyntaxKind.AwaitExpression) {
+                joins++;
+                return false;
+            }
+            return true;
+        });
+        return !rejected && joins > 0 && (elements.length > 0 || pushes > 0) && (lengths > 0 || seeds > 0);
+    }
+
+    h30J06ListDeclarationOf(identifier) {
+        if (identifier === undefined || !isIdentifier(identifier)) {
+            return undefined;
+        }
+        const declaration = this.getChecker().getSymbolAtLocation(identifier)?.valueDeclaration?.resolve();
+        return declaration !== undefined && this.h30J06List(declaration) ? declaration : undefined;
+    }
+
+    h30J06Declaration(declaration, indent: string): string | undefined {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const name = this.printNode(declaration.name, 0);
+        if (this.h30J06List(declaration)) {
+            const seeds = ((declaration.initializer as any).elements as Expression[]).map((element) => this.printNode(element, 0).trim());
+            const init = seeds.length === 0 ? '' : `java.util.Arrays.<${future}<?>>asList(${seeds.join(', ')})`;
+            return `${indent}java.util.List<${future}<?>> ${name} = new java.util.ArrayList<${future}<?>>(${init})`;
+        }
+        const seedOf = declaration.initializer !== undefined && isCallExpression(declaration.initializer)
+            ? this.h30J06SeedListOf(declaration) : undefined;
+        if (seedOf !== undefined) {
+            return `${indent}${future}<?> ${name} = ${this.printNode(declaration.initializer, 0).trim()}`;
+        }
+        return undefined;
+    }
+
+    // the h30 list whose literal holds the only use of this future local
+    h30J06SeedListOf(declaration) {
+        const checker = this.getChecker();
+        const symbol = checker.getSymbolAtLocation(declaration.name);
+        const scope = this.javaFunctionOrFile(declaration);
+        if (symbol === undefined || scope === undefined) {
+            return undefined;
+        }
+        let found;
+        this.javaTreeSome(scope, (current) => {
+            if (isIdentifier(current) && current !== declaration.name && checker.getSymbolAtLocation(current) === symbol) {
+                found = current;
+                return true;
+            }
+            return undefined;
+        });
+        const literal = found?.parent;
+        if (literal === undefined || !isArrayLiteralExpression(literal) || !isVariableDeclaration(literal.parent)
+            || literal.parent.initializer !== literal || !this.h30J06List(literal.parent)) {
+            return undefined;
+        }
+        return this.h30J06SeedLocal(found, literal.parent) ? literal.parent : undefined;
+    }
+
+    h30J06ListPush(node, name, parsedArg): string | undefined {
+        const receiver = node?.expression?.expression;
+        if (parsedArg === undefined || this.h30J06ListDeclarationOf(receiver) === undefined || name !== receiver.text) {
+            return undefined;
+        }
+        return `${name}.add(${parsedArg})`;
+    }
+
+    // allOf waits for every future, then the values are read in list order (the helper's answer)
+    h30J06ListJoin(node): string | undefined {
+        const argument = node?.arguments?.[0];
+        if (node?.parent?.kind !== SyntaxKind.AwaitExpression || this.h30J06ListDeclarationOf(argument) === undefined) {
+            return undefined;
+        }
+        const future = 'java.util.concurrent.CompletableFuture';
+        const list = this.printNode(argument, 0);
+        return `${future}.allOf(${list}.toArray(new ${future}<?>[0])).thenApply((promiseAllDone) -> `
+            + `new java.util.ArrayList<Object>(${list}.stream().<Object>map(${future}::join).toList()))`;
+    }
+    // ===== end h30-J06
+}
+
+// `this.parseNumber ('0.0025')` inside a `tiers` row is a constant: BaseExchange.parseNumber returns the
+// Double of Double.parseDouble(text), which is the correctly rounded value the Java literal `0.0025`
+// autoboxes to; whole texts print `100.0` so the box stays a Double, never an Integer
+function javaFeeTierLiteral(node: any): string | undefined {
+    const arg = node?.arguments?.[0];
+    if ((node?.kind !== SyntaxKind.CallExpression) || (node.arguments.length !== 1) || (arg.kind !== SyntaxKind.StringLiteral)
+        || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (node.expression.name?.text !== "parseNumber") || !/^-?\d+(\.\d+)?$/.test(arg.text)) { return undefined; }
+    let n = node.parent;
+    if (n?.kind !== SyntaxKind.ArrayLiteralExpression) { return undefined; }
+    while ((n !== undefined) && (n.kind === SyntaxKind.ArrayLiteralExpression || n.kind === SyntaxKind.PropertyAssignment || n.kind === SyntaxKind.ObjectLiteralExpression)) {
+        if ((n.kind === SyntaxKind.PropertyAssignment) && (n.name?.text === "tiers")) {
+            return arg.text.includes(".") ? arg.text : arg.text + ".0";
+        }
+        n = n.parent;
+    }
+    return undefined;
 }
