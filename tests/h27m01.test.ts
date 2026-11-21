@@ -64,7 +64,7 @@ describe ('h27m01: market rows bound typed only where every use is a native fiel
     });
     test ('negative: a field stored into a request map keeps the map', () => {
         const go = print (fn ('symbol: string', '        const market = this.market (symbol);\n        const r = { "pair": market["id"] };\n        return r;\n'));
-        expect (go).not.toContain ('var market MarketInterface');
+        expect (go).toContain ('if market.Id != nil {\n\t\tr["pair"] = *market.Id\n\t}');
         expect (go).not.toContain ('ToMap(');
     });
     test ('negative: a nil-tested binder keeps the map and its nil answer', () => {

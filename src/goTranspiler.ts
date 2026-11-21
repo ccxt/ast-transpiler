@@ -55592,3 +55592,79 @@ GoTranspiler.prototype.h29m02AccessorDeclaration = function (call: any) {
     };
 }
 // ===== end h29-M02
+// ===== h29-M01
+export interface GoTranspiler {
+    h29m01EntryUse(n: any): { field: string, statement: any, target: any, key: string } | undefined;
+    h29m01Pending: Map<any, Map<any, string>> | undefined;
+}
+// a typed-binder `*string` field as an entry of `const x = { 'k': m['f'], .. }` (a local map literal): the entry
+// prints `nil` and `if m.F != nil { x["k"] = *m.F }` follows the statement, so the key is present with an
+// untyped nil exactly when the map read gave nil; nothing can read the literal before the store
+GoTranspiler.prototype.h29m01EntryUse = function (n: any) {
+    const access: any = n?.parent;
+    if ((n?.kind !== SyntaxKind.Identifier) || (access?.kind !== SyntaxKind.ElementAccessExpression) || (access.expression !== n)
+        || (access.argumentExpression?.kind !== SyntaxKind.StringLiteral)) {
+        return undefined;
+    }
+    const field = access.argumentExpression.text;
+    const table = this.goTypedRowTable(n, field);
+    const entry = (table !== undefined) && Object.prototype.hasOwnProperty.call(table, field) ? table[field] : undefined;
+    if (!Array.isArray(entry) || (entry[1] !== '*string')) {
+        return undefined;
+    }
+    const property: any = access.parent;
+    const literal: any = property?.parent;
+    const declaration: any = literal?.parent;
+    const list: any = declaration?.parent;
+    const statement: any = list?.parent;
+    const parentKind = statement?.parent?.kind;
+    if ((property?.kind !== SyntaxKind.PropertyAssignment) || (property.initializer !== access)
+        || ((property.name?.kind !== SyntaxKind.StringLiteral) && (property.name?.kind !== SyntaxKind.Identifier))
+        || (literal.kind !== SyntaxKind.ObjectLiteralExpression) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.initializer !== literal) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((declaration.type !== undefined) && (declaration.type.typeName?.text !== 'Dict'))
+        || (list?.kind !== SyntaxKind.VariableDeclarationList) || (list.declarations.length !== 1) || (statement?.kind !== SyntaxKind.VariableStatement)
+        || ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause))) {
+        return undefined;
+    }
+    return { field: entry[0], statement, target: declaration.name, key: property.name.text };
+};
+{
+    const fieldRead = GoTranspiler.prototype.h27m01BinderUseIsFieldRead;
+    GoTranspiler.prototype.h27m01BinderUseIsFieldRead = function (n: any): boolean {
+        return fieldRead.call(this, n) || (this.h29m01EntryUse(n) !== undefined);
+    };
+    const elementAccess = GoTranspiler.prototype.printElementAccessExpression;
+    GoTranspiler.prototype.printElementAccessExpression = function (node: any, identation: number) {
+        const base: any = node?.expression;
+        const declaration = ((this.nativeStoreFields?.['markets']?.['rowStructReads'] === true) && (base?.kind === SyntaxKind.Identifier))
+            ? this.goDeclarationOfIdentifier(base) : undefined;
+        const use = ((declaration !== undefined) && (this.goTypedRowBinder(declaration) !== undefined)) ? this.h29m01EntryUse(base) : undefined;
+        const pending = (use !== undefined) ? this.h29m01Pending?.get(use.statement) : undefined;
+        if ((use === undefined) || (pending === undefined)) {
+            return elementAccess.call(this, node, identation);
+        }
+        const f = `${base.text}.${use.field}`;
+        pending.set(node, `if ${f} != nil {\n\t${this.printNode(use.target, 0).trim()}[${JSON.stringify(use.key)}] = *${f}\n}`);
+        return 'nil';
+    };
+    const variableStatement = GoTranspiler.prototype.printVariableStatement;
+    GoTranspiler.prototype.printVariableStatement = function (node: any, identation: number) {
+        this.h29m01Pending = this.h29m01Pending ?? new Map<any, Map<any, string>>();
+        const stores = new Map<any, string>();
+        this.h29m01Pending.set(node, stores);
+        let printed: any;
+        try {
+            printed = variableStatement.call(this, node, identation);
+        } finally {
+            this.h29m01Pending.delete(node);
+        }
+        if ((stores.size === 0) || (typeof printed !== 'string')) {
+            return printed;
+        }
+        const iden = this.getIden(identation);
+        const lines = [ ...stores.values() ].map((s) => s.split('\n').map((l) => iden + l).join('\n'));
+        return printed.trimEnd() + '\n' + lines.join('\n');
+    };
+}
+// ===== end h29-M01
