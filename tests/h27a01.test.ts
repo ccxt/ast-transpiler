@@ -83,7 +83,7 @@ describe ('h27a01: JSON-origin map receiver, literal key, comma-ok map read', ()
         expect (fn ('escapes')).not.toContain ('.(map[string]any)');
     });
     test ('negative: a list response and a non-literal key keep their reads', () => {
-        expect (fn ('listResponse')).not.toContain ('.(map[string]any)');
+        expect (fn ('listResponse')).toContain ('data, _ = response[0].(map[string]any)');
         expect (fn ('paramKey')).not.toContain ('.(map[string]any)');
     });
     test ('negative: a parameter receiver keeps the wrap', () => {

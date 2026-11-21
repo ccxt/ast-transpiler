@@ -53207,3 +53207,46 @@ GoTranspiler.prototype.h29a08JsonListParam = function (node, depth: number): boo
     };
 }
 // ===== end h29-H29-A08
+// ===== h29-H29-A09 =====
+// `const r = await this.<endpoint> (..)` whose endpoint receive prints `var r []any = rRecv.Value` (declared `Promise<List>`,
+// decoded JSON) is a []any JSON-origin list while every use only reads it: the row readers above may index it
+export interface GoTranspiler {
+    h29a09EndpointList(node): boolean;
+}
+GoTranspiler.prototype.h29a09EndpointList = function (node): boolean {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+    if ((init?.kind !== SyntaxKind.AwaitExpression)
+        || !(this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression))
+        || (this.goAwaitReceiveUnbox(init, this.printNode(init, 0))?.goType !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginListUseIsReadOnly(n, name)
+        || this.goIsNilComparisonOperand(n, n.parent) || this.h27a09SafeReaderArg(n, name));
+};
+// only the row readers take the endpoint list as declared []any: plain element reads keep their own printing
+let h29a09InRowRead = 0;
+const goDeclaredListIdentifierH29a09 = GoTranspiler.prototype.goDeclaredListIdentifier;
+GoTranspiler.prototype.goDeclaredListIdentifier = function (node) {
+    return goDeclaredListIdentifierH29a09.call(this, node) || ((h29a09InRowRead > 0) && this.h29a09EndpointList(node));
+};
+for (const reader of [ 'h27a08RowRead', 'h27a09JsonRowRead', 'h28a09JsonRowReadDefault' ]) {
+    const previous = (GoTranspiler.prototype as any)[reader];
+    (GoTranspiler.prototype as any)[reader] = function (...args) {
+        h29a09InRowRead++;
+        try {
+            return previous.apply(this, args);
+        } finally {
+            h29a09InRowRead--;
+        }
+    };
+}
+const h27a09JsonOriginListH29a09 = GoTranspiler.prototype.h27a09JsonOriginList;
+GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr) {
+    return h27a09JsonOriginListH29a09.call(this, baseExpr) || this.h29a09EndpointList(baseExpr);
+};
+// ===== end h29-H29-A09 =====
