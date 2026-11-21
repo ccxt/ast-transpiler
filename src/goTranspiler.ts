@@ -55752,3 +55752,93 @@ function h29g22SameSourceCopy (siteFile: string, myFile: string): boolean {
     };
 }
 // ===== end h29-parent =====
+// ===== h30-H30-A02
+// the h29a02 defaulted read where the receiver R is itself a safeDict read (literal key) of a JSON-origin container,
+// declared map[string]any (h27a02JsonOrigin proves the chain read-only): the member is still decoded JSON, so the
+// comma-ok read plus the empty default answers exactly what SafeListSlice / SafeDictMap did
+export interface GoTranspiler {
+    h30a02TypedReadReceiverDefaultedRead(node, identation: number, printed: string): string | undefined;
+    h30a02WrittenThroughElement(declaration): boolean;
+}
+GoTranspiler.prototype.h30a02TypedReadReceiverDefaultedRead = function (node, identation: number, printed: string) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression)
+        || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const accessor = init.expression?.name?.text;
+    if ((accessor !== 'safeList') && (accessor !== 'safeDict')) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, accessor);
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier)
+        || !/^[A-Za-z0-9_]+$/.test(args.key.text)) {
+        return undefined;
+    }
+    const source: any = this.goAnyBoxLocalDeclaration(args.container);
+    let sourceInit: any = source?.initializer;
+    while ((sourceInit?.kind === SyntaxKind.AsExpression) || (sourceInit?.kind === SyntaxKind.ParenthesizedExpression)) {
+        sourceInit = sourceInit.expression;
+    }
+    const sourceArgs: any = this.goSafeAccessorLocalArgs(sourceInit, 'safeDict');
+    if ((sourceArgs === undefined) || (sourceArgs.key?.kind !== SyntaxKind.StringLiteral)
+        || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !(this.h27a02JsonOrigin(args.container, 0)
+            || ((declaration.initializer === init) && this.h27a02JsonOriginBeforeRead(args.container, declaration)))) {
+        return undefined;
+    }
+    if (this.h30a02WrittenThroughElement(declaration)) {
+        return undefined;               // an element store keeps the shipped form the element-write rules match
+    }
+    const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    const name = this.printNode(declaration.name, 0).trim();
+    const container = this.printNode(args.container, 0).trim();
+    const iden = this.getIden(identation);
+    const call = `(${container}, "${args.key.text}", ${goType}{})`;
+    const forms = (accessor === 'safeList')
+        ? [ `this.SafeListSlice${call}`, `SafeListTypedDefault${call}`, `ListTyped(this.SafeList${call})` ]
+        : [ `this.SafeDictMap${call}`, `MapTyped(this.SafeDict${call})` ];
+    const lead = /^\n*/.exec(printed)[0];
+    if (!forms.some((form) => printed.substring(lead.length) === `${iden}var ${name} ${goType} = ${form}`)) {
+        return undefined;
+    }
+    const inner = this.getIden(identation + 1);
+    return `${lead}${iden}var ${name} ${goType}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${goType})\n`
+        + `${iden}if ${name} == nil {\n${inner}${name} = ${goType}{}\n${iden}}`;
+};
+GoTranspiler.prototype.h30a02WrittenThroughElement = function (declaration): boolean {
+    const scope: any = this.goEnclosingFunction(declaration);
+    const name: string = declaration.name.text;
+    let written = false;
+    const visit = (n: any) => {
+        if (written) {
+            return;
+        }
+        if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n)) {
+            let read: any = n.parent;
+            while (((read.parent?.kind === SyntaxKind.ElementAccessExpression) || (read.parent?.kind === SyntaxKind.PropertyAccessExpression)) && (read.parent.expression === read)) {
+                read = read.parent;
+            }
+            written = (read.parent?.kind === SyntaxKind.BinaryExpression) && (read.parent.left === read)
+                && (read.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (read.parent.operatorToken.kind <= SyntaxKind.LastAssignment);
+        }
+        n.forEachChild(visit);
+    };
+    if (scope !== undefined) {
+        visit(scope);
+    }
+    return written;
+};
+{
+    const printVariableDeclarationListH30a02 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH30a02.call(this, node, identation);
+        const h = this.h30a02TypedReadReceiverDefaultedRead(node, identation, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h30-H30-A02
