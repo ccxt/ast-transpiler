@@ -132,6 +132,10 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.SlugToOutcomeSymbol': string;
     'this.RlpEncodeList': string;
     'this.IntToRlpHex': string;
+    'this.FilterEventsByStatus': string;
+    'this.FilterEventsByTags': string;
+    'this.FilterEventsBySearchIn': string;
+    'this.OrderbookChecksumMessage': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -2138,3 +2142,144 @@ export interface GoTranspiler {
     h26g57ForCounterSeed(declaration: any): string | undefined;
 }
 export declare function goIsOwnTsSourceName(name: string): boolean;
+export interface GoTranspiler {
+    h27a01JsonDictRead(declaration: any, printed: string): string | undefined;
+    h27a01ReceiverType(container: any): string | undefined;
+}
+export interface GoTranspiler {
+    h27a02JsonListRead(node: any, identation: number, printed: string): string | undefined;
+    h27a02JsonOrigin(node: any, depth: number): boolean;
+    h27a02ScalarReaderUse(node: any): boolean;
+    h27a02JsonOriginBeforeRead(container: any, read: any): boolean;
+}
+export interface GoTranspiler {
+    h27a03SafeDictDefaultSite(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h27a04JsonListRead(node: any, printed: string): string | undefined;
+    h27a04DictEndpointResponse(node: any): boolean;
+    h27a04WrittenThrough(access: any): boolean;
+}
+export interface GoTranspiler {
+    h27a05TypedMapRead(declaration: any, declaredType: string, unboxValue: string | undefined, varName: string, identation: number): string | undefined;
+    h27a05KeyText(keyNode: any): string | undefined;
+    h27a05JsonOriginContainer(node: any): boolean;
+}
+export interface GoTranspiler {
+    h27a06OptionsDictRead(node: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27a08RowRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h27a08JsonList(list: any): boolean;
+}
+export interface GoTranspiler {
+    h27a09JsonRowRead(declaration: any, identation: number): string | undefined;
+    h27a09JsonOriginList(baseExpr: any): boolean;
+    h27a09SafeReaderArg(node: any, name: string): boolean;
+}
+export interface GoTranspiler {
+    h27a10RowSliceRead(declaration: any, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    h27a11FrameReadDeclaration(node: any, declaration: any, identation: number): string | undefined;
+    h27a11FrameParam(param: any): boolean;
+    h27a11JsonContainer(node: any, depth?: number): boolean;
+    h27a11FrameParamCache: Map<any, boolean>;
+    h27a11ElsewhereCache: Map<string, boolean>;
+    h27a11Active: Set<any>;
+}
+export interface GoTranspiler {
+    h27a12JsonNestedRead(node: any, printed: string): string | undefined;
+    h27a12JsonOrigin(node: any, depth: number): boolean;
+    h27a12MapTyped(node: any): boolean;
+}
+export interface GoTranspiler {
+    h27a14SiblingEndpointLocal(declaration: any, goType: string, readsTheValue: (n: Node) => boolean, skipUse: (n: Node) => boolean): string | undefined;
+}
+export interface GoTranspiler {
+    h27a15CacheRowZero(node: any): {
+        expected: string;
+        rows: string;
+        name: string;
+        cache: string;
+    } | undefined;
+}
+export interface GoTranspiler {
+    h27a16ListSlotMap(access: any, at: any): boolean;
+    h27a16AliasSlot(declaration: any): string | undefined;
+}
+export interface GoTranspiler {
+    h27g01ForeignNamesake(tree: any, siteFile: string, myFile: string | undefined): boolean;
+    h27g01BaseFile(tree: any, file: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27g02StringIdentDefault(node: any): boolean;
+}
+export declare function h27g04DefaultDigestHashCall(node: any): boolean;
+export interface GoTranspiler {
+    h27g09GuardedPointerPush(pushNode: any): boolean;
+}
+export interface GoTranspiler {
+    h27g10HandlerSliceParameterType(fn: any, param: any, index: number, handlerParam: boolean): string | undefined;
+    h27g10OnlyDirectCalls(fn: any): boolean;
+}
+export interface GoTranspiler {
+    h27g11GuardedParamRead(node: any, containerStr: string, keyStr: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27g17HandleOptionCompare(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    h27g19RequestStubAwait(expr: any): boolean | undefined;
+}
+export interface GoTranspiler {
+    h27g20BalanceStore(node: any, baseExpr: any, keys: any[], valueNode: any, rhs: string, identation: number): string | undefined;
+    h27g20BalanceNeverNil(field: any): boolean;
+}
+export interface GoTranspiler {
+    h27g21SliceIndexStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any): string | undefined;
+    h27g21IndexInRange(containerNode: any, keyNode: any): boolean;
+    h27g21LengthGuarded(containerNode: any, at: any, lengthNode: any): boolean;
+    h27g21IsLengthOf(node: any, containerSymbol: any): boolean;
+    h27g21SliceKeepsLength(containerNode: any): boolean;
+    h27g21StoreValueIsPlain(valueNode: any, containerNode: any): boolean;
+}
+export interface GoTranspiler {
+    h27g22NumberRowSliceParameterType(fn: any, param: any, goType: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27g23SideRowRead(node: any): string | undefined;
+    h27g23SideLengthBefore(node: any, decl: any): boolean;
+    h27g23IsIntLoopCounter(key: any): boolean;
+}
+export interface GoTranspiler {
+    h27g27RowParamType(fn: any, param: any): string | undefined;
+    h27g27MapElement(node: any): boolean;
+    h27g27RowSlotOf(node: any): boolean;
+}
+export interface GoTranspiler {
+    h27g28ElementReadOfMap(n: any): boolean;
+}
+export interface GoTranspiler {
+    h27g31AnyBoxTernaryStore(node: any, identation: number, upstream: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27g33StringListLiteralRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string | undefined;
+}
+export interface GoTranspiler {
+    h27g36ClientUrlPointerCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+}
+export interface GoTranspiler {
+    h27g37SpawnedParamType(fn: any, param: any, index: number): string | undefined;
+    h27g37SpawnArgIsString(arg: any): boolean;
+    h27g37SpawnArgDeref(node: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h27m01BinderUseIsFieldRead(n: any): boolean;
+    h27m01RowBaseIsStruct(base: any): boolean;
+    h27m01Proving: Set<any> | undefined;
+}

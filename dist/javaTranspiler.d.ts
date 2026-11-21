@@ -591,5 +591,12 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrintBodyStatements(statements: any, identation: number): string[];
     printParseToIntDoubleProduct(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     javaProductFeedsBaseParseToInt(node: any): boolean;
+    h27J06Cache: WeakMap<any, boolean>;
+    h27J06FutureList(declaration: any): boolean;
+    h27J06FutureListProof(declaration: any): boolean;
+    h27J06Declaration(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h27J06FutureListDeclaration(declaration: any, indent: string): string | undefined;
+    h27J06FutureListPush(node: any, name: any, parsedArg: any): string | undefined;
+    h27J06FutureListJoin(node: any): string | undefined;
 }
 export {};

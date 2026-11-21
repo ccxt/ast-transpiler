@@ -5866,5 +5866,35 @@ export declare class RustTranspiler extends BaseTranspiler {
     h26r11UntaggedMapSource(node: any): boolean;
     /** The settled value of a ws `client.resolve (x, hash)` or the item of a cache `.append (x)`: both take `impl Into<Value>`. */
     rustH26r14RecordBoxUse(n: any): boolean;
+    /** `n.toString ()` of an `i64` scalar local whose checker type is `any` (an all-int `sum`): the `String` `format!` makes,
+     *  whatever the `any` the checker gives the call. */
+    h27r02IntToStringSeed(declaration: any, kind: string | undefined, checked: string | undefined): boolean;
+    /** `xs[i]['k'] = v` (statement, REST tier) inside `for (let i = 0; i < xs.length; i++)` on a boxed list local whose every
+     *  binding is `[]` or a base `this.toArray (..)` (always a `Value::Arr`): the slot is in bounds, so the helper's padding is
+     *  dead; the hop through a non-map row is skipped as the helper skipped it; a fresh REST row carries no tag. */
+    h27r05ArrayRowInsert(left: any, keyText: string, valueText: string): string | undefined;
+    /** Such a result is built by the parser (or is the stored markets table): never a ws-tagged snapshot, so the map's own
+     *  insertion-order iterators list what `object_keys` / `object_values` listed; a non-map (Null) lists nothing, as before. */
+    h27r06FreshParseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `this.parseX (..)` or `super.setMarkets (..)` whose declared return is a proven map type. */
+    h27r06FreshParseCall(node: any): boolean;
+    private static readonly H27R07_BASE_HANDLE_METHODS;
+    h27r07BaseHandlePlan(method: any, file: string): any;
+    /** On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`)
+     *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
+    h27r07KeepBoxedKey(node: any, plan: any): boolean;
+    private static readonly RUST_H27R08_WS_FNS;
+    private static readonly RUST_H27R08_RECORD_RETURN;
+    /** `x = this.parseWsTrade|Order|Ticker (..)` resolved to a venue override whose every `return` answers a record parser
+     *  of the h26-R14 table (`safeTrade (..)` ...): the ccxt build types such an override `Dict` and drops `.into_dict()`.
+     *  The base declaration (it throws) or any other return keeps the box. */
+    rustH27r08WsRecordWrite(rhs: any): boolean;
+    /** `c.append (x)` on a local whose checker type is a ws cache (`ArrayCache*`): the hand-written `append` takes `impl Into<Value>`. */
+    rustH27r08CacheAppendUse(n: any): boolean;
+    /** The box at such an append: moved at the last use, else the Arc bump; `None` is `Value::Null`. */
+    rustH27r08CacheAppendBox(node: any, text: string): string | undefined;
+    /** `row[n] = <literal>` on a const `row = this.safeDict (client.subscriptions, k, {})`: no native insert takes that tagged
+     *  ws-store copy, so the write stays `add_element_to_object` and lends the key box exactly as ral-63k does for plain locals. */
+    h27r10SubscriptionRowKey(n: any): boolean;
 }
 export {};
