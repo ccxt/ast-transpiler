@@ -48204,3 +48204,33 @@ GoTranspiler.prototype.h27g01ForeignNamesake = function (tree, siteFile: string,
     return false;
 };
 // ===== end h27-G01 =====
+// ===== h27-G02 =====
+// a SafeString-family default that is an identifier the printer declares as a Go `string` (local or
+// parameter): ToString of a Go string is never nil, so the hand-written method never answers nil
+export interface GoTranspiler {
+    h27g02StringIdentDefault(node): boolean;
+}
+const h27g02Busy = new Set<any> ();
+GoTranspiler.prototype.h27g02StringIdentDefault = function (node): boolean {
+    const call: any = node;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || h27g02Busy.has (call)) {
+        return false;
+    }
+    const arity = GO_DEFAULTED_SAFE_STRING_ARITY[call.expression.name?.text];
+    const last: any = call.arguments?.[arity - 1];
+    if ((arity === undefined) || (call.arguments.length !== arity) || (last?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    h27g02Busy.add (call);
+    try {
+        return this.goDeclaredTypeOfIdentifier (last) === 'string';
+    } finally {
+        h27g02Busy.delete (call);
+    }
+};
+const h27g02ShippedDefaultedSafeStringCall = GoTranspiler.prototype.goDefaultedSafeStringCall;
+GoTranspiler.prototype.goDefaultedSafeStringCall = function (node): boolean {
+    return h27g02ShippedDefaultedSafeStringCall.call (this, node) || this.h27g02StringIdentDefault (node);
+};
+// ===== end h27-G02 =====
