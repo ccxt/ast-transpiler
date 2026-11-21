@@ -21347,6 +21347,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
                 && (this.goTypeOfInitializer(declaration.initializer, parsedValue) === '*int64')) {
                 declaredValue = '*' + declaredValue;
             }
+            const h27a05 = this.h27a05TypedMapRead(declaration, declaredType, unboxValue, varName, identation); if (h27a05 !== undefined) { return h27a05; }
             const cacheKeys = this.goCacheKeysRange(declaration, declaredType, varName, identation);
             if (cacheKeys !== undefined) {
                 return cacheKeys;
@@ -47317,3 +47318,67 @@ GoTranspiler.prototype.h27a04JsonListRead = function (node, printed: string): st
     };
 }
 // ===== end h27-A04 =====
+// ===== h27-A05 =====
+// `const x = this.safeDict (doc, k)` / `this.safeList (doc, k)` on a decoded JSON document with a Go string key (or a
+// nil-guarded *string key) reads the member natively: a missing key, a nil map or a value of another type is nil,
+// as the SafeMapTyped / SafeListTyped wrap answered (a JSON document holds no sync.Map, list pointer or cache)
+export interface GoTranspiler {
+    h27a05TypedMapRead(declaration, declaredType: string, unboxValue: string | undefined, varName: string, identation: number): string | undefined;
+    h27a05KeyText(keyNode): string | undefined;
+    h27a05JsonOriginContainer(node): boolean;
+}
+// goJsonOriginContainer, also admitting `Object.keys (x)` (a read of the key set) as a read-only use of the local
+GoTranspiler.prototype.h27a05JsonOriginContainer = function (node) {
+    if (this.goJsonOriginContainer(node)) {
+        return true;
+    }
+    const declaration: any = this.goAnyBoxLocalDeclaration(node);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeDict');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !this.goJsonOriginContainer(args.container, 1)) {
+        return false;
+    }
+    const keysRead = (n: any): boolean => {
+        const call: any = n.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === n)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.Identifier)
+            && (call.expression.expression.text === 'Object') && (call.expression.name?.text === 'keys');
+    };
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => keysRead(n) || this.goJsonOriginUseIsReadOnly(n, name));
+};
+GoTranspiler.prototype.h27a05KeyText = function (keyNode) {
+    if (keyNode?.kind !== SyntaxKind.Identifier) {
+        return undefined;
+    }
+    if (this.goDeclaredTypeOfIdentifier(keyNode) === 'string') {
+        return this.printNode(keyNode, 0);
+    }
+    return this.goIsNilGuardedStringPointerKey(keyNode) ? '*' + this.printNode(keyNode, 0) : undefined;
+};
+GoTranspiler.prototype.h27a05TypedMapRead = function (declaration, declaredType: string, unboxValue: string | undefined, varName: string, identation: number) {
+    const accessor = (declaredType === GO_SAFE_DICT_LOCAL_TYPE) ? 'safeDict' : ((declaredType === GO_SAFE_LIST_LOCAL_TYPE) ? 'safeList' : undefined);
+    if ((accessor === undefined) || (unboxValue === undefined)) {
+        return undefined;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, accessor);
+    if ((args === undefined) || (declaration.initializer.arguments.length !== 2) || (args.container?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const container = this.printNode(args.container, 0);
+    const key = this.printNode(args.key, 0);
+    const wrap = (accessor === 'safeDict') ? 'SafeMapTyped' : 'SafeListTyped';
+    if (unboxValue.trim().replace(/^ccxt\./, '') !== `${wrap}(${container}, ${key})`) {
+        return undefined;
+    }
+    const keyText = this.h27a05KeyText(args.key);
+    if ((keyText === undefined) || (this.goDeclaredTypeOfIdentifier(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !this.h27a05JsonOriginContainer(args.container)) {
+        return undefined;
+    }
+    return `${this.getIden(identation)}var ${varName}, _ = ${container}[${keyText}].(${declaredType})`;
+};
+// ===== end h27-A05 =====
