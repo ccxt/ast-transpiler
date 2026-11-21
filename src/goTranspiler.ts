@@ -52196,3 +52196,42 @@ GoTranspiler.prototype.h28g31DerefedReaderValue = function (valueNode): boolean 
         || (fallback?.kind === SyntaxKind.NullKeyword) || ((fallback?.kind === SyntaxKind.Identifier) && (fallback.text === 'undefined'));
 };
 // ===== end h28-H28-G31
+// ===== h28-H28-G32
+// The first step of a nested `m[k][..] = v` write chain only names the container AddElementToObject writes into: a
+// receiver the printer declares map[string]any with a Go string key (or a `*string` key a guard proves non-nil) reads
+// the same container natively (nil map / missing key give nil, a non-map value stays a no-op target, as in GetValue).
+{
+    const writeChain = GoTranspiler.prototype.goElementWriteChain;
+    GoTranspiler.prototype.goElementWriteChain = function (baseExpr, containerStr: string, keyNodes, keyStrs: string[]): string {
+        const acc = writeChain.call(this, baseExpr, containerStr, keyNodes, keyStrs);
+        const first = (keyStrs.length > 1) ? this.h28g32MapChainFirstStep(baseExpr, containerStr, keyNodes[0], keyStrs[0]) : undefined;
+        if ((first === undefined) || !acc.startsWith(`${this.ELEMENT_ACCESS_WRAPPER_OPEN.repeat(keyStrs.length - 1)}${containerStr}, ${keyStrs[0]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`)) {
+            return acc;
+        }
+        let out = first;
+        for (let i = 1; i < keyStrs.length - 1; i++) {
+            out = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${out}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+        }
+        return out;
+    };
+    (GoTranspiler.prototype as any).h28g32MapChainFirstStep = function (baseExpr, containerStr: string, keyNode, keyStr: string): string | undefined {
+        if ((baseExpr?.kind !== SyntaxKind.Identifier) || containerStr.includes('\n') || keyStr.includes('\n')) {
+            return undefined;
+        }
+        const declaration: any = this.goDeclarationOfIdentifier(baseExpr);
+        const isMap = (this.goDeclaredTypeOfIdentifier(baseExpr) === 'map[string]any')
+            || ((declaration?.kind === SyntaxKind.VariableDeclaration) && ((this.goPrintedLocalDeclarationType(baseExpr) === 'map[string]any')
+                || (this.goSafeDictMapLocal(declaration) === 'map[string]any')));
+        if (!isMap) {
+            return undefined;
+        }
+        if (this.goKeyIsString(keyNode, keyStr)) {
+            return `${containerStr}[${keyStr}]`;
+        }
+        if ((keyNode?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(keyNode) === '*string')) {
+            return this.goProvenPointerKeyMapIndex(keyNode, containerStr, keyStr);
+        }
+        return undefined;
+    };
+}
+// ===== end h28-H28-G32
