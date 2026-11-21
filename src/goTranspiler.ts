@@ -48813,3 +48813,48 @@ function h27g16ParseToIntConstSlot (e, printed = undefined) {
 }
 
 // ===== end h27-G16
+// ===== h27-G17 =====
+// `this.handleOption (..) === undefined | null | true | false` (and !==, ==, !=): BaseExchange.HandleOption answers
+// derefScalar'd twice (optionAndParams, then SafeValue's list read), a fixed point of derefScalar, so IsEqual(v, nil|bool)
+// is exactly the interface comparison `v == nil` / `v == true|false`
+export interface GoTranspiler {
+    h27g17HandleOptionCompare(node): string | undefined;
+}
+GoTranspiler.prototype.h27g17HandleOptionCompare = function (node) {
+    const op = node?.operatorToken?.kind;
+    const negated = (op === SyntaxKind.ExclamationEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken);
+    if (!negated && (op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)) {
+        return undefined;
+    }
+    const isCall = (n): boolean => (n?.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (n.expression.expression?.kind === SyntaxKind.ThisKeyword) && (n.expression.name?.text === 'handleOption')
+        && (n.arguments.length >= 2) && (n.arguments.length <= 3) && this.goIsBaseExchangeMethod(n.expression.name);
+    const constant = (n): string | undefined => {
+        if ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined')) {
+            return 'nil';
+        }
+        if (n?.kind === SyntaxKind.NullKeyword) {
+            return 'nil';
+        }
+        if (n?.kind === SyntaxKind.TrueKeyword) {
+            return 'true';
+        }
+        return (n?.kind === SyntaxKind.FalseKeyword) ? 'false' : undefined;
+    };
+    const left = this.goUnwrapParenthesizedNode(node.left);
+    const right = this.goUnwrapParenthesizedNode(node.right);
+    const call = isCall(left) ? left : (isCall(right) ? right : undefined);
+    const value = (call === left) ? constant(right) : constant(left);
+    if ((call === undefined) || (value === undefined)) {
+        return undefined;
+    }
+    return `${this.printNode(call, 0)} ${negated ? '!=' : '=='} ${value}`;
+};
+{
+    const printBinaryExpressionH27g17 = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        const h = this.h27g17HandleOptionCompare(node); if (h !== undefined) return h;
+        return printBinaryExpressionH27g17.call(this, node, identation);
+    };
+}
+// ===== end h27-G17 =====
