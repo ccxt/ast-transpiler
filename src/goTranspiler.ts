@@ -7734,6 +7734,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoNestedSafeDictRead (goTranspiler);
     installCcxtGoTypedTernaryDeclaration (goTranspiler);
     installH26G23StringTernaryHoist (goTranspiler);
+    installH28G23MapEntryTernaryStore (goTranspiler);
     installH27a07ConfigMapReads (goTranspiler);
     installH28a07ConfigMapNilFill (goTranspiler);
     installH28g10StrPtrTernaryDecl (goTranspiler);
@@ -51752,3 +51753,82 @@ GoTranspiler.prototype.printVariableStatement = function (node, identation) {
     return (h !== undefined) ? h : upstream;
 };
 // ===== end h28-G22 =====
+// ===== h28-G23
+// `const x = { .., 'k': c ? a : b, .. }` printed `var x map[string]any = map[string]any{..}`: the entry
+// leaves the literal and becomes `if c { x["k"] = a } else { x["k"] = b }` after it. Same value in the
+// same `any` slot (a nil arm stores an untyped nil, key present as before); arms and condition are local reads.
+function h28g23LocalRead (node: any): boolean {
+    let found = false;
+    const visit = (n: any) => {
+        if ((n.kind === SyntaxKind.ThisKeyword) || (n.kind === SyntaxKind.CallExpression)) {
+            found = true;
+        }
+        n.forEachChild (visit);
+    };
+    visit (node);
+    return !found && h26g23PureCondition (node);
+}
+function h28g23Entries (node: any): any[] {
+    const declarations = node?.declarationList?.declarations ?? [];
+    const parentKind = node?.parent?.kind;
+    if ((node?.kind !== SyntaxKind.VariableStatement) || (declarations.length !== 1) || (declarations[0].name?.kind !== SyntaxKind.Identifier)
+        || ((parentKind !== SyntaxKind.Block) && (parentKind !== SyntaxKind.CaseClause) && (parentKind !== SyntaxKind.DefaultClause))) {
+        return [];
+    }
+    const literal: any = declarations[0].initializer;
+    if (literal?.kind !== SyntaxKind.ObjectLiteralExpression) {
+        return [];
+    }
+    return literal.properties.filter ((p: any) => (p.kind === SyntaxKind.PropertyAssignment)
+        && ((p.name?.kind === SyntaxKind.StringLiteral) || (p.name?.kind === SyntaxKind.Identifier)) && /^[\w.-]+$/.test (p.name.text)
+        && (ral90g5UnwrapNode (p.initializer)?.kind === SyntaxKind.ConditionalExpression)
+        && [ 'condition', 'whenTrue', 'whenFalse' ].every ((k) => h28g23LocalRead (ral90g5UnwrapNode (p.initializer)[k])));
+}
+function h28g23PrintStatement (goTranspiler: any, node: any, identation: number, print: () => string): string {
+    const base = print ();
+    const entries = (goTranspiler.h28g23Skip.size === 0) ? h28g23Entries (node) : [];
+    if ((entries.length === 0) || (typeof base !== 'string') || !base.includes ('func() any {')) {
+        return base;
+    }
+    const declaration: any = node.declarationList.declarations[0];
+    const name = goTranspiler.printNode (declaration.name, 0).trim ();
+    const literal: any = declaration.initializer;
+    goTranspiler.h28g23Skip.set (literal, new Set (entries));
+    let printed: string;
+    try {
+        printed = print ();
+    } finally {
+        goTranspiler.h28g23Skip.clear ();
+    }
+    const count = (s: string) => s.split ('func() any {').length - 1;
+    const head = new RegExp (`(^|\\n)[ \\t]*var ${name} map\\[string\\]any = map\\[string\\]any\\{`);
+    if ((count (printed) !== count (base) - entries.length) || !head.test (printed) || !printed.trimEnd ().endsWith ('}')) {
+        return base;
+    }
+    const stores: string[] = [];
+    for (const p of entries) {
+        const store = goTranspiler.goTernaryStatementIfElse (`${name}[${JSON.stringify (p.name.text)}]`, ral90g5UnwrapNode (p.initializer), identation);
+        if ((store === undefined) || store.includes ('func()')) {
+            return base;
+        }
+        stores.push (store);
+    }
+    return printed.trimEnd () + '\n' + stores.join ('\n');
+}
+function installH28G23MapEntryTernaryStore (goTranspiler: any) {
+    if (!goInstallOnce (goTranspiler, '__h28g23Installed', 'printObjectLiteralBody')) {
+        return;
+    }
+    goTranspiler.h28g23Skip = new Map<any, Set<any>> ();
+    const body = goTranspiler.printObjectLiteralBody;
+    goTranspiler.printObjectLiteralBody = function (node, identation) {
+        const skip = this.h28g23Skip.get (node);
+        const target = (skip === undefined) ? node : Object.create (node, { 'properties': { 'value': node.properties.filter ((p) => !skip.has (p)) } });
+        return body.call (this, target, identation);
+    };
+    const original = goTranspiler.printVariableStatement;
+    goTranspiler.printVariableStatement = function (node, identation) {
+        return h28g23PrintStatement (this, node, identation, () => original.call (this, node, identation));
+    };
+}
+// ===== end h28-G23
