@@ -7593,6 +7593,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `x.length` -> `x.Count`, same proof for the checker's array operands; strings keep
     // the `((string)x).Length` branch and every unproven operand keeps getArrayLength
     csharpNativeLengthExpression(expression): string | undefined {
+        const h30c05 = this.h30c05BoundListName(expression); if (h30c05 !== undefined) { return `${h30c05}.Count`; }
         if (csharpListParamDeclaration(this, expression)) {
             // a parameter this printer typed as a list: keep getArrayLength's null -> 0 branch
             const declared = this.csharpDeclaredLengthExpression(expression);
@@ -8047,6 +8048,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
         const h30t01 = this.h30t01IsArrayBinding(node, parsedArg); if (h30t01 !== undefined) return h30t01;
+        const h30c05 = this.h30c05BoundListTest(node); if (h30c05 !== undefined) { return h30c05; }
         // a non-name argument (guarded element read, cast) is evaluated once and bound, not printed three times
         if (!/^[\w.]+$/.test(String(parsedArg).trim())) {
             const v = 'hxArr' + node.pos;
@@ -8281,6 +8283,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (int64Read !== undefined) {
             return int64Read;
         }
+        const h30c05 = this.h30c05BoundListLoopRead(expression, argumentExpression); if (h30c05 !== undefined) { return h30c05; }
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
@@ -10208,4 +10211,175 @@ export class CSharpTranspiler extends BaseTranspiler {
         return `(${printed} is IList<object> ${this.h30t01BindingName(printed)})`;
     }
     // ===== end h30-T01
+
+    // ===== h30-H30-C05
+    // `if (Array.isArray (x))` on a const `x = this.safeValue (R, 'k'[, {}|[]])` read from decoded JSON (R an awaited
+    // implicit-API response, or the frame parameter of a ws handle* method): JSON arrays decode to List<object>, so
+    // the test binds `x is IList<object> hxListN` and reads in its then-branch use that typed name.
+    h30c05BoundListTest(call): string | undefined {
+        const arg = call?.arguments?.length === 1 ? this.csharpUnparenthesized(call.arguments[0]) : undefined;
+        const ifStatement = this.h30c05GuardingIf(call);
+        if (!isIdentifier(arg) || ifStatement === undefined || !this.h30c05JsonValueLocal(arg)) {
+            return undefined;
+        }
+        return `(${arg.text} is IList<object> ${this.h30c05Name(ifStatement)})`;
+    }
+
+    // the if statement whose whole condition is this Array.isArray call
+    h30c05GuardingIf(call): any {
+        let node: any = call;
+        while (node.parent !== undefined && isParenthesizedExpression(node.parent)) {
+            node = node.parent;
+        }
+        const parent: any = node.parent;
+        return (parent !== undefined && isIfStatement(parent) && parent.expression === node) ? parent : undefined;
+    }
+
+    // keyed by the if node: C# scopes a pattern variable of an if condition to the enclosing block
+    h30c05Name(ifStatement): string {
+        return 'hxList' + ifStatement.pos;
+    }
+
+    // the bound name for a read of `x` inside the then-branch of its own bound type test, no closure in between
+    h30c05BoundListName(expression): string | undefined {
+        const x = this.csharpUnparenthesized(expression);
+        if (!isIdentifier(x) || !this.h30c05JsonValueLocal(x)) {
+            return undefined;
+        }
+        const declaration = this.csharpReceiverBinding(x);
+        let node: any = x;
+        while (node.parent !== undefined) {
+            const parent: any = node.parent;
+            if (isFunctionLike(parent)) {
+                return undefined;
+            }
+            if (isIfStatement(parent) && parent.thenStatement === node) {
+                const test = this.csharpUnparenthesized(parent.expression);
+                if (isCallExpression(test) && test.expression?.getText() === 'Array.isArray' && test.arguments.length === 1) {
+                    const arg = this.csharpUnparenthesized(test.arguments[0]);
+                    if (isIdentifier(arg) && this.csharpIsSameDeclaration(arg, declaration)) {
+                        return this.h30c05Name(parent);
+                    }
+                }
+            }
+            node = parent;
+        }
+        return undefined;
+    }
+
+    // `x[i]` in the bound branch with `i` the int counter of `for (let i = 0; i < x.length; i++)` and x intact there
+    h30c05BoundListLoopRead(expression, argumentExpression): string | undefined {
+        if (!isIdentifier(argumentExpression) || this.csharpExpressionTypeOf(argumentExpression) !== 'int') {
+            return undefined;
+        }
+        const name = this.h30c05BoundListName(expression);
+        const loop = name === undefined ? undefined : this.csharpCounterRangeLoop(argumentExpression, expression);
+        if (loop === undefined || !this.csharpCounterUnwrittenIn(loop.statement, argumentExpression) || !this.csharpReceiverIntactIn(loop.statement, expression)) {
+            return undefined;
+        }
+        return `${name}[${this.printNode(argumentExpression, 0)}]`;
+    }
+
+    // a single-declarator const `x = this.safeValue (R, 'k')` / `(R, 'k', {})` / `(R, 'k', [])` with R decoded JSON
+    h30c05JsonValueLocal(x): boolean {
+        const declaration: any = this.csharpReceiverBinding(x);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || ((declaration.parent?.flags & NodeFlags.Const) === 0) || !this.csharpIsSingleDeclarator(declaration)) {
+            return false;
+        }
+        const init: any = declaration.initializer;
+        if (!isCallExpression(init) || init.expression?.getText() !== 'this.safeValue' || init.arguments.length < 2 || init.arguments.length > 3) {
+            return false;
+        }
+        const [ receiver, key, fallback ] = init.arguments;
+        if (!isStringLiteral(key) || !isIdentifier(receiver)) {
+            return false;
+        }
+        const emptyFallback = (fallback === undefined) || (isObjectLiteralExpression(fallback) && fallback.properties.length === 0)
+            || (isArrayLiteralExpression(fallback) && fallback.elements.length === 0);
+        if (!emptyFallback) {
+            return false;
+        }
+        return this.h30c05JsonOrigin(receiver);
+    }
+
+    // R is decoded JSON: a local whose every write is `await this.<implicit endpoint> (...)`, or the `message`
+    // frame parameter of a ws `handle*` method (the client hands it the deserialized frame) never written there
+    h30c05JsonOrigin(receiver): boolean {
+        const declaration: any = this.csharpReceiverBinding(receiver);
+        const scope: any = declaration === undefined ? undefined : findAncestor(declaration, (n) => isFunctionLike(n));
+        if (scope === undefined) {
+            return false;
+        }
+        if (isParameterDeclaration(declaration)) {
+            const method: any = declaration.parent;
+            const name = method?.name?.getText?.() ?? '';
+            const params = method?.parameters ?? [];
+            return isMethodDeclaration(method) && /^handle[A-Z]/.test(name) && params.length >= 2 && params[1] === declaration
+                && params[0].name?.getText() === 'client' && declaration.name?.getText() === 'message'
+                && this.h30c05WritesAll(scope, declaration, () => false);
+        }
+        if (declaration.kind !== SyntaxKind.VariableDeclaration || !this.csharpIsSingleDeclarator(declaration)) {
+            return false;
+        }
+        const isEndpoint = (value) => {
+            const v = this.csharpUnparenthesized(value);
+            return v?.kind === SyntaxKind.AwaitExpression && this.csharpImplicitApiTaskType(v.expression) !== undefined;
+        };
+        if (declaration.initializer !== undefined && !isEndpoint(declaration.initializer)) {
+            return false;
+        }
+        let writes = declaration.initializer === undefined ? 0 : 1;
+        const ok = this.h30c05WritesAll(scope, declaration, (value) => { writes++; return isEndpoint(value); });
+        return ok && writes > 0 && this.h30c05AssignedBeforeUse(scope, declaration);
+    }
+
+    // every write to the declaration in scope is a plain `=` whose right side passes `accept`
+    h30c05WritesAll(scope, declaration, accept): boolean {
+        let ok = true;
+        this.csharpWalkIdentifiers(scope, (identifier: any) => {
+            if (!ok || identifier === declaration.name || !this.csharpIsSameDeclaration(identifier, declaration)) {
+                return;
+            }
+            const parent: any = identifier.parent;
+            if (isBinaryExpression(parent) && parent.left === identifier && CSHARP_ASSIGNMENT_OPERATOR_KINDS.indexOf(parent.operatorToken.kind) >= 0) {
+                ok = parent.operatorToken.kind === SyntaxKind.EqualsToken && accept(parent.right);
+            } else if (((isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) && parent.operand === identifier) || isDeleteExpression(parent)) {
+                ok = false;
+            }
+        });
+        return ok;
+    }
+
+    // an uninitialized `let R` is read only after an if / else chain whose every arm assigns it (no undefined read)
+    h30c05AssignedBeforeUse(scope, declaration): boolean {
+        if (declaration.initializer !== undefined) {
+            return true;
+        }
+        const statement: any = declaration.parent?.parent;
+        const block: any = statement?.parent;
+        const statements: any[] = block?.statements ?? [];
+        const at = statements.indexOf(statement);
+        const armsAssign = (s): boolean => {
+            if (s === undefined) {
+                return false;
+            }
+            if (isIfStatement(s)) {
+                return armsAssign(s.thenStatement) && armsAssign(s.elseStatement);
+            }
+            const body: any[] = isBlock(s) ? (s as any).statements : [ s ];
+            return body.some((b) => isExpressionStatement(b) && isBinaryExpression(b.expression) && isIdentifier(b.expression.left)
+                && this.csharpIsSameDeclaration(b.expression.left, declaration));
+        };
+        for (let i = at + 1; i < statements.length; i++) {
+            const s = statements[i];
+            let mentions = false;
+            this.csharpWalkIdentifiers(s, (id: any) => { mentions = mentions || this.csharpIsSameDeclaration(id, declaration); });
+            if (!mentions) {
+                continue;
+            }
+            return armsAssign(s);
+        }
+        return false;
+    }
+    // ===== end h30-H30-C05
 }
