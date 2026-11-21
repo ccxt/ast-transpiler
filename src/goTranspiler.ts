@@ -24996,6 +24996,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (decl?.kind === SyntaxKind.Parameter) {
             return (this.goGetArgParameterType(decl) === 'string') ? 'string' : undefined;
         }
+        const h29g23 = this.h29g23WsUrlLocal(decl); if (h29g23 !== undefined) return h29g23;
         if (this.goAwaitedStringLocal(decl)) {
             return 'string';
         }
@@ -54909,3 +54910,73 @@ function h29g20LoopBodyGuardedRead (goTranspiler: GoTranspiler, node, writeConta
     return false;
 }
 // ===== end h29-H29-G20
+
+// ===== h29-H29-G23
+// `const url = this.getWsUrl ()` where the venue declares `getWsUrl (): string` and every return is a
+// string literal or a literal-defaulted safeString: the local prints `var url string` (the ccxt
+// non-nil string method retype), so an argument slot of an internal method takes it as a Go string
+export interface GoTranspiler {
+    h29g23WsUrlLocal(decl: any): string | undefined;
+    h29g23NonNilStringLeaf(e: any): boolean;
+    h29g23LiteralDefaultedConst(ident: any): boolean;
+}
+GoTranspiler.prototype.h29g23WsUrlLocal = function (decl: any): string | undefined {
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || ((decl.parent?.flags & NodeFlags.Const) === 0)) {
+        return undefined;
+    }
+    const call: any = decl.initializer;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || ((call.arguments?.length ?? 0) !== 0) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'getWsUrl')) {
+        return undefined;
+    }
+    let method: any;
+    try {
+        method = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
+    } catch (e) {
+        method = undefined;
+    }
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined) || ((method.parameters?.length ?? 0) !== 0)
+        || (method.type?.kind !== SyntaxKind.StringKeyword)) {
+        return undefined;
+    }
+    let ok = true;
+    const visit = (n: any) => {
+        if (!ok || (n.kind === SyntaxKind.FunctionExpression) || (n.kind === SyntaxKind.ArrowFunction)) {
+            return;
+        }
+        if (n.kind === SyntaxKind.ReturnStatement) {
+            ok = this.h29g23NonNilStringLeaf(n.expression);
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    method.body.forEachChild(visit);
+    return ok ? 'string' : undefined;
+};
+
+// a string literal, a literal-defaulted safeString const, or a `+` chain of those
+GoTranspiler.prototype.h29g23NonNilStringLeaf = function (e: any): boolean {
+    if ((e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken?.kind === SyntaxKind.PlusToken)) {
+        return this.h29g23NonNilStringLeaf(e.left) && this.h29g23NonNilStringLeaf(e.right);
+    }
+    return (e?.kind === SyntaxKind.StringLiteral) || (e?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)
+        || ((e?.kind === SyntaxKind.Identifier) && this.h29g23LiteralDefaultedConst(e));
+};
+
+// `const u = this.safeString (x, k, '<literal>')` never rebound: a string on every input
+GoTranspiler.prototype.h29g23LiteralDefaultedConst = function (ident: any): boolean {
+    let d: any;
+    try {
+        d = this.checkerOrUndefined()?.getSymbolAtLocation(ident)?.valueDeclaration?.resolve?.();
+    } catch (e) {
+        d = undefined;
+    }
+    const init: any = d?.initializer;
+    const name = init?.expression?.name?.text;
+    const args = init?.arguments ?? [];
+    return (d?.kind === SyntaxKind.VariableDeclaration) && ((d.parent?.flags & NodeFlags.Const) !== 0) && (init?.kind === SyntaxKind.CallExpression)
+        && (init.expression?.expression?.kind === SyntaxKind.ThisKeyword) && (name === 'safeString') && (args.length === 3)
+        && (args[2].kind === SyntaxKind.StringLiteral);
+};
+// ===== end h29-H29-G23
