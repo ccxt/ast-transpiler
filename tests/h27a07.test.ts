@@ -38,7 +38,9 @@ describe ('h27a07: config map reads print the comma-ok assertion', () => {
     });
     test ('negative: options receiver keeps the wrap', () => {
         const out = print ('    f () {\n        const o = this.safeDict (this.options, \'x\', {});\n        return this.safeString (o, \'y\');\n    }\n');
-        expect (out).not.toContain ('this.Options["x"].(map[string]any)');
+        // sibling h27-A06 owns the options receiver: its read is the comma-ok form, never this unit's SafeMapTyped
+        expect (out).toContain ('this.Options["x"].(map[string]any)');
+        expect (out).not.toContain ('SafeMapTyped(this.Options');
     });
     test ('negative: an untyped key keeps the wrap', () => {
         const out = print ('    f (k) {\n        const fees = this.safeDict (this.fees, k, {});\n        return this.safeString (fees, \'taker\');\n    }\n');

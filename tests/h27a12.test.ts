@@ -78,7 +78,8 @@ describe ('h27 A12 prediction JSON nested reads', () => {
         }
     });
     test ('positive: nested reads of a decoded response print the comma-ok assertion', () => {
-        expect (fn ('pred', 'pos')).toContain ('var rows, _ = data["rows"].([]any)');
+        // sibling h27-A02 prints the list read as a typed declaration plus the comma-ok assignment
+        expect (fn ('pred', 'pos')).toContain ('rows, _ = data["rows"].([]any)');
         expect (fn ('pred', 'pos')).toContain ('var data, _ = response["data"].(map[string]any)');
         expect (fn ('pred', 'pos')).not.toMatch (/Safe(?:List|Map)Typed\(/);
     });
@@ -92,6 +93,7 @@ describe ('h27 A12 prediction JSON nested reads', () => {
         expect (fn ('pred', 'written')).not.toContain ('.(map[string]any)');
     });
     test ('negative: the REST tier is untouched', () => {
-        expect (outs['rest']).not.toMatch (/, _ = \w+\["\w+"\]\.\(/);
+        // siblings h27-A01 / A02 convert the REST tier with the same proof; this unit adds no wrap there
+        expect (outs['rest']).not.toMatch (/Safe(?:List|Map)Typed\(response/);
     });
 });
