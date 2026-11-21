@@ -1142,7 +1142,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
         'ParseADLRank',
         'ParseDepositAddressSpecial',
         'ParseEvent', 'ParseMarketToEvent',
-        'SafePosition', 'ParsePosition', 'ParseOptionPosition' ]
+        'SafePosition', 'ParsePosition', 'ParseOptionPosition',
+        'ParseTickerList' ]
         .flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])),
     ...Object.fromEntries ([ 'ParseTradingFees', 'AssignDefaultDepositWithdrawFees', 'ParseDepositWithdrawFee', 'ParseTradingLimits', 'DepositWithdrawFee', 'ParsePublicDepositWithdrawFees' ].flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])),
     // exchange_prediction.go: retyped by transpilePredictionBaseMethods (no venue overrides)
