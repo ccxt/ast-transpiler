@@ -7697,6 +7697,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installH26g12AddChainCallArgument (goTranspiler);
     installH27g15AddChainCallLeafArgument (goTranspiler);
     installH28g33AddChainAnyDeclaration (goTranspiler);
+    installH29g25MapLiteralAddChain (goTranspiler);
     installCcxtGoWriteSiteConversions (goTranspiler);
     installCcxtGoIdentityTupleRebind (goTranspiler);
     installCcxtGoArrayLiteralWrites (goTranspiler);
@@ -54990,3 +54991,102 @@ GoTranspiler.prototype.h29g23LiteralDefaultedConst = function (ident: any): bool
     };
 }
 // ===== end h29-H29-G24
+// ===== h29-H29-G25
+// A statement ending in a map literal whose entry is a `+` chain of Go strings and `*string` identifiers: Add answers
+// nil when a pointer is nil, else the concat. The literal is bound to a local with `nil` in that slot, and the native
+// concat is stored under the pointers' nil test right after (ruling 10); nothing reads the local in between.
+function h29g25MapLiteralAddChain (goTranspiler, node, printed) {
+    if ((typeof printed !== 'string') || !printed.includes ('Add(')) {
+        return printed;
+    }
+    let literal: any = node?.expression;
+    // hoisting the literal is only order-safe when the other arguments are plain names
+    while ((literal?.kind === SyntaxKind.CallExpression) && (literal.arguments?.length > 0)
+        && literal.arguments.slice (0, -1).every ((a) => a.kind === SyntaxKind.Identifier)) {
+        literal = literal.arguments[literal.arguments.length - 1];
+    }
+    if (literal?.kind === SyntaxKind.ParenthesizedExpression) {
+        literal = literal.expression;
+    }
+    if (literal?.kind !== SyntaxKind.ObjectLiteralExpression) {
+        return printed;
+    }
+    const open = printed.indexOf ('map[string]any{');
+    const close = printed.lastIndexOf ('}');
+    if ((open < 0) || (close < open) || printed.substring (0, open).includes ('{') || !/^\)*\s*$/.test (printed.substring (close + 1))) {
+        return printed;
+    }
+    const lineStart = printed.lastIndexOf ('\n', open) + 1;
+    const indent = /^[\t ]*/.exec (printed.substring (lineStart))[0];
+    if (printed.substring (lineStart, open).trim () === '') {
+        return printed;
+    }
+    const stores: string[] = [];
+    let text = printed;
+    for (const property of literal.properties) {
+        const store = h29g25EntryStore (goTranspiler, property);
+        if (store === undefined) {
+            continue;
+        }
+        const entry = new RegExp ('^(' + indent + '\\t' + store.key + ': *)((?:ccxt\\.)?Add\\([^\\n]*\\)),$', 'm');
+        const found = entry.exec (text);
+        if ((found === null) || (ccxtGoWholeAddCallEnd (found[2].replace (/^ccxt\./, '')) < 0) || entry.test (text.substring (found.index + found[0].length))) {
+            continue;
+        }
+        text = text.substring (0, found.index) + found[1] + 'nil,' + text.substring (found.index + found[0].length);
+        stores.push (store.guard + '\u0000' + store.key + '\u0000' + store.value);
+    }
+    if (stores.length === 0) {
+        return printed;
+    }
+    const closeText = text.lastIndexOf ('}');
+    const name = 'literal' + goTranspiler.getLineBasedSuffix (literal);
+    if (ccxtGoScopeNamesIdentifier (node.parent, name)) {
+        return printed;
+    }
+    let out = text.substring (0, lineStart) + indent + 'var ' + name + ' map[string]any = ' + text.substring (open, closeText + 1) + '\n';
+    for (const store of stores) {
+        const [ guard, key, value ] = store.split ('\u0000');
+        out += indent + 'if ' + guard + ' {\n' + indent + '\t' + name + '[' + key + '] = ' + value + '\n' + indent + '}\n';
+    }
+    return out + text.substring (lineStart, open) + name + text.substring (closeText + 1);
+}
+
+function h29g25EntryStore (goTranspiler, property) {
+    if ((property?.kind !== SyntaxKind.PropertyAssignment) || (property.name?.kind !== SyntaxKind.StringLiteral)
+        || !/^[A-Za-z0-9_]+$/.test (property.name.text)) {
+        return undefined;
+    }
+    const init = property.initializer;
+    if ((init?.kind !== SyntaxKind.BinaryExpression) || (init.operatorToken?.kind !== SyntaxKind.PlusToken)) {
+        return undefined;
+    }
+    const leaves = ccxtGoAddChainLeaves (init, []);
+    const isPointer = (leaf) => (leaf?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(leaf) === '*string')
+        && !goStringOperand (goTranspiler, leaf);
+    const pointers = leaves.filter (isPointer);
+    if ((pointers.length < 1) || !leaves.every ((leaf) => pointers.includes (leaf) || goStringOperand (goTranspiler, leaf))) {
+        return undefined;
+    }
+    const texts = leaves.map ((leaf) => (pointers.includes (leaf) ? '*' : '') + goTranspiler.printNode (leaf, 0));
+    const names: string[] = [ ...new Set<string> (pointers.map ((leaf): string => goTranspiler.printNode (leaf, 0))) ];
+    if (texts.some ((t) => t.includes ('\n')) || !names.every ((n) => /^[A-Za-z_][A-Za-z0-9_]*$/.test (n))) {
+        return undefined;
+    }
+    return { key: '"' + property.name.text + '"', guard: names.map ((n) => n + ' != nil').join (' && '), value: texts.join (' + ') };
+}
+
+function installH29g25MapLiteralAddChain (goTranspiler) {
+    if (!goInstallOnce (goTranspiler, '__h29g25MapLiteralAddChainInstalled', 'printReturnStatement')) {
+        return;
+    }
+    const upstreamReturn = goTranspiler.printReturnStatement;
+    goTranspiler.printReturnStatement = function (node, identation) {
+        return h29g25MapLiteralAddChain (this, node, upstreamReturn.call (this, node, identation));
+    };
+    const upstreamStatement = goTranspiler.printExpressionStatement;
+    goTranspiler.printExpressionStatement = function (node, identation) {
+        return h29g25MapLiteralAddChain (this, node, upstreamStatement.call (this, node, identation));
+    };
+}
+// ===== end h29-H29-G25
