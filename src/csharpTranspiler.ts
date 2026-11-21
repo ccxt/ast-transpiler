@@ -5580,6 +5580,12 @@ export class CSharpTranspiler extends BaseTranspiler {
             const fieldType = this.csharpReferenceFieldType(node);
             return (fieldType === undefined) ? this.csharpTypeOfInitializer(node) : fieldType;
         }
+        case SyntaxKind.ElementAccessExpression:
+            // a char read on a declared string prints `....ToString () : null`, a C# `string`
+            if (isNumericLiteral(node.argumentExpression)) {
+                return (this.csharpDeclaredStringIndexRead(node, node.expression, node.argumentExpression, true) !== undefined) ? 'string?' : undefined;
+            }
+            return (this.csharpDeclaredStringIdentifierIndexRead(node, node.expression, node.argumentExpression) !== undefined) ? 'string?' : undefined;
         }
         if (isStringLiteralLikeNode(node)) {
             return 'string';

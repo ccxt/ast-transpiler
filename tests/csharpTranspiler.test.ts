@@ -1816,6 +1816,24 @@ describe('csharp equality operators instead of the isEqual wrapper', () => {
         "}");
         expect(output).toContain("bool isTrue_ = (b == true);");
     });
+    test('a char read on a declared string against a string literal', () => {
+        const output = equalityTests(
+        "function f () {\n" +
+        "    const s: string = 'abc';\n" +
+        "    const a = s[0] === 'a';\n" +
+        "    return a;\n" +
+        "}");
+        expect(output).toContain("bool a = ((s != null && 0 < s.Length ? s[0].ToString () : null) == \"a\");");
+        expect(output).not.toContain("isEqual(");
+    });
+    test('an element read on an untyped receiver keeps isEqual', () => {
+        const output = equalityTests(
+        "function f (s) {\n" +
+        "    const a = s[0] === 'a';\n" +
+        "    return a;\n" +
+        "}");
+        expect(output).toContain("isEqual(");
+    });
     test('a length-derived int against a numeric literal', () => {
         const output = equalityTests(
         "function f () {\n" +
