@@ -41108,6 +41108,7 @@ GoTranspiler.prototype.go93g4PointerOperands = function (call, self = undefined)
             }
             return ((declared === '*int64') && this.goPointerNumberIsNonNil(operand)) ? { 'pointer': true, 'text': '*' + printed } : undefined;
         }
+        const h29g03 = this.h29g03NestedInt64Operand(operand, call.arguments.indexOf(operand)); if (h29g03 !== undefined) { return h29g03; }
         // a nested arithmetic operand may print as a helper box in this position: keep the boxed sum
         if ((operand.kind === SyntaxKind.BinaryExpression) || (operand.kind === SyntaxKind.ParenthesizedExpression)) {
             return undefined;
@@ -54097,3 +54098,90 @@ GoTranspiler.prototype.h29g02PointerEntries = function (node): any[] {
     };
 }
 // ===== end h29-H29-G02
+// ===== h29-H29-G03 (begin): sum / min / max writes of non-nil *int64 operands into a nil-seeded Int local =====
+// `x = this.sum (p, n)` / `Math.min|max (p, q)` where `x` is `let x: Int = undefined` and every operand is an int
+// constant, an int64 or a *int64 the checker proves non-nil: the value is a never-nil int64, so the h18-g01 join
+// stores it through `xValue := *p + n; x = &xValue` (the 93g4 operand texts) instead of keeping the boxed sum.
+function h28g03TargetDeclaration(goTranspiler, call): any {
+    const write = goIntSeedUnwrap(call)?.parent;
+    if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken) || (write.right !== call)
+        || (write.left?.kind !== SyntaxKind.Identifier) || (write.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return undefined;
+    }
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(write.left)?.valueDeclaration?.resolve();
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.type?.kind !== SyntaxKind.TypeReference)
+        || (declaration.type.typeName?.text !== 'Int') || !goTranspiler.goNilInitInitializer(declaration.initializer)) {
+        return undefined;
+    }
+    return declaration;
+}
+function h28g03SumTexts(goTranspiler, call): string[] | undefined {
+    if ((call?.kind !== SyntaxKind.CallExpression) || (h28g03TargetDeclaration(goTranspiler, call) === undefined)) {
+        return undefined;
+    }
+    const declaration = h28g03TargetDeclaration(goTranspiler, call);
+    // the written local's own read would be the pointer under decision: refused
+    if (call.arguments.some((a) => goIntSeedRefersTo(goTranspiler, a, declaration))) {
+        return undefined;
+    }
+    return goTranspiler.go93g4PointerOperands(call) ?? h29g03Int64TreeTexts(goTranspiler, call);
+}
+const goOperandStaticTypeBaseH28g03 = GoTranspiler.prototype.goOperandStaticType;
+GoTranspiler.prototype.goOperandStaticType = function (node, printedText: string) {
+    return (h28g03SumTexts(this, node) !== undefined) ? 'int64' : goOperandStaticTypeBaseH28g03.call(this, node, printedText);
+};
+const printCallExpressionBaseH28g03 = GoTranspiler.prototype.printCallExpression;
+GoTranspiler.prototype.printCallExpression = function (node, identation) {
+    const texts = h28g03SumTexts(this, node);
+    if ((texts === undefined) || (this.goDeclaredTypeOfIdentifier(node.parent.left) !== '*int64')) {
+        return printCallExpressionBaseH28g03.call(this, node, identation);
+    }
+    const minMax = this.go92g7MinMaxName(node);
+    return (minMax !== undefined) ? `${minMax}(${texts[0]}, ${texts[1]})` : `${texts[0]} + ${texts[1]}`;
+};
+export interface GoTranspiler {
+    h29g03NestedInt64Operand(operand, index: number): { 'pointer': boolean, 'text': string } | undefined;
+}
+// a nested `+ - *` operand whose every leaf is an int64 local, a non-nil *int64 local or an int literal prints native int64
+function h29g03NativeIntTree(goTranspiler, node): boolean {
+    if (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        return h29g03NativeIntTree(goTranspiler, node.expression);
+    }
+    if (node?.kind === SyntaxKind.NumericLiteral) {
+        return Number.isSafeInteger(Number(node.text));
+    }
+    if (node?.kind === SyntaxKind.Identifier) {
+        const declared = goTranspiler.goDeclaredTypeOfIdentifier(node);
+        return (declared === 'int64') || ((declared === '*int64') && goTranspiler.goPointerNumberIsNonNil(node));
+    }
+    return (node?.kind === SyntaxKind.BinaryExpression)
+        && [SyntaxKind.PlusToken, SyntaxKind.MinusToken, SyntaxKind.AsteriskToken].includes(node.operatorToken?.kind)
+        && h29g03NativeIntTree(goTranspiler, node.left) && h29g03NativeIntTree(goTranspiler, node.right);
+}
+// every operand an int64 tree (no pointer needed): the operand texts of a plain int64 sum
+function h29g03Int64TreeTexts(goTranspiler, call): string[] | undefined {
+    if ((call.arguments?.length !== 2) || (!goTranspiler.go92g7IsBaseSum(call) && (goTranspiler.go92g7MinMaxName(call) === undefined))) {
+        return undefined;
+    }
+    const texts = call.arguments.map((operand, index) => {
+        if (operand.kind === SyntaxKind.Identifier) {
+            const declared = goTranspiler.goDeclaredTypeOfIdentifier(operand);
+            const printed = goTranspiler.printNode(operand, 0).trim();
+            return (declared === 'int64') ? printed : (((declared === '*int64') && goTranspiler.goPointerNumberIsNonNil(operand)) ? '*' + printed : undefined);
+        }
+        if (operand.kind === SyntaxKind.NumericLiteral) {
+            return Number.isSafeInteger(Number(operand.text)) ? operand.text : undefined;
+        }
+        return goTranspiler.h29g03NestedInt64Operand(operand, index)?.text;
+    });
+    return texts.every((t) => t !== undefined) ? texts : undefined;
+}
+GoTranspiler.prototype.h29g03NestedInt64Operand = function (operand, index: number) {
+    if (((operand?.kind !== SyntaxKind.BinaryExpression) && (operand?.kind !== SyntaxKind.ParenthesizedExpression))
+        || !h29g03NativeIntTree(this, operand)) {
+        return undefined;
+    }
+    const printed = this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)).trim();
+    return (this.goOperandStaticType(operand, printed) === 'int64') ? { 'pointer': false, 'text': this.go92g7OperandText(operand, index) } : undefined;
+};
+// ===== end h29-H29-G03 =====

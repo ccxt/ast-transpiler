@@ -109,7 +109,7 @@ describe ('go declared int / number local keeps its type across reassignment', (
         expect (out).not.toMatch (/var o int64/);
     });
 
-    test ('a sum whose operand is a nested product keeps the box', () => {
+    test ('a sum whose operand is a nested int64 product prints native', () => {
         const out = print (
             '    f (b: number, c: number) {\n' +
             "        const s = this.safeInteger (this.options, 's');\n" +
@@ -121,6 +121,6 @@ describe ('go declared int / number local keeps its type across reassignment', (
             '        }\n' +
             '        return until > 3;\n' +
             '    }\n');
-        expect (out).not.toMatch (/var until int64/);
+        expect (out).toContain ('until = *s + *w * d');
     });
 });
