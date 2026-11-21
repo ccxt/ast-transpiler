@@ -47193,3 +47193,51 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return printed;
 };
 // ===== end h27-A02 =====
+// ===== h27-A03 =====
+// `const d = this.safeDict (R, 'k', {})` on a JSON-origin map receiver R (an awaited map endpoint, or a typed safeDict of
+// one: goJsonOriginContainer) prints the comma-ok read plus the `{}` default: a missing key, a nil, an empty string or a
+// non-map value all answered the default before, and a nil map receiver reads nil, so the answer is unchanged
+export interface GoTranspiler {
+    h27a03SafeDictDefaultSite(node): { name: any, container: any, key: any } | undefined;
+}
+GoTranspiler.prototype.h27a03SafeDictDefaultSite = function (node) {
+    if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
+        return undefined;
+    }
+    const decl: any = node.declarations[0];
+    const init: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    const callee: any = init?.expression;
+    if ((decl.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    if ((fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0) || (key?.kind !== SyntaxKind.StringLiteral)
+        || (container?.kind !== SyntaxKind.Identifier) || !this.goJsonOriginContainer(container)) {
+        return undefined;
+    }
+    // the receiver prints as a Go map: a typed map endpoint receive, or the map unbox of a safeDict read
+    const source: any = this.goAnyBoxLocalDeclaration(container);
+    const sourceInit: any = this.goUnwrapParenthesizedNode(source?.initializer);
+    const isMap = (sourceInit?.kind === SyntaxKind.AwaitExpression)
+        ? (ccxtGoEndpointElement(this, this.goUnwrapParenthesizedNode(sourceInit.expression)) === GO_SAFE_DICT_LOCAL_TYPE)
+        : (this.goSafeDictLocalUnbox(source) === GO_SAFE_DICT_LOCAL_TYPE);
+    return isMap ? { name: decl.name, container, key } : undefined;
+};
+const printVariableDeclarationListH27a03 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH27a03.call(this, node, identation);
+    const site = this.h27a03SafeDictDefaultSite(node);
+    if (site === undefined) {
+        return printed;
+    }
+    const name = this.printNode(site.name, 0);
+    const ind = this.getIden(identation);
+    // only the defaulted map read the printer already declares `map[string]any`
+    if ((printed.trim().indexOf('\n') >= 0) || !(new RegExp('^\\s*var ' + name + ' map\\[string\\]any = (?:this\\.SafeDictMap\\(|MapTyped\\(this\\.SafeDict\\()')).test(printed)) {
+        return printed;
+    }
+    const read = `${this.printNode(site.container, 0)}[${this.printNode(site.key, 0)}].(map[string]any)`;
+    return `${ind}var ${name} map[string]any\n${ind}${name}, _ = ${read}\n${ind}if ${name} == nil {\n${ind}\t${name} = map[string]any{}\n${ind}}`;
+};
+// ===== end h27-A03 =====
