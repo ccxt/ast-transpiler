@@ -56230,3 +56230,45 @@ function h30a10ProveFrameParam (go: any, param: any): boolean {
     };
 }
 // ===== end h30-H30-A10 =====
+// ===== h30-H30-A11
+// `const x = this.safeDict (F, 'k', {})` on a proven frame F that the printer already lowers to the plain
+// `SafeMapTyped(F, "k")` (the `{}` default dropped, a missing member answers nil): print the comma-ok read,
+// which answers nil for a missing key, a non-map value or a nil F exactly as that wrap did
+export interface GoTranspiler {
+    h30a11FrameDefaultedRead(declaration, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h30a11FrameDefaultedRead = function (declaration, printed: string): string | undefined {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string') || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return undefined;
+    }
+    let init: any = declaration.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const callee: any = init?.expression;
+    if ((init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    if ((key?.kind !== SyntaxKind.StringLiteral) || !/^[^"\\\n]*$/.test(key.text) || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || (fallback.properties.length !== 0) || !this.h29a13FrameMap(container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const lit = `"${key.text}"`;
+    const m = /^(\n*)(\t*)(.*)$/s.exec(printed);
+    if ((m === null) || (m[3] !== `var ${name} map[string]any = SafeMapTyped(${container.text}, ${lit})`)) {
+        return undefined;
+    }
+    return `${m[1]}${m[2]}var ${name}, _ = ${container.text}[${lit}].(map[string]any)`;
+};
+{
+    const printVariableDeclarationListH30a11 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH30a11.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h30a11FrameDefaultedRead(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h30-H30-A11
