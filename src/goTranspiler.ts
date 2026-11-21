@@ -15161,6 +15161,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'checkRequiredMarginArgument': [ 1 ],
     // the one caller passes a SafeString `*string`; nil returns nil before any other read
     'integerPrecisionToAmount': [ 0 ],
+    // the one caller (hand-written UpdateProxySettings) passes a SafeString `*string`; the body only nil/empty-tests it
+    'checkConflictingProxies': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
