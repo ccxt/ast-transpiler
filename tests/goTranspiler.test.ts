@@ -4670,8 +4670,8 @@ describe('go gofmt-clean native shapes', () => {
         "}\n";
         const output = squashWs(transpiler.transpileGo(input).content);
         expect(output).toContain("import \"strings\"");
-        // GetIndexOf derefScalar's a nil *string to -1; the literal repeats the identifier
-        expect(output).toContain("func() int { if amount == nil { return -1 } return strings.Index(*amount, \"-\") }()");
+        // GetIndexOf derefScalar's a nil *string to -1, folded into the compare
+        expect(output).toContain("if amount != nil && strings.Index(*amount, \"-\") >= 0 {");
         expect(output).not.toContain("GetIndexOf(amount");
     });
     test('indexOf on an asserted receiver and needle reads the operands\' own Go types', () => {

@@ -32056,6 +32056,7 @@ ${this.getIden(identation)}${returnStatement}`;
         const {left, right, operatorToken} = node;
 
         const h28m01 = this.h28m01RowFieldBinary(node, identation); if (h28m01 !== undefined) return h28m01;
+        const h30g27 = this.h30g27IndexOfCompare(node, identation); if (h30g27 !== undefined) return h30g27;
         const deadNilTest = this.h21g06DeadNilTest(node);
         if (deadNilTest !== undefined) {
             return this.getIden(identation) + deadNilTest;
@@ -57490,3 +57491,60 @@ GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: stri
     return `${iden}var ${varName} []any\n${iden}if ${k} < len(${xs}) {\n${inner}${varName}, _ = ${xs}[${k}].([]any)\n${iden}}${fallback}`;
 };
 // ===== end h30-H30-G25 =====
+// ===== h30-H30-G27 =====
+export interface GoTranspiler {
+    h30g27IndexOfCompare(node: any, identation: number): string | undefined;
+}
+// `a.indexOf (b) <op> k` on Go `string` / `*string` identifiers: GetIndexOf derefs both and answers -1 when either
+// pointer is nil, else strings.Index; the nil arm folds to the constant (-1 <op> k), so no closure is needed
+{
+    const H30G27_OPS: any = { [SyntaxKind.GreaterThanEqualsToken]: '>=', [SyntaxKind.GreaterThanToken]: '>', [SyntaxKind.LessThanToken]: '<',
+        [SyntaxKind.LessThanEqualsToken]: '<=', [SyntaxKind.EqualsEqualsEqualsToken]: '==', [SyntaxKind.ExclamationEqualsEqualsToken]: '!=' };
+    const h30g27Constant = function (n: any): number | undefined {
+        if (n?.kind === SyntaxKind.NumericLiteral && /^[0-9]+$/.test(n.text)) {
+            return Number(n.text);
+        }
+        if ((n?.kind === SyntaxKind.PrefixUnaryExpression) && (n.operator === SyntaxKind.MinusToken) && (n.operand?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(n.operand.text)) {
+            return -Number(n.operand.text);
+        }
+        return undefined;
+    };
+    // the operand's Go text and whether it is a nilable pointer; undefined for anything that is not a plain string
+    const h30g27Operand = function (self: any, n: any): [string, boolean] | undefined {
+        if (n?.kind === SyntaxKind.StringLiteral) {
+            return [ self.printNode(n, 0), false ];
+        }
+        if (n?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const declared = self.goDeclaredTypeOfIdentifier(n);
+        if (((declared !== 'string') && (declared !== '*string')) || (self.printNode(n, 0) !== n.text)) {
+            return undefined;
+        }
+        return [ n.text, declared === '*string' ];
+    };
+    GoTranspiler.prototype.h30g27IndexOfCompare = function (node: any, identation: number): string | undefined {
+        const op = H30G27_OPS[node?.operatorToken?.kind];
+        const k = h30g27Constant(node?.right);
+        const call: any = node?.left;
+        if ((op === undefined) || (k === undefined) || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 1)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.name?.text !== 'indexOf')) {
+            return undefined;
+        }
+        const recv = h30g27Operand(this, call.expression.expression);
+        const needle = h30g27Operand(this, call.arguments[0]);
+        if ((recv === undefined) || (needle === undefined) || (!recv[1] && !needle[1]) || !this.goStdlibImportIsPlaceable()) {
+            return undefined; // two plain strings already print strings.Index (goNativeIndexOf)
+        }
+        if (this.goDerefIndexOf(call, recv[0], needle[0]) !== undefined) {
+            return undefined; // a proven non-nil pointer already prints the plain deref
+        }
+        const nilAnswer = ({ '>=': -1 >= k, '>': -1 > k, '<': -1 < k, '<=': -1 <= k, '==': -1 === k, '!=': -1 !== k } as any)[op];
+        const ptrs = [ recv, needle ].filter((o) => o[1]).map((o) => o[0]);
+        const index = `strings.Index(${recv[1] ? '*' : ''}${recv[0]}, ${needle[1] ? '*' : ''}${needle[0]}) ${op} ${this.printNode(node.right, 0)}`;
+        const guard = nilAnswer ? ptrs.map((p) => `${p} == nil`).join(' || ') + ' || ' : ptrs.map((p) => `${p} != nil`).join(' && ') + ' && ';
+        this.goFileStdlibImports.add('strings');
+        return this.getIden(identation) + `(${guard}${index})`;
+    };
+}
+// ===== end h30-H30-G27 =====
