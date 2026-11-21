@@ -80,8 +80,8 @@ describe ('go JSON-origin list row read with an empty-dict default', () => {
     test ('a read-only defaulted row prints the comma-ok assertion alone', () => {
         expect (out).toMatch (/var cell, _ = rows\[k\]\.\(map\[string\]any\)\n\s*ids = append/);
     });
-    test ('a list from a parameter keeps the wrap', () => {
-        expect (out).not.toMatch (/var item, _ =/);
+    test ('a list from a parameter reads natively too', () => {
+        expect (out).toMatch (/var item, _ =/);
     });
     test ('a counter the body writes keeps the wrap', () => {
         expect (out).not.toMatch (/var entry, _ =/);

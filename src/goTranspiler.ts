@@ -35733,12 +35733,25 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
     const listUnbox = GoTranspiler.prototype.goSafeListLocalUnbox;
     const isConcat = (call): boolean => (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
         && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'arrayConcat') && (call.arguments.length === 2);
+    const listUnboxPending = new Set<any>();
     GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
         const shipped = listUnbox.call(this, declaration);
         if ((shipped !== undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
             || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList') === undefined)) {
             return shipped;
         }
+        // its use scan prints `xs.length`, which asks this verdict again: the inner question answers no
+        if (listUnboxPending.has(declaration)) {
+            return undefined;
+        }
+        listUnboxPending.add(declaration);
+        try {
+            return listUnboxScan.call(this, declaration);
+        } finally {
+            listUnboxPending.delete(declaration);
+        }
+    };
+    const listUnboxScan = function (declaration) {
         const scope: Node | undefined = this.goEnclosingFunction(declaration);
         if (scope === undefined) {
             return undefined;
@@ -47528,12 +47541,22 @@ GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: stri
     const args: any = (assert !== undefined) ? this.goSafeAccessorLocalArgs(init, accessor) : undefined;
     const list: any = args?.container;
     const key: any = args?.key;
-    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)
-        || !this.goDeclaredListIdentifier(list) || !this.h27a08JsonList(list)) {
+    // a map row needs only the []any receiver: every element kind reads as SafeMapTyped reads it
+    const intKey = (key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.text}`);
+    const lastKey = (key?.kind === SyntaxKind.BinaryExpression) && (key.operatorToken.kind === SyntaxKind.MinusToken)
+        && (key.left?.kind === SyntaxKind.PropertyAccessExpression) && (key.left.name?.text === 'length') && (key.left.expression?.kind === SyntaxKind.Identifier)
+        && (key.left.expression.text === list?.text) && (key.right?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.right.text}`);
+    const counterKey = (key?.kind === SyntaxKind.Identifier) && (list?.kind === SyntaxKind.Identifier) && (key.text !== list.text);
+    if ((list?.kind !== SyntaxKind.Identifier) || !(intKey || lastKey || counterKey) || !this.goDeclaredListIdentifier(list)
+        || ((assert !== GO_SAFE_DICT_LOCAL_TYPE) && (!intKey || !this.h27a08JsonList(list)))) {
         return undefined;
     }
     const xs = this.printNode(list, 0);
-    const k = `${key.text}`;
+    const k = intKey ? `${key.text}` : this.printNode(key, 0);
+    const looped = counterKey && (this.goLoopBoundedIndexRead(init, list, key, xs, k) !== undefined);
+    if (counterKey && !looped) {
+        return undefined;
+    }
     const iden = this.getIden(identation);
     const printed = declaredValue.trim();
     // the `{}`-defaulted typed read answers a fresh empty map where the element is missing or not a map
@@ -47543,10 +47566,11 @@ GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: stri
     }
     const fallback = emptyDefault ? `\n${iden}if ${varName} == nil {\n${this.getIden(identation + 1)}${varName} = map[string]any{}\n${iden}}` : '';
     const read = { kind: SyntaxKind.ElementAccessExpression, expression: list, argumentExpression: key, pos: init.pos, end: init.end, parent: init.parent };
-    if (this.h26g24GuardedLiteralRead(read, true)) {
+    if (looped || (intKey && this.h26g24GuardedLiteralRead(read, true))) {
         return `${iden}var ${varName}, _ = ${xs}[${k}].(${assert})${fallback}`;
     }
-    return `${iden}var ${varName} ${assert}\n${iden}if ${k} < len(${xs}) {\n${this.getIden(identation + 1)}${varName}, _ = ${xs}[${k}].(${assert})\n${iden}}${fallback}`;
+    const inRange = intKey ? `${k} < len(${xs})` : `${k} >= 0`;
+    return `${iden}var ${varName} ${assert}\n${iden}if ${inRange} {\n${this.getIden(identation + 1)}${varName}, _ = ${xs}[${k}].(${assert})\n${iden}}${fallback}`;
 };
 // a never-rebound list local from `this.safeList (C, k[, []])` on a JSON-origin container whose every use only reads it
 GoTranspiler.prototype.h27a08JsonList = function (list) {
@@ -47571,29 +47595,11 @@ GoTranspiler.prototype.h27a08JsonList = function (list) {
 };
 // ===== h27-H27-A08 (end) =====
 // ===== h27-A09 =====
-// `const row = this.safeDict (xs, i)` inside `for (let i = 0; i < xs.length; i++)` over a JSON-origin
-// list (decoded response or its safeList chain: only maps, lists, scalars or nil) reads the element with
-// the comma-ok assertion; a missing / non-map element gives the nil map SafeMapTyped gave
+// a JSON-origin list (decoded response or its safeList chain: only maps, lists, scalars or nil)
 export interface GoTranspiler {
-    h27a09JsonRowRead(declaration, identation: number): string | undefined;
     h27a09JsonOriginList(baseExpr): boolean;
     h27a09SafeReaderArg(node, name: string): boolean;
 }
-GoTranspiler.prototype.h27a09JsonRowRead = function (declaration, identation: number) {
-    const args: any = this.goSafeAccessorLocalArgs(declaration?.initializer, 'safeDict');
-    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
-    const key: any = args?.key;
-    if ((args === undefined) || (declaration.initializer.arguments.length !== 2) || (container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
-        || (container.text === key.text) || !this.goDeclaredListIdentifier(container) || !this.h27a09JsonOriginList(container)) {
-        return undefined;
-    }
-    const containerStr = this.printNode(container, identation);
-    const keyStr = this.printNode(key, 0);
-    if (this.goLoopBoundedIndexRead(declaration.initializer, container, key, containerStr, keyStr) === undefined) {
-        return undefined;
-    }
-    return `${containerStr}[${keyStr}].(map[string]any)`;
-};
 // goJsonOriginList, also admitting a use as the first argument of a `this.safe*` reader (it only reads)
 GoTranspiler.prototype.h27a09JsonOriginList = function (baseExpr): boolean {
     const declaration: any = this.goAnyBoxLocalDeclaration(baseExpr);
@@ -47612,19 +47618,6 @@ GoTranspiler.prototype.h27a09SafeReaderArg = function (node, name: string): bool
     return (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === node) && !this.goWritesOrRebindsName(node, name, [])
         && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
         && /^safe(Dict|List|String|StringLower|StringUpper|Integer|Number|Bool|Value|Float|Timestamp)$/.test(callee.name?.text ?? '');
-};
-// the single-value assertion would panic on a non-map element: declare through the comma-ok form
-const printVariableDeclarationListH27a09 = GoTranspiler.prototype.printVariableDeclarationList;
-GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
-    const printed: string = printVariableDeclarationListH27a09.call(this, node, identation);
-    const declaration: any = node?.declarations?.[0];
-    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
-        return printed;
-    }
-    const value = this.h27a09JsonRowRead(declaration, identation);
-    const name = this.printNode(declaration.name, 0);
-    const m = (value === undefined) ? null : /^(\s*)var (\w+) map\[string\]any = (?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\)$/.exec(printed);
-    return ((m !== null) && (m[2] === name) && (`${m[3]}[${m[4]}].(map[string]any)` === value)) ? `${m[1]}var ${name}, _ = ${value}` : printed;
 };
 // ===== end h27-A09 =====
 // ===== h27-A10 =====
@@ -50170,48 +50163,6 @@ GoTranspiler.prototype.h27a08JsonList = function (list) {
     return h27a08JsonListH28a08.call(this, list) || this.h28a08JsonList(list);
 };
 // ===== end h28-H28-A08 =====
-// ===== h28-H28-A09 =====
-// `const row = this.safeDict (xs, i, {})` at the loop counter over a JSON-origin list (the h27-A09 proof)
-// reads the element with the comma-ok assertion and restores the `{}` default where SafeDictMap gave it
-export interface GoTranspiler {
-    h28a09JsonRowReadDefault(declaration, identation: number): string | undefined;
-}
-GoTranspiler.prototype.h28a09JsonRowReadDefault = function (declaration, identation: number) {
-    const init: any = declaration?.initializer;
-    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-    const container: any = (args !== undefined) ? this.goUnwrapParenthesizedNode(args.container) : undefined;
-    const key: any = args?.key;
-    if ((args === undefined) || (init.arguments.length !== 3) || (container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
-        || (container.text === key.text) || !this.goDeclaredListIdentifier(container) || !this.h27a09JsonOriginList(container)) {
-        return undefined;
-    }
-    const containerStr = this.printNode(container, identation);
-    const keyStr = this.printNode(key, 0);
-    if (this.goLoopBoundedIndexRead(init, container, key, containerStr, keyStr) === undefined) {
-        return undefined;
-    }
-    return `${containerStr}[${keyStr}].(map[string]any)`;
-};
-const printVariableDeclarationListH28a09 = GoTranspiler.prototype.printVariableDeclarationList;
-GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
-    const printed: string = printVariableDeclarationListH28a09.call(this, node, identation);
-    const declaration: any = node?.declarations?.[0];
-    if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
-        return printed;
-    }
-    const value = this.h28a09JsonRowReadDefault(declaration, identation);
-    const name = this.printNode(declaration.name, 0);
-    const m = (value === undefined) ? null : /^(\s*)var (\w+) map\[string\]any = (?:(?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\)|this\.SafeDictMap\((\w+), (\w+), map\[string\]any\{\}\))$/.exec(printed);
-    if ((m === null) || (m[2] !== name) || (`${m[3] ?? m[5]}[${m[4] ?? m[6]}].(map[string]any)` !== value)) {
-        return printed;
-    }
-    if (m[3] !== undefined) {
-        return `${m[1]}var ${name}, _ = ${value}`; // every consumer reads nil as {} (goSafeDictLocalUnboxStandard)
-    }
-    const iden = this.getIden(identation);
-    return `${m[1]}var ${name}, _ = ${value}\n${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = map[string]any{}\n${iden}}`;
-};
-// ===== end h28-H28-A09 =====
 // ===== h28-H28-A10 =====
 // `const row = this.safeList (xs, k)` printed `SafeListTyped(xs, k)` where xs is a `[]any` local cut by a
 // literal-key safeList from decoded JSON (response chain or ws frame): elements are only maps, []any, scalars or
@@ -53202,7 +53153,7 @@ const goDeclaredListIdentifierH29a09 = GoTranspiler.prototype.goDeclaredListIden
 GoTranspiler.prototype.goDeclaredListIdentifier = function (node) {
     return goDeclaredListIdentifierH29a09.call(this, node) || ((h29a09InRowRead > 0) && this.h29a09EndpointList(node));
 };
-for (const reader of [ 'h27a08RowRead', 'h27a09JsonRowRead', 'h28a09JsonRowReadDefault' ]) {
+for (const reader of [ 'h27a08RowRead' ]) {
     const previous = (GoTranspiler.prototype as any)[reader];
     (GoTranspiler.prototype as any)[reader] = function (...args) {
         h29a09InRowRead++;

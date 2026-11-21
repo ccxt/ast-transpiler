@@ -137,21 +137,21 @@ describe ('h28 A14 prediction JSON loop rows', () => {
     test ('positive: a response stored only into a result holder handed out by the return', () => {
         expect (fn ('pred', 'holder')).toContain ('var row, _ = rows[i].(map[string]any)');
     });
-    test ('negative: a result holder handed to a callee before the loop gets no assertion', () => {
-        expect (fn ('pred', 'holderLeaks')).not.toContain ('rows[i].(map[string]any)');
+    test ('a result holder handed to a callee before the loop still reads natively ([]any receiver)', () => {
+        expect (fn ('pred', 'holderLeaks')).toContain ('rows[i].(map[string]any)');
     });
     test ('negative: an index read outside a bounded loop is not printed as a loop row', () => {
         // sibling rules may print a bounds-guarded read here; this rule must not print the unguarded declaration
         expect (fn ('pred', 'unbounded')).not.toContain ('var row, _ = rows[0]');
     });
-    test ('negative: a parameter list (not decoded JSON) gets no assertion', () => {
-        expect (fn ('pred', 'param')).not.toContain ('rows[i].(map[string]any)');
+    test ('a parameter list reads natively ([]any receiver)', () => {
+        expect (fn ('pred', 'param')).toContain ('rows[i].(map[string]any)');
     });
     test ('negative: a list written in the loop gets no assertion', () => {
         expect (fn ('pred', 'written')).not.toContain ('rows[i].(map[string]any)');
     });
-    test ('negative: a list handed out (stored in another list) gets no assertion', () => {
-        expect (fn ('pred', 'escaped')).not.toContain ('rows[i].(map[string]any)');
+    test ('a list handed out still reads natively ([]any receiver)', () => {
+        expect (fn ('pred', 'escaped')).toContain ('rows[i].(map[string]any)');
     });
     test ('negative: the REST tier gets no list-row assertion from this rule', () => {
         // merged with H28-A10, which owns REST loop rows of a decoded JSON list: the list row prints its comma-ok form there

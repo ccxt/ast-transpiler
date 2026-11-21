@@ -66,10 +66,10 @@ describe ('h29a08: JSON-origin list parameter, every-caller proof', () => {
         expect (fn ('ParseRows')).toContain ('var row, _ = rows[i].(map[string]any)\n');
         expect (fn ('ParseRows')).not.toContain ('SafeMapTyped(rows, i)');
     });
-    test ('negative: one caller passes a built list, so no assertion is printed', () => {
-        expect (fn ('ParseMixed')).not.toContain ('rows[i].(');
+    test ('one caller passes a built list: the []any receiver still reads natively', () => {
+        expect (fn ('ParseMixed')).toContain ('rows[i].(map[string]any)');
     });
-    test ('negative: a list parameter written through prints no assertion', () => {
-        expect (fn ('ParseWr')).not.toContain ('rows[i].(');
+    test ('a list parameter written through still reads natively', () => {
+        expect (fn ('ParseWr')).toContain ('rows[i].(map[string]any)');
     });
 });

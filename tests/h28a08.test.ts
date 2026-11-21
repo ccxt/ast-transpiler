@@ -100,8 +100,8 @@ describe ('go literal-index row read: widened JSON-origin container', () => {
         expect (out).toMatch (/firstAccount, _ = accounts\[0\]\.\(map\[string\]any\)/);
         expect (out).not.toMatch (/SafeDictMap\(accounts, 0/);
     });
-    test ('negative: a response handed to a callee that may write it', () => {
-        expect (out).not.toMatch (/h0, _ = hl\[0\]/);
+    test ('a response handed to a callee still reads natively ([]any receiver)', () => {
+        expect (out).toMatch (/h0, _ = hl\[0\]/);
     });
     test ('negative: a response stored into a literal that is not returned', () => {
         expect (out).not.toMatch (/wa0, _ = wa\[0\]/);

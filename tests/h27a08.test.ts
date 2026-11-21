@@ -84,9 +84,9 @@ describe ('go JSON-origin list row read at a literal index', () => {
     test ('positive: a {}-defaulted row keeps the empty-map answer', () => {
         expect (out).toMatch (/d0, _ = dl\[0\]\.\(map\[string\]any\)\n\s*\}\n\s*if d0 == nil \{\n\s*d0 = map\[string\]any\{\}/);
     });
-    test ('negative: a parameter list keeps the wrap', () => {
-        expect (out).toMatch (/var pr map\[string\]any = SafeMapTyped\(prs, 0\)/);
-        expect (out).not.toMatch (/pr, _ = /);
+    test ('a parameter list reads natively ([]any receiver)', () => {
+        expect (out).not.toMatch (/SafeMapTyped\(prs, 0\)/);
+        expect (out).toMatch (/pr, _ = prs\[0\]/);
     });
     test ('negative: a list written into keeps the wrap', () => {
         expect (out).toMatch (/var w0 map\[string\]any = SafeMapTyped\(wl, 0\)/);

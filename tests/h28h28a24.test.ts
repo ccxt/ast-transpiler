@@ -54,7 +54,7 @@ describe ('go getCacheIndex delta rows', () => {
         expect (out).not.toMatch (/cache\[j\]/);
     });
 
-    test ('negative: another method is not a delta buffer', () => {
-        expect (out).not.toMatch (/head, _ = cache\[0\]/);
+    test ('another method reads the []any row natively too', () => {
+        expect (out).toMatch (/head, _ = cache\[0\]/);
     });
 });

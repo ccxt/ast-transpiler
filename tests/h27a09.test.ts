@@ -67,8 +67,8 @@ describe ('go JSON-origin list row read at the loop counter', () => {
         expect (out).toMatch (/var row, _ = data\[i\]\.\(map\[string\]any\)/);
         expect (out).not.toMatch (/SafeMapTyped\(data, i\)\n[^\n]*\n[^\n]*row/);
     });
-    test ('a list from a parameter keeps the wrap', () => {
-        expect (out).not.toMatch (/var item, _ =/);
+    test ('a list from a parameter reads natively too', () => {
+        expect (out).toMatch (/var item, _ = data\[i\]/);
     });
     test ('a counter the body writes keeps the wrap', () => {
         expect (out).not.toMatch (/var entry, _ =/);

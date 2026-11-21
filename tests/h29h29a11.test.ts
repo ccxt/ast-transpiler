@@ -101,6 +101,6 @@ describe ('go nested loop rows of a JSON-origin list carry the JSON-origin proof
     });
     test ('a row read outside a bounded loop does not prove the nested list', () => {
         expect (out).not.toMatch (/fcoins, _ = first\["coins"\]/);
-        expect (out).not.toMatch (/var fcoin, _ =/);
+        expect (out).toMatch (/var fcoin, _ = fcoins\[j\]/);
     });
 });

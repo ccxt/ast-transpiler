@@ -59,17 +59,17 @@ describe ('h28 A13 frame list row reads', () => {
         expect (out).not.toContain ('SafeMapTyped(rows, i)');
         expect (out).not.toContain ('SafeDictMap(rows, i');
     });
-    test ('negative: a frame list written through keeps the wrap', () => {
+    test ('a frame list written through reads natively: the receiver is []any', () => {
         const out = go (dispatch + '\n' + handler ('        const rows = this.safeList (message, \'rows\');\n        rows[0] = {};\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n            this.safeString (row, \'a\');\n        }'));
-        expect (out).not.toContain ('rows[i].(map[string]any)');
+        expect (out).toContain ('var row, _ = rows[i].(map[string]any)');
     });
-    test ('negative: a handler also called with a built dict keeps the wrap', () => {
+    test ('a handler also called with a built dict reads natively: the receiver is []any', () => {
         const out = go (dispatch + '\n' + handler (loop + '        return out;')
             + '\n    other (client: Client) {\n        const m: Dict = { \'rows\': [] };\n        this.handleTrade (client, m);\n    }');
-        expect (out).not.toContain ('rows[i].(map[string]any)');
+        expect (out).toContain ('var row, _ = rows[i].(map[string]any)');
     });
-    test ('negative: a list from a non-frame parameter keeps the wrap', () => {
+    test ('a list from a non-frame parameter reads natively: the receiver is []any', () => {
         const out = go ('    parseX (message: Dict) {\n' + loop + '        return out;\n    }');
-        expect (out).not.toContain ('rows[i].(map[string]any)');
+        expect (out).toContain ('var row, _ = rows[i].(map[string]any)');
     });
 });
