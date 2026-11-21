@@ -2778,6 +2778,7 @@ function ccxtGoSafeCollectionRestUse (goTranspiler, node, family, defaulted) {
 // exactly like the printer's own emission does (no admitted read observes it); a non-empty default
 // is passed to a default-aware reader so the local holds the value the box held.
 function ccxtGoSafeCollectionUnboxValue (goTranspiler, declaration, identation, families) {
+    const h27a10 = (families.indexOf ('list') >= 0) ? goTranspiler.h27a10RowSliceRead (declaration, identation) : undefined; if (h27a10 !== undefined) return h27a10;
     const found = ccxtGoSafeCollectionArgs (declaration.initializer);
     if ((found === undefined) || (families.indexOf (found.family) < 0)) {
         return undefined;
@@ -20041,6 +20042,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goSafeListLocalUnbox(declaration) !== GO_SAFE_LIST_LOCAL_TYPE) {
             return undefined;
         }
+        const h27a10 = this.h27a10RowSliceRead(declaration, identation); if (h27a10 !== undefined) return h27a10;
         if (this.h26g51PushStoreBackList(declaration)) { return this.h26g51PushStoreBackValue(declaration, identation); }
         const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList');
         const container = this.printNode(args.container, identation);
@@ -47596,3 +47598,25 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return ((m !== null) && (m[2] === name) && (`${m[3]}[${m[4]}].(map[string]any)` === value)) ? `${m[1]}var ${name}, _ = ${value}` : printed;
 };
 // ===== end h27-A09 =====
+// ===== h27-A10 =====
+// `const row = this.safeList (rows, i)` where rows prints `[][]any` and i is the counter of a loop over
+// rows.length that writes neither: SafeListTyped answers rows[i] itself (a nil row reads as a nil slice)
+export interface GoTranspiler {
+    h27a10RowSliceRead(declaration, identation: number): string | undefined;
+}
+GoTranspiler.prototype.h27a10RowSliceRead = function (declaration, identation: number) {
+    const init: any = declaration?.initializer;
+    const callee: any = init?.expression;
+    if ((init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeList') || (init.arguments.length !== 2)) {
+        return undefined;
+    }
+    const [ rows, key ] = init.arguments;
+    if ((rows?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier (rows) !== '[][]any')) {
+        return undefined;
+    }
+    const rowsStr = this.printNode (rows, identation).trim ();
+    const keyStr = this.printNode (key, 0).trim ();
+    return this.goLoopBoundedIndexRead (init, rows, key, rowsStr, keyStr);
+};
+// ===== end h27-A10 =====
