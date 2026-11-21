@@ -70,7 +70,7 @@ describe ('go safeList local with a [] default keeps []any through a const alias
     test ('negative: an alias tested against nil keeps the box', () => {
         expect (out).toMatch (/var rows any = this\.SafeList\(message, "data", \[\]any\{\}\)/);
         expect (out).toMatch (/var copy any = rows/);
-        expect (out).toMatch (/IsEqual\(copy, nil\)/);
+        expect (out).toMatch (/copy == nil/);
     });
 
     test ('negative: an alias written with another value keeps the box', () => {

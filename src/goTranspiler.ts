@@ -23159,6 +23159,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const h27g19 = this.h27g19RequestStubAwait(expr); if (h27g19 !== undefined) { return h27g19; }
         const h28g13 = this.h28g13ProvenDefaultSafeRead(expr); if (h28g13 !== undefined) { return h28g13; }
+        const h29g11 = this.h29g11CopyOrFreshMapSource(expr); if (h29g11 !== undefined) { return h29g11; }
         switch (expr.kind) {
         case SyntaxKind.NullKeyword:
             return true;
@@ -28794,6 +28795,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const nilTest = (text: string): string => (isEq ? `(${text} == nil)` : `(${text} != nil)`);
         const native = isEq ? `(${leftText} == ${rightText})` : `(${leftText} != ${rightText})`;
         const h28g16 = this.h28g16CellNilCompare(left, rFam, nilTest(leftText)); if (h28g16 !== undefined) return h28g16;
+        const h29g11 = this.h29g11CopyNilCompare(left, rFam, nilTest(leftText)); if (h29g11 !== undefined) return h29g11;
         if (rFam === 'nil' && lPtr) {
             return nilTest(leftText);
         }
@@ -54498,3 +54500,124 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
         + `${iden}}`;
 };
 // ===== end h29-H29-G08
+// ===== h29-G11
+// three more non-pointer sources for the `IsEqual(x, nil)` -> `x == nil` proof:
+// - a plain copy of another `any` local whose every write is proven (no typed Go local: a nil typed map is not nil in `any`)
+// - slot 0 of base handleOptionAndParams/2: the hand-written binder returns derefScalar(value), never a scalar pointer
+// - base extend/deepExtend (a fresh map) and omit (derefScalar'd input or a fresh map)
+export interface GoTranspiler {
+    h29g11CopyOrFreshMapSource(expr): boolean | undefined;
+    h29g11CopyNilCompare(left, rFam: string | undefined, nilText: string): string | undefined;
+    h29g11EveryWriteProven(decl): boolean;
+    h29g11Proving: Set<any>;
+}
+const H29G11_FRESH_MAP_CALLS = [ 'extend', 'deepExtend', 'omit' ];
+const H29G11_DEREF_SLOT0_CALLS = [ 'handleOptionAndParams', 'handleOptionAndParams2' ];
+GoTranspiler.prototype.h29g11CopyOrFreshMapSource = function (expr) {
+    expr = this.goUnwrapParenthesizedNode(expr);
+    if (expr?.kind === SyntaxKind.CallExpression) {
+        const callee: any = expr.expression;
+        return ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && H29G11_FRESH_MAP_CALLS.includes(String(callee.name?.text ?? '')) && this.goIsBaseExchangeMethod(callee.name)) ? true : undefined;
+    }
+    if ((expr?.kind !== SyntaxKind.Identifier) || (expr.text === 'undefined')) {
+        return undefined;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(expr);
+    if (this.goDeclaredTypeOfIdentifier(expr) !== undefined) {
+        return undefined;
+    }
+    if ((decl?.kind === SyntaxKind.BindingElement) && (decl.name?.kind === SyntaxKind.Identifier) && (decl.initializer === undefined)
+        && (decl.dotDotDotToken === undefined)) {
+        const pattern: any = decl.parent;
+        const declaration: any = pattern?.parent;
+        const call: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+        const callee: any = call?.expression;
+        if ((pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements[0] !== decl) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+            || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !H29G11_DEREF_SLOT0_CALLS.includes(String(callee.name?.text ?? ''))
+            || !this.goIsBaseExchangeMethod(callee.name) || (this.goTuplePointerSlotOfBinding(decl) !== undefined)) {
+            return undefined;
+        }
+        // a later `[ x, p ] = ...` or `x = ...` write of the binding must be proven too
+        const name = decl.name.text;
+        const scope = this.goEnclosingFunction(declaration);
+        let unproven = (scope === undefined);
+        const visit = (n) => {
+            if (unproven) { return; }
+            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
+                && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)) {
+                unproven = true;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        scope?.forEachChild(visit);
+        return unproven ? undefined : true;
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    this.h29g11Proving = this.h29g11Proving ?? new Set<any>();
+    if (this.h29g11Proving.has(decl)) {
+        return false;
+    }
+    this.h29g11Proving.add(decl);
+    try {
+        return this.h29g11EveryWriteProven(decl) ? true : undefined;
+    } finally {
+        this.h29g11Proving.delete(decl);
+    }
+};
+// an untyped `any` local (no Go type named) whose initializer and every `=` write is a proven non-pointer
+// source: the box never holds a nil *T, so `IsEqual(x, nil)` answers exactly `x == nil`
+GoTranspiler.prototype.h29g11EveryWriteProven = function (decl) {
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
+        || (decl.parent?.kind !== SyntaxKind.VariableDeclarationList) || (this.goDeclaredTypeOfIdentifier(decl.name) !== undefined)
+        || !this.goIsNonPointerValueSource(decl.initializer)) {
+        return false;
+    }
+    const name = decl.name.text;
+    const scope = this.goEnclosingFunction(decl);
+    let holds = (scope !== undefined);
+    const visit = (n) => {
+        if (!holds) { return; }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
+            && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)
+            && ((n.operatorToken.kind !== SyntaxKind.EqualsToken) || (n.left.kind !== SyntaxKind.Identifier) || !this.goIsNonPointerValueSource(n.right))) {
+            holds = false;
+            return;
+        }
+        if (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression))
+            && (n.operand?.kind === SyntaxKind.Identifier) && (n.operand.text === name)) {
+            holds = false;
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    scope?.forEachChild(visit);
+    return holds;
+};
+GoTranspiler.prototype.h29g11CopyNilCompare = function (left, rFam, nilText) {
+    const n: any = this.goUnwrapParenthesizedNode(left);
+    if ((rFam !== 'nil') || (n?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(n) !== undefined)) {
+        return undefined;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(n);
+    // only locals the shipped proof cannot see: a copy write or a handleOptionAndParams slot somewhere in the chain
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goAnyLocalHoldsNonPointer(decl)) {
+        return undefined;
+    }
+    this.h29g11Proving = this.h29g11Proving ?? new Set<any>();
+    if (this.h29g11Proving.has(decl)) {
+        return undefined;
+    }
+    this.h29g11Proving.add(decl);
+    try {
+        return this.h29g11EveryWriteProven(decl) ? nilText : undefined;
+    } finally {
+        this.h29g11Proving.delete(decl);
+    }
+};
+// ===== end h29-G11
+

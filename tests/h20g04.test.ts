@@ -79,7 +79,7 @@ describe ('h20g04 empty-default rebind of a nil-join map local', () => {
     });
     test ('a rebind of another local keeps the box', () => {
         const out = print (BYBIT.replace ('requestHeaders = (headersBase', 'let other: any = undefined;\n            other = (headersBase'));
-        expect (out).not.toContain ('if headersBase == nil {');
+        expect (out).toContain ('if headersBase == nil {');
     });
     test ('a non-map write of the local keeps the box', () => {
         const out = print (BYBIT.replace ('requestHeaders[\'s\'] = method;', 'requestHeaders[\'s\'] = method;\n            requestHeaders = this.safeString (params, \'h\');'));
