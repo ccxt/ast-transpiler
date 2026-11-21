@@ -17877,6 +17877,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return declared;
         }
         const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(receiver)?.valueDeclaration?.resolve();
+        if ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === GO_STRING_LIST_LOCAL_TYPE)) {
+            return GO_STRING_LIST_LOCAL_TYPE; // bound as `var xs []string = GetArgStringSlice(..)`
+        }
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)) {
             return undefined;
         }
