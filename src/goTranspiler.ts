@@ -21353,6 +21353,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
             if (cacheKeys !== undefined) {
                 return cacheKeys;
             }
+            const h27a08 = this.h27a08RowRead(declaration, declaredType, varName, identation, declaredValue); if (h27a08 !== undefined) { return h27a08; }
             // an initializer printed at the declaration's own level (parenthesized expression,
             // helper call) carries that indentation; gofmt puts one space after `=`
             const stm = this.getIden(identation) + "var " + varName + " " + declaredType + " = " + declaredValue;
@@ -47475,3 +47476,66 @@ function installH27a07ConfigMapReads (goTranspiler) {
     };
 }
 // ===== end h27-A07 =====
+// ===== h27-H27-A08 =====
+// `const row = this.safeDict (xs, K)` / `this.safeList (xs, K)` (K an integer literal) where xs is a read-only []any local
+// read by safeList from a decoded JSON container: its elements are only map[string]any, []any, scalars or nil, so the
+// comma-ok assertion answers what SafeMapTyped / SafeListTyped did; the index is bounds-proven or tested in a statement
+export interface GoTranspiler {
+    h27a08RowRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h27a08JsonList(list): boolean;
+}
+GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: string, varName: string, identation: number, declaredValue: string) {
+    let init: any = declaration?.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.NonNullExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const accessor = init?.expression?.name?.text;
+    // only where the declaration would print the nil-answering wrap on the same list and index
+    const assert = ((accessor === 'safeDict') && (declaredType === GO_SAFE_DICT_LOCAL_TYPE)) ? GO_SAFE_DICT_LOCAL_TYPE
+        : (((accessor === 'safeList') && (declaredType === GO_SAFE_LIST_LOCAL_TYPE)) ? GO_SAFE_LIST_LOCAL_TYPE : undefined);
+    const wrap = (assert === GO_SAFE_DICT_LOCAL_TYPE) ? 'SafeMapTyped' : 'SafeListTyped';
+    const args: any = (assert !== undefined) ? this.goSafeAccessorLocalArgs(init, accessor) : undefined;
+    const list: any = args?.container;
+    const key: any = args?.key;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`)
+        || !this.goDeclaredListIdentifier(list) || !this.h27a08JsonList(list)) {
+        return undefined;
+    }
+    const xs = this.printNode(list, 0);
+    const k = `${key.text}`;
+    const iden = this.getIden(identation);
+    const printed = declaredValue.trim();
+    // the `{}`-defaulted typed read answers a fresh empty map where the element is missing or not a map
+    const emptyDefault = (assert === GO_SAFE_DICT_LOCAL_TYPE) && [ `this.SafeDictMap(${xs}, ${k}, map[string]any{})`, `MapTyped(this.SafeDict(${xs}, ${k}, map[string]any{}))` ].includes(printed);
+    if (!emptyDefault && (printed !== `${wrap}(${xs}, ${k})`) && (printed !== `this.SafeDictMap(${xs}, ${k})`)) {
+        return undefined;
+    }
+    const fallback = emptyDefault ? `\n${iden}if ${varName} == nil {\n${this.getIden(identation + 1)}${varName} = map[string]any{}\n${iden}}` : '';
+    const read = { kind: SyntaxKind.ElementAccessExpression, expression: list, argumentExpression: key, pos: init.pos, end: init.end, parent: init.parent };
+    if (this.h26g24GuardedLiteralRead(read, true)) {
+        return `${iden}var ${varName}, _ = ${xs}[${k}].(${assert})${fallback}`;
+    }
+    return `${iden}var ${varName} ${assert}\n${iden}if ${k} < len(${xs}) {\n${this.getIden(identation + 1)}${varName}, _ = ${xs}[${k}].(${assert})\n${iden}}${fallback}`;
+};
+// a never-rebound list local from `this.safeList (C, k[, []])` on a JSON-origin container whose every use only reads it
+GoTranspiler.prototype.h27a08JsonList = function (list) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(list);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeList');
+    if ((args === undefined) || !this.goJsonOriginContainer(this.goUnwrapParenthesizedNode(args.container))) {
+        return false;
+    }
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
+        if (this.goJsonOriginListUseIsReadOnly(n, name) || this.goIsNilComparisonOperand(n, n.parent)) {
+            return true;
+        }
+        // the receiver of a `this.safeX (xs, ..)` reader
+        const call: any = n.parent;
+        return !this.goWritesOrRebindsName(n, name, []) && (call?.kind === SyntaxKind.CallExpression) && (call.arguments?.[0] === n)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && /^safe(Dict|List|String|Integer|Number|Value|Float|Bool|Timestamp)$/.test(`${call.expression.name?.text}`);
+    });
+};
+// ===== h27-H27-A08 (end) =====
