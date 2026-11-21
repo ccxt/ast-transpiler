@@ -49693,3 +49693,9 @@ GoTranspiler.prototype.h27m01RowBaseIsStruct = function (base: any): boolean {
     return (declaration !== undefined) && ((this.h27m01Proving?.has(declaration) === true) || (this.goTypedRowBinder(declaration) !== undefined));
 };
 // ===== end h27-M01
+// ===== h27-H27-P11
+// parseOrderBookBidsAsks: the base and the one override (luno) return their `[]any` result accumulator
+// on every path (host table goProvenListMethods), so a local either call initialises is a `[]any`
+CCXT_GO_HELPER_RETURN_TYPES['this.ParseOrderBookBidsAsks'] = '[]any';
+CCXT_GO_HELPER_RETURN_TYPES['this.DerivedExchange.ParseOrderBookBidsAsks'] = '[]any';
+// ===== end h27-H27-P11
