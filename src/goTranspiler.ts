@@ -24036,6 +24036,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const goType = entry[fn.parameters.indexOf(param)];
+        const h28t05 = this.h28t05ObjectRowSliceParameterType(fn, param, goType); if (h28t05 !== undefined) return h28t05;
         if (goType === '[]any') {
             return this.goUnifiedAnySliceParameterType(fn, param);
         }
@@ -52535,3 +52536,21 @@ GoTranspiler.prototype.printIfStatement = function (node, identation) {
     return h28t03ShippedIf.call(this, node, identation);
 };
 // ===== end h28-H28-T03
+// ===== h28-H28-T05
+// a `[]any` table slot types a required `object[]` row list (`object` is a non-primitive, not an Object
+// type, so the generic rule skips it); the body must keep it a slice
+export interface GoTranspiler {
+    h28t05ObjectRowSliceParameterType(fn, param, goType: string): string | undefined;
+}
+GoTranspiler.prototype.h28t05ObjectRowSliceParameterType = function (fn, param, goType) {
+    if ((goType !== '[]any') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'object[]')) {
+        return undefined;
+    }
+    if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]any')) {
+        throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
+    }
+    return '[]any';
+};
+// ===== end h28-H28-T05
