@@ -36,7 +36,7 @@ describe ('h30a08: reads of a decoded map with an unguarded *string key', () => 
     });
     test ('two-argument dict read keeps the nil answer (no default)', () => {
         const out = print (fn ('const entry = this.safeDict (response, code);'));
-        expect (out).toContain ('\tvar entry map[string]any\n\tif code != nil {\n\t\tentry, _ = response[*code].(map[string]any)\n\t}\n\treturn entry');
+        expect (out).toContain ('\tvar entry map[string]any\n\tif code != nil {\n\t\tentry, _ = response[*code].(map[string]any)\n\t}\n\n\tch <- entry');
     });
     test ('defaulted list read: nil-guarded comma-ok plus the [] default', () => {
         const out = print (fn ('const entry = this.safeList (response, code, []);'));

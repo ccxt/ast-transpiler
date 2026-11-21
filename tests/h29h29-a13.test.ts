@@ -65,6 +65,8 @@ describe ('h29 A13 frame dict reads', () => {
     });
     test ('negative: a computed key keeps the wrap', () => {
         const out = go (dispatch + '\n' + handler ('        const k = this.safeString (message, \'k\');\n        const data = this.safeDict (message, k);\n        return this.parseRow (data);'));
-        expect (out).not.toContain ('].(map[string]any)');
+        // H30-A08 owns the *string-key read on a proven frame: nil-guarded comma-ok
+        expect (out).toContain ('\tif k != nil {\n\t\tdata, _ = message[*k].(map[string]any)\n\t}');
+        expect (out).not.toContain ('message[k]');
     });
 });

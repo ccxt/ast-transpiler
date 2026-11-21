@@ -41754,7 +41754,7 @@ export class RustTranspiler extends BaseTranspiler {
         const indexSym = this.rustSymbolOf(index);
         const same = (n: any, sym: any): boolean => n !== undefined && isIdentifier(n) && sym !== undefined && this.rustSymbolOf(n) === sym;
         let loop: any = index;
-        while (loop !== undefined && !(isForStatement(loop) && same(loop.condition?.left, indexSym))) loop = loop.parent;
+        while (loop !== undefined && !(isForStatement(loop) && same((loop.condition as any)?.left, indexSym))) loop = loop.parent;
         const fn: any = this.rustEnclosingFunction(row);
         if (loop === undefined || this.rustEnclosingFunction(loop) !== fn) return undefined;
         const init: any = loop.initializer;

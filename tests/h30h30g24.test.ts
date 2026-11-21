@@ -65,7 +65,6 @@ describe ('go ArrayCache hashmap row entry reads (h30g24)', () => {
         const t: any = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 }, 'asyncMethodSuffix': 'Async' } });
         installCcxtGoLocalTypes (t.goTranspiler);
         out = t.transpileGoByPath (file).content;
-        fs.writeFileSync (path.join (__dirname, '..', '..', '..', 'campaigns', 'hx12', 'work', 'h30', 'tmp-H30-G24', 'out.go'), out);
     });
     afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h30g24'), { recursive: true, force: true }));
 

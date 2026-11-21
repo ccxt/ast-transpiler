@@ -8751,7 +8751,8 @@ describe('the base pair twins bind natively at every call site', () => {
     });
     test('the twin prints the Go pair signature and return', () => {
         const output = run('');
-        expect(output).toContain('HandleParamString(params any, paramName any, optionalArgs ...any) (*string, map[string]any)');
+        // H30-A18 tables the params slot as a map when every call site proves one
+        expect(output).toContain('HandleParamString(params map[string]any, paramName any, optionalArgs ...any) (*string, map[string]any)');
         expect(output).toContain('return value, MapTyped(paramsOmitted)');
     });
     test('a holder whose reads are all literal slot indexes binds the pair into two locals', () => {

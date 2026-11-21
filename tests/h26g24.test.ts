@@ -71,7 +71,9 @@ describe ('go literal list read under a length guard', () => {
     });
     afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h26g24'), { recursive: true, force: true }));
     test ('positive: a row write under a defined safeDict (xs, 0) guard indexes natively', () => {
-        expect (out).toMatch (/AddElementToObject\(rows\[0\], "cursor", cursor\)/);
+        // H30-G31 prints the row store natively on the same proven index
+        expect (out).toContain ('if row, ok := rows[0].(map[string]any); ok && (row != nil) {');
+        expect (out).not.toMatch (/AddElementToObject\(GetValue\(rows, 0\)/);
     });
     test ('positive: an exiting length === 0 guard proves index 0', () => {
         expect (out).toMatch (/head any = items\[0\]|head = items\[0\]/);

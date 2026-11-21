@@ -84,7 +84,9 @@ describe ('h27a01: JSON-origin map receiver, literal key, comma-ok map read', ()
     });
     test ('negative: a list response and a non-literal key keep their reads', () => {
         expect (fn ('listResponse')).toContain ('data, _ = response[0].(map[string]any)');
-        expect (fn ('paramKey')).not.toContain ('.(map[string]any)');
+        // H30-A08 owns the *string-key read: nil-guarded comma-ok, never the wrap and never an unguarded dereference
+        expect (fn ('paramKey')).toContain ('\tif k != nil {\n\t\tdata, _ = response[*k].(map[string]any)\n\t}');
+        expect (fn ('paramKey')).not.toContain ('SafeMapTyped(');
     });
     test ('negative: a parameter receiver keeps the wrap', () => {
         expect (fn ('parse')).not.toContain ('.(map[string]any)');
