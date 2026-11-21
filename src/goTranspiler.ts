@@ -50910,3 +50910,39 @@ GoTranspiler.prototype.h25g17NonNilDefaultLocal = function (node) {
     return (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.name?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node) === 'string');
 };
 // ===== end h28-G01
+// ===== h28-H28-G04
+export interface GoTranspiler {
+    h28g04WatchMultipleHashesArg(node): boolean;
+}
+// a `string[]` local handed whole as the messageHashes / subscribeHashes argument of the base
+// `this.watchMultiple`: the hand-written WatchMultiple reads both slots as `[]string` first
+const h28g04StringListUseReadsAs = GoTranspiler.prototype.goStringListUseReadsAs;
+GoTranspiler.prototype.goStringListUseReadsAs = function (node): boolean {
+    return this.h28g04WatchMultipleHashesArg(node) || h28g04StringListUseReadsAs.call(this, node);
+};
+GoTranspiler.prototype.h28g04WatchMultipleHashesArg = function (node): boolean {
+    const call: any = node?.parent;
+    if ((node?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (call.expression === node)) {
+        return false;
+    }
+    const callee: any = call.expression;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'watchMultiple')) {
+        return false;
+    }
+    const index = call.arguments.indexOf(node);
+    if ((index !== 1) && (index !== 3)) {
+        return false;
+    }
+    let declaration: any;
+    try {
+        declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve?.();
+    } catch (e) {
+        return false;
+    }
+    // only the base declaration: a venue override would take its own parameter types
+    return (declaration?.kind === SyntaxKind.MethodDeclaration) && (declaration.name?.text === 'watchMultiple')
+        && ['Exchange', 'BaseExchange'].includes(this.goEnclosingClassName(declaration))
+        && /[\\/]base[\\/]Exchange\.ts$/.test(declaration.getSourceFile().fileName);
+};
+// ===== end h28-H28-G04
