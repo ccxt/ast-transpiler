@@ -52554,3 +52554,70 @@ GoTranspiler.prototype.h28t05ObjectRowSliceParameterType = function (fn, param, 
     return '[]any';
 };
 // ===== end h28-H28-T05
+// ===== h28-T07 =====
+// `const x = this.safeList|safeDict (R, 'lit')` where R is an uninitialised `let` map local whose every write is an
+// awaited endpoint (ruling 6c) and whose other uses are reads: the member is decoded JSON, so the comma-ok assertion
+// answers what SafeListTyped / SafeMapTyped did (the value of that kind, else nil; a nil map reads nil)
+export interface GoTranspiler {
+    h28t07AwaitedJsonLet(container): boolean;
+    h28t07DictEndpointCall(expression): boolean;
+    h28t07JsonLetRead(declaration, printed: string): string | undefined;
+}
+GoTranspiler.prototype.h28t07AwaitedJsonLet = function (container) {
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.initializer !== undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    let writes = 0;
+    const ok = this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            const right: any = this.goUnwrapParenthesizedNode(parent.right);
+            writes++;
+            return (right?.kind === SyntaxKind.AwaitExpression) && this.h28t07DictEndpointCall(right.expression);
+        }
+        // a nil test of the let would compare a typed nil map: keep the box there
+        return !this.goIsNilComparisonOperand(n, parent)
+            && (this.goJsonOriginUseIsReadOnly(n, name) || (!this.goWritesOrRebindsName(n, name, []) && this.h27a02ScalarReaderUse(n)));
+    });
+    return ok && (writes > 0);
+};
+// a request stub declared `Promise<Dict>`: the ccxt endpoint pass binds its result as map[string]any (EndpointResult)
+GoTranspiler.prototype.h28t07DictEndpointCall = function (expression) {
+    if (!this.goAwaitedCallIsRequestStub(expression)) {
+        return false;
+    }
+    const callee: any = this.goUnwrapParenthesizedNode(expression).expression;
+    const methods: any[] = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.declarations?.map((d) => d.resolve()) ?? [];
+    return (methods.length > 0) && methods.every((d) => /^Promise<Dict>$/.test(String(d.type?.getText?.() ?? '').replace(/\s+/g, '')));
+};
+GoTranspiler.prototype.h28t07JsonLetRead = function (declaration, printed: string) {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string')) {
+        return undefined;
+    }
+    const isList = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList') !== undefined;
+    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, isList ? 'safeList' : 'safeDict');
+    if ((args === undefined) || (declaration.initializer.arguments.length !== 2) || (args.key?.kind !== SyntaxKind.StringLiteral)
+        || !/^[A-Za-z0-9_]+$/.test(args.key.text) || (args.container?.kind !== SyntaxKind.Identifier) || !this.h28t07AwaitedJsonLet(args.container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const type = isList ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
+    const shipped = `var ${name} ${type} = ${isList ? 'SafeListTyped' : 'SafeMapTyped'}(${args.container.text}, "${args.key.text}")`;
+    const match = /^(\n*)(\t*)(.*)$/s.exec(printed);
+    if ((match === null) || (match[3] !== shipped)) {
+        return undefined;
+    }
+    return `${match[1]}${match[2]}var ${name} ${type}\n${match[2]}${name}, _ = ${args.container.text}["${args.key.text}"].(${type})`;
+};
+{
+    const printVariableDeclarationListH28t07 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH28t07.call(this, node, identation);
+        const h = (node?.declarations?.length === 1) ? this.h28t07JsonLetRead(node.declarations[0], printed) : undefined; if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end h28-T07 =====
