@@ -21293,6 +21293,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         }
 
         const h26g49Clients = this.h26g49ClientsReadDeclaration(node, declaration, identation); if (h26g49Clients !== undefined) { return h26g49Clients; }
+        const h27a11 = this.h27a11FrameReadDeclaration(node, declaration, identation); if (h27a11 !== undefined) { return h27a11; }
         const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
             () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
             () => this.goTypedRowBinderDeclaration(declaration, identation)]);
@@ -47620,3 +47621,220 @@ GoTranspiler.prototype.h27a10RowSliceRead = function (declaration, identation: n
     return this.goLoopBoundedIndexRead (init, rows, key, rowsStr, keyStr);
 };
 // ===== end h27-A10 =====
+// ===== h27-A11 =====
+// A ws handler's frame parameter printed `map[string]any` holds what the JSON decode produced (maps, []any,
+// scalars, nil) when every caller passes the dispatched frame: a member read is the comma-ok assertion.
+export interface GoTranspiler {
+    h27a11FrameReadDeclaration(node, declaration, identation: number): string | undefined;
+    h27a11FrameParam(param): boolean;
+    h27a11JsonContainer(node, depth?: number): boolean;
+    h27a11FrameParamCache: Map<any, boolean>;
+    h27a11ElsewhereCache: Map<string, boolean>;
+    h27a11Active: Set<any>;
+}
+GoTranspiler.prototype.h27a11FrameReadDeclaration = function (node, declaration, identation: number) {
+    if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    let goType: string | undefined;
+    let args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeDict');
+    if (args !== undefined) {
+        goType = ((this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE) && (this.goSafeDictLocalUnboxStandard(declaration) !== undefined)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
+    } else {
+        args = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeList');
+        goType = ((args !== undefined) && (this.goSafeListLocalUnbox(declaration) === GO_SAFE_LIST_LOCAL_TYPE) && !this.h26g51PushStoreBackList(declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
+    }
+    // a `[]` default answers a non-nil empty list where the assertion answers nil: keep the wrap (a dict
+    // local typed by the standard unbox already drops its `{}` default and prints SafeMapTyped)
+    if ((goType === undefined) || ((goType === GO_SAFE_LIST_LOCAL_TYPE) && (declaration.initializer.arguments.length !== 2)) || (args.key?.kind !== SyntaxKind.StringLiteral) || !this.h27a11JsonContainer(args.container)) {
+        return undefined;
+    }
+    return this.getIden(identation) + 'var ' + this.printNode(declaration.name, 0) + ', _ = ' + this.printNode(args.container, 0) + '[' + this.printNode(args.key, 0) + '].(' + goType + ')';
+};
+// a frame parameter, or a read-only typed local cut from one by a literal-key safeDict
+GoTranspiler.prototype.h27a11JsonContainer = function (node, depth = 0) {
+    if ((depth > 4) || (node?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const decl: any = this.goAnyBoxLocalDeclaration(node);
+    if (decl?.kind === SyntaxKind.Parameter) {
+        return this.h27a11FrameParam(decl);
+    }
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(decl.initializer, 'safeDict');
+    return (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && (this.goSafeDictLocalUnboxStandard(decl) === GO_SAFE_DICT_LOCAL_TYPE)
+        && (this.goSafeDictLocalUnbox(decl) === GO_SAFE_DICT_LOCAL_TYPE) && this.h27a11JsonContainer(args.container, depth + 1)
+        && !h27a11WritesInto(this, this.goEnclosingFunction(decl), decl.name.text, decl);
+};
+// the name is rebound, shadowed, or a member of it is assigned or deleted
+function h27a11WritesInto (go: any, scope: any, name: string, own: any): boolean {
+    return go.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n !== own) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === own?.name)) {
+            return false;
+        }
+        if (go.goWritesOrRebindsName(n, name, [])) {
+            return true;
+        }
+        if ((n.parent?.kind !== SyntaxKind.ElementAccessExpression) || (n.parent.expression !== n)) {
+            return false;
+        }
+        let read: any = n.parent;
+        while ((read.parent?.kind === SyntaxKind.ElementAccessExpression) && (read.parent.expression === read)) {
+            read = read.parent;
+        }
+        return go.isGoElementAccessAssignmentTarget(read) || (read.parent?.kind === SyntaxKind.DeleteExpression);
+    });
+}
+GoTranspiler.prototype.h27a11FrameParam = function (param) {
+    if (this.h27a11FrameParamCache === undefined) {
+        this.h27a11FrameParamCache = new Map();
+        this.h27a11ElsewhereCache = new Map();
+        this.h27a11Active = new Set();
+    }
+    if (this.h27a11FrameParamCache.has(param)) {
+        return this.h27a11FrameParamCache.get(param);
+    }
+    if (this.h27a11Active.has(param)) {
+        return false; // a cycle proves nothing
+    }
+    // an answer reached while an outer proof is open may rest on that cycle: only the outermost is kept
+    const outermost = (this.h27a11Active.size === 0);
+    this.h27a11Active.add(param);
+    let result = false;
+    try {
+        result = h27a11ProveFrameParam(this, param);
+    } finally {
+        this.h27a11Active.delete(param);
+    }
+    if (outermost || result) {
+        this.h27a11FrameParamCache.set(param, result);
+    }
+    return result;
+};
+function h27a11ProveFrameParam (go: any, param: any): boolean {
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.parameters.indexOf(param) !== 1) || !go.goIsProHandlerMethod(fn)
+        && (fn.name.text !== 'handleMessage')) {
+        return false;
+    }
+    if (go.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE) {
+        return false;
+    }
+    // the frame itself is never rebound and nothing is stored into it
+    const name: string = param.name.text;
+    const written = h27a11WritesInto(go, fn.body, name, param);
+    if (written) {
+        return false;
+    }
+    const methodName: string = fn.name.text;
+    if ((methodName === 'handleMessage') && (go.goWsFrameParameterType(fn, param) === GO_SAFE_DICT_LOCAL_TYPE)) {
+        return true; // the ws dispatch hands the decoded object frame here
+    }
+    if ((methodName === 'handleMessage') || goHasDynamicCall(fn, methodName) || h27a11NamedElsewhere(go, fn, methodName)) {
+        return false;
+    }
+    const isFrameArg = (arg: any): boolean => {
+        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.goAnyBoxLocalDeclaration(arg) : undefined;
+        return (decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl);
+    };
+    const calls = go.goSameFileCallsOf(fn, methodName);
+    let callCount = 0;
+    for (const call of calls) {
+        if ((call.runner !== undefined) || !isFrameArg(call.arguments?.[1])) {
+            return false;
+        }
+        callCount++;
+    }
+    // `this.handleX` held as a value: the method holding it must hand only its own frame to every dynamic call
+    let refs = 0;
+    const sourceFile = fn.getSourceFile();
+    const valueRefsOk = !go.hasNodeWhere(sourceFile, (n: any) => {
+        if ((n.kind !== SyntaxKind.PropertyAccessExpression) || (n.name?.text !== methodName) || (n.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        if ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression === n)) {
+            return false;
+        }
+        refs++;
+        let up: any = n.parent;
+        while ((up !== undefined) && ((up.kind === SyntaxKind.PropertyAssignment) || (up.kind === SyntaxKind.ObjectLiteralExpression) || (up.kind === SyntaxKind.ParenthesizedExpression))) {
+            up = up.parent;
+        }
+        if ((up?.kind !== SyntaxKind.VariableDeclaration) || (up.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return true; // stored or handed anywhere but a local table
+        }
+        const holder: any = go.goEnclosingFunction(n);
+        const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
+        if ((frame === undefined) || !go.h27a11FrameParam(frame)) {
+            return true;
+        }
+        return go.hasNodeWhere(holder.body, (c: any) => {
+            if (c.kind !== SyntaxKind.CallExpression) {
+                return false;
+            }
+            const callee: any = c.expression;
+            const viaCall = (callee?.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply'))
+                && (callee.expression?.kind !== SyntaxKind.ThisKeyword);
+            if (viaCall) {
+                return (callee.name.text === 'apply') || (go.goAnyBoxLocalDeclaration(c.arguments?.[2]) !== frame);
+            }
+            if ((callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration)) {
+                return go.goAnyBoxLocalDeclaration(c.arguments?.[1]) !== frame;
+            }
+            return false;
+        });
+    });
+    return valueRefsOk && ((callCount + refs) > 0);
+}
+// the name appears in another ts/src file (a subclass, a parent or a by-name reference) or as a string here
+function h27a11NamedElsewhere (go: any, fn: any, name: string): boolean {
+    const sourceFile = fn.getSourceFile();
+    if (go.hasNodeWhere(sourceFile, (n: any) => ((n.kind === SyntaxKind.StringLiteral) || (n.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) && (n.text === name))) {
+        return true;
+    }
+    const tree = go.goTsSrcTree(sourceFile);
+    if (tree === undefined) {
+        return false;
+    }
+    const own = tree.relativeOf.get(path.resolve(sourceFile.fileName));
+    const key = String(own) + '|' + name;
+    if (!go.h27a11ElsewhereCache.has(key)) {
+        // only the classes this one extends or that extend it can override or call the handler
+        const mine = go.goEnclosingClassName(fn);
+        const related = new Set<string>();
+        for (let c = mine; (c !== undefined) && !related.has(c); c = tree.classBases.get(c)) {
+            related.add(c);
+        }
+        let grew = true;
+        while (grew) {
+            grew = false;
+            for (const [ cls, base ] of tree.classBases) {
+                if (related.has(base) && !related.has(cls) && (base !== 'Exchange')) {
+                    related.add(cls);
+                    grew = true;
+                }
+            }
+        }
+        const rx = new RegExp('\\b' + name + '\\b');
+        let found = (own === undefined) || (mine === undefined);
+        for (const [ rel, text ] of tree.fileText) {
+            if (found) {
+                break;
+            }
+            if ((rel === own) || /(^|\/)base\//.test(rel)) {
+                continue;
+            }
+            const classes = [ ...text.matchAll(/\bclass\s+([A-Za-z_$][\w$]*)/g) ].map((m) => m[1]);
+            found = classes.some((c) => related.has(c)) && rx.test(text);
+        }
+        go.h27a11ElsewhereCache.set(key, found);
+    }
+    return go.h27a11ElsewhereCache.get(key);
+}
+// ===== end h27-A11 =====
