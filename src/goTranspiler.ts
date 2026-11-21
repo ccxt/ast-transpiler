@@ -49355,3 +49355,75 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     return (h !== undefined) ? h : upstream;
 };
 // ===== end h27-G31 =====
+// ===== h27-G32 =====
+// `const x = (y === undefined) ? [] : y` (either arm order) with y printed `[]string` declares x `[]string`
+// filled by an if/else: the taken arm is y (not nil there) or the empty literal, so x is never nil.
+function h27g32StringListNilDefault (go, declaration): any {
+    const ternary: any = ccxtGoUnwrapParens(declaration?.initializer);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (ternary?.kind !== SyntaxKind.ConditionalExpression)) {
+        return undefined;
+    }
+    const declared = String(declaration.type?.getText() ?? '');
+    const t = ccxtGoUnwrapParens(ternary.whenTrue);
+    const f = ccxtGoUnwrapParens(ternary.whenFalse);
+    const emptyTrue = ccxtGoArrayLiteralIsEmpty(t);
+    const arm: any = emptyTrue ? f : (ccxtGoArrayLiteralIsEmpty(f) ? t : undefined);
+    if (((declared !== '') && (declared !== 'string[]') && (declared !== 'Strings')) || (arm === undefined) || ccxtGoArrayLiteralIsEmpty(arm)
+        || !h27g32NilTestOf(ternary.condition, arm, !emptyTrue) || !h27g32StringListArm(go, arm)) {
+        return undefined;
+    }
+    return ternary;
+}
+// the condition is `arm === undefined` (empty arm taken when true) or `arm !== undefined` (arm taken when true)
+function h27g32NilTestOf (condition, arm, armWhenTrue: boolean): boolean {
+    const c: any = ccxtGoUnwrapParens(condition);
+    const op = c?.operatorToken?.kind;
+    const isNil = (n) => (n?.kind === SyntaxKind.NullKeyword) || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
+    if ((c?.kind !== SyntaxKind.BinaryExpression) || !((isNil(c.right) && (c.left.getText() === arm.getText())) || (isNil(c.left) && (c.right.getText() === arm.getText())))) {
+        return false;
+    }
+    const isIdOrIds = (arm.kind === SyntaxKind.Identifier) || ((arm.kind === SyntaxKind.PropertyAccessExpression) && (arm.expression?.kind === SyntaxKind.ThisKeyword));
+    return isIdOrIds && (armWhenTrue ? ((op === SyntaxKind.ExclamationEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken))
+        : ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsToken)));
+}
+// the arm's printed type is []string, or it is `this.ids` (BaseExchange `Ids []string` in go/v4/exchange.go,
+// `ids: Strings` in ts/src/base/Exchange.ts)
+function h27g32StringListArm (go, arm): boolean {
+    if (go.goTernaryJoinArmType(arm) === GO_STRING_LIST_LOCAL_TYPE) {
+        return true;
+    }
+    if ((arm?.kind !== SyntaxKind.PropertyAccessExpression) || (arm.expression?.kind !== SyntaxKind.ThisKeyword) || (arm.name?.text !== 'ids')) {
+        return false;
+    }
+    const decls = go.checkerOrUndefined()?.getSymbolAtLocation(arm.name)?.declarations?.map((d) => d.resolve()) ?? [];
+    return (decls.length > 0) && decls.every((d) => (d.kind === SyntaxKind.PropertyDeclaration) && [ 'string[]', 'Strings' ].includes(String(d.type?.getText())));
+}
+const h27g32ShippedGetGoLocalType = GoTranspiler.prototype.getGoLocalType;
+GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string): string {
+    const shipped = h27g32ShippedGetGoLocalType.call(this, declaration, parsedValue);
+    if ((shipped !== 'any') || (h27g32StringListNilDefault(this, declaration) === undefined)) {
+        return shipped;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    return this.goLocalIsSafeToType(scope, declaration, declaration.name.text, GO_STRING_LIST_LOCAL_TYPE) ? GO_STRING_LIST_LOCAL_TYPE : shipped;
+};
+const h27g32ShippedPrintDeclarationList = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const declaration: any = node?.declarations?.[0];
+    const ternary: any = (node?.declarations?.length === 1) ? h27g32StringListNilDefault(this, declaration) : undefined;
+    if ((ternary === undefined) || (this.goDeclaredTypeOfIdentifier(declaration.name) !== GO_STRING_LIST_LOCAL_TYPE)) {
+        return h27g32ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const name = this.printNode(declaration.name, 0).trim();
+    const printed = this.goTernaryStatementIfElse(name, ternary, identation);
+    if (printed === undefined) {
+        return h27g32ShippedPrintDeclarationList.call(this, node, identation);
+    }
+    const lines = printed.split('\n');
+    const iden = this.getIden(identation);
+    const emptyLine = ccxtGoArrayLiteralIsEmpty(ccxtGoUnwrapParens(ternary.whenTrue)) ? 1 : 3;
+    lines[emptyLine] = `${iden}\t${name} = []string{}`;
+    return `${iden}var ${name} ${GO_STRING_LIST_LOCAL_TYPE}\n` + lines.join('\n');
+};
+// ===== end h27-G32 =====
