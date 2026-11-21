@@ -2422,6 +2422,7 @@ export class RustTranspiler extends BaseTranspiler {
             const nestedKeyWrite = keyStrs.length > 1 ? this.printNestedFieldKeyWrite(left, acc, ((owned) => owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned))(this.rustOwnedArgText(right, rhs.trim()))) : undefined; if (nestedKeyWrite !== undefined) return nestedKeyWrite;
             const untilWrite = keyStrs.length === 1 ? this.printUntilHeadKeyWrite(left, right, rhs) ?? this.printReuseDynamicKeyWrite(left, right, rhs) ?? this.print84dStoreKeyWrite(left, right, rhs) ?? this.printNilMapKeyWrite(left, right, rhs) : undefined; if (untilWrite !== undefined) return untilWrite;
             const slotNested = keyStrs.length > 1 ? this.printSlotNestedInsert(left, right, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (slotNested !== undefined) return slotNested;
+            const h30r06 = keyStrs.length > 1 ? this.h30r06CacheRowFeeWrite(baseExpr, keys, right, rhs, identation) : undefined; if (h30r06 !== undefined) return h30r06;
             const rowNested = keyStrs.length > 1 ? this.printCacheRowNestedWrite(baseExpr, keyStrs, this.rustOwnedArgText(right, rhs.trim())) : undefined; if (rowNested !== undefined) return rowNested;
             // the helper takes the value by move: an owned bare local (`Copy`, last use) is marked, the rest cloned on the file text
             // ral-55n: a registered `i64` counter as the written key is the `Int` the boxed counter held (marked closed only below,
@@ -41709,6 +41710,99 @@ export class RustTranspiler extends BaseTranspiler {
         });
     }
     // ===== end h29-T01
+    // ===== h30-R06
+    /** `row['fee']['k'] = v` / `row['fees'][i]['k'] = v` on a typed cache row (`printCacheRowNestedWrite`'s receivers): the first
+     *  hop is the same `entry(..).or_insert(Value::Null)`; the write is a native insert on a map, skipped on anything else as the
+     *  helper skipped it. The `[i]` hop needs `i` in bounds: a loop over a copy of `row['fees']` with the row unwritten since. */
+    h30r06CacheRowFeeWrite(baseExpr: any, keys: any[], right: any, rhs: string, identation: number): string | undefined {
+        if (!isIdentifier(baseExpr) || !this.rustCacheRowNestedUses.has(baseExpr) || (keys.length !== 2 && keys.length !== 3)) return undefined;
+        const lit = (k: any): string | undefined => { const n: any = this.rustSkipWrappers(k); return n !== undefined && isStringLiteral(n) ? String(n.text) : undefined; };
+        const first = lit(keys[0]);
+        const last = lit(keys[keys.length - 1]);
+        if (first === undefined || last === undefined || last.startsWith('__') || /^\d+$/.test(last) || last in this.StringLiteralReplacements
+            || ['timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache'].includes(last)) return undefined;
+        const head = this.rustCacheRowMapHead(baseExpr);
+        if (head === undefined) return undefined;
+        let index: string | undefined;
+        if (keys.length === 3) {
+            index = this.h30r06BoundedRowIndex(baseExpr, first, keys[1]);
+            if (index === undefined) return undefined;
+        }
+        const owned = this.rustOwnedArgText(right, rhs.trim());
+        const value = owned.startsWith('\u0004') ? owned : RustTranspiler.cloneIfBareLocal(owned);
+        const hop = `std::sync::Arc::make_mut(__d).entry(${this.quotedStringLiteral(first)}.to_string()).or_insert(Value::Null)`;
+        const insert = (v: string): string => `std::sync::Arc::make_mut(__f).insert(${this.quotedStringLiteral(last)}.into(), ${v});`;
+        const body = (v: string): string => index === undefined
+            ? `if let Value::Dict(__f) = ${hop} { ${insert(v)} }`
+            : `if let Value::Arr(__a) = ${hop} { if let Some(Value::Dict(__f)) = std::sync::Arc::make_mut(__a).get_mut(${index} as usize) { ${insert(v)} } }`;
+        const indent = this.getIden(identation);
+        const one = `${head[0]}${body(`Value::from(${value})`)}${head[1]}`;
+        if (!one.includes('\n') && indent.length + one.length <= 400) return one;
+        const split = `${head[0]}let __r06v = Value::from(${value});\n${indent}    ${body('__r06v')}${head[1]}`;
+        return split.split('\n').every((l: string, at: number) => (at === 0 ? indent.length : 0) + l.length <= 400) ? split : undefined;
+    }
+
+    /** `i` of `row[k][i]`: the index of `for (let i = 0; i < xs.length; i++)` (i never written) where `const xs` is a
+     *  `this.safeList (row, k[, []])` copy of the same row's list, and nothing writes `row` between that read and the write. */
+    h30r06BoundedRowIndex(row: any, key: string, indexNode: any): string | undefined {
+        const index: any = this.rustSkipWrappers(indexNode);
+        if (index === undefined || !isIdentifier(index)) return undefined;
+        const rowSym = this.rustSymbolOf(row);
+        const indexSym = this.rustSymbolOf(index);
+        const same = (n: any, sym: any): boolean => n !== undefined && isIdentifier(n) && sym !== undefined && this.rustSymbolOf(n) === sym;
+        let loop: any = index;
+        while (loop !== undefined && !(isForStatement(loop) && same(loop.condition?.left, indexSym))) loop = loop.parent;
+        const fn: any = this.rustEnclosingFunction(row);
+        if (loop === undefined || this.rustEnclosingFunction(loop) !== fn) return undefined;
+        const init: any = loop.initializer;
+        const decl: any = init !== undefined && isVariableDeclarationList(init) && init.declarations.length === 1 ? init.declarations[0] : undefined;
+        const cond: any = loop.condition;
+        const step: any = loop.incrementor;
+        if (decl === undefined || decl !== this.rustDeclaredNode(index) || !isNumericLiteral(decl.initializer) || Number(decl.initializer.text) !== 0
+            || !isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.LessThanToken || !isPropertyAccessExpression(cond.right)
+            || String(cond.right.name.text) !== 'length' || !isIdentifier(cond.right.expression)
+            || !((isPostfixUnaryExpression(step) || isPrefixUnaryExpression(step)) && step.operator === SyntaxKind.PlusPlusToken && same(step.operand, indexSym))) return undefined;
+        const list: any = cond.right.expression;
+        const listDecl: any = this.rustSingleLocalDeclaration(list);
+        if (listDecl === undefined || !isVariableDeclaration(listDecl) || !(listDecl.parent.flags & NodeFlags.Const) || this.rustEnclosingFunction(listDecl) !== fn) return undefined;
+        const src: any = this.rustSkipWrappers(listDecl.initializer);
+        if (src === undefined || !isCallExpression(src) || !isPropertyAccessExpression(src.expression) || src.expression.expression.kind !== SyntaxKind.ThisKeyword
+            || String(src.expression.name.text) !== 'safeList' || src.arguments.length < 2 || src.arguments.length > 3
+            || !same(this.rustSkipWrappers(src.arguments[0]), rowSym) || !isStringLiteral(this.rustSkipWrappers(src.arguments[1]))
+            || String(this.rustSkipWrappers(src.arguments[1]).text) !== key) return undefined;
+        if (src.arguments.length === 3) { const d: any = this.rustSkipWrappers(src.arguments[2]); if (!isArrayLiteralExpression(d) || d.elements.length !== 0) return undefined; }
+        const callee: any = this.rustScalarCallee(src);
+        if (callee === undefined || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName))) return undefined;
+        const target: any = row.parent;
+        // a later statement of the loop body runs before the write on the next pass: the window ends at the loop's end
+        let sound = true;
+        const visit = (n: any): void => {
+            if (!sound) return;
+            if (same(n, indexSym) && n !== index) {
+                const up: any = n.parent;
+                if ((isBinaryExpression(up) && up.left === n && rustIsAssignmentOperator(up.operatorToken.kind)) || isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up)) {
+                    if (up !== step) sound = false;
+                }
+            }
+            if ((same(n, rowSym) || same(n, this.rustSymbolOf(list))) && n !== row && n.pos > listDecl.end && n.pos < Math.max(target.pos, loop.end)) {
+                let top: any = n;
+                while (top.parent !== undefined && (isElementAccessExpression(top.parent) || isPropertyAccessExpression(top.parent)) && top.parent.expression === top) top = top.parent;
+                const up: any = top.parent;
+                if (up !== undefined && isBinaryExpression(up) && up.left === top && rustIsAssignmentOperator(up.operatorToken.kind)) sound = false;
+                if (up !== undefined && (isPrefixUnaryExpression(up) || isPostfixUnaryExpression(up) || isDeleteExpression(up))) sound = false;
+                if (top !== n && isCallExpression(up) && up.expression === top) sound = false;
+                if (up !== undefined && isCallExpression(up) && up.expression !== top) {
+                    const c: any = up.expression;
+                    const name = isPropertyAccessExpression(c) && c.expression.kind === SyntaxKind.ThisKeyword ? String(c.name.text) : '';
+                    if (!/^safe[A-Z]/.test(name) && name !== 'isEmpty') sound = false;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        visit(fn.body);
+        return sound ? String(index.text) : undefined;
+    }
+    // ===== end h30-R06
 }
 
 // ===== h28-H28-T02: safeStringList borrows its container like the other generated safe readers (impl KeyRead)

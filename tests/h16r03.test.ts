@@ -65,7 +65,7 @@ describe('a row read by key out of a ws cache bucket is written natively', () =>
         expect(out).not.toMatch(/append_to_object_array\(&mut previousOrder\b/);
         expect(out).not.toMatch(/get_value_mut\(&mut previousOrder\b/);
         expect(out).toContain('if let Some(__d) = &mut previousOrder { if let Value::Arr(__a) = std::sync::Arc::make_mut(__d).entry("trades".to_string()).or_insert_with(|| Value::Array(Vec::new()))');
-        expect(out).toContain('if let Some(__d) = &mut previousOrder { add_element_to_object(std::sync::Arc::make_mut(__d).entry("fee".to_string()).or_insert(Value::Null), &Value::Str("cost".into()), fee); }');
+        expect(out).toContain('if let Some(__d) = &mut previousOrder { if let Value::Dict(__f) = std::sync::Arc::make_mut(__d).entry("fee".to_string()).or_insert(Value::Null) { std::sync::Arc::make_mut(__f).insert("cost".into(), Value::from(fee)); } }');
     });
     test('negative: a whole rewrite of the row with another value keeps the helper', () => {
         const out = run('venue6', src('const', 'orders.hashmap', "previousOrder['fee'] = fee;\n            previousOrder = {};").replace('const previousOrder', 'let previousOrder'));
