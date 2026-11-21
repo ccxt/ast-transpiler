@@ -55732,3 +55732,23 @@ function h29g22SameSourceCopy (siteFile: string, myFile: string): boolean {
     return (siteFile !== myFile) && (strip (siteFile) === strip (myFile));
 }
 // ===== end h29-H29-G22 =====
+// ===== h29-parent: row uses of the value-string market fields =====
+// `symbol` / `base` / `quote` are plain Go strings on the market row (h27-M02), so the nil-guarded pointer
+// store and compare forms do not apply to them: such a use keeps the map read
+{
+    const h29ParentValueStringField = function (self: any, n: any): boolean {
+        const access: any = n?.parent;
+        const key: any = (access?.kind === SyntaxKind.ElementAccessExpression) ? access.argumentExpression : undefined;
+        return (key?.kind === SyntaxKind.StringLiteral) && (GO_H27M02_STRING_ROW_FIELDS[key.text] !== undefined)
+            && (self.goTypedRowTable(n, key.text) === GO_TYPED_ROW_FIELDS['MarketInterface']);
+    };
+    const pointerUse = GoTranspiler.prototype.h28m01RowPointerUse;
+    GoTranspiler.prototype.h28m01RowPointerUse = function (n: any) {
+        return h29ParentValueStringField(this, n) ? undefined : pointerUse.call(this, n);
+    };
+    const entryUse = GoTranspiler.prototype.h29m01EntryUse;
+    GoTranspiler.prototype.h29m01EntryUse = function (n: any) {
+        return h29ParentValueStringField(this, n) ? undefined : entryUse.call(this, n);
+    };
+}
+// ===== end h29-parent =====

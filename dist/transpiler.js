@@ -59270,6 +59270,21 @@ function h29g22SameSourceCopy(siteFile, myFile) {
   const strip = (f) => String(f ?? "").replace(/\.nooverloads\.\d+\.ts$/, ".ts");
   return siteFile !== myFile && strip(siteFile) === strip(myFile);
 }
+{
+  const h29ParentValueStringField = function(self, n) {
+    const access = n?.parent;
+    const key = access?.kind === SyntaxKind5.ElementAccessExpression ? access.argumentExpression : void 0;
+    return key?.kind === SyntaxKind5.StringLiteral && GO_H27M02_STRING_ROW_FIELDS[key.text] !== void 0 && self.goTypedRowTable(n, key.text) === GO_TYPED_ROW_FIELDS["MarketInterface"];
+  };
+  const pointerUse = GoTranspiler.prototype.h28m01RowPointerUse;
+  GoTranspiler.prototype.h28m01RowPointerUse = function(n) {
+    return h29ParentValueStringField(this, n) ? void 0 : pointerUse.call(this, n);
+  };
+  const entryUse = GoTranspiler.prototype.h29m01EntryUse;
+  GoTranspiler.prototype.h29m01EntryUse = function(n) {
+    return h29ParentValueStringField(this, n) ? void 0 : entryUse.call(this, n);
+  };
+}
 
 // src/javaTranspiler.ts
 init_esm_shims();
