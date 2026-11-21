@@ -5718,10 +5718,6 @@ describe('inline math/comparison dispatch and Str|Null field concat', () => {
         expect(o).toContain('(Value::Null, Value::Null) => true');
         expect(o).not.toContain('is_less_than_or_equal(');
     });
-    test('Str|Null fields of a same-file returned literal concatenate natively', () => {
-        expect(o).toContain('self.hashMessage((match (&(crate::value::get_value_k(&signature, "r")), &(crate::value::get_value_k(&signature, "s"))) { (Value::Null, Value::Null) => Value::Null, (__a, __b) => Value::Str(format!("{}{}", __a, __b).into()) }))');
-        expect(o).not.toContain('add(');
-    });
     test('a non-literal field source keeps the add helper', () => {
         const n = transpiler.transpileRust('class B {\n    run (x: any) {\n        const s = x[0];\n        return s[\'r\'] + s[\'s\'];\n    }\n}\n').content;
         expect(n).toContain('add(&');

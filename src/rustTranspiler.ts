@@ -23027,13 +23027,6 @@ export class RustTranspiler extends BaseTranspiler {
         return isPropertyAccessExpression(up.left) && up.left.expression.kind === SyntaxKind.ThisKeyword && !this.rustTestTierSource(up);
     }
 
-    /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
-    rustWsSettleMove(n: any): boolean {
-        const up: any = n?.parent;
-        return isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && isIdentifier(up.expression.expression)
-            && (String(up.expression.name.text) === 'resolve' || String(up.expression.name.text) === 'reject') && this.rustWsSettleCall(up);
-    }
-
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     // eslint-disable-next-line no-useless-escape
     private static readonly RUST_PREDICTION_VENUE_FILE = /ts[\/]src[\/]prediction[\/][^/]+\.ts$/;
@@ -32782,7 +32775,6 @@ export class RustTranspiler extends BaseTranspiler {
             if (at < 0 || /ts[\\/]src[\\/](?:test|abstract)[\\/]/.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
             const types = this.rustVenueFamilyReturnTypes(file, at, name);
             if (types === undefined || ![ ...types ].every((t) => t.replace(/\s+/g, '') === own)) return false;
-            if (async && this.rustVenueMarketListMethod(declaration)) return true;
         }
         const saved = this.rustDeclaredArrayProof;
         this.rustDeclaredArrayProof = true;
@@ -34677,13 +34669,6 @@ export class RustTranspiler extends BaseTranspiler {
         return RustTranspiler.rustLentMark(text);
     }
 
-    /** ral-qd: a local initialised from a `this.parse*(..)` call. */
-    rustParseResultLocal(declaration: any): boolean {
-        const init: any = isVariableDeclaration(declaration) ? this.rustSkipWrappers(declaration.initializer) : undefined;
-        return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword
-            && /^parse[A-Z]/.test(String(init.expression.name.text));
-    }
-
     /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
     rustUntilHeadKeyWrite(n: any): string | undefined {
         const access: any = n.parent;
@@ -36009,21 +35994,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (typed !== undefined) return /^Vec<crate::types::\w+>$/.test(typed.ret) ? call : undefined;
         const venue = this.rustVenueContainerReturnKindUncached(declaration);
         if (venue !== undefined) return venue.kind === 'list' && !venue.nullable ? call : undefined;
-        // a venue `Promise<Market[]>` (every declaration of the name in the family spells it): a list of market rows
-        return this.rustVenueMarketListMethod(declaration) ? call : undefined;
-    }
-
-    /** zf: a venue-private async method (no override, no typed signature) whose every family declaration returns `Promise<Market[]>`. */
-    rustVenueMarketListMethod(declaration: any): boolean {
-        if (!isIdentifier(declaration.name) || declaration.type === undefined) return false;
-        const file = String(declaration.getSourceFile?.()?.fileName ?? '');
-        const at = file.search(/[/\\]ts[/\\]src[/\\]/);
-        if (at < 0 || RustTranspiler.RUST_BASE_TIER_FILE.test(file) || /ts[\\/]src[\\/](?:test|abstract)[\\/]/.test(file) || this.getMethodOverride(declaration) !== undefined) return false;
-        const name = String(declaration.name.text);
-        if (this.rustTypedUnified.has(name) || this.rustTypedSignature(declaration) !== undefined) return false;
-        const own = String(declaration.type.getText()).replace(/\s+/g, '');
-        const types = this.rustVenueFamilyReturnTypes(file, at, name);
-        return own === 'Promise<Market[]>' && types !== undefined && [ ...types ].every((t) => t.replace(/\s+/g, '') === own);
+        return undefined;
     }
 
     private rustPromiseAllListKinds = new WeakMap<any, 'list' | undefined>();
@@ -38350,7 +38321,6 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     nativeCoercingArithmetic(op, left, right, leftText: string, rightText: string): string | undefined {
-        if (op === SyntaxKind.PlusToken) return this.nativeStrOrNullConcat(left, right, leftText, rightText);
         if (op !== SyntaxKind.MinusToken && op !== SyntaxKind.AsteriskToken && op !== SyntaxKind.SlashToken) return undefined;
         if (!this.plainValueOperand(left) || !this.plainValueOperand(right)) return undefined;
         const a = this.rustNumericKind(left) !== undefined ? '__a.as_f64()' : this.looseF64('__a');
@@ -38375,79 +38345,6 @@ export class RustTranspiler extends BaseTranspiler {
             ` (Value::Int(__x), Value::Int(__y)) => __x == __y, (Value::Float(__x), Value::Float(__y)) => __x == __y, _ => matches!(${p}, (Some(__x), Some(__y)) if __x == __y) })`;
         const text = `(match (&(${this.printNode(left, 0)}), &(${this.printNode(right, 0)})) { (__a, __b) => ${order}${operator.length === 2 ? equal : ''} })`;
         return this.isBooleanPosition(node) ? text : `Value::Bool(${text})`;
-    }
-
-    // Str+Str / Str+Null take `string_concat` (Display, Null is "null"); Null+Null is Null.
-    nativeStrOrNullConcat(left, right, leftText: string, rightText: string): string | undefined {
-        if (!this.strOrNull(left, 0) || !this.strOrNull(right, 0)) return undefined;
-        return `(match (&(${leftText}), &(${rightText})) { (Value::Null, Value::Null) => Value::Null, (__a, __b) => Value::Str(format!("{}{}", __a, __b).into()) })`;
-    }
-
-    strOrNull(node: any, depth: number): boolean {
-        const inner: any = this.rustStripWrappers(node);
-        if (inner === undefined || depth > 12 || !this.plainValueOperand(inner)) return false;
-        if (isStringLiteral(inner) || this.alwaysStrOperand(inner)) return true;
-        // `pad_start` / `pad_end` (helper or native form) answer Str or Null
-        if (isCallExpression(inner) && isPropertyAccessExpression(inner.expression)
-            && (String(inner.expression.name.text) === 'padStart' || String(inner.expression.name.text) === 'padEnd')) return true;
-        if (!isElementAccessExpression(inner) || !isStringLiteral(inner.argumentExpression)) return false;
-        return this.dictFieldStrOrNull(inner.expression, String(inner.argumentExpression.text), depth + 1);
-    }
-
-    /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
-    dictFieldStrOrNull(node: any, key: string, depth: number): boolean {
-        const inner: any = this.rustStripWrappers(node);
-        if (inner === undefined || depth > 12) return false;
-        if (inner.kind === SyntaxKind.NullKeyword || (isIdentifier(inner) && String(inner.text) === 'undefined')) return true;
-        if (isObjectLiteralExpression(inner)) {
-            for (const p of inner.properties as any) {
-                if (p.kind !== SyntaxKind.PropertyAssignment) return false;
-                const name: any = p.name;
-                const text = (isStringLiteral(name) || isIdentifier(name)) ? String(name.text) : undefined;
-                if (text === undefined) return false;
-                if (text === key && !this.strOrNull(p.initializer, depth + 1)) return false;
-            }
-            return true;
-        }
-        if (isCallExpression(inner)) return this.methodFieldStrOrNull(inner, key, depth + 1);
-        if (!isIdentifier(inner)) return false;
-        const declaration: any = this.rustSingleLocalDeclaration(inner);
-        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)
-            || declaration.initializer === undefined || (declaration.parent?.flags & NodeFlags.Const) === 0) return false;
-        const fn = this.rustEnclosingFunction(declaration);
-        if (fn === undefined) return false;
-        // no element write / delete rooted at the local
-        for (const m of this.rustScopeNameNodes(fn, String(declaration.name.text)) as any[]) {
-            if (m === declaration.name || m.kind !== SyntaxKind.Identifier) continue;
-            let top: any = m;
-            while (isElementAccessExpression(top.parent) && top.parent.expression === top) top = top.parent;
-            if (top === m) continue;
-            const parent: any = top.parent;
-            if (isDeleteExpression(parent) || (isBinaryExpression(parent) && parent.left === top && rustIsAssignmentOperator(parent.operatorToken.kind))) return false;
-        }
-        return this.dictFieldStrOrNull(declaration.initializer, key, depth + 1);
-    }
-
-    /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
-    methodFieldStrOrNull(call: any, key: string, depth: number): boolean {
-        const callee = call.expression;
-        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        let declaration: any;
-        try {
-            declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call));
-        } catch (e) {
-            return false;
-        }
-        if (declaration?.kind !== SyntaxKind.MethodDeclaration || declaration.body === undefined
-            || declaration.getSourceFile() !== call.getSourceFile() || RustTranspiler.RUST_BASE_TIER_FILE.test(this.provenDictFieldPath(call))) return false;
-        let ok = true;
-        const visit = (n: any) => {
-            if (!ok || (n !== declaration && isFunctionLike(n))) return;
-            if (isReturnStatement(n) && n.expression !== undefined && !this.dictFieldStrOrNull(n.expression, key, depth + 1)) ok = false;
-            n.forEachChild?.(visit);
-        };
-        declaration.body.forEachChild(visit);
-        return ok;
     }
 
     // Tuple slot 1 of the base `handle*AndParams` / `handleParam*` helpers is their
