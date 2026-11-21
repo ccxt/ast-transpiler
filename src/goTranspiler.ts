@@ -57548,3 +57548,24 @@ export interface GoTranspiler {
     };
 }
 // ===== end h30-H30-G27 =====
+// ===== h30-G29 =====
+// a for-loop counter printed `i := int(seed)` (h26g57) is a Go `int` whatever its later writes:
+// ordered comparisons on it may widen natively like any other int local
+export interface GoTranspiler {
+    h30g29ForCounterKind(node): string | undefined;
+}
+{
+    const literalTypedLocalKindH30g29 = GoTranspiler.prototype.goLiteralTypedLocalKind;
+    GoTranspiler.prototype.goLiteralTypedLocalKind = function (node) {
+        return literalTypedLocalKindH30g29.call(this, node) ?? this.h30g29ForCounterKind(node);
+    };
+}
+GoTranspiler.prototype.h30g29ForCounterKind = function (node) {
+    const checker: any = this.checkerOrUndefined();
+    const declaration = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+    if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
+        return undefined;
+    }
+    return (this.h26g57ForCounterSeed(declaration) !== undefined) ? 'int' : undefined;
+};
+// ===== end h30-G29 =====
