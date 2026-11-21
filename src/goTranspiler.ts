@@ -23873,6 +23873,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return goType;
             }
         }
+        const h27g10 = this.h27g10HandlerSliceParameterType(fn, param, index, handlerParam); if (h27g10 !== undefined) return h27g10;
         const sliceType = handlerParam ? undefined : this.goSliceParameterType(fn, param, index);
         if (sliceType !== undefined) {
             return sliceType;
@@ -48580,3 +48581,43 @@ export interface GoTranspiler {
     h27g09GuardedPointerPush(pushNode): boolean;
 }
 // ===== end h27-g09
+// ===== h27-g10 =====
+// a pro handler's non-frame list parameter (`handleUnsubscriptions (client, messageHashes: string[])`) takes the
+// slice proof every other exchange-local method gets, but only when the method is never passed as a value
+// (a by-name dispatch table calls it with boxed arguments): every mention of the name is a direct `this.x (` call.
+export interface GoTranspiler {
+    h27g10HandlerSliceParameterType(fn, param, index: number, handlerParam: boolean): string | undefined;
+    h27g10OnlyDirectCalls(fn): boolean;
+}
+GoTranspiler.prototype.h27g10HandlerSliceParameterType = function (fn, param, index: number, handlerParam: boolean) {
+    if (!handlerParam || (this.goAnnotatedSliceParameterType(param) === undefined) || !this.h27g10OnlyDirectCalls(fn)) {
+        return undefined;
+    }
+    return this.goSliceParameterType(fn, param, index);
+};
+GoTranspiler.prototype.h27g10OnlyDirectCalls = function (fn) {
+    const name: string = fn.name.text;
+    const mentions = new RegExp ('\\b' + name + '\\b', 'g');
+    const direct = new RegExp ('\\bthis\\.' + name + ' ?\\(', 'g');
+    const decl = new RegExp ('^\\s*(override\\s+)?' + name + ' ?\\(', 'gm');
+    const counts = (text: string): boolean => {
+        const all = (text.match (mentions) ?? []).length;
+        return all === ((text.match (direct) ?? []).length + (text.match (decl) ?? []).length);
+    };
+    const own = fn.getSourceFile().getFullText();
+    if (!counts (own)) {
+        return false;
+    }
+    const tree = this.goTsSrcTree(fn.getSourceFile());
+    if (tree === undefined) {
+        return true;
+    }
+    const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+    for (const [ file, text ] of tree.fileText) {
+        if ((file !== myFile) && (text as string).includes (name) && !counts (text as string)) {
+            return false;
+        }
+    }
+    return true;
+};
+// ===== end h27-g10 =====
