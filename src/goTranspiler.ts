@@ -52153,3 +52153,46 @@ GoTranspiler.prototype.h28g30JsonListRead = function (node, identation: number, 
     };
 }
 // ===== end h28-H28-G30
+// ===== h28-H28-G31
+export interface GoTranspiler {
+    h28g31DerefedReaderValue(valueNode: any): boolean;
+}
+// a base safeList / safeDict family read never yields a scalar pointer: it answers SafeValue's derefScalar-ed
+// hit (only after IsArray / IsDictionary) or its default, so a nil / literal-container default keeps the helper's
+// derefScalar of the stored value the identity and the native store keeps the same value
+const H28G31_DEREFED_READERS = [ 'safeList', 'safeDict', 'safeList2', 'safeDict2', 'safeListN', 'safeDictN' ];
+const goMapWriteValueIsNotPointerBaseH28g31 = GoTranspiler.prototype.goMapWriteValueIsNotPointer;
+GoTranspiler.prototype.goMapWriteValueIsNotPointer = function (valueNode): boolean {
+    return goMapWriteValueIsNotPointerBaseH28g31.call (this, valueNode) || this.h28g31DerefedReaderValue (valueNode);
+};
+GoTranspiler.prototype.h28g31DerefedReaderValue = function (valueNode): boolean {
+    const call: any = this.goUnwrapParenthesizedNode (valueNode);
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !H28G31_DEREFED_READERS.includes (callee.name?.text)) {
+        return false;
+    }
+    let declaration: any;
+    try {
+        declaration = this.checkerOrUndefined ()?.getSymbolAtLocation (callee)?.valueDeclaration?.resolve ();
+    } catch (e) {
+        return false;
+    }
+    // only the base declaration: a venue override could answer anything
+    const file: string = declaration?.getSourceFile?.()?.fileName ?? '';
+    if (!/[\\/]base[\\/]Exchange\.ts$/.test (file)) {
+        return false;
+    }
+    const keyCount = (callee.name.text.endsWith ('2')) ? 3 : 2;
+    const args: any[] = call.arguments ?? [];
+    if (args.length === keyCount) {
+        return true;
+    }
+    if (args.length !== keyCount + 1) {
+        return false;
+    }
+    const fallback: any = this.goUnwrapParenthesizedNode (args[keyCount]);
+    return (fallback?.kind === SyntaxKind.ArrayLiteralExpression) || (fallback?.kind === SyntaxKind.ObjectLiteralExpression)
+        || (fallback?.kind === SyntaxKind.NullKeyword) || ((fallback?.kind === SyntaxKind.Identifier) && (fallback.text === 'undefined'));
+};
+// ===== end h28-H28-G31
