@@ -49695,6 +49695,7 @@ GoTranspiler.prototype.h27m01BinderUseIsFieldRead = function (n: any): boolean {
         return true;
     }
     const parent: any = n.parent;
+    const h28m03 = this.h28m03BinderAccessorUse(n); if (h28m03 !== undefined) { return h28m03; }
     if ((parent?.kind !== SyntaxKind.ElementAccessExpression) || (parent.expression !== n)) {
         return false;
     }
@@ -52406,3 +52407,78 @@ GoTranspiler.prototype.h28m01RowFieldBinary = function (node: any, identation: n
     return equal ? `(${field} != nil && ${wantTrue ? '' : '!'}*${field})` : `(${field} == nil || ${wantTrue ? '' : '!'}*${field})`;
 };
 // ===== end h28-M01
+// ===== h28-M03
+export interface GoTranspiler {
+    h28m03AccessorField(call: any): { text: string, goType: string } | undefined;
+    h28m03BinderAccessorUse(n: any): boolean | undefined;
+}
+// `this.safeString (row, 'f')` / `this.safeBool (row, 'f')` (no default) on a typed row binder: the base accessor
+// answers exactly what the row's `*string` / `*bool` field holds (both read SafeString / SafeBool with a nil default)
+const H28M03_ROW_ACCESSORS: { [name: string]: string } = { 'safeString': '*string', 'safeBool': '*bool' };
+GoTranspiler.prototype.h28m03AccessorField = function (call: any): { text: string, goType: string } | undefined {
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || ((call.arguments?.length ?? 0) < 2)) {
+        return undefined;
+    }
+    // `safeBool (row, f, false)` on a value `bool` field: false for absent or non-bool, as the struct field
+    const falseDefault = (call.arguments.length === 3) && (call.arguments[2].kind === SyntaxKind.FalseKeyword) && (callee.name?.text === 'safeBool');
+    if ((call.arguments.length !== 2) && !falseDefault) {
+        return undefined;
+    }
+    const goType = falseDefault ? 'bool' : H28M03_ROW_ACCESSORS[callee.name?.text ?? ''];
+    const [ base, key ] = call.arguments;
+    if ((goType === undefined) || (base?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral)) {
+        return undefined;
+    }
+    const table = this.goTypedRowTable(base, key.text);
+    const entry = ((table !== undefined) && Object.prototype.hasOwnProperty.call(table, key.text)) ? table[key.text] : undefined;
+    if (!Array.isArray(entry) || (entry[1] !== goType) || !this.h27m01RowBaseIsStruct(base)) {
+        return undefined;
+    }
+    const text = `${base.text}.${entry[0]}`;
+    if (goType !== 'bool') {
+        return this.goTypedRowFieldText(call, text, goType); // the pointer field's own use limits and nil answer
+    }
+    let outer: any = call;
+    while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        outer = outer.parent;
+    }
+    const parent: any = outer.parent;
+    const op = (parent?.kind === SyntaxKind.BinaryExpression) ? parent.operatorToken.kind : undefined;
+    const used = ((parent?.kind === SyntaxKind.IfStatement) && (parent.expression === outer))
+        || ((parent?.kind === SyntaxKind.PrefixUnaryExpression) && (parent.operator === SyntaxKind.ExclamationToken))
+        || ((parent?.kind === SyntaxKind.ConditionalExpression) && (parent.condition === outer))
+        || (op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken);
+    return used ? { text, goType } : undefined;
+};
+{
+    // the printed field read carries the field's Go type
+    const goTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string): string | undefined {
+        return this.h28m03AccessorField(initializer)?.goType ?? goTypeOfInitializer.call(this, initializer, printedValue);
+    };
+}
+// binder proof: such an accessor call is a native field read of the binder (undefined: not this shape)
+GoTranspiler.prototype.h28m03BinderAccessorUse = function (n: any): boolean | undefined {
+    const call: any = n.parent;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.[0] !== n)) {
+        return undefined;
+    }
+    const declaration = this.goDeclarationOfIdentifier(n);
+    this.h27m01Proving = this.h27m01Proving ?? new Set<any>();
+    this.h27m01Proving.add(declaration);
+    try {
+        return (this.h28m03AccessorField(call) !== undefined) ? true : undefined;
+    } finally {
+        this.h27m01Proving.delete(declaration);
+    }
+};
+{
+    const printCallExpression = GoTranspiler.prototype.printCallExpression;
+    GoTranspiler.prototype.printCallExpression = function (node, identation) {
+        const field = this.h28m03AccessorField(node);
+        return (field !== undefined) ? field.text : printCallExpression.call(this, node, identation);
+    };
+}
+// ===== end h28-M03
