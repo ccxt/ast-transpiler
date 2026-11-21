@@ -56555,3 +56555,44 @@ GoTranspiler.prototype.h30a19AnyResult = function (n: any): boolean {
     };
 }
 // ===== end h30-H30-A19
+// ===== h30-H30-G01
+export interface GoTranspiler {
+    h30g01DefaultArg(node): any;
+}
+// `x = this.safeString* (.., d)` into a Go `string` local whose default `d` is a `*string` identifier under a
+// dominating nil guard, or a GetArgString-bound `string` parameter: SafeString answers &found or &ToString(d), never nil
+const h30g01NonNilSafeStringWrite = GoTranspiler.prototype.h26g37NonNilSafeStringWrite;
+GoTranspiler.prototype.h26g37NonNilSafeStringWrite = function (node, varName: string): boolean {
+    if (h30g01NonNilSafeStringWrite.call(this, node, varName)) {
+        return true;
+    }
+    const last = this.h30g01DefaultArg(node);
+    if ((last === undefined) || (last.text === varName)) {
+        return false;
+    }
+    const declared = this.goDeclaredTypeOfIdentifier(last);
+    return (declared === 'string') || (this.goDeclaredParamStaticType(last) === 'string')
+        || ((declared === '*string') && this.goHasEnclosingNilGuard(last));
+};
+const h30g01TypedDefault = GoTranspiler.prototype.goDefaultedSafeStringCallOrTypedDefault;
+GoTranspiler.prototype.goDefaultedSafeStringCallOrTypedDefault = function (call): boolean {
+    if (h30g01TypedDefault.call(this, call)) {
+        return true;
+    }
+    const last = this.h30g01DefaultArg(call);
+    return (last !== undefined) && (this.goDeclaredParamStaticType(last) === 'string');
+};
+GoTranspiler.prototype.h30g01DefaultArg = function (node): any {
+    while (node?.kind === SyntaxKind.ParenthesizedExpression) {
+        node = node.expression;
+    }
+    const callee: any = (node?.kind === SyntaxKind.CallExpression) ? node.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || !this.goIsBaseExchangeMethod(callee.name)) {
+        return undefined;
+    }
+    const arity = GO_DEFAULTED_SAFE_STRING_ARITY[callee.name?.text];
+    const last: any = node.arguments?.[arity - 1];
+    return ((arity !== undefined) && (node.arguments.length === arity) && (last?.kind === SyntaxKind.Identifier)) ? last : undefined;
+};
+// ===== end h30-H30-G01
