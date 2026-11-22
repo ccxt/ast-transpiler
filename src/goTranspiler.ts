@@ -59138,3 +59138,104 @@ GoTranspiler.prototype.h38p10ExtendDeclaration = function (literal) {
     };
 }
 // ===== end H38-P10 =====
+// ===== H38-H01: undeclared locals seeded by a `[]`-defaulted safeList (begin) =====
+// `const xs = this.safeList (c, k, [])` with no annotation: SafeList answers the member list or the literal empty
+// default for a missing key, nil and a non-list member, so the value is always a list and the local is `[]any` read
+// through SafeListSlice. Same uses as the declared case, plus at least one native read (a length or an element read).
+// a local holding an awaited result whose channel unboxes to map[string]any
+function h38h01AwaitedMapReceiver (goTranspiler: GoTranspiler, container): boolean {
+    const declaration: any = goTranspiler.goAnyBoxLocalDeclaration (container);
+    const init: any = goTranspiler.goUnwrapParenthesizedNode (declaration?.initializer);
+    if (init?.kind !== SyntaxKind.AwaitExpression) {
+        return false;
+    }
+    const unbox = goTranspiler.goAwaitReceiveUnbox (init, goTranspiler.printNode (init, 0));
+    // an implicit endpoint answers decoded JSON; every use of the local must leave it unwritten
+    return (unbox !== undefined) && (unbox !== null) && (unbox.holder !== true) && (unbox.goType === GO_SAFE_DICT_LOCAL_TYPE)
+        && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement)
+        && (goTranspiler.goAwaitedCallIsImplicitEndpoint (init.expression) || goTranspiler.goAwaitedCallIsRequestStub (init.expression))
+        && goTranspiler.goJsonOriginBindingIsReadOnly (declaration,
+            (n, name) => goTranspiler.goJsonOriginUseIsReadOnly (n, name) || goTranspiler.h27a09SafeReaderArg (n, name)
+                || (!goTranspiler.goWritesOrRebindsName (n, name, []) && goTranspiler.h27a02ScalarReaderUse (n)));
+}
+// a decoded JSON map receiver read by a literal key: the member is a []any, another JSON value or absent
+function h38h01JsonMemberRead (goTranspiler: GoTranspiler, declaration): boolean {
+    if (!h24n04EmptyDefaultSafeList (declaration?.initializer)) {
+        return false;
+    }
+    const [ container, key ] = declaration.initializer.arguments;
+    return (container?.kind === SyntaxKind.Identifier) && (key?.kind === SyntaxKind.StringLiteral) && /^[A-Za-z0-9_]+$/.test (key.text)
+        && (declaration.initializer.expression.name.text === 'safeList')
+        && (h38h01AwaitedMapReceiver (goTranspiler, container) || ((goTranspiler.goResolvedLocalGoType (container) === GO_SAFE_DICT_LOCAL_TYPE)
+            && (goTranspiler.h27a02JsonOrigin (container, 0) || goTranspiler.h27a02JsonOriginBeforeRead (container, declaration))));
+}
+// `xs = []` as a statement: the write is itself a []any
+function h38h01EmptyListWrite (node): boolean {
+    const parent: any = node.parent;
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === node) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && (parent.right?.kind === SyntaxKind.ArrayLiteralExpression)
+        && (parent.right.elements.length === 0);
+}
+const h38h01Verdicts = new WeakMap<object, boolean>();
+function h38h01DefaultedListLocal (goTranspiler: GoTranspiler, declaration): boolean {
+    if ((declaration === undefined) || (declaration === null)) {
+        return false;
+    }
+    if (h38h01Verdicts.has (declaration)) {
+        return h38h01Verdicts.get (declaration);
+    }
+    h38h01Verdicts.set (declaration, false); // re-entry answers box
+    const verdict = h38h01DefaultedListLocalUncached (goTranspiler, declaration);
+    h38h01Verdicts.set (declaration, verdict);
+    return verdict;
+}
+function h38h01DefaultedListLocalUncached (goTranspiler: GoTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type !== undefined) || !h24n04EmptyDefaultSafeList (declaration.initializer)
+        || (declaration.initializer.expression.name.text !== 'safeList') || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    if (!h38h01JsonMemberRead (goTranspiler, declaration)) {
+        return false;
+    }
+    const typed = goTranspiler.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => {
+        return goTranspiler.goSafeListUseReadsTheList (n) || goTranspiler.goListLocalSinkReadsAsList (n, true) || h26g04NeverNilUse (goTranspiler, n)
+            || h38h01EmptyListWrite (n);
+    });
+    return typed !== undefined;
+}
+{
+    const listType = GoTranspiler.prototype.goSafeListLocalUnbox;
+    GoTranspiler.prototype.goSafeListLocalUnbox = function (declaration) {
+        return listType.call (this, declaration) ?? (h38h01DefaultedListLocal (this, declaration) ? GO_SAFE_LIST_LOCAL_TYPE : undefined);
+    };
+    const listValue = GoTranspiler.prototype.goSafeListUnboxValue;
+    GoTranspiler.prototype.goSafeListUnboxValue = function (declaration, identation: number) {
+        if ((listType.call (this, declaration) === undefined) && h38h01DefaultedListLocal (this, declaration)) {
+            const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, (i === 0) ? identation : 0).trim ());
+            return `this.SafeListSlice(${args.join (', ')})`;
+        }
+        return listValue.call (this, declaration, identation);
+    };
+    // the comma-ok member read plus the literal empty default SafeList answered for absent, nil and non-list
+    const printList = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printList.call (this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || (declaration === undefined) || (listType.call (this, declaration) !== undefined)
+            || !h38h01DefaultedListLocal (this, declaration)) {
+            return printed;
+        }
+        const name = this.printNode (declaration.name, 0).trim ();
+        const [ container, key ] = declaration.initializer.arguments;
+        const c = this.printNode (container, 0).trim ();
+        const iden = this.getIden (identation);
+        const shipped = `${iden}var ${name} []any = this.SafeListSlice(${c}, "${key.text}", []any{})`;
+        const lead = /^\n*/.exec (printed)[0];
+        if (printed.substring (lead.length) !== shipped) {
+            return printed;
+        }
+        return `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${key.text}"].([]any)\n${iden}if ${name} == nil {\n${this.getIden (identation + 1)}${name} = []any{}\n${iden}}`;
+    };
+}
+// ===== H38-H01 (end) =====
