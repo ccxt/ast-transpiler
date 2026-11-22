@@ -19080,6 +19080,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                     rebinds.add(write); // every write is again a never-nil safeDict: one map type
                 } else if (noDefault && this.goNilGuardFill(write, name, found.family, ws)) {
                     rebinds.add(write);
+                } else if (!noDefault && this.goMapLocalFreshMapWrite(write, name)) {
+                    rebinds.add(write);
                 }
             }
         }
@@ -19093,6 +19095,28 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goMapLocalRebindWrites = new Map<any, Set<any>>();
+
+    // a statement write that prints a fresh map[string]any: `this.extend (..)` (Extend returns the map type),
+    // a map literal, or `this.omit (x, ..)` of the local itself (printed as its OmitDict twin)
+    goMapLocalFreshMapWrite(write, name: string): boolean {
+        const value: any = this.goUnwrapParenthesizedNode(write.right);
+        if (write.parent?.kind !== SyntaxKind.ExpressionStatement) {
+            return false;
+        }
+        if (value?.kind === SyntaxKind.ObjectLiteralExpression) {
+            return !value.properties.some((p: any) => p.kind !== SyntaxKind.PropertyAssignment);
+        }
+        const callee: any = (value?.kind === SyntaxKind.CallExpression) ? value.expression : undefined;
+        if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return false;
+        }
+        const method = callee.name?.text;
+        if (method === 'extend') {
+            return (value.arguments.length >= 1) && !value.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement);
+        }
+        const first: any = this.goUnwrapParenthesizedNode(value.arguments[0]);
+        return (method === 'omit') && (value.arguments.length >= 2) && (first?.kind === SyntaxKind.Identifier) && (first.text === name);
+    }
 
     // `if (x === undefined) { x = {} }` (or a never-nil safeDict of the same family): the write fills the absent map
     goNilGuardFill(write, name: string, family: string, ws: boolean): boolean {
@@ -19199,7 +19223,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const found: any = this.goSafeDictCallArgs(node.right);
         if (found === undefined) {
-            return undefined; // a `{}` fill prints as the map literal
+            const omit = this.goMapLocalFreshMapWrite(node, node.left.text) ? this.printNode(node.right, 0).trim() : '';
+            // Omit of the map local is its OmitDict twin; `{}`, extend and map literals print their map as is
+            return /^this\.Omit\(/.test(omit) ? `${this.printNode(node.left, 0)} = this.OmitDict(${omit.slice('this.Omit('.length)}` : undefined;
         }
         return `${this.printNode(node.left, 0)} = this.${found.family}Map(${this.printArgsForCallExpression(found.call, identation)})`;
     }
@@ -31240,6 +31266,10 @@ ${this.getIden(identation)}${returnStatement}`;
             return false;
         }
         // a defaulted `params = {}` is the GetArgMap-bound Go map in the line that binds it
+        // a safeDict-seeded local whose every write prints a map keeps map[string]any through its rebinds
+        if ((declaration.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE)) {
+            return true;
+        }
         const declared = (declaration.kind === SyntaxKind.Parameter)
             ? this.goGetArgParameterType(declaration)
             : this.goDeclaredTypeOfIdentifier(receiver);
