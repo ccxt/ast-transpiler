@@ -58446,3 +58446,89 @@ GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     };
 }
 // ===== end H36-P04 =====
+// ===== H36-P11 =====
+// `xs[k] === s` with xs a `[]string` local, k an integer local and s a Go string: GetValue answers nil out of
+// range (never equal to a string) and the element in range, so the native form is the bounds test then `==`;
+// the other side is a `string` local, or an element of a TS `string[]` local the printer already reads as the
+// plain (loop-bounded) slice index, so it holds a string
+export interface GoTranspiler {
+    h36p11StringSliceIndexCompare(left, right, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    h36p11ForCounter(key): boolean;
+    h36p11StringArrayLocal(list): boolean;
+}
+GoTranspiler.prototype.h36p11StringArrayLocal = function (list): boolean {
+    const goType = this.goResolvedLocalGoType(list);
+    const declaration: any = this.goDeclarationOfIdentifier(list);
+    const annotated: any = declaration?.type;
+    if (goType === GO_STRING_LIST_LOCAL_TYPE) {
+        return true;
+    }
+    // a `[]any` box holds Go strings only when it starts empty and every push / element write is a string local or literal
+    // (never a `*string`, which `==` would not deref the way IsEqual does)
+    const scope: any = this.goEnclosingFunction(list);
+    const init: any = declaration?.initializer;
+    if ((goType !== '[]any') || (annotated?.kind !== SyntaxKind.ArrayType) || (annotated.elementType?.kind !== SyntaxKind.StringKeyword)
+        || (init?.kind !== SyntaxKind.ArrayLiteralExpression) || (init.elements.length !== 0) || (scope === undefined)) {
+        return false;
+    }
+    const isGoString = (e: any): boolean => (e?.kind === SyntaxKind.StringLiteral)
+        || ((e?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(e) === 'string'));
+    const refersToList = (e: any): boolean => (e?.kind === SyntaxKind.Identifier) && (e.text === list.text) && (this.goDeclarationOfIdentifier(e) === declaration);
+    return !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && refersToList(n.expression.expression)) {
+            return (n.expression.name?.text !== 'push') || !n.arguments.every(isGoString);
+        }
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            const target: any = n.left;
+            return refersToList(target) || ((target?.kind === SyntaxKind.ElementAccessExpression) && refersToList(target.expression) && !isGoString(n.right));
+        }
+        return false;
+    });
+};
+// `for (let i = 0; ..; i++)` whose body never writes i prints `for i := 0`: i is a Go int
+GoTranspiler.prototype.h36p11ForCounter = function (key): boolean {
+    const declaration: any = this.goDeclarationOfIdentifier(key);
+    const loop: any = declaration?.parent?.parent;
+    const step: any = loop?.incrementor;
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (loop?.kind === SyntaxKind.ForStatement) && (loop.initializer === declaration.parent)
+        && (declaration.parent.declarations.length === 1) && (declaration.initializer?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(declaration.initializer.text)
+        && (step?.kind === SyntaxKind.PostfixUnaryExpression) && (step.operator === SyntaxKind.PlusPlusToken) && (step.operand?.text === key.text)
+        && (key.pos >= loop.statement.pos) && (key.end <= loop.statement.end)
+        && !this.hasNodeWhere(loop.statement, (n: any) => this.goWritesOrRebindsName(n, key.text, []));
+};
+GoTranspiler.prototype.h36p11StringSliceIndexCompare = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+    const sides: [any, any, string][] = [[left, right, rightText], [right, left, leftText]];
+    for (const [readNode, otherNode, otherText] of sides) {
+        const read: any = this.goUnwrapParenthesizedNode(readNode);
+        const list: any = read?.expression;
+        const key: any = read?.argumentExpression;
+        if ((read?.kind !== SyntaxKind.ElementAccessExpression) || (list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+            || (this.goResolvedLocalGoType(list) !== GO_STRING_LIST_LOCAL_TYPE) || otherText.includes('\n')) {
+            continue;
+        }
+        const keyType = this.goDeclaredTypeOfIdentifier(key) ?? (this.h36p11ForCounter(key) ? 'int' : undefined);
+        const other: any = this.goUnwrapParenthesizedNode(otherNode);
+        const otherIsString = ((other?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(other) === 'string'))
+            || ((other?.kind === SyntaxKind.ElementAccessExpression) && (other.expression?.kind === SyntaxKind.Identifier)
+                && (other.argumentExpression?.kind === SyntaxKind.Identifier) && this.h36p11StringArrayLocal(other.expression)
+                && (otherText.trim() === `${other.expression.text}[${other.argumentExpression.text}]`));
+        if (((keyType !== 'int') && (keyType !== 'int64')) || !otherIsString) {
+            continue;
+        }
+        const listText = this.printNode(list, 0).trim();
+        const keyText = this.printNode(key, 0).trim();
+        const size = (keyType === 'int') ? `len(${listText})` : `int64(len(${listText}))`;
+        const element = `${listText}[${keyText}]`;
+        return isEq ? `(${keyText} >= 0 && ${keyText} < ${size} && ${otherText} == ${element})`
+            : `(${keyText} < 0 || ${keyText} >= ${size} || ${otherText} != ${element})`;
+    }
+    return undefined;
+};
+{
+    const printInlineEquality = GoTranspiler.prototype.printInlineEquality;
+    GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+        const h = this.h36p11StringSliceIndexCompare(left, right, leftText, rightText, isEq); if (h !== undefined) return h;
+        return printInlineEquality.call(this, left, right, leftText, rightText, isEq);
+    };
+}
+// ===== end H36-P11 =====

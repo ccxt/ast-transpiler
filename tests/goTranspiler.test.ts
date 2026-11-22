@@ -20188,3 +20188,47 @@ describe('parsePrecision / integerPrecisionToAmount results are *string locals',
         expect (run ('parsePrecision', '        v = 1;\n')).not.toContain ('var v *string');
     });
 });
+
+describe('go string-slice index compared with a Go string', () => {
+    const SRC = 'class T {\n'
+        + '    f (rows: any[], other: any, s: string) {\n'
+        + '        const keys: string[] = [];\n'
+        + '        const ks: string[] = [];\n'
+        + '        const loose = [];\n'
+        + '        const ptrs: string[] = [];\n'
+        + '        for (let i = 0; i < rows.length; i++) { keys.push (\'a\'); ks.push (\'b\'); loose.push (other); ptrs.push (this.safeString (other, \'k\')); ptrs[0] = \'\'; }\n'
+        + '        let n = 0;\n'
+        + '        for (let i = 0; i < rows.length; i++) {\n'
+        + '            for (let j = 0; j < ks.length; j++) {\n'
+        + '                if (ks[j] === keys[i]) { n = n + 1; }\n'
+        + '                if (ks[j] !== keys[i]) { n = n + 2; }\n'
+        + '                if (other === keys[i]) { n = n + 3; }\n'
+        + '                if (s === loose[i]) { n = n + 4; }\n'
+        + '                if (ptrs[j] === keys[i]) { n = n + 6; }\n'
+        + '                if (ks[j] === keys[i]) { ks[j] = \'\'; }\n'
+        + '            }\n'
+        + '        }\n'
+        + '        let w = 0;\n'
+        + '        for (let k = 0; k < rows.length; k++) {\n'
+        + '            w = k + 1;\n'
+        + '            if (s === keys[w]) { n = n + 5; }\n'
+        + '        }\n'
+        + '        return n;\n'
+        + '    }\n'
+        + '}\n';
+    const out = (): string => new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileGo (SRC).content;
+    test('a for-counter index of a []string local against a Go string is the bounds test then == (fails on the base printer)', () => {
+        const go = out ();
+        expect (go).toContain ('if i >= 0 && i < len(keys) && ks[j] == keys[i] {');
+        expect (go).toContain ('if i < 0 || i >= len(keys) || ks[j] != keys[i] {');
+        expect (go).toContain ('var ks []any = []any{}');
+    });
+    test('negatives: an any operand, a []any receiver and a non-counter index keep the helper', () => {
+        const go = out ();
+        expect (go).toContain ('IsEqual(other, GetValue(keys, i))');
+        expect (go).not.toContain ('ks[j] == GetValue(keys, i)');
+        expect (go).not.toContain ('s == loose[i]');
+        expect (go).not.toContain ('len(keys) && s == keys[w]');
+        expect (go).not.toContain ('ptrs[j] == keys[i]');
+    });
+});
