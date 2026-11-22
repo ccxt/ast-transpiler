@@ -20296,3 +20296,37 @@ describe('go string-slice index compared with a Go string', () => {
         expect (go).not.toContain ('ptrs[j] == keys[i]');
     });
 });
+
+describe('a declared string method returning a local filled from a defaulted safeString prints string', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-p08fill');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const fill = (first: string, fillCall: string) => "    wsUrl (): string {\n        let url = this.safeString (this.options, 'u');\n" + first
+        + "        if (url === undefined) {\n            this.options['u'] = 'x';\n            url = " + fillCall + ";\n        }\n        return url;\n    }\n";
+    test('the nil branch fills it from a literal default: string and deref (fails on the base printer)', () => {
+        const out = run(fill('', "this.safeString (this.options, 'u', '')"));
+        expect(out).toContain('WsUrl() string {');
+        expect(out).toContain('return *url');
+    });
+    test('negative: a fill with no default keeps any (a missing key answers nil)', () => {
+        expect(run(fill('', "this.safeString (this.options, 'v')"))).toContain('WsUrl() any {');
+    });
+    test('negative: a second write of the local keeps any', () => {
+        expect(run(fill("        url = this.safeString (this.options, 'w');\n", "this.safeString (this.options, 'u', '')"))).toContain('WsUrl() any {');
+    });
+});
