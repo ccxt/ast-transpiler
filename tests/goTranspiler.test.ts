@@ -12579,10 +12579,24 @@ describe ('goPointerHelperTupleSlots', () => {
             expect(out).not.toContain('end = *until');
             expect(out).not.toContain('var until *int64');
         });
-        test('a store without a nil proof keeps the box', () => {
+        test('an unguarded map store and a Dict literal entry store the value or nil without a box', () => {
+            const out = fn(TAG, "        this.checkAddress (address, 'c', tag);\n        request['memo'] = tag;\n        const body: Dict = {\n            'a': address,\n            'tag': tag,\n        };\n        request['b'] = body;\n");
+            expect(out).toContain('var tag *string = SafeStringPtr(tagparamsTagVariable[0])');
+            expect(out).toContain('if tag != nil {\n\t\trequest["memo"] = *tag\n\t} else {\n\t\trequest["memo"] = nil\n\t}');
+            expect(out).toContain('if tag != nil {\n\t\tbody["tag"] = *tag\n\t} else {\n\t\tbody["tag"] = nil\n\t}');
+            expect(out).not.toContain('func() any {');
+        });
+        test('a nested literal entry and a write into an untyped receiver keep the box', () => {
+            for (const use of [ "        const body: Dict = { 'o': { 'tag': tag } };\n        request['b'] = body;\n", "        const x = this.other (1);\n        x['tag'] = tag;\n        request['x'] = x;\n" ]) {
+                const out = fn(TAG, use);
+                expect(out).not.toContain('var tag *string');
+            }
+        });
+        test('a store without a nil proof stores the value or nil', () => {
             const out = fn(TAG, "        request['memo'] = tag;\n");
-            expect(out).toContain('tag := GetValue(tagparamsTagVariable, 0)');
-            expect(out).not.toContain('var tag *string');
+            expect(out).toContain('var tag *string = SafeStringPtr(tagparamsTagVariable[0])');
+            expect(out).toContain('request["memo"] = nil');
+            expect(out).not.toContain('tag := GetValue(tagparamsTagVariable, 0)');
         });
         test('an object literal value, a return and a foreign callee keep the box', () => {
             for (const use of [ "        request['o'] = { 'k': tag };\n", '        return tag;\n', '        this.other (tag);\n' ]) {

@@ -58617,3 +58617,97 @@ GoTranspiler.prototype.h37p04PassiveUse = function (node, name: string): boolean
     };
 }
 // ===== end H37-P04 =====
+// ===== H37-P10: a typed pointer slot stored into an `any` map slot without a nil guard =====
+// `m['k'] = slot` (m a `map[string]any` local) and `'k': slot` in `const x: Dict = {..}` print as
+// `if slot != nil { m["k"] = *slot } else { m["k"] = nil }`: the key is present, nil stays nil, a value is stored as itself
+export interface GoTranspiler {
+    h37p10StoreSite(current): 'element' | 'entry' | undefined;
+    h37p10TypedSlot(node): boolean;
+    h37p10Skip: Map<any, Set<any>>;
+}
+GoTranspiler.prototype.h37p10StoreSite = function (current) {
+    const parent: any = current?.parent;
+    if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === current)
+        && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && (parent.left?.kind === SyntaxKind.ElementAccessExpression)
+        && (parent.left.expression?.kind === SyntaxKind.Identifier) && (parent.left.argumentExpression?.kind === SyntaxKind.StringLiteral)
+        && (this.goDeclaredTypeOfIdentifier(parent.left.expression) === 'map[string]any')) {
+        return 'element';
+    }
+    const literal: any = parent?.parent;
+    const declaration: any = literal?.parent;
+    const statement: any = declaration?.parent?.parent;
+    if ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === current)
+        && ((parent.name?.kind === SyntaxKind.StringLiteral) || (parent.name?.kind === SyntaxKind.Identifier)) && /^[\w.-]+$/.test(parent.name.text)
+        && (literal?.kind === SyntaxKind.ObjectLiteralExpression) && (declaration?.kind === SyntaxKind.VariableDeclaration)
+        && (declaration.initializer === literal) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && (declaration.type?.kind === SyntaxKind.TypeReference) && (declaration.type.typeName?.text === 'Dict')
+        && (declaration.parent?.declarations?.length === 1) && (statement?.kind === SyntaxKind.VariableStatement)
+        && (statement.parent?.kind === SyntaxKind.Block)) {
+        return 'entry';
+    }
+    return undefined;
+};
+GoTranspiler.prototype.h37p10TypedSlot = function (node) {
+    if ((node?.kind !== SyntaxKind.Identifier) || this.goTuplePointerSlotProbing) {
+        return false;
+    }
+    const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+    return ((declaration?.kind === SyntaxKind.BindingElement) && (this.goTuplePointerSlotOfBinding(declaration) !== undefined))
+        || ((declaration?.kind === SyntaxKind.VariableDeclaration) && (this.goTuplePointerSlotNilInitType(declaration) !== undefined));
+};
+{
+    const admissibleH37P10 = GoTranspiler.prototype.goTuplePointerSlotReadAdmissible;
+    GoTranspiler.prototype.goTuplePointerSlotReadAdmissible = function (ident, allowStore: boolean, goType?: string) {
+        if (admissibleH37P10.call(this, ident, allowStore, goType)) {
+            return true;
+        }
+        return allowStore && (ident?.parent !== undefined) && (this.h37p10StoreSite(ident) !== undefined);
+    };
+    const ifElse = (iden: string, slot: string, target: string): string => `${iden}if ${slot} != nil {\n${iden}\t${target} = *${slot}\n${iden}} else {\n${iden}\t${target} = nil\n${iden}}`;
+    const statementH37P10 = GoTranspiler.prototype.printExpressionStatement;
+    GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+        const write: any = node?.expression;
+        const right: any = write?.right;
+        if ((write?.kind !== SyntaxKind.BinaryExpression) || !this.h37p10TypedSlot(right) || (this.h37p10StoreSite(right) !== 'element')
+            || this.goTuplePointerSlotNilProven(right) || this.goHasExitingNilGuard(right)) {
+            return statementH37P10.call(this, node, identation);
+        }
+        const slot = this.printNode(right, 0).trim();
+        const target = `${this.printNode(write.left.expression, 0).trim()}[${this.printNode(write.left.argumentExpression, 0).trim()}]`;
+        return this.printNodeCommentsIfAny(node, identation, ifElse(this.getIden(identation), slot, target));
+    };
+    const bodyH37P10 = GoTranspiler.prototype.printObjectLiteralBody;
+    GoTranspiler.prototype.printObjectLiteralBody = function (node, identation) {
+        const skip = this.h37p10Skip?.get(node);
+        const target = (skip === undefined) ? node : Object.create(node, { 'properties': { 'value': node.properties.filter((p) => !skip.has(p)) } });
+        return bodyH37P10.call(this, target, identation);
+    };
+    const variableH37P10 = GoTranspiler.prototype.printVariableStatement;
+    GoTranspiler.prototype.printVariableStatement = function (node, identation) {
+        const declaration: any = node?.declarationList?.declarations?.[0];
+        const literal: any = declaration?.initializer;
+        const entries: any[] = (literal?.kind === SyntaxKind.ObjectLiteralExpression)
+            ? literal.properties.filter((p: any) => (p.kind === SyntaxKind.PropertyAssignment) && this.h37p10TypedSlot(p.initializer)
+                && (this.h37p10StoreSite(p.initializer) === 'entry'))
+            : [];
+        if (entries.length === 0) {
+            return variableH37P10.call(this, node, identation);
+        }
+        this.h37p10Skip = this.h37p10Skip ?? new Map();
+        this.h37p10Skip.set(literal, new Set(entries));
+        let printed: string;
+        try {
+            printed = variableH37P10.call(this, node, identation);
+        } finally {
+            this.h37p10Skip.delete(literal);
+        }
+        const name = this.printNode(declaration.name, 0).trim();
+        if (!new RegExp(`(^|\\n)[ \\t]*var ${name} map\\[string\\]any = map\\[string\\]any\\{`).test(printed)) {
+            throw new Error(`H37-P10: ${name} is not printed as a map[string]any literal`);
+        }
+        const iden = this.getIden(identation);
+        const stores = entries.map((p: any) => ifElse(iden, this.printNode(p.initializer, 0).trim(), `${name}[${JSON.stringify(p.name.text)}]`));
+        return printed.trimEnd() + '\n' + stores.join('\n');
+    };
+}
+// ===== end H37-P10 =====
