@@ -27200,3 +27200,21 @@ describe('h34-P25: `rows[k]` on a converted `Dict[]` local reads the same conver
         expect (run ("    m (response: Dict, k: any) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        const row = rows[k];\n        return this.safeString (row, 'id');\n    }\n")).not.toContain ('dict_rows');
     });
 });
+
+describe('rust array destructure with a skipped slot', () => {
+    const rustOf = (body: string) => new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } })
+        .transpileRust(`class T {\n    pick (p) { return [ 'a', p ]; }\n    f (params) {\n${body}\n    }\n}`).content;
+    test('a leading hole binds only the named slot', () => {
+        const out = rustOf('        const [ , rest ] = this.pick (params);\n        return rest;');
+        expect (out).toContain ('let mut rest: Value = restVariable.get(1).cloned().unwrap_or(Value::Null);');
+        expect (out).not.toMatch (/let mut : Value/);
+    });
+    test('a middle hole keeps the slot index of the later name', () => {
+        const out = rustOf('        const [ a, , c ] = this.pick (params);\n        return [ a, c ];');
+        expect (out).toContain ('let mut a: Value = acVariable.get(0).cloned().unwrap_or(Value::Null)');
+        expect (out).toContain ('let mut c: Value = acVariable.get(2).cloned().unwrap_or(Value::Null)');
+    });
+    test('no hole: unchanged naming', () => {
+        expect (rustOf('        const [ a, b ] = this.pick (params);\n        return b;')).toContain ('let abVariable: Vec<Value> = ');
+    });
+});

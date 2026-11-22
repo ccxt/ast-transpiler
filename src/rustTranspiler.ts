@@ -2568,7 +2568,8 @@ export class RustTranspiler extends BaseTranspiler {
         const indent = this.getIden(identation);
         const bookDecl = node.declarations.length === 1 && declaration?.name.kind === SyntaxKind.Identifier ? this.printWsBookLocalDeclaration(declaration, this.printNode(declaration.name, 0), indent) : undefined; if (bookDecl !== undefined) return bookDecl;
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
-            const parsedElements = declaration.name.elements.map(e => this.printNode(e.name, 0));
+            // a skipped slot (`const [ , x ] = ..`) is an OmittedExpression with no name: it binds nothing
+            const parsedElements = declaration.name.elements.map(e => (e.name === undefined ? '' : this.printNode(e.name, 0)));
             const untilDecl = this.printRustUntilPairDestructure(declaration, parsedElements, indent); if (untilDecl !== undefined) return untilDecl;
             const syntheticName = parsedElements.join('') + 'Variable';
             const nativeList = this.rustNativeListSource(declaration.initializer);
@@ -2576,11 +2577,11 @@ export class RustTranspiler extends BaseTranspiler {
                 ? `${indent}let ${syntheticName}: Vec<Value> = ${this.printNode(declaration.initializer, 0)}.as_array().cloned().unwrap_or_default();\n`
                 : `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
             const untypedRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`);
-            const lines = parsedElements.map((e, idx) => this.printWsTupleCacheSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
+            const lines = parsedElements.map((e, idx) => e === '' ? undefined : this.printWsTupleCacheSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
                 ?? this.printWsTupleStrSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
                 ?? this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent)
                 ?? this.printRustHandedDictSlot(declaration.name.elements[idx], e, untypedRead(idx), indent)
-                ?? this.printPromiseAllListSlot(declaration.name.elements[idx], e, untypedRead(idx), indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`);
+                ?? this.printPromiseAllListSlot(declaration.name.elements[idx], e, untypedRead(idx), indent) ?? `${indent}let mut ${e}: Value = ${untypedRead(idx)}`).filter((l) => l !== undefined);
             return head + lines.join(';\n');
         }
         const varName = this.printNode(declaration.name, 0);
@@ -5380,7 +5381,7 @@ export class RustTranspiler extends BaseTranspiler {
             names = new Set<string>();
             for (const n of this.rustScopeIndex(src).nodes as any[]) {
                 if (isVariableDeclaration(n) && isIdentifier(n.name) && (n.initializer === undefined || this.rustScalarInitShape(n.initializer))) names.add(String(n.name.text));
-                if (isBindingElement(n) && isIdentifier(n.name) && n.parent?.kind === SyntaxKind.ArrayBindingPattern) names.add(String(n.name.text));
+                if (isBindingElement(n) && n.name !== undefined && isIdentifier(n.name) && n.parent?.kind === SyntaxKind.ArrayBindingPattern) names.add(String(n.name.text));
             }
             this.rustScalarCandidates.set(src, names);
         }
