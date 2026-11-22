@@ -37440,6 +37440,12 @@ function ccxtGo87g2ListLocal (goTranspiler, declaration, mode: 'F' | 'G' | 'I'):
                 feature++;
                 return true;
             }
+            // rebound to another `[]`-defaulted safeList: SafeListSlice answers a list on every path, as the box held
+            if ((mode === 'I') && !noDefault && h24n04EmptyDefaultSafeList(ccxtGoUnwrapTypeOnly(parent.right))
+                && (ccxtGoUnwrapTypeOnly(parent.right).expression.name.text === 'safeList')) {
+                feature++;
+                return true;
+            }
             if ((mode === 'F') && (ccxtGoUnwrapTypeOnly(parent.right)?.kind === SyntaxKind.ArrayLiteralExpression)
                 && !ccxtGoUnwrapTypeOnly(parent.right).elements.some((e) => e.kind === SyntaxKind.SpreadElement)) {
                 feature++;
@@ -58764,3 +58770,23 @@ GoTranspiler.prototype.h37p11StringOptionLocal = function (node): boolean {
     return (declaration?.kind === SyntaxKind.VariableDeclaration) && (this.goDeclaredTypeOfIdentifier(node) === 'string');
 };
 // ===== end H37-P11 =====
+// ===== list local rebound to a defaulted safeList (begin) =====
+// `xs = this.safeList (C, 'k', [])` as a statement on a []any local, C a decoded JSON map: the member is a
+// []any, another JSON value or absent, so the comma-ok read plus the empty default answers what SafeListSlice did.
+{
+    const printBinary = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        const printed = printBinary.call(this, node, identation);
+        const right: any = ccxtGoUnwrapTypeOnly(node?.right);
+        const m = (typeof printed === 'string') ? /^(\w+) = this\.SafeListSlice\((\w+), ("\w+"), \[\]any\{\}\)$/.exec(printed.trim()) : null;
+        if ((m === null) || (node.parent?.kind !== SyntaxKind.ExpressionStatement) || !h24n04EmptyDefaultSafeList(right)
+            || (right.arguments[0]?.kind !== SyntaxKind.Identifier) || (this.h27a01ReceiverType(right.arguments[0]) !== GO_SAFE_DICT_LOCAL_TYPE)
+            || !(this.h27a02JsonOrigin(right.arguments[0], 0)
+                || this.h27a02JsonOriginBeforeRead(right.arguments[0], { kind: node.kind, parent: node.parent, end: node.end, initializer: right }))) {
+            return printed;
+        }
+        const iden = this.getIden(identation);
+        return `${m[1]}, _ = ${m[2]}[${m[3]}].([]any)\n${iden}if ${m[1]} == nil {\n${this.getIden(identation + 1)}${m[1]} = []any{}\n${iden}}`;
+    };
+}
+// ===== list local rebound to a defaulted safeList (end) =====
