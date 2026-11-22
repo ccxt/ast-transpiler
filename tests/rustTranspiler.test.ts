@@ -3832,22 +3832,6 @@ describe('rust declared-Dict locals: table and census', () => {
         expect(answer).toBeUndefined();
     });
 
-    test('the census counts proven and unproven declarators', () => {
-        const snippet =
-            'class T {\n' +
-            '    m(response, other) {\n' +
-            "        const proven = this.safeDict(response, 'a', {});\n" +
-            "        const mayBeNull = this.safeDict(response, 'b');\n" +
-            "        let reassigned = this.safeDict(response, 'c', {});\n" +
-            '        reassigned = other;\n' +
-            "        return [ proven['x'], mayBeNull['y'], reassigned['z'] ];\n" +
-            '    }\n' +
-            '}';
-        transpiler.transpileRust(snippet);
-        const census = rustPrinter().rustDeclaredDictLocalCensus();
-        expect(census).toEqual({ declarators: 3, dict: 1, alwaysDict: 2, kindUnstable: 1, retypeEligible: 1 });
-    });
-
     test('the table is keyed by local name and skips non-dict initialisers', () => {
         const snippet =
             'class T {\n' +

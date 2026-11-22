@@ -14748,15 +14748,7 @@ export class RustTranspiler extends BaseTranspiler {
         return isPropertyAccessExpression(access) && access.expression === top && isCallExpression(access.parent) && access.parent.expression === access
             && ((this.rustStrLocalSplitText(access.parent) ?? this.rustStrLocalSliceText(access.parent)) !== undefined
                 // 42b: a native method of the typed local reads it through the cast (`(x as string).m(..)` prints `x`)
-                || (this.rustStrCastLocal(top) !== undefined && this.rustScalarStrMethod(access.parent) !== undefined)
-                || (this.rustStrCastLocal(top) !== undefined && this.rust42bCastContainsTest(access.parent)));
-    }
-
-    /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
-    rust42bCastContainsTest(call): boolean {
-        let top: any = call;
-        while (isParenthesizedExpression(top.parent)) top = top.parent;
-        return isBinaryExpression(top.parent) && top.parent.left === top && this.rustScalarContainsTest(top.parent, true) !== undefined;
+                || (this.rustStrCastLocal(top) !== undefined && this.rustScalarStrMethod(access.parent) !== undefined));
     }
 
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
@@ -15186,23 +15178,6 @@ export class RustTranspiler extends BaseTranspiler {
     private rustIdentifierRefersToDeclaration(node: Identifier, declaration: VariableDeclaration | ParameterDeclaration): boolean {
         const symbol = this.rustSymbolOf(node);
         return symbol !== undefined && symbol === this.rustSymbolOf(declaration.name as Identifier);
-    }
-
-    /** Census of the current source file's table, for reports and tests. */
-    rustDeclaredDictLocalCensus(): { declarators: number, dict: number, alwaysDict: number, kindUnstable: number, retypeEligible: number } {
-        let declarators = 0, dict = 0, alwaysDict = 0, kindUnstable = 0, retypeEligible = 0;
-        for (const entries of this.rustDeclaredDictLocals().values()) {
-            for (const entry of entries) {
-                declarators++;
-                if (entry.alwaysDict) alwaysDict++;
-                if (entry.alwaysDict && entry.stable) dict++;
-                if (entry.alwaysDict && !entry.stable) kindUnstable++;
-                // every later use is an element access or a kind-preserving
-                // mutator -> the only uses a native declaration has to serve.
-                if (entry.alwaysDict && entry.stable && entry.uses.other === 0) retypeEligible++;
-            }
-        }
-        return { declarators, dict, alwaysDict, kindUnstable, retypeEligible };
     }
 
     private collectRustDeclaredDictLocals(src: SourceFile): Map<string, RustDeclaredDictLocalEntry[]> {
