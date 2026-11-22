@@ -14292,8 +14292,10 @@ describe('ral-wh: Promise.all results over a built list hold the List', () => {
     };
     test('Promise.all over a pushed list of promises read by safeDict at an index is a List', () => {
         const out = write ('wh-pall', "    async m (params: Dict = {}) {\n        const promises: Promise<any>[] = [\n            this.fetchA (params),\n            this.fetchA (params),\n        ];\n        promises.push (this.fetchA ());\n        const results = await Promise.all (promises);\n        const a = this.safeDict (results, 0, {});\n        const b = this.safeDict (results, 1, {});\n        return [ this.hold (a), this.hold (b) ];\n    }\n");
-        expect(out).toContain('let mut results: crate::value::List = promise_all(');
+        // read only as rows: the list is converted once to maps
+        expect(out).toContain('let results: Vec<crate::value::Dict> = crate::value::dict_rows(promise_all(');
         expect(out).toContain('.await.into_list()');
+        expect(out).toContain('results.get(1).cloned().unwrap_or_default()');
     });
     test('negative: Promise.all over a parameter of unknown kind stays a Value', () => {
         const out = write ('wh-palln', "    async m (promises: any) {\n        const results = await Promise.all (promises);\n        const a = this.safeDict (results, 0, {});\n        return this.hold (a);\n    }\n");
@@ -27102,6 +27104,36 @@ describe('h33-P21: a `Dict[]` local read from `safeList (.., [])` holds converte
     test('an unannotated local read only as map rows is converted too', () => {
         const out = run ("    m (response: Dict) {\n        const rows = this.safeList (response, 'rows', []);\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
         expect (out).toContain ('rows.get(0).cloned().unwrap_or_default()');
+    });
+});
+
+describe('awaited list rows: `Promise<List>` endpoints and `Promise.all` locals read as converted rows', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p25aw-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (root, 'ts/src/abstract'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type List = any[];\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/abstract/venue.ts'), "import Exchange from '../base/Exchange.js';\nimport type { Dict, List } from '../base/Exchange.js';\nexport default abstract class venueApi extends Exchange {\n    publicGetRows (params = {}): Promise<List> { return this.hold (params); }\n    publicGetAny (params = {}): Promise<Dict | List> { return this.hold (params); }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import venueApi from './abstract/venue.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends venueApi {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const one = (init: string, extra = '') => "    async m (params: Dict = {}) {\n        const rows = " + init + ";\n        const n = rows.length;\n        const first = this.safeDict (rows, 0);\n" + extra + "        return this.hold ([ n, this.safeString (first, 'id') ]);\n    }\n";
+    test('an endpoint declared `Promise<List>` read only by row is converted once', () => {
+        const out = run (one ('await this.publicGetRows (params)'));
+        expect (out).toMatch (/let rows: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('rows.get(0).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('negative: an endpoint not declared `Promise<List>` keeps the boxed read', () => {
+        expect (run (one ('await this.publicGetAny (params)'))).not.toContain ('dict_rows');
+    });
+    test('negative: a list handed on whole keeps the boxed list', () => {
+        expect (run (one ('await this.publicGetRows (params)', "        this.hold (rows);\n"))).not.toContain ('dict_rows');
+    });
+    test('negative: a row whose key is written keeps the optional reader', () => {
+        const out = run ("    async m (params: Dict = {}) {\n        const rows = await this.publicGetRows (params);\n        const first = rows[0];\n        first['x'] = 1;\n        return first;\n    }\n");
+        expect (out).not.toContain ('dict_rows');
     });
 });
 

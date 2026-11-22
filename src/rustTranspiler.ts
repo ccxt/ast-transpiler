@@ -41891,10 +41891,19 @@ export class RustTranspiler extends BaseTranspiler {
     // an unannotated local takes `safeList`'s own `any[]`: only its rows read as maps are converted
     if ((declaration.type !== undefined && declaration.type.getText() !== 'Dict[]') || this.rustTestTierSource(declaration)) return false;
     const init: any = this.rustSkipWrappers(declaration.initializer);
-    if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
-    if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
-    const dflt: any = this.rustSkipWrappers(init.arguments[2]);
-    if (!isArrayLiteralExpression(dflt) || dflt.elements.length !== 0) return false;
+    // `await Promise.all (..)` and an awaited endpoint declared `Promise<List>` (a non-list answer reads as the empty
+    // list) give a list, like `safeList (.., [])`
+    if (init?.kind === SyntaxKind.AwaitExpression) {
+        const all: any = this.rustSkipWrappers(init.expression);
+        const isAll = all !== undefined && isCallExpression(all) && isPropertyAccessExpression(all.expression) && isIdentifier(all.expression.expression)
+            && String(all.expression.expression.text) === 'Promise' && String(all.expression.name.text) === 'all';
+        if (!isAll && !this.rustDeclaredListProducer(init)) return false;
+    } else {
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
+        const dflt: any = this.rustSkipWrappers(init.arguments[2]);
+        if (!isArrayLiteralExpression(dflt) || dflt.elements.length !== 0) return false;
+    }
     const scope: any = this.rustEnclosingFunction(declaration);
     if (scope === undefined || isSourceFile(scope)) return false;
     const name = String(declaration.name.text);
@@ -41939,7 +41948,12 @@ export class RustTranspiler extends BaseTranspiler {
     let text: string;
     try { text = this.printVariableDeclarationList(declaration.parent, 0).trim(); } finally { this.rustP21Printing = undefined; }
     const head = [`let mut ${varName}: crate::value::List = `, `let ${varName}: crate::value::List = `].find ((h) => text.startsWith(h));
-    if (head === undefined) return undefined;
+    if (head === undefined) {
+        // an awaited endpoint's optional list: `None` (a non-list answer) is the empty list here
+        const opt = [`let mut ${varName}: Option<crate::value::List> = `, `let ${varName}: Option<crate::value::List> = `].find ((h) => text.startsWith(h));
+        if (opt === undefined || declaration.initializer?.kind !== SyntaxKind.AwaitExpression) return undefined;
+        return `${indent}let ${varName}: Vec<crate::value::Dict> = crate::value::dict_rows(${text.slice(opt.length)}.unwrap_or_default())`;
+    }
     return `${indent}let ${varName}: Vec<crate::value::Dict> = crate::value::dict_rows(${text.slice(head.length)})`;
 };
 (RustTranspiler.prototype as any).rustP21RowReadText = function (this: any, rowDeclaration: any): string | undefined {
