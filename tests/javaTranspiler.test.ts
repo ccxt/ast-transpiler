@@ -10942,6 +10942,54 @@ describe('java base-tier Map returns', () => {
         expect(print(undefined)).toMatch(/public Object buildMap\(/);
     });
 });
+// a base-tier `: string` method whose returns all print String carries the String return on the same sole terms
+describe('java base-tier String returns', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-base-string-returns');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const CLEAN = { declared: 1, mentions: 0, handWritten: false, calls: [] as any[] };
+    const BASE_SOURCE =
+        "export class BaseExchange {\n" +
+        "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+        "    first (): void {\n" +
+        "    }\n" +
+        "    hostOf (a: number): string {\n" +
+        "        if (a > 1) {\n" +
+        "            return 'x';\n" +
+        "        }\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    opaque (x: any): string {\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+    const print = (uses: any) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        if (uses !== undefined) {
+            printer.javaRepoMethodUses = (name: string) => uses(name);
+        }
+        return byPath.transpileJavaByPath(BASE_FIXTURE).content as string;
+    };
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+    test('a sole String-returning base method prints the String return', () => {
+        expect(print(() => CLEAN)).toMatch(/public String hostOf\(Object a\)/);
+    });
+    test('a return that is not a String (an any value) keeps Object', () => {
+        expect(print(() => CLEAN)).toMatch(/public Object opaque\(Object x\)/);
+    });
+    test('a redeclared, mentioned or hand-written name, or no repo facts, keeps Object', () => {
+        expect(print(() => ({ ...CLEAN, declared: 2 }))).toMatch(/public Object hostOf\(/);
+        expect(print(() => ({ ...CLEAN, mentions: 1 }))).toMatch(/public Object hostOf\(/);
+        expect(print(() => ({ ...CLEAN, handWritten: true }))).toMatch(/public Object hostOf\(/);
+        expect(print(undefined)).toMatch(/public Object hostOf\(/);
+    });
+});
 describe('java ordering of two printed String operands', () => {
     const withStrings = (strings, input) => {
         transpiler.javaTranspiler.javaDeclaredStringResolver = (node) => strings[node?.text];

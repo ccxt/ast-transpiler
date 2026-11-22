@@ -2907,7 +2907,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (target === undefined && !baseTier) {
             target = this.javaReturnTypeFromBody(node);
         }
-        if (target === undefined || (baseTier && target !== 'Boolean' && !this.javaBaseMapReturnIsSole(node, target))) {
+        if (target === undefined || (baseTier && target !== 'Boolean' && !this.javaBaseMapReturnIsSole(node, target)
+            && !this.javaBaseStringReturnIsSole(node, target))) {
             return undefined;
         }
         // an override prints the base declaration's boxed signature; a Boolean base
@@ -2918,7 +2919,13 @@ export class JavaTranspiler extends BaseTranspiler {
             || (this.javaMethodReturnsNonNullBoolean(ancestor, 0) && !this.javaMethodReturnsNonNullBoolean(node, 0)))) {
             throw new Error(`java: ${String((node.name as any).text)} overrides a Boolean base method but its returns do not all print Boolean`);
         }
-        if (ancestor !== undefined && !ancestorBoolean) {
+        // a String venue ancestor binds the override to String as well (an Object override would not compile)
+        const ancestorString = ancestor !== undefined && !ancestorBoolean && target === 'String'
+            && JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(ancestor.getSourceFile().fileName) && this.javaNativeReturnType(ancestor) === 'String';
+        if (ancestorString && !this.javaReturnSitesPrintType(node, target)) {
+            throw new Error(`java: ${String((node.name as any).text)} overrides a String method but its returns do not all print String`);
+        }
+        if (ancestor !== undefined && !ancestorBoolean && !ancestorString) {
             return undefined;
         }
         if (!this.javaReturnSitesPrintType(node, target)) {
@@ -2936,6 +2943,12 @@ export class JavaTranspiler extends BaseTranspiler {
         const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
         return uses !== undefined && uses.declared === 1 && uses.mentions === 0 && !uses.handWritten
             && this.javaTry(() => this.getMethodOverride(node)) === undefined;
+    }
+
+    // a base-tier `: string` method under the same sole-declaration terms prints its String return
+    // (Java return types are covariant only, so no venue override or hand-written caller may exist)
+    javaBaseStringReturnIsSole(node, target: string): boolean {
+        return target === 'String' && this.javaBaseMapReturnIsSole(node, JAVA_NATIVE_RETURN_MAP_TYPE);
     }
 
     javaNativeReturnTypeTarget(node): string | undefined {
