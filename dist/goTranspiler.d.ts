@@ -1661,7 +1661,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
-    printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
     printAssertCall(node: any, identation: any, parsedArgs: any): string;
     goSliceLiteralBound(node: any): number | undefined;
@@ -1682,7 +1681,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(node: any, identation: any): string;
-    printLengthProperty(node: any, identation: any, name?: any): string;
     printConditionalExpression(node: any, identation: any): string;
     printPropertyAccessExpression(node: any, identation: any): any;
     printDeleteExpression(node: any, identation: any): string;
@@ -2740,4 +2738,5 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     h33p02BoxedStores: Set<any> | undefined;
     h33p02StringSliceValue(node: any): boolean;
+    h33p02Converter(node: any): string | undefined;
 }

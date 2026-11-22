@@ -446,6 +446,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpNativeIntegralMod(node: any, leftText: string, rightText: string): string | undefined;
     csharpNativeIntegralMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpIntegralMinMaxOperand(node: any): any;
     csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;

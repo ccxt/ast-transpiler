@@ -377,10 +377,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_TYPEOF_HELPERS;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
+    /** The boxed own-container call converted straight back (`Value::Dict(c).into_dict()`) is the call `c` itself. */
+    rustOwnContainerUnwrap(init: any, text: string): string;
     printDateNowCall(node: any, identation: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printVariableDeclarationList(node: any, identation: any): any;
+    printVariableDeclarationListInner(node: any, identation: any): any;
     /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
      *  by `storeArray` / `store`, or `Null` out of range), read only as `const parts = lvl[K]` (numeric literal K) where
      *  `parts` is itself read only at numeric literal keys. `lvl` holds the list (`into_list()`: the same `Arr`, an empty
@@ -3285,6 +3288,30 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The pair call as printed, unboxed (`undefined` when `node` is not one). */
     rustUntilPairText(node: any): string | undefined;
     private rustUntilPairRaw;
+    private rustOwnContainerDecisions;
+    private rustOwnContainerBare;
+    rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined;
+    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined;
+    /** A checker type that is a map (object, never any / unknown / nullable / array) or a list (array or tuple). */
+    rustStaticContainerType(type: any, kind: 'dict' | 'list'): boolean;
+    /** The venue container decision of a declaration (the call-site rule's own cache). */
+    rustVenueContainerDecisionOf(declaration: any): {
+        kind: 'dict' | 'list';
+        nullable: boolean;
+    } | undefined;
+    /** `[await] this.m (..)` of an own-container method: its kind. */
+    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined;
+    rustOwnContainerBareText(node: any): string;
+    /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
+    printOwnContainerCallBox(node: any): string | undefined;
+    /** The native text of `[await] this.m (..)` for a typed local of the same kind, else undefined. */
+    rustOwnContainerNativeText(expr: any, kind: 'dict' | 'list'): string | undefined;
+    /** Brackets balance and never close below depth 0 (string contents aside, as the literal rule does). */
+    rustBalancedText(text: string): boolean;
+    /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
+    rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
+    printOwnContainerReturn(fn: any, exp: any): string | undefined;
     /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
     printRustUntilPairBox(node: any): string | undefined;
     /** `this.handleUntilOption (..)[i]` with a literal 0 / 1: that map, boxed where the read took a `Value`. */
