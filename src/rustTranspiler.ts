@@ -2680,7 +2680,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP26ListRowRead(declaration.initializer, false) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -27738,7 +27738,7 @@ export class RustTranspiler extends BaseTranspiler {
         const field = /^(\w+)\.get\(("\w+")\)\.cloned\(\)\.unwrap_or_default\(\)$/.exec(this.rustWsFieldGetText(init, true) ?? '');
         if (field !== null && !RUST_BOOK_META_KEYS.has(field[2].slice(1, -1))) return `${indent}let mut ${varName}: Option<${type}> = self.safe_${kind}_k_o(&${field[1]}, ${field[2]})`;
         const printed = this.printNode(declaration.initializer, 0).trim();
-        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? (this as any).rustP26ListRowRead(init, true) ?? this.rustOdictCallText(init) ?? this.rustOptDictNativeInit(init, printed) ?? (this as any).rustP22KeyedDictRead(init, true) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOdictCallText(init) ?? this.rustOptDictNativeInit(init, printed) ?? (this as any).rustP22KeyedDictRead(init, true) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
     }
 
     /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
@@ -42109,43 +42109,3 @@ export class RustTranspiler extends BaseTranspiler {
     return `(if let Some(Value::Dict(__m)) = ${(BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text)}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
 };
 // ===== end h34-H34-P22
-
-// ===== h36-H36-P26: `this.safeDict (xs, i)` on a plain `List` local with an int literal or counter key reads the slice
-// `safe_dict_t` / `safe_dict_o` on a list read `get_list_value`: out of range, negative, Null or a non-map element
-// answers the empty map / `None`, as the native `get` does. Lists hold no marker maps, so every tier takes it.
-(RustTranspiler.prototype as any).rustP26ListRowRead = function (this: any, initializer: any, optional: boolean): string | undefined {
-    const call: any = this.rustSkipWrappers(initializer);
-    if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
-    if (String(call.expression.name.text) !== 'safeDict' || call.arguments.length < 2 || call.arguments.length > 3) return undefined;
-    if (call.arguments.length === 3) {
-        const dflt: any = this.rustSkipWrappers(call.arguments[2]);
-        if (optional || !isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return undefined;
-    }
-    if (this.rustTestTierSource(call)) return undefined;
-    const recv: any = this.rustSkipWrappers(call.arguments[0]);
-    const decl: any = isIdentifier(recv) ? this.rustDeclarationOfIdentifier(recv) : undefined;
-    if (decl?.kind !== SyntaxKind.VariableDeclaration || decl.name === recv || !(this.rustBorrowedLocalKind(decl) === 'list' || this.rustLentListLocal(decl) || this.rustReadBearerKindOfDeclaration(decl) === 'list') || this.rustOptContainerLocals.has(decl) || this.rustP21DictRowsLocal(decl)) return undefined;
-    // a list returned as positional slots (`return [a, b]`) is a tuple the ccxt build reads by slot, and a row the
-    // function then writes into keeps the helper read the native-insert proof recognises
-    const src: any = decl.initializer !== undefined ? this.rustSkipWrappers(decl.initializer) : undefined;
-    const callee: any = src !== undefined && isCallExpression(src) ? this.rustCalleeDeclaration(src) : undefined;
-    if (callee !== undefined && this.rustFunctionReturnsArrayLiteral(callee, new Set())) return undefined;
-    const own: any = initializer?.parent;
-    const fn: any = findAncestor(call, (n: any) => isFunctionLike(n));
-    if (own === undefined || !isVariableDeclaration(own) || !isIdentifier(own.name) || fn === undefined) return undefined;
-    const ownName = String((own.name as any).text);
-    let written = false;
-    const visit = (n: any): void => {
-        if (written) return;
-        if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(n.left) && isIdentifier(n.left.expression) && n.left.expression.text === ownName) { written = true; return; }
-        n.forEachChild(visit);
-    };
-    fn.forEachChild(visit);
-    if (written) return undefined;
-    const key: any = this.rustSkipWrappers(call.arguments[1]);
-    const index = isNumericLiteral(key) ? String(Number(key.text)) : (isIdentifier(key) && this.rustI64CounterUse(key) ? `${String(key.text)} as usize` : undefined);
-    if (index === undefined || !/^(\d+|\w+ as usize)$/.test(index)) return undefined;
-    const m = `std::sync::Arc::clone(__m)`;
-    return `(if let Some(Value::Dict(__m)) = ${(BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text)}.get(${index}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
-};
-// ===== end h36-H36-P26

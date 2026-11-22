@@ -6977,7 +6977,7 @@ describe('generated readers lend their container', () => {
         const o = out();
         expect(o).toContain('let mut pair: crate::value::List = ');
         expect(o).toContain('self.safeDict(&pair, Value::Int(0)');
-        expect(o).toContain('= rows.get(i as usize) { std::sync::Arc::clone(__m) } else { Default::default() })');
+        expect(o).toContain('self.safeDict(&rows, ');
         expect(o).not.toContain('pair: Value');
         expect(o).toContain('let mut data: crate::value::Dict = ');
         expect(o).toContain('self.safeList2(&data, ');
@@ -27332,54 +27332,6 @@ describe('h35-P26: a base `string[]` method that builds its list returns `List`'
         expect (run (built.replace ('): string[] {', '): string[] | undefined {'))).not.toMatch (/fn queriesOf\([^\n]*\) -> crate::value::List/);
     });
 });
-describe('h36-P26: `safeDict (xs, i)` on a plain `List` local reads the slice natively', () => {
-    const run = (body: string, file = 'ts/src/venue.ts') => {
-        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p26-'));
-        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
-        fs.mkdirSync (path.join (root, path.dirname (file)), { recursive: true });
-        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    parseTicker (t: Dict): Dict { return t; }\n}\n");
-        const up = file.split ('/').length - 3;
-        fs.writeFileSync (path.join (root, file), "import Exchange from '" + '../'.repeat (up) + "./base/Exchange.js';\nimport type { Dict, Str } from '" + '../'.repeat (up) + "./base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
-        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
-        try { return t.transpileRustByPath (path.join (root, file)).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
-    };
-    const first = (read: string) => "    m (response: Dict) {\n        const data = this.safeList (response, 'data', []);\n" + read + "        return this.parseTicker (first);\n    }\n";
-    test('row 0 of a list local: `None` out of range or for a non-map element', () => {
-        const out = run (first ("        const first = this.safeDict (data, 0);\n"));
-        expect (out).toContain ('(if let Some(Value::Dict(__m)) = data.get(0) { Some(std::sync::Arc::clone(__m)) } else { None })');
-        expect (out).not.toContain ('safe_dict_o(&data');
-    });
-    test('a counter-indexed row of a list read from options', () => {
-        const out = run ("    m () {\n        const chains: Dict[] = this.safeList (this.options, 'c', []);\n        const out = [];\n        for (let j = 0; j < chains.length; j++) {\n            const chain = this.safeDict (chains, j);\n            const tokens: Dict[] = this.safeList (chain, 'tokens', []);\n            for (let f = 0; f < tokens.length; f++) {\n                out.push ({ 'info': chain });\n            }\n        }\n        return out;\n    }\n");
-        expect (out).toContain ('= chains.get(j as usize) { Some(std::sync::Arc::clone(__m)) } else { None })');
-    });
-    test('the same read in a ws file', () => {
-        const out = run (first ("        const first = this.safeDict (data, 0);\n"), 'ts/src/pro/venue.ts');
-        expect (out).toContain ('= data.get(0) { Some(std::sync::Arc::clone(__m)) } else { None })');
-    });
-    test('negative: a string-literal key keeps the helper', () => {
-        const out = run (first ("        const first = this.safeDict (data, '0');\n"));
-        expect (out).not.toContain ('= data.get(');
-    });
-    test('negative: a non-empty default keeps the helper', () => {
-        const out = run (first ("        const first = this.safeDict (data, 0, { 'a': 1 });\n"));
-        expect (out).not.toContain ('= data.get(0)');
-    });
-    test('negative: an untyped receiver keeps the helper', () => {
-        const out = run ("    m (response) {\n        const first = this.safeDict (response, 0);\n        return this.parseTicker (first);\n    }\n");
-        expect (out).not.toContain ('if let Some(Value::Dict(__m))');
-    });
-    test('negative: a row the function writes into keeps the helper', () => {
-        const out = run ("    m (response: Dict) {\n        const data = this.safeList (response, 'data', []);\n        for (let i = 0; i < data.length; i++) {\n            const t = this.safeDict (data, i);\n            if (t === undefined) {\n                continue;\n            }\n            t['ts'] = 1;\n        }\n        return data;\n    }\n");
-        expect (out).not.toContain ('= data.get(i as usize) {');
-    });
-    test('negative: a list of positional slots (`return [a, b]`) keeps the slot read', () => {
-        const out = run ("    pair (params: Dict): any[] {\n        return [ true, params ];\n    }\n    m (params: Dict) {\n        const sel = this.pair (params);\n        const q = this.safeDict (sel, 1);\n        return this.parseTicker (q);\n    }\n");
-        expect (out).not.toContain ('= sel.get(1) {');
-    });
-});
-
-
 describe('a local holding a base list-builder result is a typed list', () => {
     const run = (name: string, method: string) => {
         const dir = path.join (rustFixtureRoot, 'list-builder-local', name);
