@@ -27099,9 +27099,9 @@ describe('h33-P21: a `Dict[]` local read from `safeList (.., [])` holds converte
         const out = run ("    m (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows');\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
         expect (out).not.toContain ('dict_rows');
     });
-    test('an untyped local keeps the boxed list', () => {
+    test('an unannotated local read only as map rows is converted too', () => {
         const out = run ("    m (response: Dict) {\n        const rows = this.safeList (response, 'rows', []);\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
-        expect (out).not.toContain ('dict_rows');
+        expect (out).toContain ('rows.get(0).cloned().unwrap_or_default()');
     });
 });
 
@@ -27241,5 +27241,34 @@ describe('a string alias of a typed parameter rewritten natively keeps Option<St
     test('negative: an alias with no native write keeps the Value', () => {
         const out = run ("    m (id: string): Dict[] {\n        const orderId = id;\n        const a: Dict = this.extend ({}, { 'order_id': orderId });\n        const b: Dict = this.extend ({}, { 'order_id': orderId });\n        return [ a, b ];\n    }\n");
         expect (out).not.toContain ('Value::from(orderId.as_deref())');
+    });
+});
+describe('h35-P25: an unannotated `safeList (.., [])` local read only as map rows holds converted rows', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p25b-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const first = (decl: string, read: string, extra = '') => "    m (response: Dict) {\n        " + decl + "\n        const row = " + read + ";\n" + extra + "        return this.safeString (row, 'id');\n    }\n";
+    test('a `{}`-default row read of an unannotated list is a bounds-tested slice read', () => {
+        const out = run (first ("const rows = this.safeList (response, 'data', []);", "this.safeDict (rows, 0, {})"));
+        expect (out).toMatch (/let rows: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('rows.get(0).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('a non-empty default keeps the boxed list', () => {
+        expect (run (first ("const rows = this.safeList (response, 'data', []);", "this.safeDict (rows, 0, { 'id': 'x' })"))).not.toContain ('dict_rows');
+    });
+    test('an unannotated list with no default keeps the boxed list', () => {
+        expect (run (first ("const rows = this.safeList (response, 'data');", "this.safeDict (rows, 0, {})"))).not.toContain ('dict_rows');
+    });
+    test('an unannotated list handed on whole keeps the boxed list', () => {
+        expect (run (first ("const rows = this.safeList (response, 'data', []);", "this.safeDict (rows, 0, {})", "        this.hold (rows);\n"))).not.toContain ('dict_rows');
+    });
+    test('a list annotated with another type keeps the boxed list', () => {
+        expect (run (first ("const rows: any[] = this.safeList (response, 'data', []);", "this.safeDict (rows, 0, {})"))).not.toContain ('dict_rows');
     });
 });

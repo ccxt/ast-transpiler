@@ -41846,7 +41846,8 @@ export class RustTranspiler extends BaseTranspiler {
 (RustTranspiler.prototype as any).rustP21DictRowsLocalUncached = function (this: any, declaration: any): boolean {
     const list: any = declaration.parent;
     if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0) return false;
-    if (declaration.type === undefined || declaration.type.getText() !== 'Dict[]' || this.rustTestTierSource(declaration)) return false;
+    // an unannotated local takes `safeList`'s own `any[]`: only its rows read as maps are converted
+    if ((declaration.type !== undefined && declaration.type.getText() !== 'Dict[]') || this.rustTestTierSource(declaration)) return false;
     const init: any = this.rustSkipWrappers(declaration.initializer);
     if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
     if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
@@ -41871,9 +41872,12 @@ export class RustTranspiler extends BaseTranspiler {
 };
 // `const row = this.safeDict (rows, k)` (k a literal or a `for` counter) whose local is the printer's borrowed map
 (RustTranspiler.prototype as any).rustP21RowRead = function (this: any, call: any, recv: any): any {
-    if (!isCallExpression(call) || call.arguments.length !== 2 || call.arguments[0] !== recv) return undefined;
+    if (!isCallExpression(call) || call.arguments.length < 2 || call.arguments.length > 3 || call.arguments[0] !== recv) return undefined;
     const callee: any = call.expression;
     if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return undefined;
+    // a `{}` default gives the empty map for a missing or non-map row: the same answer
+    const dflt: any = call.arguments.length === 3 ? this.rustSkipWrappers(call.arguments[2]) : undefined;
+    if (dflt !== undefined && (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0)) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
     if (!isNumericLiteral(key)) {
         if (!isIdentifier(key)) return undefined;
@@ -41892,14 +41896,14 @@ export class RustTranspiler extends BaseTranspiler {
     this.rustP21Printing = declaration;
     let text: string;
     try { text = this.printVariableDeclarationList(declaration.parent, 0).trim(); } finally { this.rustP21Printing = undefined; }
-    const head = `let mut ${varName}: crate::value::List = `;
-    if (!text.startsWith(head)) return undefined;
+    const head = [`let mut ${varName}: crate::value::List = `, `let ${varName}: crate::value::List = `].find ((h) => text.startsWith(h));
+    if (head === undefined) return undefined;
     return `${indent}let ${varName}: Vec<crate::value::Dict> = crate::value::dict_rows(${text.slice(head.length)})`;
 };
 (RustTranspiler.prototype as any).rustP21RowReadText = function (this: any, rowDeclaration: any): string | undefined {
     const call: any = this.rustSkipWrappers(rowDeclaration.initializer);
     if (call !== undefined && isElementAccessExpression(call)) return this.rustP21ElementRowReadText(call);
-    if (call === undefined || !isCallExpression(call) || call.arguments.length !== 2 || !isIdentifier(call.arguments[0])) return undefined;
+    if (call === undefined || !isCallExpression(call) || call.arguments.length < 2 || !isIdentifier(call.arguments[0])) return undefined;
     const owner: any = this.rustDeclarationOfIdentifier(call.arguments[0]);
     if (!this.rustP21DictRowsLocal(owner) || this.rustP21RowRead(call, call.arguments[0]) === undefined) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
