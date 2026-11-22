@@ -6390,8 +6390,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     // any other shape needs each nullable side to be a null-tested identifier (`.Value`)
     csharpNativeNullableComparison(node, token: string, leftKind: string, rightKind: string): string | undefined {
         const base = (k: string) => k.replace('?', '');
-        const leftNullable = leftKind.endsWith('?');
-        const rightNullable = rightKind.endsWith('?');
+        let leftNullable = leftKind.endsWith('?');
+        let rightNullable = rightKind.endsWith('?');
         const integer = (CSHARP_INTEGER_KINDS.indexOf(base(leftKind)) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(base(rightKind)) >= 0);
         const double = (base(leftKind) === 'double') && (base(rightKind) === 'double');
         if ((!leftNullable && !rightNullable) || (!integer && !double) || (double && ((token === '<') || (token === '<=')))) {
@@ -6403,6 +6403,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         let leftText = this.printNode(node.left, 0).trim();
         let rightText = this.printNode(node.right, 0).trim();
+        // a side bound by a safeInteger literal default is never null: read it as its value
+        if (leftNullable && this.csharpNeverNullInt64Read(node.left)) {
+            [ leftText, leftNullable ] = [ `${leftText}.GetValueOrDefault()`, false ];
+        }
+        if (rightNullable && this.csharpNeverNullInt64Read(node.right)) {
+            [ rightText, rightNullable ] = [ `${rightText}.GetValueOrDefault()`, false ];
+        }
+        if (!leftNullable && !rightNullable) {
+            return leftText + ' ' + token + ' ' + rightText;
+        }
         const liftedExact = (leftNullable !== rightNullable) && (leftNullable ? ((token === '>') || (token === '>=')) : ((token === '<') || (token === '<=')));
         if (!liftedExact) {
             // a second null test of the binding resets the C# flow state (CS8629): a dominating guard then no longer counts
@@ -6698,6 +6708,74 @@ export class CSharpTranspiler extends BaseTranspiler {
         return isNumericLiteral(fallback) && /^\d{1,15}$/.test(fallback.text);
     }
 
+    // an Int64? identifier read whose binding csharpInt64BindingNeverNull proves (a safeInteger literal default, never rewritten)
+    csharpNeverNullInt64Read(node): boolean {
+        while (isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        if (!isIdentifier(node) || (this.csharpIntegralOperand(node)?.kind !== 'Int64?')) {
+            return false;
+        }
+        let symbol: any;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(node);
+        } catch (e) {
+            return false;
+        }
+        return (symbol !== undefined) && this.csharpInt64BindingNeverNull(symbol);
+    }
+
+    // `(a - b) > x` / `x < (a - b)` with x a never-null Int64? read and native integral arithmetic on the other side: subtract throws on a null
+    // operand where the lifted operator answers false; the bound is read as its value
+    csharpNeverNullArithmeticComparison(node): string | undefined {
+        const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
+        if (token === undefined) {
+            return undefined;
+        }
+        const greater = (token === '>') || (token === '>=');
+        const [ arithmetic, bound ] = greater ? [ node.left, node.right ] : [ node.right, node.left ];
+        if (!this.csharpNeverNullInt64Read(bound)) {
+            return undefined;
+        }
+        // `(a - b)` over two integral identifiers (not `+`: add(x, null) answers x where the lifted `+` answers null)
+        let inner: any = arithmetic;
+        while (isParenthesizedExpression(inner)) {
+            inner = inner.expression;
+        }
+        const integral = (n) => isIdentifier(n) && (this.csharpArithmeticOperandKind(this.csharpArithmeticOperandType(n)) === 'Int64');
+        if (!isBinaryExpression(inner) || (inner.operatorToken.kind !== SyntaxKind.MinusToken) || !integral(inner.left) || !integral(inner.right)) {
+            return undefined;
+        }
+        const arithmeticText = `(${this.printNode(inner.left, 0).trim()} - ${this.printNode(inner.right, 0).trim()})`;
+        const boundText = `${this.printNode(bound, 0).trim()}.GetValueOrDefault()`;
+        return greater ? `${arithmeticText} ${token} ${boundText}` : `${boundText} ${token} ${arithmeticText}`;
+    }
+
+    // `a + b` / `a - b` / `a / b` with a never-null Int64? side and an Int64 / int / integer-literal other side: add and subtract box
+    // the Int64 result the operator gives, divide the double quotient of two integers (`(double)a / b`)
+    csharpNeverNullIntegralArithmetic(node, op): string | undefined {
+        if ((op !== SyntaxKind.PlusToken) && (op !== SyntaxKind.MinusToken) && (op !== SyntaxKind.SlashToken)) {
+            return undefined;
+        }
+        const sides = [ node.left, node.right ];
+        const texts = sides.map((side) => {
+            if (this.csharpNeverNullInt64Read(side)) {
+                return `${this.printNode(side, 0).trim()}.GetValueOrDefault()`;
+            }
+            const o = this.csharpIntegralOperand(side);
+            const plain = (o !== undefined) && (o.literal ? (o.literalKind !== undefined) : ((o.kind === 'Int64') || (o.kind === 'int')));
+            return plain ? this.printNode(side, 0).trim() : undefined;
+        });
+        if ((texts[0] === undefined) || (texts[1] === undefined) || !sides.some((side) => this.csharpNeverNullInt64Read(side))
+            || !this.csharpMinMaxResultIsPlainValue(node)) {
+            return undefined;
+        }
+        if (op === SyntaxKind.SlashToken) {
+            return (this.csharpIntegralOperand(node.right)?.zero) ? undefined : `((double)${texts[0]} / ${texts[1]})`;
+        }
+        return `(${texts[0]} ${(op === SyntaxKind.PlusToken) ? '+' : '-'} ${texts[1]})`;
+    }
+
     // the null test sits in the same expression as the read (`x == null ? a : f(x)`, `x != null && f(x)`)
     csharpIntegralTestedInExpression(call, symbol): boolean {
         let current: any = call;
@@ -6956,7 +7034,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         // the base printBinaryExpression prints them, and doing it eagerly means
         // every unhandled binary expression gets its subtrees printed twice
         if (op === SyntaxKind.PlusEqualsToken || op === SyntaxKind.MinusEqualsToken || op in this.binaryExpressionsWrappers) {
-            const nativeComparison = this.csharpNativeNumericComparison(node, identation);
+            const nativeComparison = this.csharpNativeNumericComparison(node, identation) ?? this.csharpNeverNullArithmeticComparison(node);
             if (nativeComparison !== undefined) {
                 return nativeComparison;
             }
@@ -7009,13 +7087,13 @@ export class CSharpTranspiler extends BaseTranspiler {
                     return guardedChain;
                 }
             }
-            const nativeOperator = (op === SyntaxKind.PlusToken)
+            const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? ((op === SyntaxKind.PlusToken)
                 ? (this.csharpNativeStringConcat(left, right, leftText, rightText)
                     ?? this.csharpPrinterStringConcat(left, right, leftText, rightText)
                     ?? ((spine === undefined) ? undefined : this.csharpObjectStringConcat(spine.base, spine.rights)))
                 : (op === SyntaxKind.AsteriskToken) ? this.csharpNativeLiteralProduct(left, right)
                     : (op === SyntaxKind.PercentToken) ? (this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText))
-                        : undefined;
+                        : undefined);
             if (nativeOperator !== undefined) {
                 return nativeOperator;
             }
