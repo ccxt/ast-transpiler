@@ -58865,3 +58865,73 @@ for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'pr
     };
 }
 // ===== end H37-P01 =====
+// ===== H38-P04 =====
+// a JSON-origin local handed whole to `this.parseX (local, ..)` stays JSON-origin when the callee, resolved by
+// declaration in a venue file and overridden by no related class, only reads that row parameter
+export interface GoTranspiler {
+    h38p04ParseRowReadOnly(fn, param): boolean;
+    h38p04Cache: Map<any, boolean>;
+    h38p04Active: Set<any>;
+}
+GoTranspiler.prototype.h38p04ParseRowReadOnly = function (fn, param): boolean {
+    this.h38p04Cache = this.h38p04Cache ?? new Map();
+    this.h38p04Active = this.h38p04Active ?? new Set();
+    if (this.h38p04Cache.has(param)) {
+        return this.h38p04Cache.get(param);
+    }
+    if (this.h38p04Active.has(param)) {
+        return false; // a cycle proves nothing
+    }
+    const outermost = (this.h38p04Active.size === 0);
+    this.h38p04Active.add(param);
+    let result = false;
+    try {
+        result = h38p04ProveParseRow(this, fn, param);
+    } finally {
+        this.h38p04Active.delete(param);
+    }
+    if (outermost || result) {
+        this.h38p04Cache.set(param, result);
+    }
+    return result;
+};
+function h38p04ProveParseRow (go: any, fn: any, param: any): boolean {
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (param.dotDotDotToken !== undefined)
+        || (fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier)
+        || !/^parse[A-Z]/.test(fn.name.text) || !/(^|[\\/])ts[\\/]src[\\/]/.test(String(fn.getSourceFile().fileName))
+        || /(^|[\\/])ts[\\/]src[\\/](base|test)[\\/]/.test(String(fn.getSourceFile().fileName))) {
+        return false;
+    }
+    go.h27a11ElsewhereCache = go.h27a11ElsewhereCache ?? new Map();
+    if (h27a11NamedElsewhere(go, fn, fn.name.text)) {
+        return false; // a related class in another file may override it
+    }
+    return go.goJsonOriginBindingIsReadOnly(param, (n: any, local: string) => go.goJsonOriginUseIsReadOnly(n, local)
+        || (!go.goWritesOrRebindsName(n, local, []) && (go.h27a02ScalarReaderUse(n)
+            || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.initializer === n) && (n.parent.name?.text === 'info')))));
+}
+{
+    const goJsonOriginUseIsReadOnlyH38p04 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        if (goJsonOriginUseIsReadOnlyH38p04.call(this, node, name)) {
+            return true;
+        }
+        const call: any = node?.parent;
+        if (this.goWritesOrRebindsName(node, name, []) || (call?.kind !== SyntaxKind.CallExpression)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+            || !/^parse[A-Z]/.test(String(call.expression.name?.text)) || (call.arguments.indexOf(node) < 0)) {
+            return false;
+        }
+        let declarations: any[] | undefined;
+        try {
+            declarations = this.getChecker().getSymbolAtLocation(call.expression.name)?.declarations?.map((d) => d.resolve());
+        } catch (e) {
+            declarations = undefined;
+        }
+        const index: number = call.arguments.indexOf(node);
+        return (declarations !== undefined) && (declarations.length === 1)
+            && (declarations[0].parameters?.length >= call.arguments.length)
+            && this.h38p04ParseRowReadOnly(declarations[0], declarations[0].parameters[index]);
+    };
+}
+// ===== end H38-P04 =====
