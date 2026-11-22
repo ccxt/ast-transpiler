@@ -61,7 +61,7 @@ describe ('go safeList local with a [] default keeps []any through a const alias
     afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g02'), { recursive: true, force: true }));
 
     test ('positive: the defaulted list and its alias print []any with native length and bounded reads', () => {
-        expect (out).toMatch (/var data \[\]any = SafeListTypedDefault\(message, "data", \[\]any\{\}\)/);
+        expect (out).toMatch (/var data \[\]any = this\.SafeListSlice\(message, "data", \[\]any\{\}\)/);
         expect (out).toMatch (/var trades \[\]any = data\n/);
         expect (out).toMatch (/for j := 0; j < len\(trades\); j\+\+ \{/);
         expect (out).toMatch (/this\.ParseWsTrade\(trades\[j\]\)/);

@@ -72,13 +72,13 @@ describe ('go defaulted list read on an awaited list endpoint result', () => {
     });
     test ('positive: the defaulted list read becomes a bounds-guarded comma-ok read with the empty default', () => {
         expect (out).toMatch (/var spot \[\]any\n\tif 0 < len\(response\) \{\n\t\tspot, _ = response\[0\]\.\(\[\]any\)\n\t\}\n\tif spot == nil \{\n\t\tspot = \[\]any\{\}\n\t\}/);
-        expect (out).not.toContain ('SafeListTypedDefault(response, 1, []any{})');
+        expect (out).not.toContain ('this.SafeListSlice(response, 1, []any{})');
     });
     test ('negative: the list handed to a callee that may write it keeps the wrap', () => {
-        expect (out).toContain ('var hd []any = SafeListTypedDefault(response, 0, []any{})');
+        expect (out).toContain ('var hd []any = this.SafeListSlice(response, 0, []any{})');
     });
     test ('negative: the list written before the read keeps the wrap', () => {
-        expect (out).toContain ('var wr []any = SafeListTypedDefault(response, 0, []any{})');
+        expect (out).toContain ('var wr []any = this.SafeListSlice(response, 0, []any{})');
     });
     test ('negative: a read without a default is not this rule', () => {
         expect (out).not.toMatch (/nd = \[\]any\{\}/);

@@ -15282,7 +15282,7 @@ describe ('ral-84g5 R1 unproven key', () => {
 });
 
 describe ('ral-84g5 R1 append argument', () => {
-    test('a defaulted safeList local appended to an R1 cache keeps its box (no SafeListTypedDefault)', () => {
+    test('a defaulted safeList local appended to an R1 cache keeps its box (no SafeListSlice)', () => {
         const head = 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
             + 'class ArrayCacheByTimestamp { constructor (limit: any) {} append (x: any) {} }\n'
             + 'class BaseExchange {\n'
@@ -15301,7 +15301,7 @@ describe ('ral-84g5 R1 append argument', () => {
             installCcxtGoLocalTypes (t.goTranspiler);
             const out = t.transpileGoByPath (file).content;
             expect (out).toContain ('var stored WsArrayCache');
-            expect (out).not.toContain ('SafeListTypedDefault');
+            expect (out).not.toContain ('SafeListSlice');
         } finally {
             fs.rmSync (tmp, { recursive: true, force: true });
         }
@@ -17588,7 +17588,7 @@ describe('ral-92g8 R3 list seeds rebound through a defaulted safeList', () => {
             + '    }\n'
             + '}\n');
         expect(out).toContain('var types []any = []any{"spot", "swap"}');
-        expect(out).toContain('types = SafeListTypedDefault(o, "types", types)');
+        expect(out).toContain('types = this.SafeListSlice(o, "types", types)');
         expect(out).toContain('i < len(types)');
     });
     test('a seed with a write defaulting to something else keeps the box', () => {
@@ -17627,7 +17627,7 @@ describe('ral-92g8 R4 venue string[] producers over a literal-defaulted safeList
             + '    }\n'
             + '}\n');
         expect(out).toContain(') OrderFlags(flags any) []any {');
-        expect(out).toContain('return SafeListTypedDefault(table, flags, []any{})');
+        expect(out).toContain('return this.SafeListSlice(table, flags, []any{})');
         expect(out).toContain('var flags []any = this.OrderFlags(raw)');
     });
     test('a producer without the literal default keeps any', () => {
@@ -18461,7 +18461,7 @@ describe('venue paged-list producers print []any', () => {
             + '    use (m: unknown) { return m; }\n'
             + '}\n');
         expect(out).toContain(') Paged(response any) []any {');
-        expect(out).toContain('var data []any = SafeListTypedDefault(response, "data", []any{})');
+        expect(out).toContain('var data []any = this.SafeListSlice(response, "data", []any{})');
         expect(out).toContain('var rows []any = this.Paged(r)');
         expect(out).not.toContain('DerefScalar(data[0])');
     });

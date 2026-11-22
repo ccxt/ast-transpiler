@@ -2778,7 +2778,7 @@ function ccxtGoSafeCollectionUnboxValue (goTranspiler, declaration, identation, 
         return empty ? 'SafeMapTyped(' + printed[0] + ', ' + printed[1] + ')' : 'MapTyped(' + goTranspiler.printNode (found.call, identation) + ')';
     }
     if (found.family === 'list') {
-        return empty ? 'SafeListTyped(' + printed[0] + ', ' + printed[1] + ')' : 'SafeListTypedDefault(' + printed[0] + ', ' + printed[1] + ', ' + printed[2] + ')';
+        return empty ? 'SafeListTyped(' + printed[0] + ', ' + printed[1] + ')' : 'this.SafeListSlice(' + printed[0] + ', ' + printed[1] + ', ' + printed[2] + ')';
     }
     const reader = found.family === 'dict2' ? 'SafeDict2Typed' : 'SafeList2Typed';
     return reader + '(' + (empty ? printed.slice (0, 3) : printed.slice (0, 4)).join (', ') + ')';
@@ -40654,7 +40654,7 @@ GoTranspiler.prototype.goAnyLocalHoldsPointer = function (decl): boolean {
 };
 
 // `let types = [ .. ]; types = this.safeList (o, k, types)`: the default is the local itself or a list
-// literal, so SafeListTypedDefault never answers nil and the local types []any (needs an index or
+// literal, so SafeListSlice never answers nil and the local types []any (needs an index or
 // `.length` read).
 function goTypedVenueDefaultedSafeListWrite (goTranspiler, write, declaration): boolean {
     const right = goTypedVenueUnparen (write?.right);
@@ -40721,14 +40721,14 @@ GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
         if ((declaration?.kind === SyntaxKind.VariableDeclaration) && goTypedVenueDefaultedSafeListWrite (this, node, declaration)
             && (this.goDeclaredTypeOfIdentifier (node.left) === '[]any')) {
             const args = goTypedVenueUnparen (node.right).arguments.map ((a) => this.printNode (a, 0).trim ());
-            return this.printNode (node.left, 0) + ' = SafeListTypedDefault(' + args.join (', ') + ')';
+            return this.printNode (node.left, 0) + ' = this.SafeListSlice(' + args.join (', ') + ')';
         }
     }
     return printBinaryExpressionBaseTypedVenue.call (this, node, identation);
 };
 
 // Venue `string[]` producers whose every return is `this.safeList (t, k, [ .. ])` never answer nil:
-// the signature prints []any and the return prints SafeListTypedDefault.
+// the signature prints []any and the return prints SafeListSlice.
 function goTypedVenueDefaultedSafeListReturn (node): boolean {
     const e = goTypedVenueUnparen (node);
     return (e?.kind === SyntaxKind.CallExpression) && (e.arguments.length === 3) && (e.expression?.kind === SyntaxKind.PropertyAccessExpression)
@@ -40758,7 +40758,7 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     const fn = this.goEnclosingFunction (node);
     if ((fn !== undefined) && goTypedVenueDefaultedSafeListReturn (node.expression) && goTypedVenueStringListProducer (this, fn)) {
         const args = goTypedVenueUnparen (node.expression).arguments.map ((a) => this.printNode (a, 0).trim ());
-        return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return SafeListTypedDefault(' + args.join (', ') + ')');
+        return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return this.SafeListSlice(' + args.join (', ') + ')');
     }
     return printReturnStatementBaseTypedVenue.call (this, node, identation);
 };
@@ -41924,7 +41924,7 @@ function goPagedListReader (initializer): string | undefined {
     if ((fallback?.kind !== SyntaxKind.ArrayLiteralExpression) || (fallback.elements.length !== 0)) {
         return undefined;
     }
-    return { 'safeList': 'SafeListTypedDefault', 'safeListN': 'this.SafeListNSliceDefault' }[callee.name?.text];
+    return { 'safeList': 'this.SafeListSlice', 'safeListN': 'this.SafeListNSliceDefault' }[callee.name?.text];
 }
 function goPagedListProducerLocal (goTranspiler, node) {
     if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined)) {
@@ -44349,7 +44349,7 @@ function installGoGuardedRowSplit (goTranspiler) {
 
 // ===== h22-g02: `[]`-defaulted safeList local read through one const alias =====
 // `const data = this.safeList (m, k, [])` whose only use is `const alias = data`, and an alias used only as
-// `alias.length` and `alias[i]` inside `for (let i = 0; i < alias.length; i++)`: SafeListTypedDefault never
+// `alias.length` and `alias[i]` inside `for (let i = 0; i < alias.length; i++)`: SafeListSlice never
 // answers nil (non-list member -> the empty default), so length and bounded reads answer as the box did.
 const h22g02Verdicts = new WeakMap<object, object | null>();
 function h22g02EmptyDefaultedSafeList (initializer): boolean {
@@ -44442,7 +44442,7 @@ function h22g02AliasOf (goTranspiler: GoTranspiler, declaration): any {
                 return this.printNode (declaration.initializer, 0).trim ();
             }
             const args = declaration.initializer.arguments.map ((a, i) => this.printNode (a, i === 0 ? identation : 0).trim ());
-            return 'SafeListTypedDefault(' + args.join (', ') + ')';
+            return 'this.SafeListSlice(' + args.join (', ') + ')';
         }
         return listValue.call (this, declaration, identation);
     };
