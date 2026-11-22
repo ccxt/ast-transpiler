@@ -27272,3 +27272,30 @@ describe('h35-P25: an unannotated `safeList (.., [])` local read only as map row
         expect (run (first ("const rows: any[] = this.safeList (response, 'data', []);", "this.safeDict (rows, 0, {})"))).not.toContain ('dict_rows');
     });
 });
+describe('h35-P26: a base `string[]` method that builds its list returns `List`', () => {
+    const run = (method: string, venue = '') => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p26-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    hold (x: any): any { return x; }\n" + method + "    m (params: Dict = {}) {\n        const queries = this.queriesOf (params);\n        return this.hold (queries);\n    }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + venue + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/base/Exchange.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const built = "    queriesOf (params: Dict = {}): string[] {\n        const single = this.safeString (params, 'query');\n        if (single !== undefined) {\n            return [ single ];\n        }\n        const out: string[] = [];\n        out.push ('a');\n        return out;\n    }\n";
+    test('literal and built-local returns: `-> crate::value::List`, payloads unboxed, a Value use boxes once', () => {
+        const out = run (built);
+        expect (out).toMatch (/fn queriesOf\([^\n]*\) -> crate::value::List/);
+        expect (out).toContain ('return std::sync::Arc::new(vec![');
+        expect (out).toContain ('return std::sync::Arc::new(out);');
+        expect (out).toContain ('let mut queries: crate::value::List = self.queriesOf(');
+    });
+    test('negative: a return that is not a built list keeps `Value`', () => {
+        expect (run (built.replace ('return out;', 'return this.hold (out);'))).not.toMatch (/fn queriesOf\([^\n]*\) -> crate::value::List/);
+    });
+    test('negative: a venue redeclaring the method keeps `Value`', () => {
+        expect (run (built, "    queriesOf (params = {}): string[] {\n        return [];\n    }\n")).not.toMatch (/fn queriesOf\([^\n]*\) -> crate::value::List/);
+    });
+    test('negative: a `string[] | undefined` declaration keeps `Value`', () => {
+        expect (run (built.replace ('): string[] {', '): string[] | undefined {'))).not.toMatch (/fn queriesOf\([^\n]*\) -> crate::value::List/);
+    });
+});

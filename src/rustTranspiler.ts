@@ -2542,7 +2542,8 @@ export class RustTranspiler extends BaseTranspiler {
         const bare = this.rustOwnContainerBareText(node);
         const box = `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${bare})`;
         const native = kind === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
-        return text.split(`${box}.into_${kind}()`).join(bare).split(`${box}.into_opt_${kind}()`).join(`Some(${bare})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare}`);
+        return text.split(`${box}.into_${kind}()`).join(bare).split(`${box}.into_opt_${kind}()`).join(`Some(${bare})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare}`)
+            .split(`${box}.as_array().cloned().unwrap_or_default()`).join(kind === 'list' ? `${bare}.to_vec()` : `${box}.as_array().cloned().unwrap_or_default()`);
     }
 
     // `Date.now()` → runtime helper returning current epoch millis.
@@ -22340,6 +22341,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined {
         if (this.checkerOrUndefined() === undefined) return undefined;
+        const baseList = this.rustBaseStringListReturn(node); if (baseList !== undefined) return baseList;
         const kind = this.rustVenueContainerDecisionOf(node);
         const declared = String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
         if (kind === undefined || kind.nullable || !/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared)) return undefined;
@@ -22357,6 +22359,36 @@ export class RustTranspiler extends BaseTranspiler {
         };
         node.body.forEachChild(visit);
         return ok && returns > 0 ? kind.kind : undefined;
+    }
+
+    /** A sync base-tier method declared `string[]` that no venue redeclares, every return a literal list or a list
+     *  local the body builds: it returns `List` (a list on every path, never Null). */
+    rustBaseStringListReturn(node: any): 'list' | undefined {
+        if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? '')) || this.isAsyncFunction(node)) return undefined;
+        if (String(node.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'string[]' || this.rustLentOverridden(String(node.name.text))) return undefined;
+        const checker = this.getChecker();
+        let returns = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok || (n !== node.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                returns++;
+                const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
+                if (v === undefined || !(isArrayLiteralExpression(v) || isIdentifier(v)) || !this.rustStaticContainerType(checker.getTypeAtLocation(v), 'list') || this.rustBaseListPayload(v) === undefined) ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        node.body.forEachChild(visit);
+        return ok && returns > 0 ? 'list' : undefined;
+    }
+
+    /** `Value::from(vec![..])` / `Value::from(v)` of a built `Vec<Value>`: the `Arc` of that vector. */
+    rustBaseListPayload(exp: any): string | undefined {
+        const printed = this.printNode(exp, 0).trim();
+        if (!printed.startsWith('Value::from(') || !printed.endsWith(')')) return undefined;
+        const inner = printed.slice('Value::from('.length, -1);
+        if (!this.rustBalancedText(inner) || !(inner.startsWith('vec![') || /^[A-Za-z_]\w*$/.test(inner))) return undefined;
+        return `std::sync::Arc::new(${inner})`;
     }
 
     /** A checker type that is a map (object, never any / unknown / nullable / array) or a list (array or tuple). */
@@ -22430,6 +22462,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined {
         const own = this.rustOwnContainerNativeText(exp, kind);
         if (own !== undefined) return own;
+        const fn: any = findAncestor(exp, isFunctionLike);
+        if (kind === 'list' && fn !== undefined && this.rustOwnContainerDecisions.get(fn) !== undefined && this.rustBaseStringListReturn(fn) === 'list') return this.rustBaseListPayload(this.unwrapParens(exp));
         const printed = this.printNode(exp, 0).trim();
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
