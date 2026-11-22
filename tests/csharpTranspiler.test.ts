@@ -8685,3 +8685,50 @@ describe ('csharp venue-lineage list parameters', () => {
         expect(b).toContain('parseList(object r, object kind = null)');
     });
 });
+
+describe ('csharp inferred collection return of an async method', () => {
+    const unique = [ 'rowsOf', 'pairAsync', 'mixedAsync', 'user' ];
+    const config: any = { 'verbose': false, 'csharp': { 'uniqueMethodNames': unique, 'parser': WRAPPED_PARSER } };
+    const source =
+        "type Dict = { [key: string]: any };\n" +
+        "class Base {\n" +
+        "    safeList (d: any, k: string, def: any = undefined): any[] { return d[k]; }\n" +
+        "    safeString (d: any, k: string): string { return d[k]; }\n" +
+        "}\n" +
+        "class Venue extends Base {\n" +
+        "    async rowsOf (r: any): Promise<Dict[]> {\n" +
+        "        return this.safeList (r, 'orders', []) as Dict[];\n" +
+        "    }\n" +
+        "    async pairAsync (r: any): Promise<any[]> {\n" +
+        "        return [ r, r ];\n" +
+        "    }\n" +
+        "    async mixedAsync (r: any): Promise<Dict[]> {\n" +
+        "        return this.safeString (r, 'k') as any;\n" +
+        "    }\n" +
+        "    async user (r: any) {\n" +
+        "        const rows = await this.rowsOf (r);\n" +
+        "        const n = rows.length;\n" +
+        "        const t = this.rowsOf (r);\n" +
+        "        const z = await this.mixedAsync (r);\n" +
+        "        return [ rows, n, t, z ];\n" +
+        "    }\n" +
+        "}";
+    const printed = (cfg: any): string => (new Transpiler(cfg) as any).transpileCSharp(source).content;
+
+    test('an async method whose every return proves the box prints Task<box>, awaited locals take the box', () => {
+        const out = printed(config);
+        expect(out).toContain('public async virtual Task<List<object>> rowsOf(object r)');
+        expect(out).toContain('List<object> rows = await this.rowsOf(r);');
+        expect(out).toContain('object t = this.rowsOf(r);');
+    });
+
+    test('an unproven async return, and no table, keep Task<object>', () => {
+        const out = printed(config);
+        expect(out).toContain('public async virtual Task<object> mixedAsync(object r)');
+        expect(out).toContain('public async virtual Task<object> pairAsync(object r)');
+        expect(out).toContain('object z = await this.mixedAsync(r);');
+        const bare = printed({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        expect(bare).toContain('public async virtual Task<object> rowsOf(object r)');
+        expect(bare).toContain('object rows = await this.rowsOf(r);');
+    });
+});

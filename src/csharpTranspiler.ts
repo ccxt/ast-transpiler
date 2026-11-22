@@ -7288,6 +7288,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             return stringType;
         }
         const own = super.printFunctionType(node);
+        if (own === 'Task<object>') {
+            // a typed core (config.csharp.typedCores) prints its own Task<T> through the wrapper
+            const box = (this.csharpTypedCoreType(node, node.name?.text) === '') ? this.csharpCollectionReturnType(node) : undefined;
+            return (box === undefined) ? own : `Task<${box}>`;
+        }
         return (own === 'object') ? (this.csharpCollectionReturnType(node) ?? own) : own;
     }
 
@@ -7751,13 +7756,16 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpProveCollectionReturn(node): string | undefined {
         const checker: any = this.checkerOrUndefined();
         const overridden = (node.modifiers ?? []).some((m) => m.kind === SyntaxKind.OverrideKeyword);
-        if (checker === undefined || node.body === undefined || node.type === undefined || overridden || this.isAsyncFunction(node) || this.getMethodOverride(node) !== undefined) {
+        const asyncMethod = this.isAsyncFunction(node);
+        if (checker === undefined || node.body === undefined || node.type === undefined || overridden || (asyncMethod && !this.hasAsyncModifier(node)) || this.getMethodOverride(node) !== undefined) {
             return undefined;
         }
         if (checker.getSymbolAtLocation(node.name)?.declarations?.length !== 1) {
             return undefined;
         }
-        const box = this.csharpCollectionBoxOfType(checker, checker.getTypeFromTypeNode(node.type));
+        // an async method's box is the Promise's type argument (its Task<T>)
+        const declared = checker.getTypeFromTypeNode(node.type);
+        const box = this.csharpCollectionBoxOfType(checker, asyncMethod ? this.csharpPromiseArgumentType(checker, declared) : declared);
         let returns = 0;
         let proved = box !== undefined;
         const visit = (n: any) => {
@@ -7766,7 +7774,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             if (n.kind === SyntaxKind.ReturnStatement) {
                 returns++;
-                proved = (n.expression !== undefined) && this.csharpReturnValueProvesBox(n.expression, box as string);
+                // an async `return [ a, b ]` is a tuple its callers destructure into a C# tuple
+                const tuple = asyncMethod && (this.csharpUnwrapAssertion(n.expression)?.kind === SyntaxKind.ArrayLiteralExpression);
+                proved = (n.expression !== undefined) && !tuple && this.csharpReturnValueProvesBox(n.expression, box as string);
                 return;
             }
             n.forEachChild(visit);
@@ -7790,6 +7800,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         };
         node.body.forEachChild(visitConcrete);
         return concrete ? dict : box;
+    }
+
+    // T of a declared Promise<T>, else undefined
+    csharpPromiseArgumentType(checker, type) {
+        if (type?.getSymbol?.()?.name !== 'Promise') {
+            return undefined;
+        }
+        const args = checker.getTypeArguments(type) ?? [];
+        return (args.length === 1) ? args[0] : undefined;
     }
 
     getCSharpLocalType(declaration): string {
@@ -9600,6 +9619,13 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (initializer.operator === SyntaxKind.ExclamationToken) ? 'bool' : undefined;
         case SyntaxKind.ParenthesizedExpression:
             return this.csharpTypeOfInitializer(initializer.expression);
+        case SyntaxKind.AwaitExpression: {
+            // `await this.<async method>(...)`: the Task<T> an inferred collection return printed
+            const call = initializer.expression;
+            const awaitedThisCall = (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && this.csharpCalleeResolves(call);
+            return awaitedThisCall ? this.csharpInferredCallReturnType(call, true) : undefined;
+        }
         case SyntaxKind.PropertyAccessExpression: {
             const copied = (initializer.expression?.kind === SyntaxKind.ThisKeyword) && CSHARP_DECLARED_DICT_COPY_FIELDS.indexOf(initializer.name?.text as string) >= 0
                 ? this.csharpMemberReceiver(initializer) : undefined;
@@ -9692,15 +9718,19 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (type === box) || ((box === 'IDictionary<string, object>') && (type === 'Dictionary<string, object>'));
         }
         case SyntaxKind.CallExpression:
+        case SyntaxKind.AwaitExpression:
             return this.csharpTypeOfInitializer(node) === box;
         }
         return false;
     }
 
-    csharpIsInferredCollectionCall(value): boolean {
+    csharpIsInferredCollectionCall(value, awaited = false): boolean {
         const call = this.csharpUnwrapAssertion(value);
+        if (call?.kind === SyntaxKind.AwaitExpression) {
+            return this.csharpIsInferredCollectionCall(call.expression, true);
+        }
         return (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
-            && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (this.csharpInferredCallReturnType(call) !== undefined);
+            && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (this.csharpInferredCallReturnType(call, awaited) !== undefined);
     }
 
     // the local is initialised or reassigned from an inferred collection call
@@ -9714,7 +9744,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // `this.<name>(...)` binding a csharpCollectionReturnType method of this class or an ancestor
-    csharpInferredCallReturnType(call): string | undefined {
+    csharpInferredCallReturnType(call, awaited = false): string | undefined {
         const name = call.expression.name?.text;
         const checker: any = this.checkerOrUndefined();
         if (checker === undefined || this.csharpUniqueMethods?.has(name) !== true) {
@@ -9729,6 +9759,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         const owner = isMethodDeclaration(declaration) ? findAncestor(declaration, isClassLikeDeclaration) : undefined;
         if (owner === undefined || declaration.name?.text !== name || !this.csharpClassIsOrExtends(findAncestor(call, isClassLikeDeclaration), owner)) {
             return undefined;
+        }
+        // an async method's call is its Task: only the awaited value carries the box
+        if (this.isAsyncFunction(declaration) !== awaited) {
+            return undefined;
+        }
+        if (awaited && this.csharpTypedCoreType(declaration, name) !== '') {
+            return undefined; // a typed core prints its own Task<T>
         }
         return this.csharpCollectionReturnType(declaration);
     }
