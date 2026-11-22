@@ -12256,6 +12256,48 @@ describe ('goGeneralParamRules', () => {
             expect(out).toContain('ConvertIt(code any, fromNetwork string)');
             expect(out).toContain('Other(code any, fromNetwork any)');
         });
+        test('an uncalled venue-private method in a ts/src tree types its required string params; override, nullable, async and called stay boxed', () => {
+            const dir = path.join(__dirname, 'files', 'tmp-p14-go', 'ts', 'src');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'ex.ts'), 'type Str = string | undefined;\n' +
+                'class Exchange {\n    base (code: string): string {\n        return code;\n    }\n}\n' +
+                'export class ex extends Exchange {\n' +
+                '    convertIt (code: string, fromNetwork: string): string {\n        return fromNetwork.toUpperCase ();\n    }\n' +
+                '    maybe (code: Str): string {\n        return (code === undefined) ? \'\' : code;\n    }\n' +
+                '    base (code: string): string {\n        return code;\n    }\n' +
+                '    async later (code: string): Promise<string> {\n        return code.toUpperCase ();\n    }\n' +
+                '    used (code: string): string {\n        return code.toUpperCase ();\n    }\n' +
+                '    caller (x: any) {\n        return this.used (x);\n    }\n' +
+                '}\n');
+            const out = new Transpiler(config({})).transpileGoByPath(path.join(dir, 'ex.ts')).content;
+            expect(out).toContain('ConvertIt(code string, fromNetwork string)');
+            expect(out).toContain('Maybe(code any)');
+            expect(out).toContain('func (this *ex) Base(code any)');
+            expect(out).toContain('Later(code any)');
+            expect(out).toContain('Used(code any)');
+        });
+        afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-p14-go'), { recursive: true, force: true }));
+        test('sibling-file safeInteger and Precise string arguments prove *int64 / *string parameters', () => {
+            const dir = path.join(__dirname, 'files', 'tmp-p11-go', 'ts', 'src');
+            fs.mkdirSync(path.join(dir, 'pro'), { recursive: true });
+            fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+            fs.writeFileSync(path.join(dir, 'base', 'Precise.ts'), 'export class Precise {\n    static stringAbs (s: string | undefined): string | undefined { return s; }\n}\n');
+            fs.writeFileSync(path.join(dir, 'ex.ts'),
+                "import { Precise } from './base/Precise.js';\ntype Str = string | undefined;\ntype Int = number | undefined;\nclass Exchange {\n    safeString (o: any, k: string): Str { return undefined; }\n    safeInteger (o: any, k: string): Int { return undefined; }\n}\n" +
+                'export class ex extends Exchange {\n' +
+                '    scaled (en: Str, scale: Int): Str {\n        if ((en === undefined) || (scale === undefined)) {\n            return undefined;\n        }\n        return en;\n    }\n' +
+                "    run (row: any): Str {\n        const a = Precise.stringAbs (this.safeString (row, 'a'));\n        return this.scaled (a, this.safeInteger (row, 's'));\n    }\n" +
+                '}\n');
+            const sibling = (arg0: string, arg1: string) => fs.writeFileSync(path.join(dir, 'pro', 'ex.ts'),
+                "import { Precise } from '../base/Precise.js';\nimport ex from '../ex.js';\nexport default class exs extends ex {\n" +
+                `    go (row: any, raw: any) {\n        const abs = Precise.stringAbs (this.safeString (row, 'a'));\n        return this.scaled (${arg0}, ${arg1});\n    }\n}\n`);
+            const run = () => new Transpiler(config({})).transpileGoByPath(path.join(dir, 'ex.ts')).content;
+            sibling('abs', "this.safeInteger (row, 's')");
+            expect(run()).toContain('Scaled(en *string, scale *int64)');
+            sibling('raw', 'raw');
+            expect(run()).toContain('Scaled(en any, scale any)');
+        });
+        afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-p11-go'), { recursive: true, force: true }));
     });
 });
 

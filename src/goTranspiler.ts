@@ -16023,6 +16023,32 @@ const GO_TS_SRC_STRING_PRODUCERS = goThisCallPatterns([
     'safeStringUpper', 'safeStringUpper2', 'safeCurrencyCode', 'safeSymbol',
 ]);
 
+// the base integer readers whose Go signature answers `*int64`, and the static Precise string
+// operations, which answer `*string` (exchange_precise.go)
+const GO_TS_SRC_INT64_PTR_PRODUCERS = goThisCallPatterns([ 'safeInteger', 'safeInteger2', 'safeIntegerN' ]);
+const GO_TS_SRC_PRECISE_STRING_PRODUCERS = /^Precise\s*\.\s*string(?:Mul|Div|Sub|Add|Or|Max|Min|Abs|Neg|Mod)\s*\(/;
+
+// a parameter read as a container key (index, `in` key) or handed to a call: the key and argument rules
+// decide by their own proofs, so an unlisted uncalled method keeps that parameter boxed
+function goParamIsContainerKey(fn, name: string): boolean {
+    let found = false;
+    const isParam = (n) => (n?.kind === SyntaxKind.Identifier) && (n.text === name);
+    const visit = (n) => {
+        if (found || (n === undefined)) {
+            return;
+        }
+        if (((n.kind === SyntaxKind.ElementAccessExpression) && isParam(n.argumentExpression))
+            || ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.InKeyword) && isParam(n.left))
+            || ((n.kind === SyntaxKind.CallExpression) && n.arguments.some(isParam))) {
+            found = true;
+            return;
+        }
+        n.forEachChild(visit);
+    };
+    visit(fn.body);
+    return found;
+}
+
 // A slice element proves a Go string only from a quoted literal, a `: string`
 // parameter the printer types, or a defaulted parameter with a string-literal initializer. The
 // `safe*` readers answer a `*string` and `this.symbol(x)` answers an `any` box in Go, so neither
@@ -25056,17 +25082,24 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (constant && (init?.kind === SyntaxKind.CallExpression) && this.stringPointerTupleCalls.includes(init.expression?.name?.text)) ? '*string' : undefined;
     }
 
-    // a required `string` parameter of a table-listed exchange-local method that no ts/src file calls
+    // a required `string` parameter of a venue-private method that no ts/src file calls (async: table-listed only)
     goUncalledStringParameterType(param): string | undefined {
         const fn: any = param?.parent;
         if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || (param.initializer !== undefined)
             || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier)) {
             return undefined;
         }
+        // no caller to break: a sync venue-private method takes its declared `string` (the Go build checks every later caller);
+        // an async one only where the table lists it
         const key = `${this.goEnclosingClassName(fn)}.${fn.name.text}`;
         const indexes = Object.prototype.hasOwnProperty.call(this.uncalledStringParams, key) ? this.uncalledStringParams[key] : undefined;
-        if (!Array.isArray(indexes) || !indexes.includes(fn.parameters.indexOf(param)) || (this.goRequiredStringParameterType(param) !== 'string')
-            || this.goHasTreeCallSite(fn) || (this.goTsSrcTree(fn.getSourceFile())?.callIndex.get(fn.name.text) ?? []).length > 0) {
+        const listed = Array.isArray(indexes) && indexes.includes(fn.parameters.indexOf(param));
+        // unlisted: the absence of callers is proven only over a real ts/src tree (in-memory sources have unknown callers)
+        const tree = listed ? undefined : this.goTsSrcTree(fn.getSourceFile());
+        if ((!listed && (this.isAsyncFunction(fn) || (tree === undefined) || this.goMethodKeepsBaseSignature(fn)
+            || this.goIsProHandlerMethod(fn) || goHasDynamicCall(fn, fn.name.text) || goParamIsContainerKey(fn, param.name.text)))
+            || (this.goRequiredStringParameterType(param) !== 'string') || this.goHasTreeCallSite(fn)
+            || (this.goTsSrcTree(fn.getSourceFile())?.callIndex.get(fn.name.text) ?? []).length > 0) {
             return undefined;
         }
         return this.goParameterBodyTakes(fn, param, 'string') ? 'string' : undefined;
@@ -25452,13 +25485,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (goType === 'string') {
             return /^(?:'[^'\\]*'|"[^"\\]*"|this\.privateKey)$/.test(text); // a sibling file proves a plain literal or the string field
         }
+        if (goType === '*int64') {
+            // the base integer readers answer `*int64` in Go (exchange_safe.go)
+            const isIntProducer = (candidate: string) => GO_TS_SRC_INT64_PTR_PRODUCERS.some(rx => rx.test(candidate));
+            const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
+            return isIntProducer(text) || ((identifier !== null) && localDeclaredFrom(identifier[1], isIntProducer));
+        }
         if (goType === '*string') {
-            if (isStringProducer(text)) {
+            if (isStringProducer(text) || GO_TS_SRC_PRECISE_STRING_PRODUCERS.test(text)) {
                 return true;
             }
             const identifier = /^([A-Za-z_$][\w$]*)$/.exec(text);
             if (identifier !== null) {
-                return localDeclaredFrom(identifier[1], isStringProducer);
+                return localDeclaredFrom(identifier[1], (init) => isStringProducer(init) || GO_TS_SRC_PRECISE_STRING_PRODUCERS.test(init));
             }
         }
         if ((goType === 'map[string]any') || (goType === '[]any')) {
