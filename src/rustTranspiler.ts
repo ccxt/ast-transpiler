@@ -5561,6 +5561,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-84h R1: a ternary with an arm read from a defaulted base `Str` parameter is typed only for a native use (box-only stays `Value`)
         const init84h: Node = this.unwrapParens(declaration.initializer);
         if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: Node) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
+        // a lent `String` key that is also an insert key before its last use would copy there (`k.clone()`): keep the `Value`
+        if (ok && kind === 'str' && this.rustLentStrKeyLocals.has(declaration) && this.rustStrKeyInsertCopies(declaration)) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -5811,6 +5813,19 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok;
+    }
+
+    /** `String` locals that key a proven map read through the plain lend rule (rustScalarUseFormOwn). */
+    rustLentStrKeyLocals = new Set<any>();
+
+    /** Some insert-key (`key`) use of the local is not its last use, so a `String` key would be cloned there. */
+    rustStrKeyInsertCopies(declaration: any): boolean {
+        let copies = false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (this.rustScalarUseForms.get(n) === 'key' && !this.rustLocalLastUse(n, declaration)) copies = true;
+            return true;
+        });
+        return copies;
     }
 
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
@@ -9330,6 +9345,8 @@ export class RustTranspiler extends BaseTranspiler {
         // 40b: any initialised `String` local keys a proven map read by borrowing it (`m.get(k.as_str())` is the entry
         // `get_value` reads for its `Str` box); ws cache / subscription keys never reach here (rustWsCacheMapKeyUse above)
         if (kind === 'str' && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && !this.rust40bProTier(n) && this.rust40bFieldKeyRead(n)) return 'okey';
+        // a `String` local is never `Null`, so it keys any proven map read by borrowing it (the entry `get_value` reads)
+        if (kind === 'str' && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && !this.rust40bProTier(n) && this.rustOkeyReadUse(n)) { this.rustLentStrKeyLocals.add(this.rustDeclaredNode(n)); return 'okey'; }
         // ral-43c: a string key into an unproven `any` receiver reads through `get_value`, whose key is `impl ValueKey`
         if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rustAnyGetValueKeyUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
