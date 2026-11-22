@@ -42414,7 +42414,8 @@ function goIntSeedSumOfInts (goTranspiler, call, declaration): boolean {
         return false;
     }
     // only the operand shapes the 92g7 / 93g4 printers print native
-    if ((goTranspiler.go92g7Int64Operands (call) === undefined) && (goTranspiler.go93g4PointerOperands (call, declaration) === undefined)) {
+    if ((goTranspiler.go92g7Int64Operands (call) === undefined) && (goTranspiler.go93g4PointerOperands (call, declaration) === undefined)
+        && !h38p09SelfStepMinMax (goTranspiler, call, declaration)) {
         return false;
     }
     return call.arguments.every ((operand) => {
@@ -58971,3 +58972,89 @@ function h38p04ProveParseRow (go: any, fn: any, param: any): boolean {
     };
 }
 // ===== end H38-P04 =====
+// ===== H38-P09 =====
+// `const n = this.safeInteger (o, k, <int literal>)` never rewritten: SafeInteger answers &default on every
+// absent path, so the local is a Go int64 when every use is arithmetic, an ordered comparison, a Math.min /
+// max operand or the seed of another local (those print native on int64; a nil test or a hand-off keeps *int64)
+const H38P09_OPS = new Set ([ SyntaxKind.PlusToken, SyntaxKind.MinusToken, SyntaxKind.AsteriskToken, SyntaxKind.LessThanToken,
+    SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken ]);
+const h38p09Verdicts = new WeakMap<object, boolean> ();
+function h38p09UseIsNative (goTranspiler, n): boolean {
+    let child = n;
+    let parent = n.parent;
+    while (parent?.kind === SyntaxKind.ParenthesizedExpression) {
+        child = parent;
+        parent = parent.parent;
+    }
+    if (parent?.kind === SyntaxKind.BinaryExpression) {
+        const other = (parent.left === child) ? parent.right : parent.left;
+        if (!H38P09_OPS.has (parent.operatorToken.kind)) {
+            return (parent.operatorToken.kind === SyntaxKind.EqualsToken) && (parent.right === child) && (parent.left?.kind === SyntaxKind.Identifier);
+        }
+        return (other?.kind !== SyntaxKind.NullKeyword) && !((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'));
+    }
+    if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === child)) {
+        return true;
+    }
+    if ((parent?.kind === SyntaxKind.CallExpression) && parent.arguments.includes (child)) {
+        const callee = parent.expression;
+        return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.Identifier)
+            && (callee.expression.text === 'Math') && [ 'min', 'max' ].includes (callee.name?.text) && (parent.arguments.length === 2);
+    }
+    return false;
+}
+function h38p09Int64Local (goTranspiler, declaration): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.parent?.kind !== SyntaxKind.VariableDeclarationList) || (declaration.type !== undefined)
+        || !goTranspiler.goDefaultedSafeIntegerCall (declaration.initializer)) {
+        return false;
+    }
+    if (h38p09Verdicts.has (declaration)) {
+        return h38p09Verdicts.get (declaration);
+    }
+    h38p09Verdicts.set (declaration, false);
+    const scope = goTranspiler.goEnclosingFunction (declaration);
+    const name = declaration.name.text;
+    let uses = 0;
+    const bad = (scope === undefined) || (goTranspiler.checkerOrUndefined () === undefined) || goTranspiler.hasNodeWhere (scope, (n) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        if (goTranspiler.goDeclarationOfIdentifier (n) !== declaration) {
+            return true;   // a same-name local elsewhere: keep the shipped form
+        }
+        const p = n.parent;
+        if ((p?.kind === SyntaxKind.BinaryExpression) && (p.left === n) && (p.operatorToken.kind >= SyntaxKind.FirstAssignment)
+            && (p.operatorToken.kind <= SyntaxKind.LastAssignment)) {
+            return true;   // a second write
+        }
+        if ((p?.kind === SyntaxKind.PrefixUnaryExpression) || (p?.kind === SyntaxKind.PostfixUnaryExpression)) {
+            return true;
+        }
+        uses++;
+        return !h38p09UseIsNative (goTranspiler, n);
+    });
+    const ok = !bad && (uses > 0) && !goTranspiler.goTypeNameIsShadowed (scope, 'int64');
+    h38p09Verdicts.set (declaration, ok);
+    return ok;
+}
+{
+    const getGoLocalType = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        const shipped = getGoLocalType.call (this, declaration, parsedValue);
+        return ((shipped === '*int64') && h38p09Int64Local (this, declaration)) ? 'int64' : shipped;
+    };
+}
+// `Math.min|max (x + 1, n)` written back into the int local x being decided, n a Go int64 local: the
+// operand types settle only once x does, so the 92g7 test answers no while x is pending
+function h38p09SelfStepMinMax (goTranspiler, call, declaration): boolean {
+    if (goTranspiler.go92g7MinMaxName (call) === undefined) {
+        return false;
+    }
+    const [ a, b ] = call.arguments.map (goIntSeedUnwrap);
+    const self = (x) => (x?.kind === SyntaxKind.BinaryExpression) && goIntSeedRefersTo (goTranspiler, x, declaration);
+    const int64 = (x) => (x?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclarationOfIdentifier (x) !== declaration)
+        && (goTranspiler.goDeclaredTypeOfIdentifier (x) === 'int64');
+    return (self (a) && int64 (b)) || (self (b) && int64 (a));
+}
+// ===== end H38-P09 =====
