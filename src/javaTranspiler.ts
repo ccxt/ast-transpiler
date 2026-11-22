@@ -6488,6 +6488,10 @@ export class JavaTranspiler extends BaseTranspiler {
             && this.javaLongLimitLiteralLocalCached(this.javaDeclarationOfIdentifier(left))) {
             return `${this.printNode(left, 0)} = ${this.printNode(right, 0)}L`;
         }
+        const preciseWrite = op === SyntaxKind.EqualsToken ? this.printJavaPreciseDecimalsWrite(left, right) : undefined;
+        if (preciseWrite !== undefined) {
+            return preciseWrite;
+        }
         // `=` by target kind (a write to a natively declared parameter casts its right side), then `in`
         const assignment = op !== SyntaxKind.EqualsToken ? undefined : {
             [SyntaxKind.Identifier]: () => this.javaParameterAssignmentCast(left, right, identation),
@@ -7597,6 +7601,37 @@ export class JavaTranspiler extends BaseTranspiler {
         return parent.kind !== SyntaxKind.AsExpression
             && parent.kind !== SyntaxKind.TypeAssertionExpression
             && parent.kind !== SyntaxKind.NonNullExpression;
+    }
+
+    // `p.decimals = this.sum (p.decimals, k)` / `Math.max (p.decimals, k)` on a base `Precise` local: Precise.java
+    // declares the field `int`; parseToInt / safeInteger answer `Long` (sum adds 0 for null), and the
+    // Math.max operand is a `Long` local a null test already guards
+    printJavaPreciseDecimalsWrite(left, right): string | undefined {
+        const l: any = unwrapParens(left), r: any = unwrapParens(right);
+        if (!isPropertyAccessExpression(l) || l.name.text !== 'decimals' || !isIdentifier(l.expression)
+            || !isCallExpression(r) || r.arguments.length !== 2 || !isPropertyAccessExpression(r.expression)) {
+            return undefined;
+        }
+        const first: any = unwrapParens(r.arguments[0]);
+        if (!isPropertyAccessExpression(first) || first.name.text !== 'decimals' || !isIdentifier(first.expression)
+            || first.expression.text !== l.expression.text) {
+            return undefined;
+        }
+        const isPrecise = this.javaTry(() => this.getChecker().typeToString(this.getChecker().getTypeAtLocation(l.expression)) === 'Precise'
+            && (this.getChecker().getSymbolAtLocation(l.name)?.valueDeclaration as any)?.resolve()?.parent?.name?.text === 'Precise');
+        if (isPrecise !== true) {
+            return undefined;
+        }
+        const field = `${this.printNode(l.expression, 0)}.decimals`;
+        const k: any = unwrapParens(r.arguments[1]);
+        if (baseCall(this, r, 'sum', 2) && isCallExpression(k) && (baseCall(this, k, 'parseToInt', 1) || baseCall(this, k, 'safeInteger', 3))) {
+            return `${field} += java.util.Objects.requireNonNullElse(${this.printNode(k, 0)}, 0L).intValue()`;
+        }
+        if (isIdentifier(r.expression.expression) && r.expression.expression.text === 'Math' && r.expression.name.text === 'max'
+            && this.javaGuardedLongLocalRead(k)) {
+            return `${field} = Math.max(${field}, ${this.printNode(k, 0)}.intValue())`;
+        }
+        return undefined;
     }
 
     // the native form of Math.min/Math.max, or undefined to keep the helper
