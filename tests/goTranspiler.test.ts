@@ -20225,6 +20225,34 @@ describe('parsePrecision / integerPrecisionToAmount results are *string locals',
     });
 });
 
+describe('convertExpireDate / createCcxtTradeId answer *string', () => {
+    const run = (body: string) => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        return x.transpileGo ('class X {\n' + body + '}\n').content;
+    };
+    test('convertExpireDate prints a *string signature, nil for undefined and &local for the string', () => {
+        const out = run ('    convertExpireDate (date: string | undefined): string | undefined {\n'
+            + '        if (date === undefined) {\n            return undefined;\n        }\n'
+            + '        const r: string = \'20\' + date;\n        return r;\n    }\n');
+        expect (out).toMatch (/ConvertExpireDate\(date \w+\) \*string \{/);
+        expect (out).toContain ('return nil');
+        expect (out).not.toMatch (/\) any \{/);
+    });
+    test('a caller local of createCcxtTradeId is a *string with a native nil test', () => {
+        const out = run ('    createCcxtTradeId (t?: number): string | undefined { return undefined; }\n'
+            + '    f (t: number) {\n        const v = this.createCcxtTradeId (t);\n'
+            + '        if (v !== undefined) {\n            return v;\n        }\n        return undefined;\n    }\n');
+        expect (out).toContain ('var v *string = this.CreateCcxtTradeId(t)');
+        expect (out).toContain ('if v != nil {');
+    });
+    test('a write of another kind keeps the box', () => {
+        const out = run ('    convertExpireDate (d: string | undefined): string | undefined { return d; }\n'
+            + '    f (p: string) {\n        let v = this.convertExpireDate (p);\n        v = 1;\n        return v;\n    }\n');
+        expect (out).not.toContain ('var v *string');
+    });
+});
+
 describe('go string-slice index compared with a Go string', () => {
     const SRC = 'class T {\n'
         + '    f (rows: any[], other: any, s: string) {\n'
