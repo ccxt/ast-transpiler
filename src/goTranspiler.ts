@@ -36465,7 +36465,14 @@ function ral87g6PairMapWrite(n): boolean {
     return (n?.kind === SyntaxKind.Identifier) && (pattern?.kind === SyntaxKind.ArrayLiteralExpression)
         && (assignment?.kind === SyntaxKind.BinaryExpression) && (assignment.left === pattern)
         && (assignment.parent?.kind === SyntaxKind.ExpressionStatement)
-        && (tupleJoinWriteType(assignment, n.text) === GO_SAFE_DICT_LOCAL_TYPE);
+        && ((tupleJoinWriteType(assignment, n.text) === GO_SAFE_DICT_LOCAL_TYPE) || h34p03PostOnlyParamsWrite(assignment, n));
+}
+// slot 1 of base `handlePostOnly`: every Go return path holds the GetArgMap params or their OmitDict, a map[string]any
+function h34p03PostOnlyParamsWrite(assignment, n): boolean {
+    const call = assignment.right;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && (call.expression.name?.text === 'handlePostOnly')
+        && (assignment.left.elements.length === 2) && (assignment.left.elements[1] === n);
 }
 // a local rebound by a pair write may be re-omitted only from itself: `x = this.omit (y, ..)` with y another local asks
 // y's proof, which follows y's producer back to x while x's own verdict is in flight (the re-entry answers the box and

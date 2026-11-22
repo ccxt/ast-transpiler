@@ -108,9 +108,10 @@ describe ('h20g04 Dict local rebound by a Dict tuple slot', () => {
         expect (out).toContain ('paramsOmitted = MapTyped(this.Omit(paramsOmitted, []any{"offset"}))\n');
         expect (out).not.toContain ('func() any');
     });
-    test ('an unannotated local keeps the box', () => {
+    test ('an unannotated copy of the map param is a map (handlePostOnly slot 1 is that map)', () => {
         const out = print (KRAKEN ('', 'params', ''));
-        expect (out).not.toContain ('var paramsOmitted map[string]any');
+        expect (out).toContain ('var paramsOmitted map[string]any = params\n');
+        expect (out).toContain ('paramsOmitted = MapTyped(GetValue(postOnlyparamsOmittedVariable, 1))\n');
     });
     test ('a non-map write keeps the box', () => {
         const out = print (KRAKEN ('        paramsOmitted = this.safeString (params, \'x\');\n'));

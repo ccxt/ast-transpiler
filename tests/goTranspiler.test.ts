@@ -19873,3 +19873,32 @@ describe('pointer-key store on a never-nil safeDict map local', () => {
         expect(out).not.toContain('sub[*k] = this.SafeString');
     });
 });
+
+describe ('goPostOnlyParamsSlot', () => {
+    // slot 1 of base handlePostOnly is the params map (or its omit) on every path: an omit-seeded map local stays typed
+    const BASE = [
+        'type Dict = { [key: string]: any };',
+        'class BaseExchange {',
+        '    omit (x: any, k: any): any { return x; }',
+        '    safeString (o: any, k: string): any { return undefined; }',
+        '    handlePostOnly (isMarketOrder: boolean, exchangeSpecificPostOnlyOption: boolean, params: Dict = {}): [boolean, Dict] { return [ false, params ]; }',
+        '    other (a: boolean, params: Dict = {}): any { return [ false, params ]; }',
+        '}',
+    ].join ('\n');
+    const body = (call: string, extra = '') => BASE + '\nclass Ex extends BaseExchange {\n    f (params: Dict = {}, raw = undefined) {\n        let query = this.omit (params, "x");\n        let postOnly = false;\n        [ postOnly, query ] = ' + call + ';\n' + extra + '        query = this.omit (query, "y");\n        return this.safeString (query, "z");\n    }\n}\n';
+    const run = (src: string): string => {
+        const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const out = x.transpileGo (src).content;
+        return out.slice (out.indexOf ('func (this *Ex)'));
+    };
+    test('[ flag, query ] = this.handlePostOnly (.., query) keeps an omit-seeded local map[string]any', () => {
+        const out = run (body ('this.handlePostOnly (false, false, query)'));
+        expect (out).toContain ('var query map[string]any = MapTyped(this.Omit(params, "x"))');
+        expect (out).toContain ('query = MapTyped(GetValue(postOnlyqueryVariable, 1))');
+    });
+    test('another tuple producer, or a foreign boxed write (nil / wrong kind at run time), keeps the box', () => {
+        expect (run (body ('this.other (false, query)'))).toContain ('var query any = this.Omit(params, "x")');
+        expect (run (body ('this.handlePostOnly (false, false, query)', '        query = raw;\n'))).toContain ('var query any = this.Omit(params, "x")');
+    });
+});

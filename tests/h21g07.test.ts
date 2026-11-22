@@ -15,9 +15,10 @@ describe ('h21g07 nil-declared local rebound by a Dict tuple slot', () => {
         expect (out).toContain ('var query map[string]any = nil\n');
         expect (out).toContain ('query = MapTyped(GetValue(postOnlyqueryVariable, 1))\n');
     });
-    test ('a local seeded with a value keeps the box', () => {
+    test ('a local seeded with the map param is a map (handlePostOnly slot 1 is that map)', () => {
         const out = print (SHAPE ('let query = params;'));
-        expect (out).not.toContain ('MapTyped(GetValue(postOnlyqueryVariable');
+        expect (out).toContain ('var query map[string]any = params\n');
+        expect (out).toContain ('query = MapTyped(GetValue(postOnlyqueryVariable, 1))\n');
     });
     test ('a non-map write keeps the box', () => {
         const out = print (SHAPE ('let query: any = undefined;', '        query = \'x\';\n'));
