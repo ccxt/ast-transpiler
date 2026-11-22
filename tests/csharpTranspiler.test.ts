@@ -6622,6 +6622,34 @@ describe ('csharp element-row local suite', () => {
     });
 });
 
+describe ('csharp tuple element locals', () => {
+    const config = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
+    function printed(lines: string, local = 'const rows: C[] = this.build ();'): string {
+        const t = new Transpiler(config);
+        const printer: any = (t as any).csharpTranspiler;
+        printer.csharpDeclaredLocalTypeResolver = (d: any) => (d?.name?.text === 'rows') ? 'List<object>' : undefined;
+        printer.csharpLocalTypeOf = (n: any) => (n?.text === 'i') ? 'int' : undefined;
+        return t.transpileCSharp('type C = [number, number, number];\nclass T {\n    build (): C[] { return []; }\n    f (p: C[]) {\n        ' + local + '\n        const out = [];\n' +
+            '        for (let i = 0; i < 3; i++) {\n' + lines + '\n        }\n        return out;\n    }\n}').content;
+    }
+    test('a tuple element read only by literal index declares IList<object>', () => {
+        const out = printed('            const c = rows[i];\n            if (c !== undefined) {\n                out.push ([ c[0], c[2] ]);\n            }');
+        expect(out).toContain('IList<object> c = ((rows != null && i < rows.Count ? rows[i] : null) as IList<object>);');
+        expect(out).toContain('(c != null && 0 < c.Count ? c[0] : null)');
+        expect(out).not.toContain('getValue(c, 0)');
+    });
+    test('any other use, a parameter receiver or a let keeps object', () => {
+        for (const use of [ 'out.push (c);', 'out.push (c[i]);', 'out.push (this.foo (c));' ]) {
+            expect(printed('            const c = rows[i];\n            out.push (c[0]);\n            ' + use)).not.toContain('IList<object> c');
+        }
+        expect(printed('            const c = p[i];\n            out.push (c[0]);')).not.toContain('IList<object> c');
+        expect(printed('            let c = rows[i];\n            out.push (c[0]);')).not.toContain('IList<object> c');
+    });
+    test('a non-tuple element keeps object', () => {
+        expect(printed('            const c = rows[i];\n            out.push (c[0]);', 'const rows: any[] = this.build ();')).not.toContain('IList<object> c');
+    });
+});
+
 describe ('csharp nullable state fields', () => {
 
     // Hand-written BaseExchange fields declared in cs/ccxt/base/Exchange.Options.cs as

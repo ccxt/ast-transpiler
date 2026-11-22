@@ -8305,6 +8305,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 this.csharpTypedLocals.set(declaration, rowType);
                 return declare(rowType, "((" + rowType + ")" + parsedValue + ")");
             }
+            const tupleType = this.csharpElementTupleLocalType(declaration, parsedValue);
+            if (tupleType !== undefined) {
+                this.csharpTypedLocals.set(declaration, tupleType);
+                return declare(tupleType, "(" + parsedValue + " as " + tupleType + ")"); // a box of another kind reads as null, like getValue
+            }
         }
         // remember the concrete types this printer declared itself: the printed prefix is final (a host wrapper only rewrites untyped `object <name> = ` declarations), so the
         // local's static type is known at every later read an inferred collection return may be null: its local keeps the null-safe reads (`x?.Count ?? 0`)
@@ -8432,6 +8437,71 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const parent = n.parent;
                 if (parent?.kind === SyntaxKind.ElementAccessExpression && parent.expression === n && this.csharpElementRowKeyIsString(parent.argumentExpression)) {
                     reads += 1;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return (bad || bindings !== 1 || reads === 0) ? undefined : type;
+    }
+
+    // `const c = list[i]` on a local list whose TS element type is a tuple: the element is a list
+    // the printer built (List<object>), so the declaration may name it when every use is a literal index
+    // read or a null test. A parameter receiver (caller-built elements) keeps object.
+    csharpElementTupleLocalType(declaration, parsedValue: string): string | undefined {
+        if (declaration.name?.kind !== SyntaxKind.Identifier || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+            return undefined;
+        }
+        const init = declaration.initializer;
+        if (init?.kind !== SyntaxKind.ElementAccessExpression || !isIdentifier(init.expression) || !isIdentifier(init.argumentExpression)) {
+            return undefined;
+        }
+        const receiver = init.expression.text as string;
+        const index = init.argumentExpression.text as string;
+        if (parsedValue !== `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`) {
+            return undefined; // only the printer's own guarded read of a declared list
+        }
+        const checker = this.getChecker();
+        const listDeclaration = checker.getSymbolAtLocation(init.expression)?.valueDeclaration?.resolve();
+        if (listDeclaration?.kind !== SyntaxKind.VariableDeclaration || this.csharpEnclosingFunction(listDeclaration) !== this.csharpEnclosingFunction(declaration)) {
+            return undefined;
+        }
+        let element = checker.getTypeAtLocation(init);
+        if (element?.isUnionType?.()) {
+            const arms = element.getTypes().filter((arm) => (arm.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+            element = (arms.length === 1) ? arms[0] : undefined;
+        }
+        if (element === undefined || (element.flags & TypeFlags.Object) === 0 || !checker.isTupleType(element)) {
+            return undefined;
+        }
+        const scope = this.csharpEnclosingFunction(declaration);
+        const type = 'IList<object>';
+        if (scope === undefined || this.csharpTypeNameIsShadowed(scope, type)) {
+            return undefined;
+        }
+        const name = declaration.name.text;
+        let bindings = 0;
+        let reads = 0;
+        let bad = false;
+        const visit = (n: any) => {
+            if (bad || n === undefined) {
+                return;
+            }
+            if (n !== scope && CSHARP_FUNCTION_SCOPES.indexOf(n.kind) >= 0) {
+                return;
+            }
+            if ((n.kind === SyntaxKind.Parameter || n.kind === SyntaxKind.VariableDeclaration) && this.csharpBindingNames(n.name).indexOf(name) >= 0) {
+                bindings += 1;
+            }
+            const memberName = n.parent?.kind === SyntaxKind.PropertyAccessExpression && n.parent.name === n;
+            if (n !== declaration.name && !memberName && n.kind === SyntaxKind.Identifier && n.text === name) {
+                const parent = n.parent;
+                if (parent?.kind === SyntaxKind.ElementAccessExpression && parent.expression === n && isNumericLiteral(parent.argumentExpression)
+                        && /^\d{1,9}$/.test(parent.argumentExpression.text as string) && this.csharpIsPlainRead(parent)) {
+                    reads += 1;
+                } else if (parent?.kind !== SyntaxKind.BinaryExpression || [ SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken ].indexOf(parent.operatorToken?.kind) < 0) {
+                    bad = true;
+                    return;
                 }
             }
             n.forEachChild(visit);
