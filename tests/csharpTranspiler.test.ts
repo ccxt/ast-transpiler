@@ -6595,6 +6595,18 @@ describe ('csharp element-row local suite', () => {
             expect(printed(ts, true)).not.toContain('IDictionary<string, object> row');
         });
 
+        test('the first argument of this.extend counts as a dictionary use', () => {
+            const ts = body('        const row = list[i];\n        const a = row[\'a\'];\n        list[i] = this.extend (row, { \'b\': a });\n        return a;');
+            expect(printed(ts, true)).toContain(HEAD);
+        });
+
+        test('this.extend with the row as the second argument, or another helper, keeps object', () => {
+            for (const use of [ 'return this.extend ({}, row);', 'return this.deepExtend (row, {});', 'return this.omit (row, \'a\');' ]) {
+                const ts = body('        const row = list[i];\n        const a = row[\'a\'];\n        ' + use);
+                expect(printed(ts, true)).not.toContain('IDictionary<string, object> row');
+            }
+        });
+
         test('the source predicate decides per file', () => {
             const transpiler = new Transpiler(config);
             (transpiler as any).csharpTranspiler.csharpElementRowLocalSource = () => false;

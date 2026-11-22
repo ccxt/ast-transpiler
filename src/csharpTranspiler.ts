@@ -8025,8 +8025,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (parent.kind === SyntaxKind.CallExpression && parent.arguments?.[0] === use) {
             const callee = parent.expression;
+            // extend casts its first argument to a dictionary (Exchange.Generic.cs Extend), so a dict-typed row is exact
             return callee?.kind === SyntaxKind.PropertyAccessExpression && callee.expression?.kind === SyntaxKind.ThisKeyword
-                && CSHARP_ELEMENT_ROW_READERS.indexOf(callee.name?.text) >= 0;
+                && (CSHARP_ELEMENT_ROW_READERS.indexOf(callee.name?.text) >= 0 || callee.name?.text === 'extend');
         }
         if (parent.kind === SyntaxKind.BinaryExpression) {
             const op = parent.operatorToken?.kind;
