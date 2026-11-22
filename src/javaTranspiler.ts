@@ -5176,7 +5176,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaElementReadClaimed(node)) {
             return undefined;
         }
-        if (!this.javaDeclaredMapReceiver(node.expression)) {
+        if (!this.javaDeclaredMapReceiver(node.expression) && !this.javaTypedViewReceiver(node.expression)) {
             return undefined;
         }
         const key = node.argumentExpression;
@@ -6383,7 +6383,31 @@ export class JavaTranspiler extends BaseTranspiler {
             && this.javaFileBuiltMapField(baseExpr, baseExpr.name.text, true)) {
             return `((java.util.Map<Object, Object>) (java.util.Map<?, ?>) ${acc}).put(${lastKey}, ${rhs})`;
         }
+        // a local declared a unified-structure view (a Map<String, Object>), literal key, never-null value:
+        // the helper's Map branch is this put (a null value keeps the helper's removal arm)
+        if (keys.length === 1 && isStringLiteralLikeNode(keys[0]) && this.javaTypedViewReceiver(baseExpr)
+            && !this.elementWriteValueMayBeNull(right)) {
+            return `${acc}.put(${lastKey}, ${rhs})`;
+        }
         return `Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
+    }
+
+    // a local the Java print declares with the class of a TS interface from ts/src/base/types.ts: every
+    // such class is a TypedMap view (a Map<String, Object>), so get/put bind on the declaration
+    javaTypedViewReceiver(expression): boolean {
+        const declared = this.javaDeclaredTypeOf(expression);
+        const match = declared === undefined ? null : /^(?:io\.github\.ccxt\.types\.)?([A-Z]\w*)$/.exec(declared.trim());
+        if (match === null) {
+            return false;
+        }
+        return this.javaTry(() => {
+            const checker: any = this.getChecker();
+            const type = checker.getNonNullableType(checker.getTypeAtLocation(expression));
+            const symbol = type?.getSymbol?.();
+            const declarations = (symbol?.declarations ?? []).map((d) => d.resolve());
+            return symbol?.escapedName === match[1] && declarations.length > 0 && declarations.every((d) => d.kind === SyntaxKind.InterfaceDeclaration
+                && /(^|[\\/])ts[\\/]src[\\/]base[\\/]types\.ts$/.test(d.getSourceFile().fileName));
+        }, false);
     }
 
     printJavaInExpression(left, right) {
