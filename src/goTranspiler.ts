@@ -31758,6 +31758,10 @@ ${this.getIden(identation)}${returnStatement}`;
         return `Shift(${name})`;
     }
 
+    printReverseCall(node, identation, name = undefined) {
+        return `Reverse(${name})`;
+    }
+
     printPopCall(node, identation, name = undefined) {
         return `Pop(${name}))`;
     }
