@@ -2457,6 +2457,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         return ((type.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) || checker.isArrayType(type) || checker.isTupleType(type);
     }
 
+    // a class deriving from Array (the ws caches)
+    csharpClassExtendsArray(type, depth: number): boolean {
+        if ((depth > 6) || (type === undefined) || (typeof type.isClassOrInterface !== 'function') || !type.isClassOrInterface()) {
+            return false;
+        }
+        const checker: any = this.getChecker();
+        return (type.getBaseTypes() ?? []).some((base) => checker.isArrayType(base) || this.csharpClassExtendsArray(base, depth + 1));
+    }
+
     // A call of a base-tier method whose array parameter this rule typed from its declared type: an
     // argument the printer does not hold as a list is converted at the call (toArray)
     printArgsForCallExpression(node, identation) {
@@ -2496,8 +2505,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (!isAsExpression(inner) && this.csharpListParamArgumentPrintsList(inner, decide)) {
                 return printed;
             }
-            // only an `any` or array argument can be a list at run time; a scalar or dictionary stays as printed
-            if (!this.csharpArgumentMayBeList(this.getChecker().getTypeAtLocation(inner))) {
+            // only an `any` or array argument can be a list at run time; a scalar or dictionary stays as printed.
+            // A ws cache local the printer leaves `object` (awaited venue wrapper) converts too
+            const argType = this.getChecker().getTypeAtLocation(inner);
+            const objectCacheLocal = isIdentifier(inner) && (proven === undefined) && isVariableDeclaration(this.csharpReceiverBinding(inner) as any) && this.csharpClassExtendsArray(argType, 0);
+            if (!objectCacheLocal && !this.csharpArgumentMayBeList(argType)) {
                 return printed;
             }
             const h30t01 = this.h30t01BoundListArg(node, inner); if (h30t01 !== undefined) return h30t01;
