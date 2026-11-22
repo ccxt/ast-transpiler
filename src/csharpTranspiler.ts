@@ -7696,7 +7696,24 @@ export class CSharpTranspiler extends BaseTranspiler {
             n.forEachChild(visit);
         };
         node.body.forEachChild(visit);
-        return (proved && returns > 0) ? box : undefined;
+        if (!proved || returns === 0) {
+            return undefined;
+        }
+        // every return a Dictionary: answer the concrete type so callers keep Dictionary locals
+        const dict = 'Dictionary<string, object>';
+        let concrete = box === 'IDictionary<string, object>';
+        const visitConcrete = (n: any) => {
+            if (!concrete || isFunctionLike(n)) {
+                return;
+            }
+            if (n.kind === SyntaxKind.ReturnStatement) {
+                concrete = this.csharpReturnValueProvesBox(n.expression, dict);
+                return;
+            }
+            n.forEachChild(visitConcrete);
+        };
+        node.body.forEachChild(visitConcrete);
+        return concrete ? dict : box;
     }
 
     getCSharpLocalType(declaration): string {
@@ -9593,8 +9610,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         switch (node.kind) {
         case SyntaxKind.ArrayLiteralExpression:
             return box === 'List<object>';
-        case SyntaxKind.Identifier:
-            return (this.csharpResolvedReadType(node) ?? this.csharpDeclaredLocalValueType(node)) === box;
+        case SyntaxKind.Identifier: {
+            // a Dictionary local is already an IDictionary (implicit reference conversion)
+            const type = this.csharpResolvedReadType(node) ?? this.csharpDeclaredLocalValueType(node);
+            return (type === box) || ((box === 'IDictionary<string, object>') && (type === 'Dictionary<string, object>'));
+        }
         case SyntaxKind.CallExpression:
             return this.csharpTypeOfInitializer(node) === box;
         }

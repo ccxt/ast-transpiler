@@ -7780,6 +7780,60 @@ describe ('csharp inferred collection return box', () => {
     });
 });
 
+describe ('csharp inferred dict return from a Dictionary local', () => {
+    const config: any = { 'verbose': false, 'csharp': { 'uniqueMethodNames': [ 'built', 'mixedLocal', 'listLocal' ], 'parser': WRAPPED_PARSER } };
+    const source =
+        "type Dict = { [key: string]: any };\n" +
+        "class Base {\n" +
+        "    extend (a: any, b: any): Dict { return a; }\n" +
+        "}\n" +
+        "class Venue extends Base {\n" +
+        "    built (a: any): Dict {\n" +
+        "        const result: Dict = { 'a': a };\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "    mixedLocal (a: any): Dict {\n" +
+        "        const result: Dict = { 'a': a };\n" +
+        "        if (a === undefined) {\n" +
+        "            return a;\n" +
+        "        }\n" +
+        "        return result;\n" +
+        "    }\n" +
+        "    listLocal (a: any): Dict {\n" +
+        "        const result = [ a ];\n" +
+        "        return result as any;\n" +
+        "    }\n" +
+        "    user (a: any) {\n" +
+        "        const p = this.built (a);\n" +
+        "        const q = this.mixedLocal (a);\n" +
+        "        return [ p, q ];\n" +
+        "    }\n" +
+        "}";
+    // the build layer declares `result` a Dictionary local (in built / mixedLocal), `[ a ]` a List
+    const out = (): string => {
+        const transpiler: any = new Transpiler(config);
+        const owner = (node) => { let n = node; while (n !== undefined && n.name?.text === undefined || n?.kind === 80) { n = n.parent; } return n?.name?.text; };
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => (node?.text !== 'result') ? undefined
+            : ((owner(node.parent) === 'listLocal') ? 'List<object>' : 'Dictionary<string, object>');
+        return transpiler.transpileCSharp(source).content;
+    };
+
+    test('a Dict method returning only a Dictionary local prints Dictionary, its caller types the local', () => {
+        const printed = out();
+        expect(printed).toContain('public virtual Dictionary<string, object> built(object a)');
+        expect(printed).toContain('return result;');
+        expect(printed).toContain('Dictionary<string, object> p = this.built(a);');
+        expect(printed).not.toContain('IDictionary<string, object> p = this.built(a);');
+    });
+
+    test('a nil / untyped return path or a list local keeps object', () => {
+        const printed = out();
+        expect(printed).toContain('public virtual object mixedLocal(object a)');
+        expect(printed).toContain('object q = this.mixedLocal(a);');
+        expect(printed).toContain('public virtual object listLocal(object a)');
+    });
+});
+
 describe ('csharp native mod / Math.Min / Math.Max', () => {
 
     const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
