@@ -57945,3 +57945,24 @@ GoTranspiler.prototype.h30t06FrameSelfDefault = function (declaration, printed: 
     };
 }
 // ===== end H32-R07
+// ===== H33-P43
+// `const row: Dict = rows[i]` printed `var row map[string]any = MapTyped(rows[i])` with `rows` a typed `[]any` or
+// `map[string]any` local: the index is already native, and the comma-ok assertion answers nil for nil and for any
+// non-map element exactly as MapTyped does (no pointer-to-map value reaches a generated container)
+const printVariableDeclarationListH33p43 = GoTranspiler.prototype.printVariableDeclarationList;
+GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+    const printed: string = printVariableDeclarationListH33p43.call(this, node, identation);
+    const declaration: any = node?.declarations?.[0];
+    const read: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((typeof printed !== 'string') || (node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier)
+        || (read?.kind !== SyntaxKind.ElementAccessExpression) || (read.questionDotToken !== undefined) || (read.expression?.kind !== SyntaxKind.Identifier)) {
+        return printed;
+    }
+    const m = /^(\s*)var (\w+) map\[string\]any = (?:ccxt\.)?MapTyped\((\w+)\[(\w+|"[^"\n]*")\]\)$/.exec(printed);
+    if ((m === null) || (m[2] !== this.printNode(declaration.name, 0)) || (m[3] !== this.printNode(read.expression, 0))
+        || ![ GO_SAFE_LIST_LOCAL_TYPE, GO_SAFE_DICT_LOCAL_TYPE ].includes(this.goResolvedLocalGoType(read.expression))) {
+        return printed;
+    }
+    return `${m[1]}var ${m[2]}, _ = ${m[3]}[${m[4]}].(map[string]any)`;
+};
+// ===== end H33-P43
