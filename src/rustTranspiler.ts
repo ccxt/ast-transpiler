@@ -2675,7 +2675,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -21227,7 +21227,7 @@ export class RustTranspiler extends BaseTranspiler {
     rust62nTypedStrKey(key: any): string | undefined {
         const kind = this.rustScalarLocalOf(key)?.kind;
         if (kind !== 'str' && kind !== 'ostr') return undefined;
-        return `Value::from(${super.printIdentifier(key)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`;
+        return `Value::from(${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`;
     }
 
     rustI64HelperKeyText(keyNode: any, read?: any): string | undefined {
@@ -27631,7 +27631,7 @@ export class RustTranspiler extends BaseTranspiler {
         const field = /^(\w+)\.get\(("\w+")\)\.cloned\(\)\.unwrap_or_default\(\)$/.exec(this.rustWsFieldGetText(init, true) ?? '');
         if (field !== null && !RUST_BOOK_META_KEYS.has(field[2].slice(1, -1))) return `${indent}let mut ${varName}: Option<${type}> = self.safe_${kind}_k_o(&${field[1]}, ${field[2]})`;
         const printed = this.printNode(declaration.initializer, 0).trim();
-        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOdictCallText(init) ?? this.rustOptDictNativeInit(init, printed) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
+        return `${indent}let mut ${varName}: Option<${type}> = ${(kind === 'dict' ? this.rustOdictCallText(init) ?? this.rustOptDictNativeInit(init, printed) ?? (this as any).rustP22KeyedDictRead(init, true) : undefined) ?? `${printed}.into_opt_${kind}()`}`;
     }
 
     /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
@@ -41907,3 +41907,27 @@ export class RustTranspiler extends BaseTranspiler {
     return text === undefined ? undefined : `Value::Dict(${text})`;
 };
 // ===== end h33-H33-P21
+
+// ===== h34-H34-P22: `this.safeDict (d, k)` on a plain `Dict` local reads the map natively
+// `safe_dict_t` / `safe_dict_o` read `d` by the key's text (`None` reads "null"); a missing key, Null, "" or a non-map
+// answers the empty map / `None`. REST and prediction tiers only: ws caches route marker maps through `get_map_value`.
+(RustTranspiler.prototype as any).rustP22KeyedDictRead = function (this: any, initializer: any, optional: boolean): string | undefined {
+    const call: any = this.rustSkipWrappers(initializer);
+    if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+    if (String(call.expression.name.text) !== 'safeDict' || call.arguments.length < 2 || call.arguments.length > 3) return undefined;
+    if (call.arguments.length === 3) {
+        const dflt: any = this.rustSkipWrappers(call.arguments[2]);
+        if (optional || !isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return undefined;
+    }
+    const file = String(call.getSourceFile?.()?.fileName ?? '');
+    if (!file.includes('ts/src/') || /ts[/]src[/](pro|test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
+    const recv: any = this.rustSkipWrappers(call.arguments[0]);
+    if (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv)) return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    const kind = isIdentifier(key) ? this.rustScalarLocalOf(key)?.kind : undefined;
+    if (kind !== 'str' && kind !== 'ostr') return undefined;
+    const k = `${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}`;
+    const m = `std::sync::Arc::clone(__m)`;
+    return `(if let Some(Value::Dict(__m)) = ${(BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text)}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
+};
+// ===== end h34-H34-P22

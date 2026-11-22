@@ -27112,3 +27112,42 @@ describe('a venue method declared Dict / Dict[] returns the native container', (
         expect(out).toMatch(/fn build\([^\n]*\) -> Value \{/);
     });
 });
+
+describe('h34-P22: `safeDict (d, k)` on a plain `Dict` local with a string key reads the map natively', () => {
+    const run = (body: string, file = 'ts/src/venue.ts') => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p22-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (root, path.dirname (file)), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    parseTicker (t: Dict): Dict { return t; }\n}\n");
+        const up = file.split ('/').length - 3;
+        fs.writeFileSync (path.join (root, file), "import Exchange from '" + '../'.repeat (up) + "./base/Exchange.js';\nimport type { Dict, Str } from '" + '../'.repeat (up) + "./base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, file)).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const body = (read: string) => "    m (response: Dict) {\n        const tickers = this.safeDict (response, 'result', {});\n        const id = this.safeString (response, 'id');\n        const s = this.safeString (response, 's', '');\n" + read + "    }\n";
+    test('an optional row keyed by a `Str` local: `None` for missing, Null or a non-map, the key `None` reads "null"', () => {
+        const out = run (body ("        const t = this.safeDict (tickers, id);\n        return this.parseTicker (t);\n"));
+        expect (out).toContain ('(if let Some(Value::Dict(__m)) = tickers.get(id.as_deref().unwrap_or("null")) { Some(std::sync::Arc::clone(__m)) } else { None })');
+        expect (out).not.toContain ('safeDict(Value::from(&tickers)');
+    });
+    test('a plain row keyed by a `string` local answers the empty map for a missing / non-map value', () => {
+        const out = run (body ("        const t = this.safeDict (tickers, s, {});\n        return this.parseTicker (t);\n"));
+        expect (out).toContain ('(if let Some(Value::Dict(__m)) = tickers.get(s.as_str()) { std::sync::Arc::clone(__m) } else { Default::default() })');
+    });
+    test('negative: a literal key keeps its existing reader', () => {
+        const out = run (body ("        const t = this.safeDict (tickers, 'BTC');\n        return this.parseTicker (t);\n"));
+        expect (out).not.toContain ('if let Some(Value::Dict(__m)) = tickers.get(');
+    });
+    test('negative: a non-empty default keeps the helper', () => {
+        const out = run (body ("        const t = this.safeDict (tickers, s, { 'a': 1 });\n        return this.parseTicker (t);\n"));
+        expect (out).not.toContain ('if let Some(Value::Dict(__m)) = tickers.get(');
+    });
+    test('negative: a ws file (marker maps) keeps the helper', () => {
+        const out = run (body ("        const t = this.safeDict (tickers, id);\n        return this.parseTicker (t);\n"), 'ts/src/pro/venue.ts');
+        expect (out).not.toContain ('if let Some(Value::Dict(__m)) = tickers.get(');
+    });
+    test('negative: an untyped receiver keeps the helper', () => {
+        const out = run ("    m (response) {\n        const id = this.safeString (response, 'id');\n        const t = this.safeDict (response, id);\n        return this.parseTicker (t);\n    }\n");
+        expect (out).not.toContain ('if let Some(Value::Dict(__m))');
+    });
+});
