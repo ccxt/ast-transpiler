@@ -12896,6 +12896,31 @@ describe ('goEndpointReceiveTypedView', () => {
         }
     }
 
+    describe('a nil-seeded Dict local written only from awaited map stubs is a typed map read by a parser', () => {
+        const v = (body: string): string => "import Exchange from './abstract/ex.js';\nimport { Dict, NullableDict } from './base/types.js';\nexport default class ex extends Exchange {\n" + body +
+            '    parseIt (o: Dict): any {\n        return o;\n    }\n}\n';
+        const body = (write: string, read: string): string => '    async b (params = {}) {\n        let response: NullableDict = undefined;\n' +
+            "        if (params['x']) {\n            response = " + write + ';\n        }\n        return this.' + read + ';\n    }\n';
+        test('a parser read through `as Dict` keeps the typed receive', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, v (body ('await this.privateGetOrdersId (params)', 'parseIt (response as Dict)')));
+            expect (out).toContain ('var response map[string]any = nil');
+            expect (out).toContain ('response = (<-this.PrivateGetOrdersId(params)).Checked()');
+        });
+        test('a write of another kind keeps the box', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, v (body ("params['y']", 'parseIt (response as Dict)')
+                .replace ('return this.', "response = await this.privateGetOrdersId (params);\n        return this.")));
+            expect (out).not.toContain ('var response map[string]any');
+        });
+        test('a list stub write keeps the box for a dict parser', () => {
+            const out = print (stubs ('map[string]any', '[]any'), true, v (body ('await this.privateGetRows (params)', 'parseIt (response as Dict)')));
+            expect (out).not.toContain ('var response map[string]any');
+        });
+        test('without the stub table the box stays', () => {
+            const out = print (undefined, true, v (body ('await this.privateGetOrdersId (params)', 'parseIt (response as Dict)')));
+            expect (out).toContain ('var response any = nil');
+        });
+    });
+
     describe('go endpoint receive reads the typed view', () => {
         test('a map stub receive prints the checked typed view, not MapTyped(Raw)', () => {
             const out = print (stubs ('map[string]any', '[]any'));

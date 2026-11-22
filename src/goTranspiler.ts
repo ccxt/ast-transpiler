@@ -4973,6 +4973,24 @@ function ccxtGoNilJoinBaseMapCall (goTranspiler, right) {
         && ((GO_MARKET_MAP_BASE_CALLS.indexOf (callee.name?.text) >= 0) || (callee.name?.text === 'parseWsTicker')) && !goTranspiler.goNodeIsInPredictionTree (right);
 }
 
+// a nil-seeded local whose every write is an awaited typed endpoint stub holds what a `const x = await ..` receive holds:
+// arg 0 of a this.parse*/safe* reader (through `x as Dict` too) is admitted, as for that receive (ccxtGoEndpointLocalParserRead)
+function h35p06EndpointLocalParserRead (goTranspiler, scope, declaration, name, node) {
+    const read = (node.parent?.kind === ts.SyntaxKind.AsExpression) ? node.parent : node;
+    if (!ccxtGoEndpointLocalParserRead (read)) {
+        return false;
+    }
+    let writes = 0;
+    const foreign = goTranspiler.hasNodeWhere (scope, (w) => {
+        if ((w.kind !== ts.SyntaxKind.BinaryExpression) || !isAssignmentOperator (w.operatorToken?.kind) || !isIdentifierNamed (w.left, name)) {
+            return false;
+        }
+        writes += 1;
+        return (w.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || (ccxtGoNilJoinEndpointElement (goTranspiler, w.right) === undefined);
+    });
+    return !foreign && (writes > 0) && isNilDeclaredInitializer (declaration.initializer);
+}
+
 function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, copySeed = false) {
     const name = declaration.name?.text;
     if (name === undefined) {
@@ -4992,7 +5010,8 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
                 if (ccxtGoNilJoinIsPush (node)) {
                     fail ();                              // AppendToArray(&x) needs an `any` box
                 } else if (!assigned) {
-                    if (!goReadRuleAccepts (CCXT_GO_NIL_JOIN_READ_RULE, goTranspiler, node) && !ccxtGoNilJoinGuardedRead (node)) {
+                    if (!goReadRuleAccepts (CCXT_GO_NIL_JOIN_READ_RULE, goTranspiler, node) && !ccxtGoNilJoinGuardedRead (node)
+                        && !h35p06EndpointLocalParserRead (goTranspiler, scope, declaration, name, node)) {
 
                         fail ();
                     }
