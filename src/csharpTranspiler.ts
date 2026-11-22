@@ -6679,7 +6679,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         let init: any = declaration?.initializer;
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init === undefined) || this.csharpIntegralBindingIsRewritten(symbol)) {
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init === undefined) || this.csharpIntegralBindingIsRewritten(symbol, true)) {
             return false;
         }
         while (isParenthesizedExpression(init)) {
@@ -6720,8 +6720,50 @@ export class CSharpTranspiler extends BaseTranspiler {
         return false;
     }
 
+    // `x = Math.min/max (x, <int literal>)` (either order) as the right side of a write to x: the self identifier
+    csharpSelfMinMaxLiteralWrite(right): any {
+        let call: any = right;
+        while (isParenthesizedExpression(call)) {
+            call = call.expression;
+        }
+        const assign: any = call?.parent;
+        const callee: any = isCallExpression(call) ? call.expression : undefined;
+        if ((callee === undefined) || !isPropertyAccessExpression(callee) || !isIdentifier(callee.expression) || (callee.expression.text !== 'Math')
+            || ((callee.name.text !== 'min') && (callee.name.text !== 'max')) || (call.arguments.length !== 2)) {
+            return undefined;
+        }
+        let target: any = assign;
+        while ((target !== undefined) && isParenthesizedExpression(target)) {
+            target = target.parent;
+        }
+        if ((target === undefined) || !isBinaryExpression(target) || (target.operatorToken.kind !== SyntaxKind.EqualsToken) || !isIdentifier(target.left)) {
+            return undefined;
+        }
+        const [ a, b ] = call.arguments;
+        const literal = (n: any) => isNumericLiteral(n) && /^\d{1,9}$/.test(n.text);
+        const self = (n: any) => isIdentifier(n) && (n.text === (target.left as any).text);
+        if ((self(a) && literal(b)) || (literal(a) && self(b))) {
+            return self(a) ? a : b;
+        }
+        return undefined;
+    }
+
+    csharpSelfMinMaxWriteIsNative(right): boolean {
+        const self = this.csharpSelfMinMaxLiteralWrite(right);
+        if (self === undefined) {
+            return false;
+        }
+        let symbol: any;
+        try {
+            symbol = this.getChecker().getSymbolAtLocation(self);
+        } catch (e) {
+            return false;
+        }
+        return (symbol !== undefined) && this.csharpInt64BindingNeverNull(symbol);
+    }
+
     // any write to the binding in its function (destructuring targets included) voids a dominance proof
-    csharpIntegralBindingIsRewritten(symbol): boolean {
+    csharpIntegralBindingIsRewritten(symbol, allowSelfMinMax = false): boolean {
         const declaration: any = symbol.valueDeclaration?.resolve();
         const scope = (declaration === undefined) ? undefined : this.csharpEnclosingFunction(declaration);
         if (scope === undefined) {
@@ -6737,7 +6779,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 while ((target.parent !== undefined) && (isParenthesizedExpression(target.parent) || isArrayLiteralExpression(target.parent) || isObjectLiteralExpression(target.parent))) {
                     target = target.parent;
                 }
-                written = this.csharpIsWriteTarget(target);
+                written = this.csharpIsWriteTarget(target)
+                    && !(allowSelfMinMax && isBinaryExpression(target.parent) && (this.csharpSelfMinMaxLiteralWrite(target.parent.right) !== undefined));
             }
             n.forEachChild(visit);
         };
@@ -8023,6 +8066,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             // has its own promotion retry (`string?`), and answering true here would print the local
             // as a non-null string and weaken every later `+` operand proof.
             return csharpType.endsWith('?');
+        }
+        if ((csharpType === 'Int64?') && this.csharpSelfMinMaxWriteIsNative(right)) {
+            return true; // `x = Math.min/max (x, <int literal>)` on a never-null x prints Math.Min/Max: an Int64
         }
         let valueType = this.csharpTypeOfInitializer(right) ?? this.csharpSourceLocalType(right);
         if ((valueType === undefined) && (right?.kind === SyntaxKind.NumericLiteral)) {

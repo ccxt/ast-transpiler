@@ -8789,3 +8789,28 @@ describe('csharp Int64? local seeded by a safeInteger literal default', () => {
         expect(output).toContain('mathMin(');
     });
 });
+
+describe('csharp Int64? local clamped by Math.min/max against an integer literal', () => {
+    const emit = (body: string) => (new Transpiler({ csharp: { parser: WRAPPED_PARSER } } as any) as any)
+        .transpileCSharp('class Exchange {\n safeInteger (o, k, d = undefined): number { return d; }\n sleep (ms) { return ms; }\n' + body + '\n}').content;
+    test('a literal-default local written only by `x = Math.max (x, lit)` stays Int64? and prints Math.Max', () => {
+        const output = emit('f (o, ep: string) { let d = this.safeInteger (o, "d", 1000); for (let i = 0; i < 3; i++) { if (ep === "x") { d = Math.max (d, 1000); } this.sleep (d); } }');
+        expect(output).toContain('Int64? d = this.safeInteger(o, "d", 1000);');
+        expect(output).toContain('d = Math.Max(d.GetValueOrDefault(), 1000);');
+        expect(output).not.toContain('mathMax(');
+    });
+    test('no default keeps object and the helper: a missing key answers null', () => {
+        const output = emit('f (o) { let d = this.safeInteger (o, "d"); d = Math.max (d, 1000); return d; }');
+        expect(output).toContain('object d = this.safeInteger(o, "d");');
+        expect(output).toContain('d = mathMax(d, 1000);');
+    });
+    test('another write keeps object and the helper: it may store a box of another kind or null', () => {
+        const output = emit('f (o, other) { let d = this.safeInteger (o, "d", 7); d = Math.min (7, d); d = other; return d; }');
+        expect(output).toContain('object d = this.safeInteger(o, "d", 7);');
+        expect(output).toContain('d = mathMin(7, d);');
+    });
+    test('a non-literal operand keeps the helper', () => {
+        const output = emit('f (o, other) { let d = this.safeInteger (o, "d", 7); d = Math.min (other, d); return d; }');
+        expect(output).toContain('mathMin(other, d)');
+    });
+});
