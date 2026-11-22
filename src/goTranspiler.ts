@@ -1798,7 +1798,9 @@ function ccxtGoTypeOfAddChainInitializerUncached (goTranspiler, initializer, pri
     if ((ccxtGoWholePrintedCallee (goTranspiler, printedValue) !== 'Add') || (ccxtGoWholeAddCallEnd ((printedValue ?? '').trim ()) < 0)) {
         return undefined;
     }
-    if (!goAddChainLeafIsStringOrNil (goTranspiler, goAddChainLeftmostLeaf (initializer))) {
+    // a call leaf (a method typed `string` at print time) leaves the local boxed: the wrap would add a counted call
+    const leftmost = goAddChainLeftmostLeaf (initializer);
+    if (((leftmost?.kind === ts.SyntaxKind.CallExpression) && !isSafeStringCall (leftmost)) || !goAddChainLeafIsStringOrNil (goTranspiler, leftmost)) {
         return undefined;
     }
     const scope = (typeof goTranspiler.goEnclosingFunction === 'function') ? goTranspiler.goEnclosingFunction (declaration) : undefined;
@@ -4201,7 +4203,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
             result = goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) ?? goNarrowedStringReturnPaths (goTranspiler, node);
         }
         if ((result === undefined) && (allowed.length === 1) && (allowed[0] === 'string')) {
-            result = goFilledStringReturnPaths (goTranspiler, node);
+            result = goFilledStringReturnPaths (goTranspiler, node) ?? goNonNilStringReturnPaths (goTranspiler, node);
         }
         if ((result !== undefined) && !CCXT_GO_PARSE_METHOD.test (name) && !goGeneralReturnKeepsAbsence (goTranspiler, node, result)) {
             result = undefined;
@@ -4288,6 +4290,42 @@ function goFilledBeforeReturn (goTranspiler, ret, ident) {
     const declaration = goTranspiler.goDeclarationOfIdentifier (ident);
     const writes = (scope === undefined) ? undefined : goTranspiler.goNameWriteSites (scope, ident.text, declaration);
     return (writes !== undefined) && (writes.length === 1) && ((writes[0] === fill.left) || (writes[0]?.parent === fill));
+}
+// a declared `string` method: each path is a Go string, a literal-defaulted SafeString call, or a `*string` local
+// every write of which is literal-defaulted or that a nil test guards at the return; the non-Go-string paths deref
+function goNonNilStringReturnPaths (goTranspiler, node) {
+    const calls = [];
+    const locals = [];
+    for (const r of collectReturnStatements (node.body)) {
+        const e = ccxtGoUnwrapParens (r.expression);
+        if ((e === undefined) || isAbsentExpression (e)) {
+            return undefined;
+        }
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        if (goTranspiler.goDefaultedSafeStringCall (e)) {
+            calls.push (r);
+            continue;
+        }
+        const goType = ccxtGoReturnExpressionType (goTranspiler, e);
+        if (goType === 'string') {
+            continue;
+        }
+        if ((goType !== '*string') || (e.kind !== ts.SyntaxKind.Identifier)
+            || !(goTranspiler.goDefaultedSafeStringLocal (e) || goTranspiler.goHasEnclosingNilGuard (e) || goTranspiler.goHasExitingNilGuard (e))) {
+            return undefined;
+        }
+        locals.push (r);
+    }
+    if ((calls.length + locals.length) === 0) {
+        return undefined;
+    }
+    calls.forEach ((r) => GO_DEREF_SAFE_STRING_RETURNS.add (r));
+    locals.forEach ((r) => GO_NARROWED_STRING_RETURNS.add (r));
+    return 'string';
 }
 // a declared `string` method: each path is a Go string, or a `*string` local the checker has narrowed
 // to non-nullable `string` at the return (nil tested or written from a string), which prints dereferenced

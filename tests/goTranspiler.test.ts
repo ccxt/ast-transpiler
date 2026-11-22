@@ -20663,3 +20663,44 @@ describe('a venue Str parameter whose caller casts a *string local to a string-l
         expect(output).toContain('(typeVar != nil && *typeVar == "market")');
     });
 });
+
+describe('a declared string method whose paths are literal-defaulted safeString reads or nil-guarded locals prints string', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-p07nonnil');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    options: any = {};\n    urls: any = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n    safeBool (o: any, k: any, d: any = undefined): boolean | undefined { return o[k]; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('a defaulted local and a defaulted call: string and deref (fails on the base printer)', () => {
+        const out = run("    wsUrl (p: boolean): string {\n        const url = this.safeString (this.urls, 'ws', '');\n        if (p) {\n            return this.safeString (this.urls, 'wsPrivate', '');\n        }\n        return url;\n    }\n");
+        expect(out).toContain('WsUrl(p any) string {');
+        expect(out).toContain('return *url');
+        expect(out).toContain('return *this.SafeString(this.Urls, "wsPrivate", "")');
+    });
+    test('a nil-guarded local: string', () => {
+        const out = run("    wsUrl (): string {\n        const id = this.safeString (this.urls, 'id');\n        if ((id !== undefined) && (id.indexOf ('-') >= 0)) {\n            return id;\n        }\n        return 'a';\n    }\n");
+        expect(out).toContain('WsUrl() string {');
+        expect(out).toContain('return *id');
+    });
+    test('negative: a read with no default keeps any (a missing key answers nil)', () => {
+        expect(run("    wsUrl (): string {\n        return this.safeString (this.urls, 'ws');\n    }\n")).toContain('WsUrl() any {');
+    });
+    test('negative: an unguarded no-default local keeps any', () => {
+        expect(run("    wsUrl (): string {\n        const u = this.safeString (this.urls, 'ws');\n        return u;\n    }\n")).toContain('WsUrl() any {');
+    });
+    test('negative: undefined on one path keeps any', () => {
+        expect(run("    wsUrl (p: boolean): string {\n        if (p) {\n            return undefined;\n        }\n        return this.safeString (this.urls, 'ws', '');\n    }\n")).toContain('WsUrl(p any) any {');
+    });
+});
