@@ -2381,7 +2381,7 @@ export class RustTranspiler extends BaseTranspiler {
         const marketWrite = isAssign ? this.printTypedMarketWrite(left, right) : undefined;
         if (marketWrite !== undefined) return marketWrite;
         if (isAssign && this.rustTypedListField(left)) return `${this.printNode(left, 0)} = ${this.printNode(right, 0).trim()}.into_list()`;
-        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right, identation) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) ?? this.printSbAliasWrite(node, left, right) : undefined;
+        const optContainerWrite = isAssign && isIdentifier(left) ? this.printOptContainerWrite(left, right, identation) ?? this.printOptListWrite(left, right) ?? this.printExtendReuseWrite(left, right) ?? this.printSbAliasWrite(node, left, right) ?? this.printGuardedOptDictWrite(node, left, right) : undefined;
         if (optContainerWrite !== undefined) return optContainerWrite;
         const nilMapWrite = isAssign && isIdentifier(left) ? this.printNilMapWrite(left, right, identation) : undefined; if (nilMapWrite !== undefined) return nilMapWrite;
         // ral-ra: a reassigned handed map takes the written map back (`omit (x, k)` of itself moves the map through the call)
@@ -24984,6 +24984,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (sbAlias && this.rustNilSlotWrite(n) && this.rustDictSlotOfWrite(n) && this.rustDestrBoxLineOk(n)) { this.rustSbAliasSlotWrites.add(n); return ++sbMapWrites > 0; }
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind === SyntaxKind.EqualsToken) {
                 if (up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                // a no-default `safeDict` local written whole under its own `!== undefined` test holds a map there (unwrapped at the write)
+                if (!nilDeclared && from === 'dict' && this.rustGuardedOptDictWrite(up, fn)) { this.rustGuardedOptDictWrites.add(up); return true; }
                 if (extendReuse) {
                     if (this.rustSelfExtendWrite(n, declaration) || this.rustSelfMergeWrite(n, declaration)) return ++extendWrites > 0;
                     // ral-50b: `x = this.handleUntilOption (k, x, p)` (slot list written whole into x): `.into_dict()` answers the empty
@@ -25167,6 +25169,8 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-43f: the source of `t = x` whose target holds the optional form of the same kind: the alias shares x's handle
             // (counted as a nullable lend: the source keeps Null apart from the empty map, so it takes the optional form too)
             if (this.rustOptAliasTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
+            // the source of a guarded whole write into a map local (rustGuardedOptDictWrite): read as its optional form
+            if (this.rustGuardedOptDictSourceUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-45f: the source of `let t = x` whose target holds the optional form through the initialised alias rule
             if (this.rustOptAliasInitTargetUse(n, declaration, fn)) return ++lentNullable > 0 && ++reads > 0;
             // ral-61i: the source of an endpoint alias write `t = x` (rustEndpointAliasWrite: x was just written from a declared
@@ -25475,6 +25479,46 @@ export class RustTranspiler extends BaseTranspiler {
         const t: any = this.rustDeclarationOfIdentifier(up.left);
         if (t === undefined || t === declaration || !isVariableDeclaration(t) || t.name === up.left || this.rustBorrowedPending.has(t)) return false;
         return this.rustBorrowedLocalKind(t) === this.rustOptAliasSourceKind(n, fn) && this.rustOptContainerLocals.has(t);
+    }
+
+    /** `x = s` (statement) where `s` is a `const s = this.safeDict (..)` with no default (43f source) and the write sits directly in
+     *  the then-branch of `if (s !== undefined)` (no else): the map there is never Null, so `x` keeps its map. */
+    private rustGuardedOptDictWrites = new WeakSet<any>();
+    rustGuardedOptDictWrite(write: any, fn: any): boolean {
+        if (!isBinaryExpression(write) || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+        const src: any = write.right;
+        if (!isIdentifier(src) || this.rustOptAliasSourceKind(src, fn) !== 'dict') return false;
+        // the read must be on a local or parameter: a store field (`this.balance`) keeps its own native read
+        const init: any = (this.rustDeclarationOfIdentifier(src) as any)?.initializer;
+        const recv: any = init !== undefined && isCallExpression(init) ? init.arguments[0] : undefined;
+        if (recv === undefined || !isIdentifier(recv)) return false;
+        const block: any = write.parent.parent;
+        const test: any = isBlock(block) ? block.parent : undefined;
+        if (test === undefined || !isIfStatement(test) || test.thenStatement !== block || test.elseStatement !== undefined) return false;
+        const cond: any = this.unwrapParens(test.expression);
+        if (!isBinaryExpression(cond) || cond.operatorToken.kind !== SyntaxKind.ExclamationEqualsEqualsToken) return false;
+        const other: any = isIdentifier(cond.left) && cond.left.text === src.text ? cond.right : (isIdentifier(cond.right) && cond.right.text === src.text ? cond.left : undefined);
+        if (other === undefined || !isIdentifier(other) || other.text !== 'undefined') return false;
+        const tested: any = other === cond.right ? cond.left : cond.right;
+        return this.rustDeclarationOfIdentifier(tested) === this.rustDeclarationOfIdentifier(src) && String(write.getText()).length <= 240;
+    }
+    rustGuardedOptDictSourceUse(n: any, declaration: any, fn: any): boolean {
+        const up: any = n.parent;
+        if (!isBinaryExpression(up) || up.right !== n || !this.rustGuardedOptDictWrite(up, fn) || !isIdentifier(up.left)) return false;
+        const t: any = this.rustDeclarationOfIdentifier(up.left);
+        if (t === undefined || t === declaration || !isVariableDeclaration(t) || this.rustBorrowedPending.has(t)) return false;
+        return this.rustBorrowedLocalKind(t) === 'dict' && !this.rustOptContainerLocals.has(t);
+    }
+    /** The guarded write printed by the source's form: `s.unwrap_or_default()` (optional) or `s.into_dict()` (boxed). */
+    printGuardedOptDictWrite(node: any, left: any, right: any): string | undefined {
+        if (!this.rustGuardedOptDictWrites.has(node)) return undefined;
+        const t: any = this.rustDeclarationOfIdentifier(left);
+        if (t === undefined || !this.rustPrintedBorrowed.has(t) || this.rustOptContainerLocals.has(t) || this.rustBorrowedLocalKind(t) !== 'dict') return undefined;
+        const d: any = this.rustDeclarationOfIdentifier(right);
+        const name = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
+        const s = super.transformIdentifier(right, this.ReservedKeywordsReplacements[right.text] ?? right.text);
+        const owned = d !== undefined && this.rustOwnedLastUse(right, d) ? s : `${s}.clone()`;
+        return `${name} = ${owned}.${d !== undefined && this.rustPrintedOptional.has(d) ? 'unwrap_or_default' : 'into_dict'}()`;
     }
 
     /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */

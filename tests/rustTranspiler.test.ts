@@ -27385,3 +27385,43 @@ describe('a base `Dict[]` method that builds its list returns `List`; a local of
         expect (base).not.toMatch (/fn keyed\([^\n]*\) -> crate::value::List/);
     });
 });
+
+describe('rust: a Dict local rewritten from a no-default safeDict under its undefined test', () => {
+    const files: Record<string, string> = {
+        "ts/src/base/Exchange.ts": "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeString (o: any, k: any, d: string = undefined): string | undefined { return o; }\n    hold (x: any): any { return x; }\n    balance: Dict = {};\n}\n",
+        "ts/src/venue.ts": "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    guarded (groups: Dict, key: string) {\n        let eventGroup: Dict = { 'id': key };\n        const knownGroup = this.safeDict (groups, key);\n        if (knownGroup !== undefined) {\n            eventGroup = knownGroup;\n        }\n        return this.safeString (eventGroup, 'id');\n    }\n    plain (resp: Dict) {\n        const data = this.safeDict (resp, 'data');\n        return this.safeString (data, 'x');\n    }\n    lit (key: string) {\n        const g: Dict = { 'id': key };\n        return this.safeString (g, 'id');\n    }\n    nowrite (groups: Dict, key: string) {\n        let eventGroup: Dict = { 'id': key };\n        const knownGroup = this.safeDict (groups, key);\n        if (knownGroup !== undefined) {\n            return this.safeString (knownGroup, 'id');\n        }\n        return this.safeString (eventGroup, 'id');\n    }\n    unguarded (groups: Dict, key: string) {\n        let eventGroup: Dict = { 'id': key };\n        const knownGroup = this.safeDict (groups, key);\n        eventGroup = knownGroup;\n        return this.safeString (eventGroup, 'id');\n    }\n    untyped (groups: Dict, key: string, other: any) {\n        let eventGroup: Dict = { 'id': key };\n        if (other !== undefined) {\n            eventGroup = other;\n        }\n        return this.safeString (eventGroup, 'id');\n    }\n    store (key: string) {\n        let account: Dict = { 'id': key };\n        const cached = this.safeDict (this.balance, key);\n        if (cached !== undefined) {\n            account = cached;\n        }\n        return this.safeString (account, 'id');\n    }\n}\n"
+    };
+    let out = '';
+    beforeAll (() => {
+        const root = path.join (rustFixtureRoot, 'guarded-opt-dict-write');
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content;
+    });
+    const fnBody = (name: string) => out.slice (out.indexOf ('pub fn ' + name + '('), out.indexOf ('\n    }', out.indexOf ('pub fn ' + name + '(')));
+    test('the guarded write keeps the map local typed and unwraps the optional map (None never reaches it)', () => {
+        const body = fnBody ('guarded');
+        expect (body).toContain ('let mut eventGroup: crate::value::Dict = ');
+        expect (body).toContain ('let mut knownGroup: Option<crate::value::Dict> = ');
+        expect (body).toContain ('if (knownGroup.is_some()) {');
+        expect (body).toContain ('eventGroup = knownGroup.unwrap_or_default();');
+        expect (body).toContain ('self.safe_string_k(&eventGroup, "id", &[])');
+    });
+    test('negative: an unguarded write from the optional map keeps the Value local', () => {
+        const body = fnBody ('unguarded');
+        expect (body).toContain ('let mut eventGroup: Value = ');
+        expect (body).toContain ('eventGroup = knownGroup;');
+        expect (body).not.toContain ('unwrap_or_default');
+    });
+    test('negative: a guarded write from an untyped value keeps the Value local', () => {
+        const body = fnBody ('untyped');
+        expect (body).toContain ('let mut eventGroup: Value = ');
+        expect (body).toContain ('eventGroup = other;');
+    });    test('negative: a guarded write from a read of a store field keeps the Value local', () => {
+        const body = fnBody ('store');
+        expect (body).not.toContain ('unwrap_or_default');
+        expect (body).not.toContain ('safe_dict_o(');
+    });
+});
