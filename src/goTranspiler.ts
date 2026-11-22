@@ -10726,19 +10726,21 @@ const CCXT_GO_TUPLE_RESULT_METHODS = [ 'handleMarketTypeAndParams', 'handleSubTy
     'handleOptionStringAndParams2',
     'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
     'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2',
-    'handleTriggerDirectionAndParams', 'handleMaxEntriesPerRequestAndParams' ];
+    'handleTriggerDirectionAndParams', 'handleMaxEntriesPerRequestAndParams', 'handleTriggerAndParams', 'isTriggerOrder' ];
 // element 0 unwrap per method (element 1 is always the params map); default SafeStringPtr
 const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handleOptionBoolAndParams': 'GetValueBool',
     'handleOptionBoolAndParams2': 'GetValueBool', 'handleOptionIntegerAndParams': 'Int64Value',
     'handleOptionIntegerAndParams2': 'Int64Value', 'handleParamBool': 'SafeBoolPtr', 'handleParamBool2': 'SafeBoolPtr',
     'handleParamInteger': 'SafeIntegerPtr', 'handleParamInteger2': 'SafeIntegerPtr',
+    'handleTriggerAndParams': 'SafeBoolPtr', 'isTriggerOrder': 'SafeBoolPtr',
     // the Go pair's `any` slot 0 is already the derefScalar'd option value, read as is
     'handleOptionAndParams': 'Raw', 'handleOptionAndParams2': 'Raw', 'handleMaxEntriesPerRequestAndParams': 'Raw' };
 // pair twins with their slot-0 Go type: the printed base twins (GO_BASE_PAIR_TWINS) and the hand-written pairs
 const CCXT_GO_PAIR_SLOT_0 = { 'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool', 'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
     'handleMarketTypeAndParams': '*string', 'handleSubTypeAndParams': '*string', 'handleOptionStringAndParams': '*string',
-    'handleOptionStringAndParams2': '*string', 'handleMarginModeAndParams': '*string', 'handleTriggerDirectionAndParams': '*string' };
+    'handleOptionStringAndParams2': '*string', 'handleMarginModeAndParams': '*string', 'handleTriggerDirectionAndParams': '*string',
+    'handleTriggerAndParams': '*bool', 'isTriggerOrder': '*bool' };
 // the value overload (`defaultValue: boolean` / `number`) with a true/false or integer literal default returns
 // Go (bool|int64, map[string]any); every other call is printed as <Name>Nullable with the []any result
 const CCXT_GO_TUPLE_BOOL_DEFAULT_SLOT = { 'handleOptionBoolAndParams': 3, 'handleOptionBoolAndParams2': 4,
@@ -13796,6 +13798,7 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     // tuple-returning param handlers: callers pass maps, tuple slots or GetArgMap params (block h30-H30-A18)
     'handleParamString': [ 0 ], 'handleParamString2': [ 0 ], 'handleParamInteger': [ 0 ], 'handleParamInteger2': [ 0 ],
     'handleParamBool': [ 0 ], 'handleParamBool2': [ 0 ], 'handleNetworkCodeAndParams': [ 0 ], 'handleTriggerDirectionAndParams': [ 0 ],
+    'handleTriggerAndParams': [ 0 ], 'isTriggerOrder': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -16165,6 +16168,7 @@ const GO_BASE_PAIR_TWINS: { [name: string]: string } = {
     'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool',
     'handleParamInteger': '*int64', 'handleParamInteger2': '*int64', 'handleTriggerDirectionAndParams': '*string',
+    'handleTriggerAndParams': '*bool', 'isTriggerOrder': '*bool',
 };
 
 // base helpers typed `any[]` that hand back, at this index, the params map they were given
@@ -16200,6 +16204,7 @@ const GO_TUPLE_POINTER_SLOT_PRODUCERS: { [name: string]: { goType: string, defau
     'handleOptionIntegerAndParams': { 'goType': '*int64', 'defaultSlot': 3, 'tabled': true },
     'handleOptionIntegerAndParams2': { 'goType': '*int64', 'defaultSlot': 4, 'tabled': true },
     'handleNetworkCodeAndParams': { 'goType': '*string', 'safe': 'SafeStringPtr' },
+    'handleTriggerAndParams': { 'goType': '*bool', 'safe': 'SafeBoolPtr' }, 'isTriggerOrder': { 'goType': '*bool', 'safe': 'SafeBoolPtr' },
 };
 
 // callees whose Go body derefs every argument, so the pointer reads like the value it holds
@@ -19851,6 +19856,13 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goBasePairReturnIsPair(node): boolean {
+        // `return this.<twin> (..)` forwards a twin of the same slot type
+        const forwarded = node?.expression;
+        if ((forwarded?.kind === SyntaxKind.CallExpression) && (forwarded.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (forwarded.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
+            const own = GO_BASE_PAIR_TWINS[String(this.goEnclosingFunction(node)?.name?.text)];
+            return (own !== undefined) && (GO_BASE_PAIR_TWINS[String(forwarded.expression.name?.text)] === own);
+        }
         return (node?.expression?.kind === SyntaxKind.ArrayLiteralExpression) && (node.expression.elements.length === 2)
             && node.expression.elements.every((e: any) => e.kind !== SyntaxKind.SpreadElement);
     }
@@ -19860,6 +19872,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const method: any = this.goEnclosingFunction(node);
         if ((method?.kind !== SyntaxKind.MethodDeclaration) || (this.goBasePairReturnType(method) === undefined)) {
             return undefined;
+        }
+        if (node.expression.kind === SyntaxKind.CallExpression) {
+            const call = ccxtGoTupleResultUnwrap(this.printNode(node.expression, 0));
+            return (call === undefined) ? undefined : this.printLeadingComments(node, identation) + this.getIden(identation) + 'return ' + call;
         }
         const [ value, params ] = node.expression.elements.map((e: any) => this.printNode(e, 0).trim());
         const leadingComment = this.printLeadingComments(node, identation);
@@ -56555,7 +56571,8 @@ GoTranspiler.prototype.h30A17JsonMap = function (container): boolean {
 // `a, p := this.HandleX(..)` whose second Go result is map[string]any; a `params = {}` parameter is bound by GetArgMap;
 // base handleOptionAndParams' handleParamString call prints inline (ccxtGoCallerMethodProbe), so it is no Go call
 const H30A18_METHODS = new Set<string> ([ 'handleParamString', 'handleParamString2', 'handleParamInteger', 'handleParamInteger2',
-    'handleParamBool', 'handleParamBool2', 'handleNetworkCodeAndParams', 'handleTriggerDirectionAndParams' ]);
+    'handleParamBool', 'handleParamBool2', 'handleNetworkCodeAndParams', 'handleTriggerDirectionAndParams',
+    'handleTriggerAndParams', 'isTriggerOrder' ]);
 function h30a18MapArg (go: any, name: string, call: any, arg: any): boolean {
     if (!H30A18_METHODS.has (name) || (arg?.kind !== SK.Identifier)) { return false; }
     if (h30a18InlinedProbeCall (go, call)) { return true; }
