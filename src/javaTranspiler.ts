@@ -891,9 +891,6 @@ export class JavaTranspiler extends BaseTranspiler {
     // ---- typed String slice / replaceAll ----
     // integral printed types only: the helper's toInt truncation has no native analogue for a double
     javaIntegralDeclaredTypes: Set<string> = new Set(['long', 'int', 'short', 'byte', 'Long', 'Integer', 'Short', 'Byte']);
-    // the native slice reads a bound up to three times: a longer line would pass the 400-char audit
-    javaTypedSliceMaxLength = 300;
-    csModifiers = {};
     // literals printed as `Helpers.newMap(k, v, ...)` (no anonymous class, so no capture rule)
     builderObjectLiterals: WeakSet<Node> = new WeakSet();
     javaNonSharedSourceVerdicts = new WeakMap<any, boolean>();
