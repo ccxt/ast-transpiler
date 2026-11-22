@@ -11013,3 +11013,40 @@ describe('java ordering of two printed String operands', () => {
         expect(withStrings({}, body('>'))).toContain('Helpers.isGreaterThan(a, b)');
     });
 });
+
+// a venue method annotated `int` whose every return is an integer literal or the base parseToInt prints Long
+describe('java int venue returns print Long', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'java-int-return-'));
+    const write = (relative: string, content: string): string => {
+        const file = path.join(root, relative);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, content);
+        return file;
+    };
+    write('ts/src/base/types.ts', 'export type int = number;\nexport type Int = number | undefined;\n');
+    write('ts/src/base/Exchange.ts', "export default class Exchange {\n    options: any = {};\n    parseToInt (n: any): number {\n        return parseInt (n);\n    }\n}\n");
+    const CLEAN = { declared: 1, mentions: 0, handWritten: false, calls: [] as any[] };
+    const print = (file: string, member: string, uses: any = () => CLEAN) => {
+        const byPath = newJavaTranspiler();
+        (byPath as any).javaTranspiler.javaRepoMethodUses = (name: string) => uses(name);
+        const src = "import Exchange from './base/Exchange.js';\nimport type { int, Int } from './base/types.js';\nexport default class V extends Exchange {\n" + member + "}\n";
+        return byPath.transpileJavaByPath(write(file, src)).content as string;
+    };
+    const delay = "    delayMs (): int {\n        const s = this.options['s'];\n        if (s === undefined) {\n            return 0;\n        }\n        return this.parseToInt (s * 1000);\n    }\n";
+    test('literal and parseToInt returns print a Long signature and a long literal', () => {
+        const out = print('ts/src/venuea.ts', delay);
+        expect(out).toMatch(/public Long delayMs\(\)/);
+        expect(out).toContain('return 0L;');
+    });
+    test('a return of any other value keeps Object', () => {
+        const out = print('ts/src/venueb.ts', "    delayMs (): int {\n        return this.options['s'];\n    }\n");
+        expect(out).toMatch(/public Object delayMs\(\)/);
+        expect(out).not.toContain('0L');
+    });
+    test('a nullable Int annotation, a redeclared or hand-written name, or no repo facts keep Object', () => {
+        expect(print('ts/src/venuec.ts', delay.replace('(): int', '(): Int'))).toMatch(/public Object delayMs\(\)/);
+        expect(print('ts/src/venued.ts', delay, () => ({ ...CLEAN, declared: 2 }))).toMatch(/public Object delayMs\(\)/);
+        expect(print('ts/src/venuee.ts', delay, () => ({ ...CLEAN, handWritten: true }))).toMatch(/public Object delayMs\(\)/);
+        expect(print('ts/src/venuef.ts', delay, () => undefined)).toMatch(/public Object delayMs\(\)/);
+    });
+});

@@ -2903,6 +2903,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         let target = this.javaNativeReturnTypeTarget(node);
+        if (target === undefined && !baseTier && this.javaIntReturnIsLong(node)) {
+            return 'Long';
+        }
         // an annotation the checker cannot carry (`any`, an unmodelled structure) still prints a
         // native return when EVERY return site prints the same carriable type
         if (target === undefined && !baseTier) {
@@ -2933,6 +2936,28 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return target;
+    }
+
+    // a venue method annotated plain `int` whose every return is an integer literal or a base
+    // `this.parseToInt (..)` (BaseExchange.parseToInt answers a non-null Long or throws) prints `Long`;
+    // the name must be declared once, override nothing and have no hand-written Java caller
+    javaIntReturnIsLong(node): boolean {
+        if (node.type?.kind !== SyntaxKind.TypeReference || !isIdentifier(node.type.typeName) || node.type.typeName.text !== 'int'
+            || !isIdentifier(node.name) || typeof this.javaRepoMethodUses !== 'function') {
+            return false;
+        }
+        const type = this.javaTry(() => this.getChecker().getTypeAtLocation(node.type));
+        if (type === undefined || type.flags !== TypeFlags.Number) {
+            return false;
+        }
+        const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
+        if (uses === undefined || uses.declared !== 1 || uses.handWritten || this.javaTry(() => this.getMethodOverride(node)) !== undefined) {
+            return false;
+        }
+        return this.javaEveryReturn(node.body, (r) => {
+            const e = r.expression === undefined ? undefined : this.unwrapParenthesized(r.expression);
+            return e !== undefined && ((isNumericLiteral(e) && /^\d+$/.test(e.text)) || this.javaBaseParseToIntCall(e));
+        });
     }
 
     // a base-tier `: Dict` method may print its Map return when the name is declared once in ts/src,
@@ -3142,6 +3167,9 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         let rightPart = exp ? (' ' + this.printNode(exp, identation)) : '';
         rightPart = rightPart.trim();
+        if (exp !== undefined && isNumericLiteral(exp) && /^\d+$/.test(rightPart) && this.javaEnclosingMethodReturnsLong(node)) {
+            rightPart += 'L'; // an int literal does not box to Long
+        }
         if (!rightPart) {
             // bare return; — check if inside async method (supplyAsync lambda needs return null)
             let parent = node.parent;
@@ -3157,6 +3185,15 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         rightPart = rightPart ? ' ' + rightPart + this.LINE_TERMINATOR : this.LINE_TERMINATOR;
         return leadingComment + this.getIden(identation) + this.RETURN_TOKEN + rightPart + trailingComment;
+    }
+
+    javaEnclosingMethodReturnsLong(node): boolean {
+        let parent = node.parent;
+        while (parent !== undefined && !isMethodDeclaration(parent) && !isFunctionDeclaration(parent)
+            && !isFunctionExpression(parent) && !isArrowFunction(parent)) {
+            parent = parent.parent;
+        }
+        return parent !== undefined && isMethodDeclaration(parent) && this.javaTry(() => this.javaNativeReturnType(parent)) === 'Long';
     }
 
     private allBranchesTerminate(node: Node): boolean {
