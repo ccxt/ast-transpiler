@@ -17446,6 +17446,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A whole-value hand-off of a struct local: the `Value` the untyped local held. */
     printTypedMarketValueUse(node: any): string | undefined {
+        const keyReadSlot = this.printVenueKeyReadMarketArg(node); if (keyReadSlot !== undefined) return keyReadSlot;
         if (this.rustCallLocalOf(node) !== undefined) {
             return this.rustMarketValueUse(node) ? `crate::types::IntoRaw::into_raw(${super.printIdentifier(node)}.clone())` : super.printIdentifier(node);
         }
@@ -20905,6 +20906,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printElementAccessExpression(node, identation) {
         const untilSlot = this.printRustUntilPairSlotRead(node); if (untilSlot !== undefined) return untilSlot;
+        const venueKeyRead = this.printVenueKeyReadParamRead(node); if (venueKeyRead !== undefined) return venueKeyRead;
         const sideRead = this.printBookSideRead(node); if (sideRead !== undefined) return sideRead;
         const bookRead = this.printWsBookMapRead(node) ?? this.printWsBookFieldRead(node); if (bookRead !== undefined) return bookRead;
         const typedElem = this.printTypedResultElemRead(node); if (typedElem !== undefined) return typedElem;
@@ -27915,6 +27917,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         const name = String(method.name.text);
+        if (this.rustVenueKeyReadParam(method, param, name)) return true;
         if (!RustTranspiler.RUST_BY_REF_GENERATED_READERS.test(name) || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile().fileName))) return false;
         if (this.rustMethodReferencedAsValue(method) || this.rustLentOverridden(name)) return false;
         let reads = 0;
@@ -27925,6 +27928,43 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok && reads > 0;
+    }
+
+    /** A venue-only method's first `any` / `Market` parameter that is only key-read (`m['k']` with a literal key, or the
+     *  container of a by-reference reader) takes `impl KeyRead`: a typed market is lent, a `Value` still passes. */
+    rustVenueKeyReadParam(method: any, param: any, name: string): boolean {
+        const type: any = param.type;
+        if (type?.kind !== SyntaxKind.AnyKeyword && !this.rustIsMarketTypeNode(type, false)) return false;
+        if (!isClassDeclaration(method.parent) || !this.rustVenueOnlyMethod(method, name)) return false;
+        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        let keyReads = 0;
+        const ok = this.rustLocalUsesAll(param, String(param.name.text), true, (n: any) => {
+            const up: any = n.parent;
+            if (isElementAccessExpression(up) && up.expression === n && isStringLiteral(up.argumentExpression) && !this.isNativeWriteTargetBase(n)
+                && !((isCallExpression(up.parent) || isPropertyAccessExpression(up.parent) || isElementAccessExpression(up.parent)) && up.parent.expression === up)) { keyReads++; return true; }
+            return isCallExpression(up) && up.arguments[0] === n && this.rustBorrowedAnyKeyReader(up);
+        });
+        return ok && keyReads > 0;
+    }
+
+    /** A typed market local (plain or optional) handed to a `rustVenueKeyReadParam` slot: lent as `&m` (both read its map). */
+    printVenueKeyReadMarketArg(node: any): string | undefined {
+        const call: any = node?.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (this.rustTypedMarketLocalOf(node) === undefined && this.rustOptMarketLocalOf(node) === undefined) return undefined;
+        const callee: any = this.rustScalarCallee(call);
+        if (callee === undefined || !isMethodDeclaration(callee) || !isIdentifier(callee.name) || callee.parameters?.[0] === undefined) return undefined;
+        const param: any = callee.parameters[0];
+        return this.rustParamReadsByReference(param) && this.rustVenueKeyReadParam(callee, param, String(callee.name.text)) ? `&${super.printIdentifier(node)}` : undefined;
+    }
+
+    /** `m['k']` on a parameter `rustVenueKeyReadParam` lends: the `KeyRead` read of the same slot. */
+    printVenueKeyReadParamRead(node: any): string | undefined {
+        if (!isElementAccessExpression(node) || !isIdentifier(node.expression) || !isStringLiteral(node.argumentExpression)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node.expression);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node.expression || !isMethodDeclaration(declaration.parent)) return undefined;
+        if (!isIdentifier(declaration.parent.name) || !this.rustParamReadsByReference(declaration) || !this.rustVenueKeyReadParam(declaration.parent, declaration, String(declaration.parent.name.text))) return undefined;
+        return `crate::value::KeyRead::key_read(&${super.printIdentifier(node.expression)}, ${this.quotedStringLiteral(String(node.argumentExpression.text))})`;
     }
 
     /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
