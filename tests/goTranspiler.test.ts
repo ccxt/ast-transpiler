@@ -20388,3 +20388,34 @@ describe ('go: a required `int` parameter of a venue-private method', () => {
         expect (out ()).toContain ('IsLessThan(duration, 3600)');
     });
 });
+describe('`k in m` on a typed SafeDictMap local with a *string key', () => {
+    const head = 'type Str = string | undefined;\ntype Int = number | undefined;\ntype Dict = { [key: string]: any };\nclass Exchange {\n    balance = {};\n    options = {};\n    safeString (d: any, k: any): Str { return undefined; }\n    safeInteger (d: any, k: any): Int { return undefined; }\n    safeDict (d: any, k: any, def: any = undefined): any { return def; }\n';
+    // the SafeDictMap local typing runs on venue sources only (ts/src/pro here)
+    const go = (body: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'inopk-'));
+        try {
+            const dir = path.join(tmp, 'ts/src/pro');
+            fs.mkdirSync(dir, { recursive: true });
+            const file = path.join(dir, 'x.ts');
+            fs.writeFileSync(file, head + body + '}\n');
+            return new Transpiler({ verbose: false }).transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('a nil-guarded *string key reads the map natively', () => {
+        const output = go("    f (message: Dict, t: string) {\n        const m = this.safeDict (this.balance, t, {});\n        const code = this.safeString (message, 'a');\n        let v = 0;\n        if ((code !== undefined) && (code in m)) {\n            v = 1;\n        } else {\n            v = 2;\n        }\n        m['x'] = v;\n    }\n");
+        expect(output).toContain('var m map[string]any = this.SafeDictMap(this.Balance, t, map[string]any{})');
+        expect(output).toContain('_, ok := m[*code]');
+        expect(output).not.toContain('InOp(');
+    });
+    test('a pointer value stored into the typed local is still dereferenced', () => {
+        const output = go("    f (message: Dict, t: string) {\n        const m = this.safeDict (this.balance, t, {});\n        const code = this.safeString (message, 'a');\n        if ((code !== undefined) && (code in m)) {\n            m['x'] = 1;\n        }\n        const ts = this.safeInteger (message, 'E');\n        m['ts'] = ts;\n    }\n");
+        expect(output).toContain('m["ts"] = *ts');
+        expect(output).not.toContain('m["ts"] = ts');
+    });
+    test('an any key keeps the helper', () => {
+        const output = go("    f (message: Dict, t: string, k) {\n        const m = this.safeDict (this.balance, t, {});\n        if (k in m) {\n            m['x'] = 1;\n        }\n    }\n");
+        expect(output).toContain('InOp(m, k)');
+    });
+});

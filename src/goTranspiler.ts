@@ -27775,7 +27775,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (dictText.includes('\n') || keyText.includes('\n')) {
             return undefined;
         }
-        if (this.goPrintedTypeOfExpression(dictNode, dictText) !== 'map[string]any') {
+        const dictType = this.goPrintedTypeOfExpression(dictNode, dictText)
+            ?? ((dictNode?.kind === SyntaxKind.Identifier) ? this.goSafeDictMapLocalType(dictNode) : undefined);
+        if (dictType !== 'map[string]any') {
             return undefined;
         }
         if (this.goPrintedTypeOfExpression(keyNode, keyText) !== 'string') {
@@ -28321,7 +28323,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if ((identifier || (dict?.kind === SyntaxKind.PropertyAccessExpression) || (dict?.kind === SyntaxKind.CallExpression) || (bookEntry !== undefined)) && keyIsText) {
                     const dictText = bookEntry ?? this.printNode(dict, 0);
                     let keyText = this.printNode(key, 0);
-                    const dictMapType = (identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined) ?? this.goInOpDictMapType(dict, dictText);
+                    const dictMapType = (identifier ? (this.goPrintedTypeOfExpression(dict, dictText) ?? this.goSafeDictMapLocalType(dict)) : undefined)
+                        ?? this.goInOpDictMapType(dict, dictText);
                     // a `*string` key the enclosing control flow proved non-nil reads through the deref
                     let keyType = this.goPrintedTypeOfExpression(key, keyText);
                     if ((keyType !== 'string') && (this.goInOpPointerKeyProvenNonNil(statement, key) || this.goWsInOpKeyDerefable(dict, key))) {
@@ -28345,6 +28348,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         };
         visit(condition);
         return (reads.length === 1) ? reads[0] : undefined;
+    }
+
+    // a `safeDict` local the printer declares `map[string]any = this.SafeDictMap(..)` (goSafeDictMapLocal's proof)
+    goSafeDictMapLocalType(node): string | undefined {
+        const declaration: any = this.goDeclarationOfIdentifier(node);
+        return (declaration?.kind === SyntaxKind.VariableDeclaration) ? this.goSafeDictMapLocal(declaration) : undefined;
     }
 
     // hand-written BaseExchange fields (go/v4/exchange.go) declared as a Go map: a `key in this.X`
