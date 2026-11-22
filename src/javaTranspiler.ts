@@ -4522,11 +4522,6 @@ export class JavaTranspiler extends BaseTranspiler {
         return indent + varToken + this.printNode(declaration.name) + " = " + parsedValue;
     }
 
-    // unreached (transformPropertyAcessExpressionIfNeeded prints every `x.length`); a build hook wraps it
-    printLengthProperty(node, _identation, _name = undefined) {
-        return this.transformPropertyAcessExpressionIfNeeded(node);
-    }
-
     transformPropertyAcessExpressionIfNeeded(node) {
         const expression = node.expression;
         const leftSide = this.printNode(expression, 0);
