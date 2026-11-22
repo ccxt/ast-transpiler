@@ -169,6 +169,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpFunctionStringListParamType(node: any): string | undefined;
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean>;
+    csharpListParamLineage(node: any): string;
     csharpParamCensus(rule: {
         walks: ((node: any) => void)[];
         settle: () => void;
@@ -515,6 +516,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpLengthReceiverType(expression: any): string | undefined;
     csharpCollectionReturnType(node: any): string | undefined;
     csharpProveCollectionReturn(node: any): string | undefined;
+    csharpPromiseArgumentType(checker: any, type: any): any;
     getCSharpLocalType(declaration: any): string;
     csharpResolvedLocalType(declaration: any): string;
     csharpWriteKeepsLocalType(right: any, csharpType: string): boolean;
@@ -610,9 +612,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpClassIsOrExtends(cls: any, owner: any): boolean;
     csharpCollectionBoxOfType(checker: any, type: any): string | undefined;
     csharpReturnValueProvesBox(expression: any, box: string): boolean;
-    csharpIsInferredCollectionCall(value: any): boolean;
+    csharpIsInferredCollectionCall(value: any, awaited?: boolean): boolean;
     csharpLocalHoldsInferredCollection(declaration: any): boolean;
-    csharpInferredCallReturnType(call: any): string | undefined;
+    csharpInferredCallReturnType(call: any, awaited?: boolean): string | undefined;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
     csharpShadowedNumericParamType(node: any): string | undefined;

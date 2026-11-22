@@ -270,7 +270,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaIdentifierPrintsDeclaredName(node: any): boolean;
     javaIdentifierKeepsDeclaredName(node: any): boolean;
     printVariableDeclarationList(node: any, identation: any): string;
-    printLengthProperty(node: any, _identation: any, _name?: any): string;
     transformPropertyAcessExpressionIfNeeded(node: any): string;
     printAsExpression(node: any, identation: any): string;
     javaTypeFlagsOnly(type: any, mask: number, depth?: number): boolean;

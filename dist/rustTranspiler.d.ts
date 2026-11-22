@@ -3290,6 +3290,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustOwnContainerBare;
     rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined;
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined;
+    /** A sync base-tier method declared `string[]` that no venue redeclares, every return a literal list or a list
+     *  local the body builds: it returns `List` (a list on every path, never Null). */
+    rustBaseStringListReturn(node: any): 'list' | undefined;
+    /** `Value::from(vec![..])` / `Value::from(v)` of a built `Vec<Value>`: the `Arc` of that vector. */
+    rustBaseListPayload(exp: any): string | undefined;
     /** A checker type that is a map (object, never any / unknown / nullable / array) or a list (array or tuple). */
     rustStaticContainerType(type: any, kind: 'dict' | 'list'): boolean;
     /** The venue container decision of a declaration (the call-site rule's own cache). */

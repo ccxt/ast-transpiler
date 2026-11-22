@@ -1304,7 +1304,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goEnclosingClassName(fn: any): string | undefined;
     goPrintedArgType(arg: any): string | undefined;
     goSafeDictMapArgType(arg: any): string | undefined;
-    goAwaitedStringLocal(decl: any): boolean;
+    goAwaitedStringLocal(decl: any, callees?: Set<string>): boolean;
     goIsClientUrl(arg: any): boolean;
     goIsClientParameter(node: any): boolean;
     goBoundIdentifierType(arg: any): string | undefined;
@@ -1578,6 +1578,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         safe?: string;
     } | undefined;
     goTuplePointerSlotReadAdmissible(ident: any, allowStore: boolean, goType?: string): boolean;
+    goTuplePointerSlotLocalStore(ident: any, current: any): boolean;
     goTuplePointerSlotTruthyOperand(chain: any): boolean;
     goTuplePointerSlotNilProven(ident: any): boolean;
     goTuplePointerSlotScan(declaration: any, name: string, scope: any, allowStore: boolean, writeType?: {
@@ -1590,6 +1591,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTuplePointerSlotWriteType(element: any): string | undefined;
     goTuplePointerSlotOfBinding(element: any): string | undefined;
     goTuplePointerSlotNilInitType(declaration: any): string | undefined;
+    goTuplePointerSlotLocalStoreRead(node: any): boolean;
     goTuplePointerSlotStoreText(right: any): string | undefined;
     goTupleSlotBindingLines(elements: any[], holder: string, identation: number, declaration: any): string;
     goParamsTupleHelperIndex(call: any): number;
@@ -1774,6 +1776,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     asyncMapRowListCallees: Set<string>;
     asyncTickerMapCallees: Set<string>;
     asyncStringCallees: Set<string>;
+    asyncStringPtrCallees: Set<string>;
     goTickerRowCache: Map<any, {
         key: any;
         keyIsPointer: boolean;
@@ -2744,4 +2747,9 @@ export interface GoTranspiler {
     h33p02BoxedStores: Set<any> | undefined;
     h33p02StringSliceValue(node: any): boolean;
     h33p02Converter(node: any): string | undefined;
+}
+export interface GoTranspiler {
+    h36p11StringSliceIndexCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
+    h36p11ForCounter(key: any): boolean;
+    h36p11StringArrayLocal(list: any): boolean;
 }
