@@ -1558,7 +1558,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (receiver.ownedKey && this.rustScalarInsertKeyArg(keyNode)?.endsWith('.clone()')) return `${super.printIdentifier(this.rustSkipWrappers(keyNode))}.to_string()`;
         const scalarKey = this.rustScalarInsertKeyArg(keyNode); if (scalarKey !== undefined) return scalarKey;
         const key = keyText.trim();
-        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)
+        // a field written under a literal-key read of a plain local (`row['k']`): no side effect, the helper's key conversion applies
+        const rowRead: any = this.rustStripWrappers(keyNode);
+        const plainRead = receiver.isField && isElementAccessExpression(rowRead) && isStringLiteral(rowRead.argumentExpression) && isIdentifier(this.rustStripWrappers(rowRead.expression));
+        if ((!plainRead && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
             || (receiver.isField ? key.includes('self') : new RegExp(`\\b${receiver.text}\\b`).test(key))) {
             return undefined;
         }
