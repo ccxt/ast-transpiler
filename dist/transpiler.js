@@ -13488,7 +13488,8 @@ function ccxtGoTypeOfAddChainInitializerUncached(goTranspiler, initializer, prin
   if (ccxtGoWholePrintedCallee(goTranspiler, printedValue) !== "Add" || ccxtGoWholeAddCallEnd((printedValue ?? "").trim()) < 0) {
     return void 0;
   }
-  if (!goAddChainLeafIsStringOrNil(goTranspiler, goAddChainLeftmostLeaf(initializer))) {
+  const leftmost = goAddChainLeftmostLeaf(initializer);
+  if (leftmost?.kind === ts.SyntaxKind.CallExpression && !isSafeStringCall(leftmost) || !goAddChainLeafIsStringOrNil(goTranspiler, leftmost)) {
     return void 0;
   }
   const scope = typeof goTranspiler.goEnclosingFunction === "function" ? goTranspiler.goEnclosingFunction(declaration) : void 0;
@@ -15516,7 +15517,7 @@ function ccxtGoAnnotatedMethodReturnType(goTranspiler, node) {
       result = goDefaultedSafeStringReturnPaths(goTranspiler, node, allowed) ?? goNarrowedStringReturnPaths(goTranspiler, node);
     }
     if (result === void 0 && allowed.length === 1 && allowed[0] === "string") {
-      result = goFilledStringReturnPaths(goTranspiler, node);
+      result = goFilledStringReturnPaths(goTranspiler, node) ?? goNonNilStringReturnPaths(goTranspiler, node);
     }
     if (result !== void 0 && !CCXT_GO_PARSE_METHOD.test(name) && !goGeneralReturnKeepsAbsence(goTranspiler, node, result)) {
       result = void 0;
@@ -15593,6 +15594,39 @@ function goFilledBeforeReturn(goTranspiler, ret, ident) {
   const declaration = goTranspiler.goDeclarationOfIdentifier(ident);
   const writes = scope === void 0 ? void 0 : goTranspiler.goNameWriteSites(scope, ident.text, declaration);
   return writes !== void 0 && writes.length === 1 && (writes[0] === fill.left || writes[0]?.parent === fill);
+}
+function goNonNilStringReturnPaths(goTranspiler, node) {
+  const calls = [];
+  const locals = [];
+  for (const r of collectReturnStatements(node.body)) {
+    const e = ccxtGoUnwrapParens(r.expression);
+    if (e === void 0 || isAbsentExpression(e)) {
+      return void 0;
+    }
+    for (let up = r.parent; up !== void 0 && up !== node.body; up = up.parent) {
+      if (up.kind === ts.SyntaxKind.TryStatement) {
+        return void 0;
+      }
+    }
+    if (goTranspiler.goDefaultedSafeStringCall(e)) {
+      calls.push(r);
+      continue;
+    }
+    const goType = ccxtGoReturnExpressionType(goTranspiler, e);
+    if (goType === "string") {
+      continue;
+    }
+    if (goType !== "*string" || e.kind !== ts.SyntaxKind.Identifier || !(goTranspiler.goDefaultedSafeStringLocal(e) || goTranspiler.goHasEnclosingNilGuard(e) || goTranspiler.goHasExitingNilGuard(e))) {
+      return void 0;
+    }
+    locals.push(r);
+  }
+  if (calls.length + locals.length === 0) {
+    return void 0;
+  }
+  calls.forEach((r) => GO_DEREF_SAFE_STRING_RETURNS.add(r));
+  locals.forEach((r) => GO_NARROWED_STRING_RETURNS.add(r));
+  return "string";
 }
 var GO_NARROWED_STRING_RETURNS = /* @__PURE__ */ new WeakSet();
 function goNarrowedStringReturnPaths(goTranspiler, node) {
@@ -39355,6 +39389,9 @@ ${indent}}`);
         if (op === SyntaxKind5.PlusToken) {
           return true;
         }
+        if (op === SyntaxKind5.MinusToken && goType === "*int64" && this.h38p10Int64Difference(parent, current, ident)) {
+          return true;
+        }
         if (op === SyntaxKind5.AmpersandAmpersandToken || op === SyntaxKind5.BarBarToken) {
           return goType === "*bool" && this.goTuplePointerSlotTruthyOperand(parent);
         }
@@ -62966,6 +63003,14 @@ ${iden}}`;
     return printed.trimEnd() + "\n" + stores.join("\n");
   };
 }
+GoTranspiler.prototype.h38p10Int64Difference = function(binary, current, ident) {
+  const other = binary.left === current ? binary.right : binary.left;
+  if (!this.goTuplePointerSlotNilProven(ident) || this.hasNodeWhere(other, (n) => n.kind === SyntaxKind5.Identifier && n.text === ident.text)) {
+    return false;
+  }
+  const operand = this.goInt64ProductOperand(other, this.printNode(other, 0));
+  return operand !== void 0 && !operand.pointer;
+};
 function h38h01AwaitedMapReceiver(goTranspiler, container) {
   const declaration = goTranspiler.goAnyBoxLocalDeclaration(container);
   const init = goTranspiler.goUnwrapParenthesizedNode(declaration?.initializer);

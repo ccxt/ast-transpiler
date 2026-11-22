@@ -2761,6 +2761,7 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     h37p10StoreSite(current: any): 'element' | 'entry' | 'extendEntry' | undefined;
     h38p10ExtendDeclaration(literal: any): any;
+    h38p10Int64Difference(binary: any, current: any, ident: any): boolean;
     h37p10TypedSlot(node: any): boolean;
     h37p10Skip: Map<any, Set<any>>;
 }
