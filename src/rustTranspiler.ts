@@ -9203,6 +9203,9 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-70f compare arm prints `x.as_deref() == p.as_str()` (a non-`Str` partner and `None` never meet, as is_equal)
             if (kind === 'ostr' && this.rust90rgCurrencyCodeLocal(this.rustDeclaredNode(n)) && (parent.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken || parent.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken)
                 && this.primitiveKindOfType(this.typeOfNodeIfAny(this.unwrapParens(other))) === 'string' && this.printsValueExpression(this.unwrapParens(other)) && this.rustScalarLocalOf(this.unwrapParens(other)) === undefined) return 'native';
+            // a literal-defaulted base `safeString` local strictly compared with a checker-string `Value` partner (`Some(x.as_str()) == p.as_str()`)
+            if (kind === 'str' && this.rustDefaultedStrReaderLocal(this.rustDeclaredNode(n)) && (parent.operatorToken.kind === SyntaxKind.EqualsEqualsEqualsToken || parent.operatorToken.kind === SyntaxKind.ExclamationEqualsEqualsToken)
+                && this.primitiveKindOfType(this.typeOfNodeIfAny(this.unwrapParens(other))) === 'string' && this.printsValueExpression(this.unwrapParens(other)) && this.rustScalarLocalOf(this.unwrapParens(other)) === undefined) return 'native';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
         // ral-46d: an `Option<bool>` leaf of a logical the printer emits as a native `bool` (a narrowed bool local's initializer,
@@ -10478,6 +10481,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustUdReaderStr(init) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
             || String(init.expression.name.text) !== 'safeCurrencyCode' || init.arguments.length !== 1) return false;
         return !this.rust70fWritten(declaration);
+    }
+
+    /** A never-written `const x = this.safeString (o, k, '<lit>')` local (the base reader's `string` overload: never `undefined`). */
+    rustDefaultedStrReaderLocal(declaration: Node): boolean {
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustTestTierSource(declaration)) return false;
+        if (!isVariableDeclarationList(declaration.parent) || (declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        const init: Node = this.unwrapParens(declaration.initializer);
+        if (!this.rustUdReaderStr(init) || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) !== 'safeString') return false;
+        return init.arguments.length === 3 && isStringLiteral(init.arguments[2]);
     }
 
     rust70fWritten(declaration: VariableDeclaration): boolean {
@@ -12124,7 +12136,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (name === 'slice' ? !numeric : (kind !== 'str' && kind !== 'ostr')) return false;
         if (![ 'slice', 'startsWith', 'endsWith', 'includes', 'indexOf', 'replace', 'replaceAll' ].includes(name)) return false;
         const method = this.rustScalarStrMethod(call);
-        return method !== undefined && method.recvKind !== 'int' && this.rustScalarLocalOf(method.recv) !== undefined && !this.rust41bWsKeyLocal(n, name === 'indexOf') && !this.rust41bWsKeyLocal(method.recv);
+        // a typed string needle of `indexOf` reads in place even when the typed receiver is a ws key (`find` prints both sides native)
+        const wsRecvOk = name === 'indexOf' && (kind === 'str' || kind === 'ostr');
+        return method !== undefined && method.recvKind !== 'int' && this.rustScalarLocalOf(method.recv) !== undefined && !this.rust41bWsKeyLocal(n, name === 'indexOf') && (wsRecvOk || !this.rust41bWsKeyLocal(method.recv));
     }
 
     /** Native `String` text of a pad / slice over the `&str` `s`. */
@@ -12886,6 +12900,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (k === 'ostr' && isIdentifier(typed) && (this.rust70fReaderLocal(this.rustDeclaredNode(typed), true) || this.rust90rgCurrencyCodeLocal(this.rustDeclaredNode(typed))) && this.primitiveKindOfType(this.typeOfNodeIfAny(other)) === 'string' && this.printsValueExpression(other)) {
                 if (dry) return '_';
                 const mine = `${super.printIdentifier(typed)}.as_deref()`;
+                const theirs = `${this.printNode(other, 0).trim()}.as_str()`;
+                return lk === undefined ? `(${theirs} ${sign} ${mine})` : `(${mine} ${sign} ${theirs})`;
+            }
+            if (k === 'str' && isIdentifier(typed) && this.rustDefaultedStrReaderLocal(this.rustDeclaredNode(typed)) && this.primitiveKindOfType(this.typeOfNodeIfAny(other)) === 'string' && this.printsValueExpression(other)) {
+                if (dry) return '_';
+                const mine = `Some(${super.printIdentifier(typed)}.as_str())`;
                 const theirs = `${this.printNode(other, 0).trim()}.as_str()`;
                 return lk === undefined ? `(${theirs} ${sign} ${mine})` : `(${mine} ${sign} ${theirs})`;
             }
@@ -37038,7 +37058,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind !== 'str' && kind !== 'ostr') return false;
         const call: any = n.parent;
         if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression)
-            || call.expression.name.text !== 'indexOf') return false;
+            || ![ 'indexOf', 'startsWith', 'endsWith' ].includes(String(call.expression.name.text))) return false;
         const recv: any = call.expression.expression;
         const plain = (x: any): boolean => isIdentifier(x) || (isPropertyAccessExpression(x) && isIdentifier(x.name) && plain(x.expression));
         if (!plain(recv) || this.primitiveKindOfType(this.typeOfNodeIfAny(recv)) !== 'string') return false;
@@ -38072,6 +38092,13 @@ export class RustTranspiler extends BaseTranspiler {
     printAffixTest(node, receiverText: string, method: string): string | undefined {
         if (node?.arguments?.length !== 1) return undefined;
         const receiver = this.strReceiverText(node, receiverText);
+        // a typed string local operand lends its text (`Option<&str>`), as the `indexOf` needle does
+        const needle = node.arguments[0];
+        const typed = receiver !== undefined && isIdentifier(needle) ? this.rustScalarLocalOf(needle) : undefined;
+        if (typed !== undefined && this.rustScalarUseForms.get(needle) === 'native' && this.rust43bValueRecvFindNeedle(needle, typed.kind)) {
+            const name = super.printIdentifier(needle);
+            return `${receiver}.as_str().zip(${typed.kind === 'str' ? `Some(${name}.as_str())` : `${name}.as_deref()`}).is_some_and(|(__s, __p)| __s.${method}(__p))`;
+        }
         const arg = receiver === undefined ? undefined : this.rustStrOperand(node.arguments[0], true);
         if (arg === undefined) return undefined;
         return `${receiver}.as_str().zip(${arg}.as_str()).is_some_and(|(__s, __p)| __s.${method}(__p))`;
