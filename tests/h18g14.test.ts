@@ -51,7 +51,6 @@ describe ('go string[] async venue param fed by typed string slices', () => {
 
     test ('a replaceAll push keeps the local []string and both callees take []string', () => {
         const out = print (VENUE ("            tagQueries.push (tag.replaceAll ('-', ' '));\n"));
-        fs.writeFileSync ('/tmp/g14/pos.go', out);
         expect (out).toContain ('var tagQueries []string = []string{}');
         expect (out).toMatch (/FetchA\(queries \[\]string/);
         expect (out).toMatch (/FetchB\(queries \[\]string/);

@@ -8,7 +8,7 @@ const method = (body: string) =>
     "        const code = this.safeString (first, 'code');\n" + body + '    }\n';
 
 describe ('h25g21: InOp with a *string key on a declared map[string]any', () => {
-    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01'), { recursive: true, force: true }));
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01-' + (process.env.JEST_WORKER_ID || '0')), { recursive: true, force: true }));
     test ('a negated unguarded *string key binds a nil-checked comma-ok read', () => {
         const out = printVenue (method ('        if (!(code in byId)) {\n            return 1;\n        }\n        return 0;\n'));
         expect (out).toContain ('\tvar has1 bool\n\tif code != nil {\n\t\t_, has1 = byId[*code]\n\t}\n\tif !has1 {\n');

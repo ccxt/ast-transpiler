@@ -40114,6 +40114,9 @@ function strPtrFamilyEnclosingMethod(node) {
     }
     return undefined;
 }
+export interface GoTranspiler {
+    goStrPtrFamilyReturnType(node): string | undefined;
+}
 GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
     return (strPtrFamilyVerdict(this, node) !== undefined) ? '*string' : undefined;
 };

@@ -8,7 +8,7 @@ const method = (decl: string, body: string) =>
     "        const firstId = this.safeString (first, 'id');\n" + body + '    }\n';
 
 describe ('h23g08: InOp on a safeDict local the printer declares map[string]any', () => {
-    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01'), { recursive: true, force: true }));
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01-' + (process.env.JEST_WORKER_ID || '0')), { recursive: true, force: true }));
     test ('a guarded *string key reads the typed local with the comma-ok', () => {
         const out = printVenue (method ("this.safeDict (this.options, 'byId', {})",
             '        if ((firstId !== undefined) && (firstId in byId)) {\n            delete byId[firstId];\n        }\n'));

@@ -5850,10 +5850,6 @@ export class RustTranspiler extends BaseTranspiler {
         return returned;
     }
 
-    // A local initialised as a plain alias of a typed optional `i64`/`f64` parameter takes the
-    // parameter's kind (`p.as_i64()` is a copy, the `Value` is never cloned); it must earn a native use.
-    private static readonly RUST_COPY_SCALAR_KINDS = new Set([ 'int', 'oint', 'num', 'onum', 'bool', 'obool' ]);
-
     /** ral-76f: a write `x = p.m(..)` of a string alias `x = p` calls a method on its own source parameter: the typed
      *  write would copy the parameter again (a second copy), so such an alias keeps the `Value` binding. */
     rust76fSourceMethodWrite(declaration, scope): boolean {

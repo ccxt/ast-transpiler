@@ -9,7 +9,7 @@ const fn = (pre: string, body: string) =>
 const keys = '        const keys = Object.keys (a);\n        return this.safeString (keys, 0);';
 
 describe ('h28g20: Object.keys of an awaited typed map receive', () => {
-    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01'), { recursive: true, force: true }));
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01-' + (process.env.JEST_WORKER_ID || '0')), { recursive: true, force: true }));
     test ('keys of the awaited map keep the typed map receive (fails on the base printer; the pipeline prints the range collect)', () => {
         const out = printVenue (fn ('', keys));
         expect (out).toContain ('\tvar a map[string]any = MapTyped(PanicOnError((<-this.FetchDepositAddressesByNetworkAsync(id, params))))\n');

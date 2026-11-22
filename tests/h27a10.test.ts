@@ -25,6 +25,7 @@ const LOOP = '        const out = [];\n' +
     '        return out;\n';
 
 describe ('h27a10: loop-bounded row of a [][]any list reads natively', () => {
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h27a10'), { recursive: true, force: true }));
     test ('the row is the plain index (fails on the base printer)', () => {
         const out = print (LOOP);
         expect (out).toContain ('var data []any = symbolsAndTimeframes[i]');

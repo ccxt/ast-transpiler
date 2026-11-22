@@ -4,6 +4,7 @@ import { Transpiler, installCcxtGoHooks } from '../src/transpiler';
 
 describe ('go map literal entry of a concat with *string identifier leaves', () => {
     const root = path.join (__dirname, 'files', 'tmp-h29g25', 'ts', 'src');
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h29g25'), { recursive: true, force: true }));
     const BASE =
         'export type Str = string | undefined;\n' +
         'export class Exchange {\n' +

@@ -10,7 +10,7 @@ const consumer = (decl: string, use: string) =>
     '        ' + decl + ' thing = await this.fetchRawThing (id, params);\n' + use + '\n    }\n';
 
 describe ('h26g41: awaited never-nil Promise<Dict> result bound to a const local', () => {
-    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01'), { recursive: true, force: true }));
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h22g01-' + (process.env.JEST_WORKER_ID || '0')), { recursive: true, force: true }));
     test ('an extend-returning producer types the local as a map', () => {
         const out = printVenue (producer ('this.extend (request, params)') + consumer ('const', '        return [ thing ];'));
         expect (out).toContain ('var thing map[string]any = MapTyped(PanicOnError((<-this.FetchRawThingAsync(id, params))))');
