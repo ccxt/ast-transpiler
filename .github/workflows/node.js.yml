@@ -40,7 +40,8 @@ jobs:
       - name: Test
         run: go build ./tests/integration/go # debug just to download the go version, do this properly todo!
       - name: Test
-        run: npm run test-ci
+        # coverage costs several seconds per suite; only the master badge step reads it
+        run: npm run test-ci -- ${{ github.ref == 'refs/heads/master' && '--coverage' || '' }}
       - name: Integration test
         run: npm run integration
       - name: Generate supported.md

@@ -29,7 +29,7 @@
     "build2": "npm run lint && tsc",
     "start": "tsx manual.ts",
     "start-py": "tsx src/pythonTranspiler.ts",
-    "test-ci": "jest --ci --coverage",
+    "test-ci": "jest --ci",
     "test": "jest --verbose",
     "testv": "jest --verbose --coverage",
     "integration": "tsx tests/integration/test.ts",
