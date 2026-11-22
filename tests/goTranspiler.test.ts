@@ -20110,3 +20110,34 @@ describe('costToPrecision / feeToPrecision results are *string locals', () => {
         expect (run ('costToPrecision', '        v = 1;\n')).not.toContain ('var v *string');
     });
 });
+
+describe('parsePrecision / integerPrecisionToAmount results are *string locals', () => {
+    const run = (call: string, extra = '') => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const ts = 'class X {\n'
+            + '    parsePrecision (p?: string): string | undefined { return p; }\n'
+            + '    integerPrecisionToAmount (p: string | undefined): string | undefined { return p; }\n'
+            + '    f (p: string) {\n'
+            + '        const v = this.' + call + ' (p);\n'
+            + extra
+            + '        if (v !== undefined) {\n'
+            + '            return v;\n'
+            + '        }\n'
+            + '        return undefined;\n'
+            + '    }\n'
+            + '}\n';
+        return x.transpileGo (ts).content;
+    };
+    test('parsePrecision prints a *string local with a native nil test', () => {
+        const out = run ('parsePrecision');
+        expect (out).toContain ('var v *string = this.ParsePrecision(p)');
+        expect (out).toContain ('if v != nil {');
+    });
+    test('integerPrecisionToAmount prints a *string local', () => {
+        expect (run ('integerPrecisionToAmount')).toContain ('var v *string = this.IntegerPrecisionToAmount(p)');
+    });
+    test('a write of another kind keeps the box', () => {
+        expect (run ('parsePrecision', '        v = 1;\n')).not.toContain ('var v *string');
+    });
+});
