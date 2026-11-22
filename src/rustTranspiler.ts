@@ -36161,7 +36161,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** pb: a checker-string slot of a native tuple in a method, read whole as the initializer or the statement write of
      *  another local of the same function: the slot and that local are decided together by `rustScalarSolveScope`. */
     rustSlotJoinsSolve(element: any): boolean {
-        if (element?.kind !== SyntaxKind.BindingElement || !isIdentifier(element.name) || this.rustTestTierSource(element)) return false;
+        if (element?.kind !== SyntaxKind.BindingElement || element.name === undefined || !isIdentifier(element.name) || this.rustTestTierSource(element)) return false;
         const owner: any = element.parent?.parent;
         if (owner === undefined || !isVariableDeclaration(owner) || owner.initializer === undefined || !this.rustNativeListSource(owner.initializer)) return false;
         const scope: any = this.rustEnclosingFunction(owner);

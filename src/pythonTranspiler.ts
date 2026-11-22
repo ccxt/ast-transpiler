@@ -98,6 +98,12 @@ export class PythonTranspiler extends BaseTranspiler {
         ];
     }
 
+    printArrayBindingPattern(node, identation) {
+        // a skipped slot (`[ , x ]`) binds `_`: an empty slot is invalid Python
+        const elements = node.elements.map((e) => (e.name === undefined ? '_' : this.printNode(e.name, identation))).join(", ");
+        return this.getIden(identation) + this.ARRAY_OPENING_TOKEN + elements + this.ARRAY_CLOSING_TOKEN;
+    }
+
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
         return  `isinstance(${parsedArg}, list)`;
     }

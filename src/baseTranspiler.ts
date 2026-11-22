@@ -1269,7 +1269,8 @@ class BaseTranspiler {
     }
 
     printArrayBindingPattern(node, identation) {
-        const elements = node.elements.map((e) => this.printNode(e.name, identation)).join(", ");
+        // a skipped slot (`[ , x ]`) has no name and prints empty
+        const elements = node.elements.map((e) => (e.name === undefined ? '' : this.printNode(e.name, identation))).join(", ");
         return this.getIden(identation) + this.ARRAY_OPENING_TOKEN + elements + this.ARRAY_CLOSING_TOKEN;
     }
 

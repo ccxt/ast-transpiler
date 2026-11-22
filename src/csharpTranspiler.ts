@@ -8093,7 +8093,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const arrayBindingPattern = declaration.name;
             const arrayBindingPatternElements = arrayBindingPattern.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
+            // a skipped slot (`const [ , x ] = ..`) has no name: it binds nothing, later slots keep their index
+            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => (e.name === undefined ? '' : this.printNode(e.name, 0)));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
             // typed holder (see csharpDestructuringTempType): same value, read without the re-cast
@@ -8104,12 +8105,16 @@ export class CSharpTranspiler extends BaseTranspiler {
 
             let arrayBindingStatement =  `${this.getIden(identation)}${tempDeclaration};\n`;
 
+            const lastNamed = parsedArrayBindingElements.reduce((last, e, index) => (e === '' ? last : index), -1);
             parsedArrayBindingElements.forEach((e, index) => {
+                if (e === '') {
+                    return;
+                }
                 const slotDeclaration = ((index === 0) && this.csharpBoolSlotBinding(arrayBindingPatternElements[0])) ? 'bool ' : 'var ';
                 const slotCast = (slotDeclaration === 'bool ') ? '(bool)' : '';
                 const statement = this.getIden(identation) + `${slotDeclaration}${e} = ${slotCast}` + (tempType ? `${syntheticName}[${index}]` : `((IList<object>) ${syntheticName})[${index}]`);
                 // printStatement adds the last ;
-                arrayBindingStatement += statement + ((index < parsedArrayBindingElements.length - 1) ? ";\n" : "");
+                arrayBindingStatement += statement + ((index < lastNamed) ? ";\n" : "");
             });
 
             return arrayBindingStatement;

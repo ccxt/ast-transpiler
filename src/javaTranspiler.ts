@@ -4459,17 +4459,21 @@ export class JavaTranspiler extends BaseTranspiler {
         // array destructuring in variable declaration
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const elements = declaration.name.elements;
-            const names = elements.map((e) => this.printNode(e.name, 0));
+            // a skipped slot (`const [ , x ] = ..`) has no name: it binds nothing, later slots keep their index
+            const names = elements.map((e) => (e.name === undefined ? '' : this.printNode(e.name, 0)));
             const syntheticName = names.join("") + "Variable";
             const arrayBindingStatement = `${indent}var ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
             return arrayBindingStatement + names.map((e, index) => {
+                if (e === '') {
+                    return undefined;
+                }
                 // a slot whose tuple element type is a json box that is only element-accessed
                 const boxType = this.javaCheckedBoxLocalTypeCached(elements[index]);
                 if (boxType !== undefined) {
                     return indent + `${boxType} ${e} = (${boxType}) ((java.util.List<Object>) ${syntheticName}).get(${index})`;
                 }
                 return indent + `var ${e} = ((java.util.List<Object>) ${syntheticName}).get(${index})`;
-            }).join(";\n");
+            }).filter((line) => line !== undefined).join(";\n");
         }
 
         const isNew =

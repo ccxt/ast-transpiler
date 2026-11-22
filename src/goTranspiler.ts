@@ -6914,7 +6914,7 @@ function ccxtGoAsyncListTarget (goTranspiler, awaitNode) {
             return goTranspiler.printNode (parent.name, 0);
         }
         if (parent.name?.kind === ts.SyntaxKind.ArrayBindingPattern) {
-            return parent.name.elements.map ((e) => goTranspiler.printNode (e.name, 0)).join ('') + 'Variable';
+            return parent.name.elements.map ((e) => ((e.name === undefined) ? '' : goTranspiler.printNode (e.name, 0))).join ('') + 'Variable';
         }
     }
     if ((parent?.kind === ts.SyntaxKind.BinaryExpression) && (parent.right === awaitNode) && (parent.left?.kind === ts.SyntaxKind.ArrayLiteralExpression)) {
@@ -8109,7 +8109,7 @@ export function ccxtGoTupleParamsElementType (goTranspiler, element) {
 function ccxtGoTupleParamsElementTypeUncached (goTranspiler, element) {
     const pattern = element?.parent;
     const holder = pattern?.parent;
-    if ((element?.kind !== ts.SyntaxKind.BindingElement) || !ts.isIdentifier (element.name)
+    if ((element?.kind !== ts.SyntaxKind.BindingElement) || !((element.name !== undefined) && ts.isIdentifier (element.name))
         || (pattern?.kind !== ts.SyntaxKind.ArrayBindingPattern)
         || (holder?.kind !== ts.SyntaxKind.VariableDeclaration) || (holder.name !== pattern)
         || (element.dotDotDotToken !== undefined) || (element.initializer !== undefined)
@@ -8483,7 +8483,7 @@ function ccxtGoTupleStringJoinType (goTranspiler, declaration) {
         && isNilDeclaredInitializer (declaration.initializer)
         && (declaration.parent?.parent?.kind === ts.SyntaxKind.VariableStatement)
         && (declaration.parent.declarations.length === 1);
-    const bound = (declaration?.kind === ts.SyntaxKind.BindingElement) && ts.isIdentifier (declaration.name)
+    const bound = (declaration?.kind === ts.SyntaxKind.BindingElement) && (declaration.name !== undefined) && ts.isIdentifier (declaration.name)
         && (declaration.parent?.parent?.parent?.parent?.kind === ts.SyntaxKind.VariableStatement)
         && ccxtGoTupleStringBindingIsProducer (goTranspiler, declaration);
     const copied = ccxtGoTupleStringIsCopyDeclaration (declaration)
@@ -9361,7 +9361,7 @@ function installCcxtGoElement1Params (goTranspiler) {
         const declaration = node?.declarations?.[0];
         const element = declaration?.name?.elements?.[1];
         if ((typeof printed !== 'string') || (node.declarations.length !== 1)
-            || (declaration.name.kind !== ts.SyntaxKind.ArrayBindingPattern) || (element?.kind !== ts.SyntaxKind.BindingElement)
+            || (declaration.name.kind !== ts.SyntaxKind.ArrayBindingPattern) || (element?.kind !== ts.SyntaxKind.BindingElement) || (element.name === undefined)
             || !ccxtGoElement1ElementIsMap (this, element, 0)) {
             return printed;
         }
@@ -9795,6 +9795,9 @@ function isNilLiteralExpression (node) {
 }
 
 function bindingMentionsName (binding, name) {
+    if (binding === undefined) {
+        return false;
+    }
     if (ts.isIdentifier (binding)) {
         return binding.text === name;
     }
@@ -10622,7 +10625,7 @@ export function installCcxtGoLimitLocals (goTranspiler) {
             return printed;
         }
         const declaration = node.declarations[0];
-        if (declaration.initializer === undefined) {
+        if ((declaration.initializer === undefined) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)) {
             return printed;
         }
         const head = this.getIden (identation) + 'var ' + (this.printNode (declaration.name, 0) ?? '').trim () + ' any = ';
@@ -10670,7 +10673,7 @@ function ccxtGoTupleBoolElementType (goTranspiler, element) {
 function ccxtGoTupleBoolElementTypeUncached (goTranspiler, element) {
     const pattern = element?.parent;
     const holder = pattern?.parent;
-    if ((element?.kind !== ts.SyntaxKind.BindingElement) || !ts.isIdentifier (element.name)
+    if ((element?.kind !== ts.SyntaxKind.BindingElement) || !((element.name !== undefined) && ts.isIdentifier (element.name))
         || (pattern?.kind !== ts.SyntaxKind.ArrayBindingPattern) || (pattern.elements.indexOf (element) !== 0)
         || (holder?.kind !== ts.SyntaxKind.VariableDeclaration) || (holder.name !== pattern)
         || (element.dotDotDotToken !== undefined) || (element.initializer !== undefined) || (element.propertyName !== undefined)
@@ -10884,7 +10887,7 @@ function ccxtGoCallerMethodProbe (goTranspiler, node, declaration, identation) {
     if ((call?.expression?.name?.text !== 'handleParamString') || (call.arguments?.length !== 3) || (declaration.name.elements.length !== 2)
         || (method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.name?.text !== 'handleOptionAndParams')
         || !CCXT_GO_ELEMENT_1_BASE_FILE.test (method.getSourceFile ().fileName)
-        || !declaration.name.elements.every ((e) => ts.isIdentifier (e.name))) {
+        || !declaration.name.elements.every ((e) => ((e.name !== undefined) && ts.isIdentifier (e.name)))) {
         return undefined;
     }
     const [ params, key, fallback ] = call.arguments.map ((a) => goTranspiler.printNode (a, 0).trim ());
@@ -11129,10 +11132,11 @@ function ccxtGoTupleResultUnwrap (text) {
 }
 
 // holder block -> multi-assign, or undefined (the block stays as printed)
-function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, first = 'SafeStringPtr') {
+// `named`: the slot index of each printed slot line (a skipped slot prints none and stays `_`)
+function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, first = 'SafeStringPtr', named = undefined) {
     const lines = printed.split ('\n').filter ((l) => l.trim () !== '');
     const head = /^(\s*)(?:var (\w+Variable) \[\]any = |(\w+Variable) := )(.*)$/.exec (lines[0] ?? '');
-    if ((head === null) || (lines.length !== count + 1)) {
+    if ((head === null) || (lines.length !== (named?.length ?? count) + 1)) {
         return undefined;
     }
     const holder = head[2] ?? head[3];
@@ -11162,7 +11166,7 @@ function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, firs
         // element 0 must already be the typed unwrap; element 1 is the map itself. A bare write of
         // element 0 into an existing local is exact for bool (GetValue derefs the *bool box to bool)
         const mapSlot = (index === slots - 1);
-        const ok = (h === holder) && (index === i - 1) && !((count === 3) && !mapSlot && (wrap === ''))
+        const ok = (h === holder) && (index === (named?.[i - 1] ?? (i - 1))) && !((count === 3) && !mapSlot && (wrap === ''))
             && ((wrap === '') ? (mapSlot || (declare && (first !== 'GetValueBool')) || (first === 'MapTyped') || (first === 'Raw')
                 || (!declare && ((first === 'GetValueBool') || (first === 'Int64Value'))))
                 : (wrap === (!mapSlot ? first : 'MapTyped')));
@@ -11179,7 +11183,7 @@ function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, firs
 
 function ccxtGoTupleResultUntypedElementsAreSafe (goTranspiler, declaration) {
     const scope = goTranspiler.goEnclosingFunction?.(declaration);
-    const names = declaration.name.elements.filter ((e) => (e.kind === ts.SyntaxKind.BindingElement) && ts.isIdentifier (e.name))
+    const names = declaration.name.elements.filter ((e) => (e.kind === ts.SyntaxKind.BindingElement) && ((e.name !== undefined) && ts.isIdentifier (e.name)))
         .map ((e) => e.name.text);
     if ((scope === undefined) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
         return false;
@@ -11216,7 +11220,7 @@ function ccxtGoJoinedParamsLocal (goTranspiler, node) {
 function ccxtGoVenueBoolPairBlankUnread (goTranspiler, declaration, joined) {
     const element = declaration.name.elements[0];
     const scope = goTranspiler.goEnclosingFunction?.(declaration);
-    if ((scope === undefined) || (element?.kind !== ts.SyntaxKind.BindingElement) || !ts.isIdentifier (element.name)) {
+    if ((scope === undefined) || (element?.kind !== ts.SyntaxKind.BindingElement) || !((element.name !== undefined) && ts.isIdentifier (element.name))) {
         return joined;
     }
     const name = element.name.text;
@@ -11455,7 +11459,7 @@ function ccxtGoVenueSlotText (goTranspiler, e, type, wrap) {
         let joined;
         const bindingCall = (decl?.kind === ts.SyntaxKind.BindingElement) ? decl.parent?.parent?.initializer : undefined;
         // a Go local keeps its declared static type whatever is written to it later, so a rebind does not matter here
-        if (ccxtGoTupleResultCall (bindingCall) && (decl.parent.elements.length === 2) && decl.parent.elements.every ((b) => ts.isIdentifier (b.name))) {
+        if (ccxtGoTupleResultCall (bindingCall) && (decl.parent.elements.length === 2) && decl.parent.elements.every ((b) => ((b.name !== undefined) && ts.isIdentifier (b.name)))) {
             const names = decl.parent.elements.map ((b) => b.name.text);
             const bound = new RegExp ('^\\s*' + names.join (', ') + ' := ').test (goTranspiler.printNode (decl.parent.parent.parent, 0) ?? '');
             const index = decl.parent.elements.indexOf (decl);
@@ -11463,7 +11467,9 @@ function ccxtGoVenueSlotText (goTranspiler, e, type, wrap) {
                 : (CCXT_GO_PAIR_SLOT_0[bindingCall.expression.name.text] ?? ccxtGoVenuePairOfCall (bindingCall)?.type));
         }
         const fresh = (type === 'map[string]any') && /^this\.(?:Extend|DeepExtend|OmitDict)\(/.test (text) && goTranspiler.isWholePrintedCall (text, text.indexOf ('('));
-        return ((declared === type) || (joined === type) || fresh) ? text : wrap + '(' + text + ')';
+        // a bool literal already is a Go bool
+        const boolLiteral = (type === 'bool') && ((e.kind === ts.SyntaxKind.TrueKeyword) || (e.kind === ts.SyntaxKind.FalseKeyword));
+        return ((declared === type) || (joined === type) || fresh || boolLiteral) ? text : wrap + '(' + text + ')';
     }
 }
 
@@ -11568,7 +11574,8 @@ function installCcxtGoTupleResults (goTranspiler) {
             const indent = /^\s*/.exec (renamed)[0];
             return indent + 'TupleSlice(' + renamed.slice (indent.length) + ')';
         }
-        if (!ccxtGoTupleResultCall (node)) {
+        // a venue pair call whose result is discarded stays a bare statement (Go drops a multi-value result there)
+        if (!ccxtGoTupleResultCall (node) || ((node.parent?.kind === ts.SyntaxKind.ExpressionStatement) && (ccxtGoVenuePairOfCall (node) !== undefined))) {
             return printed;
         }
         const lead = /^\s*/.exec (printed)[0];
@@ -11622,7 +11629,8 @@ function installCcxtGoTupleResults (goTranspiler) {
             return pairFirst;
         }
         const untypedOk = ccxtGoTupleResultUntypedElementsAreSafe (this, declaration);
-        let joined = ccxtGoTupleResultJoin (printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst (declaration.initializer));
+        const namedSlots = declaration.name.elements.map ((e, i) => ((e.name === undefined) ? -1 : i)).filter ((i) => i >= 0);
+        let joined = ccxtGoTupleResultJoin (printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst (declaration.initializer), namedSlots);
         if ((joined !== undefined) && (ccxtGoVenuePairOfCall (declaration.initializer)?.type === 'bool')) {
             joined = ccxtGoVenueBoolPairBlankUnread (this, declaration, joined);
         }
@@ -11929,7 +11937,7 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
             const lines = ccxtGoAsyncVenuePairReceive (this, call, declaration.name.text, identation);
             return (lines === undefined) ? printDeclaration.call (this, node, identation) : lines.join ('\n');
         }
-        const names = (declaration.name?.kind === ts.SyntaxKind.ArrayBindingPattern) ? declaration.name.elements.map ((e) => (ts.isIdentifier (e.name) ? e.name.text : undefined)) : [];
+        const names = (declaration.name?.kind === ts.SyntaxKind.ArrayBindingPattern) ? declaration.name.elements.map ((e) => (((e.name !== undefined) && ts.isIdentifier (e.name)) ? e.name.text : undefined)) : [];
         const holder = (names.length === 2) && names.every ((n) => n !== undefined) ? ccxtGoFreeLocalName (this, declaration, names.join ('') + 'Pair') : undefined;
         const lines = (holder === undefined) ? undefined : ccxtGoAsyncVenuePairReceive (this, call, holder, identation);
         if (lines === undefined) {
@@ -13556,7 +13564,7 @@ class TupleSlots {
         const fn = this.enclosingFunction (statement);
         if (fn === undefined) { return false; }
         let count = 0;
-        const join = (elements: any[], pattern: boolean) => elements.map ((e: any) => this.printed (pattern ? e.name : e)).join ('') + 'Variable';
+        const join = (elements: any[], pattern: boolean) => elements.map ((e: any) => (((pattern ? e.name : e) === undefined) ? '' : this.printed (pattern ? e.name : e))).join ('') + 'Variable';
         goTupleSlotWalk (fn.body, (n) => {
             if ((n.kind === SK.VariableDeclaration) && (n.name?.kind === SK.ArrayBindingPattern)) {
                 if (join (n.name.elements, true) === holder) { count += 1; }
@@ -13630,7 +13638,7 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
             || (declaration.initializer?.kind !== SK.CallExpression) || !printed.includes ('GetValue')) {
             return printed;
         }
-        const holder = declaration.name.elements.map ((e: any) => this.printNode (e.name, 0)).join ('') + 'Variable';
+        const holder = declaration.name.elements.map ((e: any) => ((e.name === undefined) ? '' : this.printNode (e.name, 0))).join ('') + 'Variable';
         if (!slots.holderIsUnique (node.parent ?? node, holder)) { return printed; }
         return slots.rewrite (printed, holder, declaration.initializer, node);
     };
@@ -21549,7 +21557,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             const arrayBindingPattern = declaration.name;
             const arrayBindingPatternElements = arrayBindingPattern.elements;
-            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
+            // a skipped slot (`const [ , x ] = ..`) has no name: it binds nothing, later slots keep their index
+            const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => (e.name === undefined ? '' : this.printNode(e.name, 0)));
             const syntheticName = parsedArrayBindingElements.join("") + "Variable";
 
             // gofmt drops every redundant statement terminator: Go statements are
@@ -30771,6 +30780,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const nativeBinding = (producer !== undefined) && GO_TUPLE_NATIVE_BINDING_PRODUCERS.includes(producer);
         const sliceHolder = !nativeBinding && this.goTupleBindingIsSliceHolder(declaration);
         return elements.map((element: any, index: number) => {
+            if (element.name === undefined) {
+                return undefined;
+            }
             const name = this.printNode(element.name, 0);
             const pointerType = (index === 0) ? this.goTuplePointerSlotOfBinding(element) : undefined;
             if (pointerType !== undefined) {
@@ -30789,7 +30801,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 return iden + name + ' := GetValue(' + holder + ', ' + index + ')';
             }
             return iden + 'var ' + name + ' ' + unbox.goType + ' = ' + unbox.conv + '(' + holder + '[' + index + '])';
-        }).join('\n');
+        }).filter((line: string | undefined) => line !== undefined).join('\n');
     }
 
     // `this.handleXxx(…, params, …)` of a base helper typed `any[]` whose element holds the params
