@@ -12530,6 +12530,19 @@ describe ('goPointerHelperTupleSlots', () => {
             expect(out).toContain('var flag *bool = nil');
             expect(out).toContain('request["f"] = *flag');
         });
+        test('a guarded assignment to an any local reads the pointer value', () => {
+            const out = fn("        const [ until, paramsUntil ] = this.handleParamInteger (params, 'until');\n",
+                "        let end: any = 1;\n        if (until !== undefined) {\n            end = until;\n        }\n        request['e'] = end;\n");
+            expect(out).toContain('var until *int64 = nil');
+            expect(out).toContain('end = *until');
+            expect(out).not.toContain('func() any {');
+        });
+        test('an unguarded assignment to a local keeps the box', () => {
+            const out = fn("        const [ until, paramsUntil ] = this.handleParamInteger (params, 'until');\n",
+                "        let end: any = 1;\n        end = until;\n        request['e'] = end;\n");
+            expect(out).not.toContain('end = *until');
+            expect(out).not.toContain('var until *int64');
+        });
         test('a store without a nil proof keeps the box', () => {
             const out = fn(TAG, "        request['memo'] = tag;\n");
             expect(out).toContain('tag := GetValue(tagparamsTagVariable, 0)');

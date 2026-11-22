@@ -30425,6 +30425,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
                 return (goType === '*bool') && this.goTuplePointerSlotTruthyOperand(parent);
             }
+            if (this.goTuplePointerSlotLocalStore(ident, current)) {
+                return true;
+            }
             return (op === SyntaxKind.EqualsToken) && allowStore && (parent.right === current)
                 && (parent.left?.kind === SyntaxKind.ElementAccessExpression)
                 && (parent.parent?.kind === SyntaxKind.ExpressionStatement)
@@ -30445,6 +30448,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return (parent.expression === current) && (parent.name?.text === 'length');
         }
         return false;
+    }
+
+    // `y = slot` under a nil guard, y an `any` local: y takes the value the box held (`y = *slot`)
+    goTuplePointerSlotLocalStore(ident, current): boolean {
+        const parent: any = current?.parent;
+        if ((parent?.kind !== SyntaxKind.BinaryExpression) || (parent.operatorToken?.kind !== SyntaxKind.EqualsToken)
+            || (parent.right !== current) || (parent.left?.kind !== SyntaxKind.Identifier)
+            || (parent.parent?.kind !== SyntaxKind.ExpressionStatement) || (parent.left.text === ident.text)) {
+            return false;
+        }
+        const target: any = this.checkerOrUndefined()?.getSymbolAtLocation(parent.left)?.valueDeclaration?.resolve();
+        return (target?.kind === SyntaxKind.VariableDeclaration) && (this.goDeclaredTypeOfIdentifier(parent.left) === undefined)
+            && (this.goTuplePointerSlotNilProven(ident) || this.goHasExitingNilGuard(ident));
     }
 
     // an `&&` / `||` chain whose value only feeds a condition (if / while / `!` / another such chain)
@@ -30607,6 +30623,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         return written.goType;
+    }
+
+    goTuplePointerSlotLocalStoreRead(node): boolean {
+        if (this.goTuplePointerSlotProbing || (node?.parent?.kind !== SyntaxKind.BinaryExpression) || (node.parent.right !== node)) {
+            return false;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        return (declaration?.kind === SyntaxKind.BindingElement) && (this.goTuplePointerSlotOfBinding(declaration) !== undefined)
+            && this.goTuplePointerSlotLocalStore(node, node);
     }
 
     // `m[k] = x` of a typed tuple-slot local stores the value the box held
@@ -31140,6 +31165,9 @@ ${this.getIden(identation)}${returnStatement}`;
             return this.printNode(init, 0);
         }
         const printed = super.printIdentifier(node);
+        if (this.goTuplePointerSlotLocalStoreRead(node)) {
+            return '*' + printed;
+        }
         const h27g37Arg = this.h27g37SpawnArgDeref(node, printed); if (h27g37Arg !== undefined) return h27g37Arg;
         const parent: any = node.parent;
         if ((parent?.kind !== SyntaxKind.CallExpression) || !(parent.arguments ?? []).includes(node)) {
