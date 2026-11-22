@@ -34295,11 +34295,26 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rust80dSplitLocals.has(declaration)) {
             return `${indent}let (mut ${varName}, ${varName}__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match ${this.printNode(declaration.initializer, 0).trim()} { Value::Arr(__l) => (Some(__l), None), __v => (None, __v.into_opt_dict()) })`;
         }
+        // a no-default list read of the ws-handler view lands in the Option straight (same Some/None as into_opt_list)
+        const viewList = this.rustProHandlerOptListRead(declaration.initializer);
+        if (viewList !== undefined) return `${indent}let mut ${varName}: Option<crate::value::List> = ${viewList}`;
         const seed = this.printNode(declaration.initializer, 0).trim();
         // ral-80c R1: the parameter's box is copied once (a handle bump) unless the alias is its last reader
         const source: Node | undefined = this.rust80cStrVecParamAlias(declaration.initializer) ? this.rustDeclaredNode(this.unwrapParens(declaration.initializer)) : undefined;
         const copy = source !== undefined && !seed.endsWith('.clone()') && !this.rustLocalLastUse(this.unwrapParens(declaration.initializer), source) ? '.clone()' : '';
         return `${indent}let mut ${varName}: Option<crate::value::List> = ${seed}${copy}.into_opt_list()`;
+    }
+
+    /** `safeList (message, 'k')` with no default on the ws-handler view: a list moves into `Some`, any other kind,
+     *  an absent key or `Null` is `None` (the answer of `into_opt_list` on the `_k` read). */
+    rustProHandlerOptListRead(init: any): string | undefined {
+        const call: any = this.rustSkipWrappers(init);
+        if (!isCallExpression(call) || call.arguments.length !== 2) return undefined;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || String((callee as any).name?.text ?? '') !== 'safeList') return undefined;
+        if (this.printProHandlerShadowRead(call, true) === undefined) return undefined;
+        const key = this.escapeRustStringLiteral((call.arguments[1] as any).text);
+        return `(match ${RustTranspiler.PRO_HANDLER_SHADOW_NAME}.get("${key}").cloned() { Some(Value::Arr(__l)) => Some(__l), _ => None })`;
     }
 
     printOptListWrite(left: any, right: any): string | undefined {

@@ -4821,6 +4821,50 @@ describe('rust pro-tier handler message shadow', () => {
         expect(output).not.toContain('self.safeString(message, Value::Str("channel"');
     });
 
+    // a pro handler beside the base tier of the lent-optional-handoffs fixture (its safeList answers any[] | undefined)
+    const optListPro = (body: string): string => {
+        const dir = path.join (rustFixtureRoot, 'pro-view-opt-list-' + String (body.length));
+        for (const rel of [ 'ts/src/base/Exchange.ts', 'ts/src/base/ws/Client.ts' ]) {
+            fs.mkdirSync (path.dirname (path.join (dir, rel)), { recursive: true });
+            fs.copyFileSync (path.join (rustFixtureRoot, 'lent-optional-handoffs', rel), path.join (dir, rel));
+        }
+        const file = path.join (dir, 'ts/src/pro/venue.ts');
+        fs.mkdirSync (path.dirname (file), { recursive: true });
+        fs.writeFileSync (file, "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (file).content;
+    };
+
+    test('a no-default safeList of the handler view tested against undefined lands in the Option directly', () => {
+        const output = optListPro (
+            "    handleOrders (client: Client, message: Dict): void {\n" +
+            "        const rows = this.safeList (message, 'result');\n" +
+            "        if (rows === undefined) {\n" +
+            "            client.resolve (message);\n" +
+            "        } else {\n" +
+            "            for (let i = 0; i < rows.length; i++) {\n" +
+            "                client.resolve (rows[i]);\n" +
+            "            }\n" +
+            "        }\n" +
+            "        client.resolve (message);\n" +
+            "    }\n");
+        // a list moves into Some; a missing key, Null or any other kind is None
+        expect(output).toContain('rows: Option<crate::value::List> = (match __pro_message.get("result").cloned() { Some(Value::Arr(__l)) => Some(__l), _ => None });');
+        expect(output).not.toContain('into_opt_list()');
+        expect(output).toContain('rows.is_none()');
+    });
+
+    test('a safeList with a default or on another receiver keeps its old form', () => {
+        const output = optListPro (
+            "    handleOrders (client: Client, message: Dict, other: Dict): void {\n" +
+            "        const rows = this.safeList (message, 'result', []);\n" +
+            "        const more = this.safeList (other, 'result');\n" +
+            "        if (more !== undefined) { client.resolve (more.length); }\n" +
+            "        client.resolve (rows.length);\n" +
+            "        client.resolve (message);\n" +
+            "    }\n");
+        expect(output).not.toContain('Some(Value::Arr(__l)) => Some(__l), _ => None');
+    });
+
     test('value/dict/list/bool reads print the helper value kinds natively', () => {
         const ts = DECLS +
             "class T {\n" +
