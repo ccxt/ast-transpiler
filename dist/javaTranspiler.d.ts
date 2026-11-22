@@ -178,6 +178,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueCalleeReturnType(call: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaBaseMapReturnIsSole(node: any, target: string): boolean;
     javaNativeReturnTypeTarget(node: any): string | undefined;
     javaArrayReturnType(type: any): boolean;
     javaReturnSitesPrintType(method: any, target: string): boolean;

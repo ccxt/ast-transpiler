@@ -242,7 +242,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNativeEqualityComparison(left: any, right: any, op: any): string;
     typeOfNodeIfAny(node: Node): Type | undefined;
     isValueLengthType(type: Type | undefined): boolean;
-    printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    printArrayLength(node: any, identation: any, leftExpr?: any): any;
     private rustNativeLengths;
     printNativeLength(node: any, place: string): string;
     /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
@@ -380,7 +380,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printDateNowCall(node: any, identation: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
-    printVariableDeclarationList(node: any, identation: any): string;
+    printVariableDeclarationList(node: any, identation: any): any;
     /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
      *  by `storeArray` / `store`, or `Null` out of range), read only as `const parts = lvl[K]` (numeric literal K) where
      *  `parts` is itself read only at numeric literal keys. `lvl` holds the list (`into_list()`: the same `Arr`, an empty
@@ -790,7 +790,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust66s3ReturnedWholeRead(n: any): boolean;
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
-    private static readonly RUST_COPY_SCALAR_KINDS;
     /** ral-76f: a write `x = p.m(..)` of a string alias `x = p` calls a method on its own source parameter: the typed
      *  write would copy the parameter again (a second copy), so such an alias keeps the `Value` binding. */
     rust76fSourceMethodWrite(declaration: any, scope: any): boolean;
@@ -2247,8 +2246,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust93reCastLengthRecv(cast: Node): boolean;
     /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
     rustCastSplitRecv(cast: any): boolean;
-    /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
-    rust42bCastContainsTest(call: any): boolean;
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
     private static readonly RUST_CACHE_CTORS;
     /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
@@ -2331,14 +2328,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** True when this identifier is a use of the given declaration's binding.
      *  Without a checker answer the callers stay conservative (reject). */
     private rustIdentifierRefersToDeclaration;
-    /** Census of the current source file's table, for reports and tests. */
-    rustDeclaredDictLocalCensus(): {
-        declarators: number;
-        dict: number;
-        alwaysDict: number;
-        kindUnstable: number;
-        retypeEligible: number;
-    };
     private collectRustDeclaredDictLocals;
     /** The Dict-proven initialiser shape of a declaration, or undefined. */
     private rustDictInitializerInfo;
@@ -2674,7 +2663,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** The whole call printed through its trait path (`rustSlotCallPath`), or undefined when method syntax stays. */
     rustSlotCallHead(node: any, args: string): string | undefined;
-    printCallExpression(node: any, identation: any): string;
+    printCallExpression(node: any, identation: any): any;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
     rustDynamicSelfCallee(callee: any): boolean;
@@ -3078,7 +3067,7 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
      *  native read would write into a discarded clone. */
     isNativeWriteTargetBase(node: Node): boolean;
-    transformPropertyAcessExpressionIfNeeded(node: any): string;
+    transformPropertyAcessExpressionIfNeeded(node: any): any;
     staticKeyLookup(node: any, container: any): string | undefined;
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;

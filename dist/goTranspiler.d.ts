@@ -1050,6 +1050,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         wrap: (recv: string) => string;
         holder?: boolean;
+        commaOk?: boolean;
     } | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
@@ -1984,6 +1985,9 @@ export interface GoTranspiler {
     goTernaryJoin90SafeReaderArgument(node: any): boolean;
 }
 export interface GoTranspiler {
+    goStrPtrFamilyReturnType(node: any): string | undefined;
+}
+export interface GoTranspiler {
     go92g7Int64Operands(call: any): Node[] | undefined;
     go92g7MinMaxName(call: any): string | undefined;
     go92g7OperandText(operand: any, index: number): string;
@@ -2732,4 +2736,8 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     h30t06FrameSelfDefault(declaration: any, printed: string): string | undefined;
+}
+export interface GoTranspiler {
+    h33p02BoxedStores: Set<any> | undefined;
+    h33p02StringSliceValue(node: any): boolean;
 }
