@@ -27135,8 +27135,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goNonNilMapLocalPointerKeyStore(containerNode, containerStr: string, keyNode, keyStr: string, valueStr: string, valueNode, identation: number): string | undefined {
         keyNode = this.goUnwrapPrintedAssertions(keyNode);
         if ((valueNode === undefined) || (keyNode?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(keyNode) !== '*string')
-            || (this.goElementAssignmentContainerType(containerNode, containerStr) !== 'map[string]any')
-            || !this.goMapWriteValueIsNotPointer(valueNode) || !this.goMapLocalIsNonNilUntilWrite(containerNode)) {
+            || !this.goMapWriteValueIsNotPointer(valueNode) || !this.goNonNilMapLocalAtWrite(containerNode)) {
             return undefined;
         }
         const keyDeclaration = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode)?.valueDeclaration?.resolve();
@@ -27209,15 +27208,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goNonNilMapLocalAtWrite(containerNode): boolean {
+        const decl: any = (containerNode?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(containerNode)?.valueDeclaration?.resolve() : undefined;
         if (this.goElementAssignmentContainerType(containerNode, '') !== 'map[string]any') {
-            return false;
-        }
-        if (this.goMapLocalIsNonNilUntilWrite(containerNode)) {
+            // a safeDict local the printer declares map[string]any before the identifier type is recorded
+            if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (this.goSafeDictMapLocal(decl) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+                return false;
+            }
+        } else if (this.goMapLocalIsNonNilUntilWrite(containerNode)) {
             return true;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(containerNode)?.valueDeclaration?.resolve();
-        return (decl?.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictCallArgs(decl.initializer)?.fallback?.kind === SyntaxKind.ObjectLiteralExpression)
-            && (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE) && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+        const found = (decl?.kind === SyntaxKind.VariableDeclaration) ? this.goSafeDictCallArgs(decl.initializer) : undefined;
+        // the hoist-typed local prints the same defaulted SafeDictMap read: never nil when the default is
+        const typed = (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE)
+            || ((this.goSafeDictLocalUnbox(decl) === GO_SAFE_DICT_LOCAL_TYPE) && this.goNeverNilDict(found?.call, this.goSourceTreeKind(decl) === 'ws'));
+        return (found?.fallback?.kind === SyntaxKind.ObjectLiteralExpression) && typed && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
     }
 
     // the Go index of a scalar store: a string key as printed, a *string local proven non-nil here dereferenced
@@ -34350,7 +34354,7 @@ ${tryBodyBlock}
         }
         const key = this.goUnwrapPrintedAssertions(keyNode);
         if ((key?.kind !== SyntaxKind.Identifier) || (this.goDeclaredTypeOfIdentifier(key) !== '*string')
-            || (this.goElementAssignmentContainerType(containerNode, containerStr) !== 'map[string]any') || !this.goMapLocalIsNonNilUntilWrite(containerNode)) {
+            || !this.goNonNilMapLocalAtWrite(containerNode)) {
             return undefined;
         }
         const keyDeclaration = this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve();

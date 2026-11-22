@@ -19840,3 +19840,36 @@ describe('venue [boolean, Dict] pair: multiple Go results and native caller bind
         expect(out).not.toContain('(bool, map[string]any)');
     });
 });
+
+describe('pointer-key store on a never-nil safeDict map local', () => {
+    const head = 'type Str = string | undefined;\ntype Dict = { [key: string]: any };\nclass T {\n    safeString (o, k, d = undefined): Str { return o[k]; }\n    safeDict (o, k, d = undefined): Dict | undefined { return o[k]; }\n';
+    const byPath = (body: string): string => {
+        const name = 'tmp-p10-' + process.pid + '-' + Math.random().toString(36).slice(2);
+        const root = path.join(__dirname, 'files', name);
+        fs.mkdirSync(path.join(root, 'ts', 'src', 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts', 'src', 'pro', 'ex.ts'), head + body + '}\n');
+        const cwd = process.cwd();
+        try {
+            process.chdir(root);
+            return new Transpiler({ verbose: false, go: {} }).transpileGoByPath('ts/src/pro/ex.ts').content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    test('a nil-guarded *string key stores a typed map natively', () => {
+        const out = byPath("    f (rows: any) {\n        const sub = this.safeDict (this.options, 'b', {});\n        for (let i = 0; i < rows.length; i++) {\n            const code = this.safeString (rows[i], 'c');\n            if (code === undefined) {\n                continue;\n            }\n            let account = this.safeDict (sub, code);\n            if (account === undefined) {\n                account = {};\n            }\n            sub[code] = account;\n        }\n        return sub;\n    }\n");
+        expect(out).toContain('var sub map[string]any = this.SafeDictMap(this.Options, "b", map[string]any{})');
+        expect(out).toContain('sub[*code] = account');
+        expect(out).not.toContain('AddElementToObject(sub, code');
+    });
+    test('an unguarded key is stored behind its nil test; a no-default safeDict keeps the helper', () => {
+        const out = byPath("    f (o: any) {\n        const sub = this.safeDict (this.options, 'b', {});\n        const k = this.safeString (o, 'c');\n        const acc = { 'a': 1 };\n        sub[k] = acc;\n        const bare = this.safeDict (this.options, 'n');\n        bare[k] = acc;\n        return [ sub, bare ];\n    }\n");
+        expect(out).toMatch(/if k != nil \{\n\t+sub\[\*k\] = acc\n/);
+        expect(out).not.toContain('bare[*k]');
+    });
+    test('a scalar value keeps the helper (derefScalar)', () => {
+        const out = byPath("    f (o: any) {\n        const sub = this.safeDict (this.options, 'b', {});\n        const k = this.safeString (o, 'c');\n        if (k === undefined) {\n            return sub;\n        }\n        sub[k] = this.safeString (o, 'v');\n        return sub;\n    }\n");
+        expect(out).not.toContain('sub[*k] = this.SafeString');
+    });
+});
