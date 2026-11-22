@@ -2227,7 +2227,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const census = this.csharpListParamCensus();
         const key = method.name.getText().trim() + ':' + index;
-        const admitted = census.get(key);
+        const admitted = (census.get(key) === true) || (census.get(key + this.csharpListParamLineage(method)) === true);
         if (admitted === true && csharpListParamBaseKeys.get(this.getProgram() as any)?.has(key)) {
             this.csharpBaseListParamDeclarations.add(node);
         }
@@ -2316,6 +2316,10 @@ export class CSharpTranspiler extends BaseTranspiler {
                 Array.from(node.parameters as any).forEach((parameter: any, index: number) => {
                     if (parameter.dotDotDotToken === undefined && node.body !== undefined) {
                         csharpMultiMapAdd(declarations, methodName + ':' + index, parameter);
+                        const lineage = this.csharpListParamLineage(node);
+                        if (lineage !== '') {
+                            csharpMultiMapAdd(declarations, methodName + ':' + index + lineage, parameter);
+                        }
                     }
                 });
             } else if (isCallExpression(node) && isPropertyAccessExpression(node.expression) && isIdentifier(node.expression.name)) {
@@ -2335,11 +2339,21 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return false;
             }
             visiting.add(key);
-            const separator = key.lastIndexOf(':');
-            const methodName = key.substring(0, separator);
-            const index = Number(key.substring(separator + 1));
+            const lineageAt = key.indexOf('@');
+            const globalKey = (lineageAt < 0) ? key : key.substring(0, lineageAt);
+            const lineage = (lineageAt < 0) ? '' : key.substring(lineageAt);
+            const separator = globalKey.lastIndexOf(':');
+            const methodName = globalKey.substring(0, separator);
+            const index = Number(globalKey.substring(separator + 1));
             let admitted = true;
             const rows = declarations.get(key) ?? [];
+            // a venue lineage decides alone only when every declaration of the name sits in a venue class
+            if (lineage !== '' && (declarations.get(globalKey) ?? []).some((parameter) => !this.csharpListParamLineage(parameter).startsWith('@'))) {
+                visiting.delete(key);
+                const shared = decide(globalKey);
+                memo.set(key, shared);
+                return shared;
+            }
             // a base-tier declaration fixes the spelling (declared type alone); overrides must follow it
             const baseTier = rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter));
             if (rows.some((parameter) => csharpListParamFileIsPrintedAlone(parameter) && csharpListParamInTradingTier(parameter))) {
@@ -2370,6 +2384,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             if (admitted && !baseTier) {
                 for (const call of calls.get(methodName) ?? []) {
+                    // a `this.` call from another venue lineage reaches another method
+                    if (lineage !== '' && call.expression.expression?.kind === SyntaxKind.ThisKeyword && this.csharpListParamLineage(call) !== lineage) {
+                        continue;
+                    }
                     const args = Array.from((call.arguments ?? []) as any);
                     if (index >= args.length) {
                         continue; // an omitted argument prints the parameter's own default
@@ -2392,6 +2410,23 @@ export class CSharpTranspiler extends BaseTranspiler {
         } });
         csharpListParamCensuses.set(program, census);
         return census;
+    }
+
+    // '@<file>#<class>' of the topmost venue class above a node (a pro class joins its REST class):
+    // C# overrides bind only inside that class chain. '' outside a venue class
+    csharpListParamLineage(node): string {
+        let owner: any = findAncestor(node, (n) => isClassDeclaration(n));
+        let lineage = '';
+        for (let depth = 0; owner !== undefined && depth < 8; depth++) {
+            const fileName = String(owner.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+            if (fileName.includes('ts/src/base/') || fileName.includes('ts/src/abstract/') || !fileName.includes('ts/src/') || owner.name === undefined) {
+                break;
+            }
+            lineage = '@' + fileName.replace(/^.*ts\/src\//, '') + '#' + owner.name.text;
+            const parent = getAllSuperTypeNodes(owner)[0];
+            owner = (parent === undefined) ? undefined : this.getChecker().getTypeAtLocation(parent)?.getSymbol()?.valueDeclaration?.resolve();
+        }
+        return lineage;
     }
 
     // the whole-program parameter census skeleton: each of the rule's walks visits every node of the
@@ -2487,7 +2522,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (baseKeys === undefined || !Array.from(baseKeys).some((key) => key.startsWith(name + ':'))) {
             return plain();
         }
-        const decide = (key: string) => census.get(key) === true;
+        const decide = (key: string) => census.get(key) === true || census.get(key.split('@')[0]) === true;
         return Array.from(node.arguments as any).map((argument: any, index: number) => {
             const printed = this.printNode(argument, identation).trim();
             const key = name + ':' + index;
@@ -2798,7 +2833,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     return false;
                 }
                 const position = (method.parameters as any).indexOf(declaration);
-                return (position < 0) ? false : decide(method.name.getText().trim() + ':' + position);
+                const own = method.name.getText().trim() + ':' + position;
+                return (position < 0) ? false : (decide(own) || decide(own + this.csharpListParamLineage(method)));
             }
             if (!isVariableDeclaration(declaration)) {
                 return false;

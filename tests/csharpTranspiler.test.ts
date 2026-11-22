@@ -8630,3 +8630,58 @@ describe ('csharp ordered comparisons on typed parameters', () => {
         expect(print("        if (0.01 >= price) { return 1; }\n")).toContain('isGreaterThanOrEqual(0.01, price)');
     });
 });
+
+describe ('csharp venue-lineage list parameters', () => {
+
+    // a venue-private method's `Dict[]` parameter is decided per venue class chain: a same-named
+    // method of another venue with a scalar parameter does not keep it boxed
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-lineage-list-parameters');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    const B = path.join(TMP, 'ts', 'src', 'b.ts');
+    let a: string;
+    let b: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    safeDict (o: any, k: any, d: any = undefined): any { return d; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            '    f (x: any) { return this.parseList (x, [ this.safeDict (x, 0, {}) ]); }\n' +
+            '    g (box: any) { return this.parseOther (box); }\n' +
+            '    parseList (r: any, rows: { [key: string]: any }[]): number { return rows.length; }\n' +
+            '    parseOther (rows: { [key: string]: any }[]): number { return rows.length; }\n' +
+            '}\n');
+        fs.writeFileSync(B,
+            "import { Exchange } from './base/Exchange';\n" +
+            "import { A } from './a';\n" +
+            'export class B extends Exchange {\n' +
+            "    f (x: any) { return this.parseList (x, 'spot'); }\n" +
+            '    parseList (r: any, kind: string = undefined): number { return 0; }\n' +
+            '}\n' +
+            'export const unusedA = A;\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A, B ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        b = (transpiler as any).transpileCSharpByPath(B).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a list parameter whose own lineage callers pass lists prints IList<object>', () => {
+        expect(a).toContain('parseList(object r, IList<object> rows)');
+        expect(a).toContain('(rows?.Count ?? 0)');
+    });
+
+    test('an object argument in the lineage keeps the parameter boxed', () => {
+        expect(a).toContain('parseOther(object rows)');
+    });
+
+    test('the other venue\'s same-named method keeps its own spelling', () => {
+        expect(b).toContain('parseList(object r, object kind = null)');
+    });
+});
