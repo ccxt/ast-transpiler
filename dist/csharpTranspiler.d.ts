@@ -46,6 +46,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPromiseAllTypedAwaits: Map<string, string>;
     csharpPromiseAllTypedLists: Map<string, string>;
     csharpPromiseAllTypedLocals: Map<string, string>;
+    csharpPromiseAllSlotTypes: WeakMap<Node, string>;
     csharpPromiseAllTypedPlanned: Set<string>;
     csharpHandlerMessageTypes: WeakMap<Node, string>;
     csharpHandlerCalled: WeakMap<Node, boolean>;
@@ -82,6 +83,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     };
     csharpBaseFieldKeyNames: WeakMap<object, number>;
     csharpBooleanParamProofs: WeakMap<Program<import("typescript/unstable/sync").ProjectId>, Map<Node, Set<number>>>;
+    csharpVenueNumberParamProofs: WeakMap<Program<import("typescript/unstable/sync").ProjectId>, Map<Node, string>>;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -151,6 +153,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpPromiseAllNativeStatement(plan: any, identation: any): string;
     csharpPromiseAllKey(node: any): string;
     csharpPromiseAllTypedListRead(receiver: any): string | undefined;
+    csharpPromiseAllTypedSlotsDeclaration(node: any, identation: any): string | undefined;
     printAwaitExpression(node: any, identation: any): string;
     csharpPromiseAllTypedPlanFunction(fn: any): void;
     csharpPromiseAllTypedPlanAwait(fn: any, awaited: any): void;
@@ -203,6 +206,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         key: string;
         arguments: any[];
     } | undefined;
+    csharpVenueNumberParamCensus(): Map<Node, string>;
+    csharpVenueNumberParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpParamIsBooleanTyped(parameter: any): boolean;
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
@@ -451,6 +456,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegralMinMaxOperand(node: any): any;
     csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
+    csharpInt64BindingNeverNull(symbol: any): boolean;
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
     csharpIntegralBindingIsRewritten(symbol: any): boolean;
     csharpNativeParseCall(node: any): string;
@@ -508,6 +514,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         text: string;
         type: string;
     } | undefined;
+    csharpPromiseAllSlotType(node: any): string | undefined;
     csharpTypedLocalType(node: any): string | undefined;
     csharpCountMemberOf(csharpType: string): string | undefined;
     csharpDeclaredLengthExpression(node: any): string | undefined;

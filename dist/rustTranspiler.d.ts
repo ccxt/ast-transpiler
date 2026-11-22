@@ -777,6 +777,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Test tier: every non-moving box of the string is a by-value `Value` argument / element of a call (the
      *  harness helpers take `Value`), where the `Value` form printed `x.clone()`: lending there costs that copy. */
     rustTestLendBoxes(declaration: any): boolean;
+    /** `String` locals that key a proven map read through the plain lend rule (rustScalarUseFormOwn). */
+    rustLentStrKeyLocals: Set<any>;
+    /** Some insert-key (`key`) use of the local is not its last use, so a `String` key would be cloned there. */
+    rustStrKeyInsertCopies(declaration: any): boolean;
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
     rustInitKeyLocal(n: any): boolean;
     /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
@@ -1576,6 +1580,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-90rg R2: a `const x = this.safeCurrencyCode (id)` (one argument, the base method: printed `-> Option<String>`) that is
      *  never written after its declaration. */
     rust90rgCurrencyCodeLocal(declaration: Node): boolean;
+    /** A never-written `const x = this.safeString (o, k, '<lit>')` local (the base reader's `string` overload: never `undefined`). */
+    rustDefaultedStrReaderLocal(declaration: Node): boolean;
     rust70fWritten(declaration: VariableDeclaration): boolean;
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean;
@@ -2102,6 +2108,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustKeyWrapped(n: any): any;
     /** The insert key of a `String` scalar local, else undefined. */
     rustScalarInsertKeyArg(keyNode: any): string | undefined;
+    /** A `String` local (a `let` of this function) whose insert key is its last use, outside any loop or closure between
+     *  it and the declaration, with no other use in the statement: the insert takes the key by move, no clone. */
+    rustInsertKeyMoves(key: any): boolean;
     /** ral-55x K1: `let id = this.safeString(o, k)` inserted as `m[id] = v` only inside an `if (id !== undefined ..)` block: the
      *  insert never sees a `None` key, so the key text is the `Str` the boxed key held (removeRepeatedTradesFromArray `id`). */
     rust55xGuardedSafeStringKey(n: any, local: any): boolean;
@@ -3290,7 +3299,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustOwnContainerBare;
     rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined;
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined;
-    /** A sync base-tier method declared `string[]` that no venue redeclares, every return a literal list or a list
+    /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
      *  local the body builds: it returns `List` (a list on every path, never Null). */
     rustBaseStringListReturn(node: any): 'list' | undefined;
     /** `Value::from(vec![..])` / `Value::from(v)` of a built `Vec<Value>`: the `Arc` of that vector. */

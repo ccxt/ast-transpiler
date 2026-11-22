@@ -1348,6 +1348,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsStringKeyExpression(node: any): boolean;
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
+    goLocalIsReboundInClosure(scope: any, nameNode: any): boolean;
     goRebindingTargetOf(identifier: any): any;
     printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean, valueNode?: any): string | undefined;
     printNativeGuardedPointerKeyAssignment(containerNode: any, containerStr: string, containerType: any, fieldType: any, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
@@ -1468,6 +1469,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInOpGuardedNestedIf(node: any, identation: any): string | undefined;
     goInOpChainNestedIf(node: any, identation: any): string | undefined;
     goIfInOpRead(condition: any, statement?: any): any;
+    goSafeDictMapLocalType(node: any): string | undefined;
     GO_NATIVE_MAP_FIELDS: {
         [name: string]: string;
     };
@@ -2752,4 +2754,16 @@ export interface GoTranspiler {
     h36p11StringSliceIndexCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string | undefined;
     h36p11ForCounter(key: any): boolean;
     h36p11StringArrayLocal(list: any): boolean;
+}
+export interface GoTranspiler {
+    h37p04PassiveUse(node: any, name: string): boolean;
+}
+export interface GoTranspiler {
+    h37p10StoreSite(current: any): 'element' | 'entry' | undefined;
+    h37p10TypedSlot(node: any): boolean;
+    h37p10Skip: Map<any, Set<any>>;
+}
+export interface GoTranspiler {
+    h37p11StringOptionSlotWrite(declaration: any, right: any, index: number): boolean;
+    h37p11StringOptionLocal(node: any): boolean;
 }

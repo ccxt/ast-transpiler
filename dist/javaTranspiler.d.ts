@@ -419,6 +419,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeMathMinMaxOperandKind(node: any): any;
     javaGuardedLongLocalRead(node: any): boolean;
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
+    printJavaPreciseDecimalsWrite(left: any, right: any): string | undefined;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
     javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
     javaEnclosingFunction(node: any): any;
