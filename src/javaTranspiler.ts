@@ -372,6 +372,7 @@ const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = { ...JAVA_NATIVE
 const JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL: { [name: string]: string } = {
     ...JAVA_NATIVE_ALIAS_TYPES,
     'Int': 'Long',
+    'int': 'Long',
     'Strings': 'java.util.List<String>',
 };
 
