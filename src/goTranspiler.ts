@@ -16599,6 +16599,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.asyncMapRowListCallees = new Set<string>(config['asyncMapRowListCallees'] ?? []);
         this.asyncTickerMapCallees = new Set<string>(config['asyncTickerMapCallees'] ?? []);
         this.asyncStringCallees = new Set<string>(config['asyncStringCallees'] ?? []);
+        this.asyncStringPtrCallees = new Set<string>(config['asyncStringPtrCallees'] ?? []);
         (this as any).h27g08Config = config;
         this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
@@ -25156,11 +25157,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `const x = await this.m (..)` where the host's table gives m's channel a plain `string`: the
     // receive prints `var x string = r.Value`, never nil, and a const is never rebound
-    goAwaitedStringLocal(decl): boolean {
+    goAwaitedStringLocal(decl, callees: Set<string> = this.asyncStringCallees): boolean {
         const init: any = (decl?.kind === SyntaxKind.VariableDeclaration) ? decl.initializer : undefined;
         const call: any = (init?.kind === SyntaxKind.AwaitExpression) ? init.expression : undefined;
         const callee: any = call?.expression;
-        if ((this.asyncStringCallees.size === 0) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        if ((callees.size === 0) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
             || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (decl.name?.kind !== SyntaxKind.Identifier)
             || ((decl.parent?.flags & NodeFlags.Const) === 0)) {
             return false;
@@ -25168,7 +25169,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const method = String(callee.name?.text ?? '');
         const goMethod = method.charAt(0).toUpperCase() + method.slice(1);
         const cls = String(this.goEnclosingClassName(decl) ?? '');
-        return this.asyncStringCallees.has(goMethod) || this.asyncStringCallees.has(cls.charAt(0).toUpperCase() + cls.slice(1) + '.' + goMethod);
+        return callees.has(goMethod) || callees.has(cls.charAt(0).toUpperCase() + cls.slice(1) + '.' + goMethod);
     }
 
     // `<param>.url` of a `<param>: Client` parameter
@@ -25197,6 +25198,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goAwaitedStringLocal(decl)) {
             return 'string';
         }
+        if (this.goAwaitedStringLocal(decl, this.asyncStringPtrCallees)) {
+            return '*string'; // the receive prints `var x *string = r.Value`
+        }
         const isSlot0 = (decl?.kind === SyntaxKind.BindingElement) && (decl.parent?.kind === SyntaxKind.ArrayBindingPattern) && (decl.parent.elements[0] === decl);
         const holder = isSlot0 ? decl.parent.parent : undefined;
         const init = holder?.initializer;
@@ -25221,7 +25225,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((!listed && (this.isAsyncFunction(fn) || (tree === undefined) || this.goMethodKeepsBaseSignature(fn)
             || this.goIsProHandlerMethod(fn) || goHasDynamicCall(fn, fn.name.text) || goParamIsContainerKey(fn, param.name.text)))
             || (this.goRequiredStringParameterType(param) !== 'string') || this.goHasTreeCallSite(fn)
-            || (this.goTsSrcTree(fn.getSourceFile())?.callIndex.get(fn.name.text) ?? []).length > 0) {
+            || (listed && ((this.goTsSrcTree(fn.getSourceFile())?.callIndex.get(fn.name.text) ?? []).length > 0))
+            || (!listed && !goStringPtrParamOnlyDirectCalls(this, tree, fn.name.text, this.goEnclosingClassName(fn)))) {
             return undefined;
         }
         return this.goParameterBodyTakes(fn, param, 'string') ? 'string' : undefined;
@@ -33450,6 +33455,7 @@ ${tryBodyBlock}
     asyncTickerMapCallees: Set<string> = new Set<string>();
     // `<Class>.<Method>` / `<Method>` rows whose channel carries a plain Go `string` (the host's async table)
     asyncStringCallees: Set<string> = new Set<string>();
+    asyncStringPtrCallees: Set<string> = new Set<string>();
     goTickerRowCache: Map<any, { key: any, keyIsPointer: boolean, ret: any } | null> = new Map();
 
     // `const tickers = await this.watchTickers ([ k ], params); return tickers[k];` in an async method that

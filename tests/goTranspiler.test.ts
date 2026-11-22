@@ -12277,6 +12277,40 @@ describe ('goGeneralParamRules', () => {
             expect(out).toContain('Used(code any)');
         });
         afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-p14-go'), { recursive: true, force: true }));
+        test('an uncalled venue-private method whose name only another venue calls types its required string param; a quoted reach stays boxed', () => {
+            const dir = path.join(__dirname, 'files', 'tmp-p09-go', 'ts', 'src');
+            fs.mkdirSync(path.join(dir, 'pro'), { recursive: true });
+            fs.writeFileSync(path.join(dir, 'ex.ts'), 'type Str = string | undefined;\nclass Exchange {\n}\n' +
+                'export class ex extends Exchange {\n' +
+                '    hashOf (name: string, symbol: Str = undefined): string {\n        if (symbol !== undefined) {\n            return name + \':\' + symbol;\n        }\n        return name + \'s\';\n    }\n' +
+                '}\n');
+            const sibling = (body: string) => fs.writeFileSync(path.join(dir, 'pro', 'other.ts'),
+                'export default class other {\n    hashOf (a: string, b: Str, c: Str): string {\n        return a;\n    }\n' + `    run (x: any) {\n        ${body}\n    }\n}\n`);
+            const run = () => new Transpiler(config({})).transpileGoByPath(path.join(dir, 'ex.ts')).content;
+            sibling("return this.hashOf ('t', undefined, x);");
+            expect(run()).toContain('HashOf(name string, optionalArgs ...any)');
+            sibling("return this.hashOf ('t', undefined, x) + this['hashOf'] (x);");
+            expect(run()).toContain('HashOf(name any, optionalArgs ...any)');
+        });
+        afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-p09-go'), { recursive: true, force: true }));
+        test('a const receive of a *string-channel callee passes a Str parameter; an unlisted callee stays boxed', () => {
+            const dir = path.join(__dirname, 'files', 'tmp-p09b-go', 'ts', 'src');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'ex.ts'), 'type Str = string | undefined;\nclass Exchange {\n}\n' +
+                'export class ex extends Exchange {\n' +
+                '    async getId (): Promise<Str> {\n        return undefined;\n    }\n' +
+                '    tag (id: Str): string {\n        if ((id !== undefined) && (id !== \'\')) {\n            return \'t-\' + id;\n        }\n        return \'t\';\n    }\n' +
+                '    async run () {\n        const id = await this.getId ();\n        return this.tag (id);\n    }\n' +
+                '}\n');
+            const go = (callees: string[]) => {
+                const t = new Transpiler({ verbose: false, go: { asyncMethodSuffix: 'Async', asyncStringPtrCallees: callees } });
+                installCcxtGoHooks(t.goTranspiler);
+                return t.transpileGoByPath(path.join(dir, 'ex.ts')).content;
+            };
+            expect(go([ 'GetId' ])).toContain('Tag(id *string)');
+            expect(go([])).toContain('Tag(id any)');
+        });
+        afterAll(() => fs.rmSync(path.join(__dirname, 'files', 'tmp-p09b-go'), { recursive: true, force: true }));
         test('sibling-file safeInteger and Precise string arguments prove *int64 / *string parameters', () => {
             const dir = path.join(__dirname, 'files', 'tmp-p11-go', 'ts', 'src');
             fs.mkdirSync(path.join(dir, 'pro'), { recursive: true });
