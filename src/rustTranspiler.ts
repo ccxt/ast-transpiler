@@ -28303,8 +28303,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (isCallExpression(head)) return this.rustBuiltReturnSourceKind(head) === 'dict' || this.rustOmitOfDict(head);
         if (!isIdentifier(head)) return false;
         const d: any = this.rustDeclarationOfIdentifier(head);
-        if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d);
-        return this.rustProvenMapParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+        if (d === undefined || d === head || d.name === head) return this.rustProvenMapParam(d) || this.rustBaseDictParam(d);
+        return this.rustProvenMapParam(d) || this.rustBaseDictParam(d) || this.rustHandedDictLocal(d) || (this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d));
+    }
+
+    /** A base-tier `params: Dict` parameter, never reassigned: `omit` of it answers the map its `Dict` declaration names (a
+     *  non-map passes through and every consumer takes it back as the empty map, which the typed `omit_t` answers too). */
+    rustBaseDictParam(d: any): boolean {
+        if (d?.kind !== SyntaxKind.Parameter || d.name?.kind !== SyntaxKind.Identifier || d.type === undefined || String(d.type.getText()) !== 'Dict') return false;
+        return RustTranspiler.RUST_BASE_TIER_FILE.test(String(d.getSourceFile().fileName)) && !this.rustTestTierSource(d) && !this.rustLocalIsReassigned(d, String(d.name.text));
     }
 
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
