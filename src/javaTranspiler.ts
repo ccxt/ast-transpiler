@@ -7104,7 +7104,24 @@ export class JavaTranspiler extends BaseTranspiler {
         const childAllows = allowDeclaredLocals && !isPlus;
         const leftKind = this.javaProvableNumericKind(node.left, childAllows);
         const rightKind = this.javaProvableNumericKind(node.right, childAllows);
-        return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind);
+        return this.javaNativeArithmeticPairKind(isPlus, isMultiply, isDivide, leftKind, rightKind)
+            ?? (isMultiply && this.javaProductFeedsDivide(node, leftKind, rightKind) ? 'double' : undefined);
+    }
+
+    // `a * b` with a double side read only by a `/`: Helpers.divide reads the product through toDouble,
+    // so multiply's Long re-box of an integral product is the same double below 2^63 in magnitude
+    javaProductFeedsDivide(node, leftKind, rightKind): boolean {
+        if (leftKind === undefined || rightKind === undefined || (leftKind !== 'double' && rightKind !== 'double')) {
+            return false;
+        }
+        let child = node;
+        let parent = node?.parent;
+        while (parent !== undefined && isParenthesizedExpression(parent)) {
+            child = parent;
+            parent = parent.parent;
+        }
+        return parent !== undefined && isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.SlashToken
+            && (parent.left === child || parent.right === child);
     }
 
     // `2 * 1.67`: two decimal literals whose IEEE product is finite and fractional. Helpers.multiply
@@ -7546,6 +7563,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaNativeArithmeticPairKind(false, isMultiply, isDivide, leftKind, rightKind) === undefined) {
             leftKind = leftKind ?? this.javaNestedAddKind(left);
             rightKind = rightKind ?? this.javaNestedAddKind(right);
+        }
+        if (isMultiply && this.javaNativeArithmeticPairKind(false, true, false, leftKind, rightKind) === undefined
+            && this.javaProductFeedsDivide(left.parent, leftKind, rightKind)) {
+            return `(((double) ${leftText}) * ((double) ${rightText}))`;
         }
         if (this.javaNativeArithmeticPairKind(false, isMultiply, isDivide, leftKind, rightKind) === undefined) {
             return undefined;
