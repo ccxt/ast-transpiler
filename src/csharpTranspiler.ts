@@ -868,6 +868,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpPromiseAllTypedAwaits = new Map<string, string>();
     csharpPromiseAllTypedLists = new Map<string, string>();
     csharpPromiseAllTypedLocals = new Map<string, string>();
+    // typed slots of a destructured WhenAll: an endpoint may answer null, so only null-safe reads use them
+    csharpPromiseAllSlotTypes = new WeakMap<Node, string>();
     csharpPromiseAllTypedPlanned = new Set<string>();
     // ws handler `message` parameter -> the typed signature this printer prints for it
     csharpHandlerMessageTypes = new WeakMap<Node, string | undefined>();
@@ -1939,6 +1941,32 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const declaration = this.csharpReceiverBinding(receiver);
         return (declaration === undefined) ? undefined : this.csharpPromiseAllTypedLists.get(this.csharpPromiseAllKey(declaration));
+    }
+
+    // `const [a, b] = await Promise.all (list)` over one typed Task<T>: Task.WhenAll already returns T[],
+    // so the holder keeps T and each slot reads a T; a slot written later keeps the boxed holder
+    csharpPromiseAllTypedSlotsDeclaration(node, identation): string | undefined {
+        const declaration = node.declarations?.[0];
+        if ((node.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.ArrayBindingPattern) || (declaration.initializer === undefined)) {
+            return undefined;
+        }
+        const taskType = this.csharpPromiseAllTypedAwaits.get(this.csharpPromiseAllKey(declaration.initializer));
+        const elements = declaration.name.elements;
+        if ((taskType === undefined) || (taskType === 'object') || elements.some((element) => (element.kind !== SyntaxKind.BindingElement)
+            || (element.name?.kind !== SyntaxKind.Identifier) || (element.initializer !== undefined) || (element.dotDotDotToken !== undefined)
+            || this.csharpParameterWrittenAnywhere(element.name))) {
+            return undefined;
+        }
+        const names = elements.map((element) => this.printNode(element.name, 0).trim());
+        const holder = names.join('') + 'Variable';
+        const indent = this.getIden(identation);
+        const awaited = 'await Task.WhenAll(' + this.printNode(declaration.initializer.expression.arguments[0], 0) + ')';
+        const lines = [ indent + taskType + '[] ' + holder + ' = ' + awaited ];
+        elements.forEach((element, index) => {
+            this.csharpPromiseAllSlotTypes.set(element, taskType);
+            lines.push(indent + 'var ' + names[index] + ' = ' + holder + '[' + index + ']');
+        });
+        return lines.join(';\n');
     }
 
     printAwaitExpression(node, identation) {
@@ -7742,6 +7770,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined;
     }
 
+    csharpPromiseAllSlotType(node): string | undefined {
+        const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        return (declaration === undefined) ? undefined : this.csharpPromiseAllSlotTypes.get(declaration);
+    }
+
     // the C# type this printer declared for a local read, or undefined
     csharpTypedLocalType(node): string | undefined {
         const declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
@@ -7779,7 +7812,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (receiver === undefined) {
             return undefined;
         }
-        const named = this.csharpTypedLocalType(receiver);
+        const named = this.csharpTypedLocalType(receiver) ?? this.csharpPromiseAllSlotType(receiver);
         const csharpType = named !== undefined ? named
             : (this.csharpExpressionTypeResolver ? this.csharpExpressionTypeResolver(receiver) : undefined)
             ?? this.csharpLengthReceiverType(receiver);
@@ -8045,6 +8078,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const taskDeclared = (listType !== undefined) ? `List<Task<${listType}>>` : `Task<${localType}>`;
                 return this.getIden(identation) + taskDeclared + ' ' + this.printNode(declaration.name) + ' = ' + this.printNode(declaration.initializer, identation).trimStart();
             }
+        }
+
+        const whenAllSlots = this.csharpPromiseAllTypedSlotsDeclaration(node, identation);
+        if (whenAllSlots !== undefined) {
+            return whenAllSlots;
         }
 
         if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer &&  isFunctionExpression(declaration.initializer)) {

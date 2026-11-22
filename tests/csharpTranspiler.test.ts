@@ -6746,6 +6746,19 @@ describe ('csharp Promise.all over the implicit API', () => {
                 "        const [ first, second ] = await Promise.all ([ a, b ]);\n" +
                 "        return [ first, second ];\n" +
                 "    }\n" +
+                "    async slotLength (params = {}): Promise<any> {\n" +
+                "        const a = this.publicGetL (params);\n" +
+                "        const b = this.publicGetL (params);\n" +
+                "        const [ first, second ] = await Promise.all ([ a, b ]);\n" +
+                "        return first.length + second.length;\n" +
+                "    }\n" +
+                "    async slotWritten (params = {}): Promise<any> {\n" +
+                "        const a = this.publicGetL (params);\n" +
+                "        const b = this.publicGetL (params);\n" +
+                "        let [ first, second ] = await Promise.all ([ a, b ]);\n" +
+                "        first = undefined;\n" +
+                "        return [ first, second ];\n" +
+                "    }\n" +
                 // 4: a union endpoint keeps the widest T, the way the generated api spells it
                 "    async union (params = {}): Promise<any> {\n" +
                 "        const r = await Promise.all ([ this.publicGetU (params), this.publicGetU (params) ]);\n" +
@@ -6822,8 +6835,22 @@ describe ('csharp Promise.all over the implicit API', () => {
             const body = method('locals');
             expect(body).toContain('Task<List<object>> a = this.publicGetL(parameters);');
             expect(body).toContain('Task<List<object>> b = this.publicGetL(parameters);');
-            expect(body).toContain('new List<object>(await Task.WhenAll(new List<Task<List<object>>>() {a, b}))');
+            expect(body).toContain('List<object>[] firstsecondVariable = await Task.WhenAll(new List<Task<List<object>>>() {a, b});');
+            expect(body).toContain('var first = firstsecondVariable[0];');
             expect(body).not.toContain('promiseAll(');
+        });
+
+        test('typed slots of a destructured WhenAll read their length natively', () => {
+            const body = method('slotLength');
+            expect(body).toContain('List<object>[] firstsecondVariable = await Task.WhenAll(');
+            expect(body).toContain('(first?.Count ?? 0)');
+            expect(body).not.toContain('getArrayLength(');
+        });
+
+        test('a written slot keeps the boxed holder', () => {
+            const body = method('slotWritten');
+            expect(body).not.toContain('List<object>[] ');
+            expect(body).toContain('new List<object>(await Task.WhenAll(');
         });
 
         test('a dict endpoint stays with the Promise.all task-local plan', () => {
