@@ -3158,7 +3158,10 @@ export class CSharpTranspiler extends BaseTranspiler {
                     continue;
                 }
                 Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
-                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls);
+                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls);
+                    if (kind === 'string') {
+                        this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
+                    }
                     if (kind !== undefined) {
                         decided.set(parameter, kind);
                     }
@@ -3196,6 +3199,36 @@ export class CSharpTranspiler extends BaseTranspiler {
             return all.some((k) => k.endsWith('?')) ? 'double?' : 'double';
         }
         return undefined;
+    }
+
+    // a required `string` / `Str` parameter prints `string` when every call passes a proven non-null C# string; a
+    // nullable, boxed or omitted argument keeps `object` (a null left of add(string, string) would answer the right)
+    csharpVenueStringParamKind(method, parameter, index: number, calls: any[]): string | undefined {
+        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || (parameter.initializer !== undefined)
+            || (parameter.type === undefined) || !isIdentifier(parameter.name) || this.csharpNameIsRebound(parameter, method)) {
+            return undefined;
+        }
+        const declared = this.getChecker().getTypeFromTypeNode(parameter.type);
+        const members = (declared === undefined) ? [] : (declared.isUnionType() ? declared.getTypes() : [ declared ]);
+        const strings = members.filter((m) => m.flags === TypeFlags.String).length;
+        if ((strings !== 1) || members.some((m) => (m.flags !== TypeFlags.String) && ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0))) {
+            return undefined;
+        }
+        for (const call of calls) {
+            const argument = call.arguments?.[index];
+            if ((argument === undefined) || (call.arguments.length > method.parameters.length) || (argument.kind === SyntaxKind.SpreadElement)
+                || ((this.csharpNonNullStringOperandType(argument) !== 'string') && !this.csharpResolvedStringArgument(argument))) {
+                return undefined;
+            }
+        }
+        return 'string';
+    }
+
+    // a local the embedding build layer declares a non-null `string` (it retypes after printing)
+    csharpResolvedStringArgument(argument): boolean {
+        const value = this.csharpUnparenthesized(argument);
+        return isIdentifier(value) && (this.csharpReceiverBinding(value)?.kind === SyntaxKind.VariableDeclaration)
+            && (this.csharpResolvedReadType(value) === 'string');
     }
 
     // `boolean`, `boolean | undefined` / `| null` and the literal-boolean unions; a mixed union
@@ -4292,6 +4325,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             const declaration = this.csharpReceiverBinding(value);
             if ((self !== undefined) && (declaration === self)) {
                 return 'string'; // the local being declared: a non-null string by induction
+            }
+            if ((declaration?.kind === SyntaxKind.Parameter) && (this.csharpTypedLocals.get(declaration) === 'string')
+                && (this.csharpVenueNumberParamCensus().get(declaration) === 'string')) {
+                return 'string'; // a venue-private parameter every caller passes a non-null string
             }
             if (declaration?.kind !== SyntaxKind.VariableDeclaration || !this.csharpIsSingleDeclarator(declaration)) {
                 return undefined;

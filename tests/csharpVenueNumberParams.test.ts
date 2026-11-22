@@ -64,3 +64,93 @@ describe ('csharp venue-private number parameters', () => {
         expect(b).toContain('boxed(object v)');
     });
 });
+
+describe ('csharp venue-private string parameters', () => {
+    // a required `string` / `Str` parameter prints `string` when every caller of its venue class
+    // chain passes a non-null C# string; a boxed, nullable or omitted argument keeps `object`
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-string-parameters');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    safeString (o: any, k: any, d: any = undefined): string { return d; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { const t: string = 'spot'; const s = this.safeString (x, 's'); return this.login (t) + this.login ('swap') + this.same (t, 'a') + this.boxed (x) + this.nullable (s) + this.rebound (t); }\n" +
+            "    login (messageType: string): string { return messageType + '.login'; }\n" +
+            "    same (u: Str, w: string): boolean { return u === w; }\n" +
+            "    boxed (v: string): string { return v + '.x'; }\n" +
+            "    nullable (n: Str): string { return n + '.x'; }\n" +
+            "    rebound (r: string): string { r = r + 'y'; return r; }\n" +
+            '}\n' +
+            'type Str = string | undefined;\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('every caller passes a non-null string: the parameter prints string and + / == go native', () => {
+        expect(a).toContain('login(string messageType)');
+        expect(a).toContain('(messageType + ".login")');
+        expect(a).toContain('same(string u, string w)');
+        expect(a).toContain('(u == w)');
+    });
+
+    test('a boxed argument (wrong kind) keeps object and the helper', () => {
+        expect(a).toContain('boxed(object v)');
+    });
+
+    test('a nullable argument (nil / missing key) keeps object', () => {
+        expect(a).toContain('nullable(object n)');
+    });
+
+    test('a parameter the body writes keeps object', () => {
+        expect(a).toContain('rebound(object r)');
+    });
+});
+
+describe ('csharp venue-private string parameters fed by a build-layer string local', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-string-resolved');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    kind (x: any): string { return x; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { const m = this.kind (x); const o = this.kind (x); return this.auth (m) + this.other (o); }\n" +
+            "    auth (messageType: string): string { return messageType + '.login'; }\n" +
+            "    other (v: string): string { return v + '.x'; }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        // the embedding layer declares `m` a string and leaves `o` unanswered
+        (transpiler as any).csharpTranspiler.csharpExpressionTypeResolver = (node) => ((node?.text === 'm') ? 'string' : undefined);
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a local the build layer declares string types the parameter', () => {
+        expect(a).toContain('auth(string messageType)');
+        expect(a).toContain('(messageType + ".login")');
+    });
+
+    test('an unanswered local keeps object', () => {
+        expect(a).toContain('other(object v)');
+    });
+});
