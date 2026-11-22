@@ -27218,3 +27218,28 @@ describe('rust array destructure with a skipped slot', () => {
         expect (rustOf('        const [ a, b ] = this.pick (params);\n        return b;')).toContain ('let abVariable: Vec<Value> = ');
     });
 });
+describe('a string alias of a typed parameter rewritten natively keeps Option<String> when its copying boxes lend', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p23-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    extend (...a: any[]): any { return a[0]; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const body = (tail: string) => "    m (id: string, params: Dict = {}): Dict[] {\n        const raw = this.safeString (params, 'text');\n        let orderId = id;\n        if (raw !== undefined) {\n            if (!raw.startsWith ('t')) {\n                orderId = 't-' + raw;\n            } else {\n                orderId = raw;\n            }\n        }\n        const a: Dict = this.extend ({}, { 'order_id': orderId });\n" + tail + "        const b: Dict = this.extend ({}, { 'order_id': orderId });\n        return [ a, b ];\n    }\n";
+    test('the alias stays Option<String> and lends at the copying box', () => {
+        const out = run (body (''));
+        expect (out).toContain ('let mut orderId: Option<String>');
+        expect (out).toContain ('Value::from(orderId.as_deref())');
+        expect (out).not.toContain ('let mut orderId: Value');
+    });
+    test('negative: a nil write keeps the boxed alias forms consistent', () => {
+        const out = run (body ("        orderId = undefined;\n"));
+        expect (out).not.toContain ('orderId.as_deref().unwrap_or(');
+    });
+    test('negative: an alias with no native write keeps the Value', () => {
+        const out = run ("    m (id: string): Dict[] {\n        const orderId = id;\n        const a: Dict = this.extend ({}, { 'order_id': orderId });\n        const b: Dict = this.extend ({}, { 'order_id': orderId });\n        return [ a, b ];\n    }\n");
+        expect (out).not.toContain ('Value::from(orderId.as_deref())');
+    });
+});

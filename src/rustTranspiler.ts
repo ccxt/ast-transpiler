@@ -5582,7 +5582,12 @@ export class RustTranspiler extends BaseTranspiler {
         // pd: a box-only alias of a typed numeric / bool parameter is stored and boxed back (D11): the Copy scalar boxes
         // with `Value::from` and no copy, where the `Value` alias cloned the parameter's binding; strings keep the veto
         // ral-76f: a string alias with a native use whose every box moves (no copying box) keeps the one copy the `Value` clone made
-        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind)
+        // a string alias rewritten with native writes whose copying boxes all lend (`Value::from(x.as_deref())`) keeps its `Option<String>`
+        const aliasLent = typedUses === 0 && strKind && copied > 0 && nativeUses > 0 && this.rustParamAliasSeedKind(declaration) !== undefined
+            && !this.rustStrNoLend && !this.rust76fSourceMethodWrite(declaration, scope) && !this.rust66s3StrReturnedVeto(declaration, scope)
+            && !this.rustVenueLocalHandedOn(declaration) && !this.rustReaderDeclTooLong(declaration, kind) && this.rustReaderLendBoxes(declaration);
+        if (aliasLent) this.rustStrLentLocals.add(declaration);
+        if (typedUses === 0 && this.rustParamAliasSeedKind(declaration) !== undefined && !RustTranspiler.RUST_COPY_SCALAR_KINDS.has(kind) && !aliasLent
             && !(strKind && copied === 0 && nativeUses > 0 && !this.rust76fSourceMethodWrite(declaration, scope))) return undefined;
         // ral-52n: a box that is an argument of a `number`-typed parameter reads back through `as_f64()`, so an Int default
         // and its Float spelling hand the callee the same `f64`
