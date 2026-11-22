@@ -11098,6 +11098,8 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
     } else if (value.kind === 'iife') {
         out.push (ind + value.name + ' := func() any {', ind + '\tif ' + temp + ' != nil {', ind + '\t\treturn *' + temp, ind + '\t}',
             ind + '\treturn nil', ind + '}()');
+    } else if ((value.kind === 'reset') && (value.reset === 'nil') && goTranspiler.h37p11StringOptionLocal (ccxtGoPairBindTarget (node))) {
+        out.push (ind + value.name + ' = *' + temp); // a string-overload option slot: never nil (see h37p11StringOptionSlotWrite)
     } else if (value.kind === 'reset') {
         if (!((value.reset === 'nil') && ccxtGoTargetIsNilHere (goTranspiler, node))) {
             out.push (ind + value.name + ' = ' + value.reset);
@@ -11105,6 +11107,12 @@ function ccxtGoPairBind (goTranspiler, printed, node, slot0) {
         out.push (ind + 'if ' + temp + ' != nil {', ind + '\t' + value.name + ' = *' + temp, ind + '}');
     }
     return out.join ('\n');
+}
+
+// slot 0 identifier of the statement `[ x, p ] = <call>` a pair bind prints
+function ccxtGoPairBindTarget (node) {
+    const e = (node?.kind === ts.SyntaxKind.ExpressionStatement) ? node.expression : node;
+    return ((e?.kind === ts.SyntaxKind.BinaryExpression) && (e.left?.kind === ts.SyntaxKind.ArrayLiteralExpression)) ? e.left.elements[0] : undefined;
 }
 
 function ccxtGoTupleResultFirst (call) {
@@ -18298,6 +18306,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 && parent.parent.left === parent
                 && parent.parent.operatorToken.kind === SyntaxKind.EqualsToken
                 && !((goType === 'map[string]any') && this.goGetArgTupleWriteIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)))
+                && !((goType === 'string') && this.h37p11StringOptionSlotWrite(declaration, parent.parent.right, parent.elements.indexOf(n)))
                 && !((goType === 'map[string]any') && (this.goDictLocalTupleRebindIsDict(declaration, parent.parent.right, parent.elements.indexOf(n)) || goNilDeclaredDictSlotRebind(this, declaration, parent.parent.right, parent.elements.indexOf(n))))) {
                     return true;
                 }
@@ -58711,3 +58720,38 @@ GoTranspiler.prototype.h37p10TypedSlot = function (node) {
     };
 }
 // ===== end H37-P10 =====
+
+// ===== H37-P11 =====
+export interface GoTranspiler {
+    h37p11StringOptionSlotWrite(declaration, right, index: number): boolean;
+    h37p11StringOptionLocal(node): boolean;
+}
+// reader -> argument slot of its `defaultValue: string` overload (declared `[string, Dict]` in Exchange.ts)
+const H37P11_STRING_OPTION_DEFAULT_AT: { [name: string]: number } = {
+    'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4, 'handleMarginModeAndParams': 2 };
+// `[ x, p ] = this.<reader> (.., d)` with d a string literal or a Go `string` (x itself included): CheckOptionString
+// answers the present string option or d, and panics on another kind, so slot 0 is never nil
+GoTranspiler.prototype.h37p11StringOptionSlotWrite = function (declaration, right, index: number): boolean {
+    const call: any = this.goUnwrapParenthesizedNode(right);
+    const at = H37P11_STRING_OPTION_DEFAULT_AT[call?.expression?.name?.text];
+    if ((index !== 0) || (at === undefined) || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.arguments?.length !== at + 1) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const d: any = call.arguments[at];
+    if ((d.kind === SyntaxKind.StringLiteral) || (d.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
+        return true;
+    }
+    if (d.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const target: any = this.checkerOrUndefined()?.getSymbolAtLocation(d)?.valueDeclaration?.resolve?.();
+    return (target === declaration) || (this.goDeclaredTypeOfIdentifier(d) === 'string');
+};
+// an identifier in slot 0 of such a write whose local the printer declares `string`
+GoTranspiler.prototype.h37p11StringOptionLocal = function (node): boolean {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (this.goDeclaredTypeOfIdentifier(node) === 'string');
+};
+// ===== end H37-P11 =====
