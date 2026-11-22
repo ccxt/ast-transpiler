@@ -22361,11 +22361,11 @@ export class RustTranspiler extends BaseTranspiler {
         return ok && returns > 0 ? kind.kind : undefined;
     }
 
-    /** A sync base-tier method declared `string[]` that no venue redeclares, every return a literal list or a list
+    /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
      *  local the body builds: it returns `List` (a list on every path, never Null). */
     rustBaseStringListReturn(node: any): 'list' | undefined {
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? '')) || this.isAsyncFunction(node)) return undefined;
-        if (String(node.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'string[]' || this.rustLentOverridden(String(node.name.text))) return undefined;
+        if (!/^(?:string|Dict)\[\]$/.test(String(node.type?.getText?.() ?? '').replace(/\s+/g, '')) || this.rustLentOverridden(String(node.name.text))) return undefined;
         const checker = this.getChecker();
         let returns = 0;
         let ok = true;
@@ -29090,7 +29090,8 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-64i: base `arraySlice (x, a[, b])` answers `Value::Array(..)` on every path (exchange_stubs.rs array_slice;
         // the ral-57i table rustBaseArraySliceCall), so `.into_list()` takes exactly that list
         if (method === 'arraySlice') return !this.rustTestTierSource(init) && this.rustBaseArraySliceCall(init);
-        return this.rustDefaultedListRead(init);
+        // a base method whose own body builds a list on every return (no venue override can answer instead) holds `Value::Arr`
+        return this.rustDefaultedListRead(init) || this.rustBuiltReturnSourceKind(init) === 'list';
     }
 
     /** ral-90rg R3: `init` is (through wrappers) a read of a never-reassigned `const xs = <never-empty base list source>` of the same

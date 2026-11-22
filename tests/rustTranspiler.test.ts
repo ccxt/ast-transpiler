@@ -10692,7 +10692,7 @@ describe('typed market slots of the list helpers', () => {
         const base = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
         expect(base).toContain('marketId: Option<&str>, market: Option<&crate::types::Market>, optional_args: &[Value]) -> crate::types::Market');
         expect(base).toContain('return market.cloned().unwrap_or_default();');
-        expect(base).toContain('trades: Value, market: Option<&crate::types::Market>, optional_args: &[Value]) -> Value');
+        expect(base).toContain('trades: Value, market: Option<&crate::types::Market>, optional_args: &[Value]) -> crate::value::List');
         expect(base).toContain('methodName: Value, market: Option<&crate::types::Market>, optional_args: &[Value]) -> Value');
         expect(base).toContain('-> Option<crate::types::Market>');
         expect(base).toContain('return Some(market);');
@@ -14761,7 +14761,8 @@ describe('ral-yf: a built list reassigned from a Promise<List> endpoint or a bas
     test('x = this.parseOrders (..) (base list parser, no override): .into_list()', () => {
         const body = out.slice (out.indexOf ('fn handleRows'));
         expect(body).toMatch(/let mut orders: crate::value::List = /);
-        expect(body).toMatch(/orders = self\.parseOrders\([^\n]*\)\.into_list\(\);/);
+        expect(body).toMatch(/orders = self\.parseOrders\([^\n]*\);/);
+        expect(body).not.toContain('.into_list()');
     });
     test('negative: an endpoint that does not declare Promise<List> keeps the box', () => {
         const body = out.slice (out.indexOf ('fn fetchUntyped'), out.indexOf ('fn handleRows'));
@@ -27378,3 +27379,57 @@ describe('h36-P26: `safeDict (xs, i)` on a plain `List` local reads the slice na
     });
 });
 
+
+describe('a local holding a base list-builder result is a typed list', () => {
+    const run = (name: string, method: string) => {
+        const dir = path.join (rustFixtureRoot, 'list-builder-local', name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export default class Exchange {\n" + method + "\n    parseList (rows: any[]): any[] { return rows; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    count (raw: any) {\n        const rows = this.rows (raw);\n        return this.parseList (rows);\n    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('every return builds a list: the local is a List', () => {
+        const out = run ('built', "    rows (x: any): any[] {\n        const out = [];\n        out.push (x);\n        return out;\n    }");
+        expect(out).toContain('let mut rows: crate::value::List = ');
+        expect(out).not.toContain('let mut rows: Value = ');
+    });
+    test('negative: a return that hands back its argument keeps the box', () => {
+        const out = run ('passthrough', "    rows (x: any): any[] {\n        if (x === undefined) {\n            return [];\n        }\n        return x;\n    }");
+        expect(out).not.toContain('let mut rows: crate::value::List = ');
+    });
+    test('negative: a nil return keeps the box', () => {
+        const out = run ('nil', "    rows (x: any): any[] {\n        if (x === undefined) {\n            return undefined;\n        }\n        return [ x ];\n    }");
+        expect(out).not.toContain('let mut rows: crate::value::List = ');
+    });
+});
+
+describe('a base `Dict[]` method that builds its list returns `List`; a local of it is a typed list', () => {
+    const run = (name: string, method: string, venue = '') => {
+        const dir = path.join (rustFixtureRoot, 'dict-list-builder', name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n" + method + "    parseList (rows: any[]): any[] { return rows; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nexport default class venue extends Exchange {\n    count (raw: any) {\n        const rows = this.keyed (raw);\n        return this.parseList (rows);\n    }\n" + venue + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        return [ t.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content, t.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content ];
+    };
+    const built = "    keyed (obj: any): Dict[] {\n        const result: Dict[] = [];\n        const keys = Object.keys (obj);\n        for (let i = 0; i < keys.length; i++) {\n            result.push ({ 'id': keys[i] });\n        }\n        return result;\n    }\n";
+    test('the method returns `crate::value::List` and the caller local takes it as a list', () => {
+        const [ base, venue ] = run ('built', built);
+        expect (base).toMatch (/fn keyed\([^\n]*\) -> crate::value::List/);
+        expect (base).toContain ('return std::sync::Arc::new(result);');
+        expect (venue).toContain ('let mut rows: crate::value::List = self.keyed(');
+        expect (venue).not.toContain ('.into_list()');
+    });
+    test('negative: a nil return keeps `Value`', () => {
+        const [ base ] = run ('nil', built.replace ("const keys = Object.keys (obj);", "if (obj === undefined) {\n            return undefined;\n        }\n        const keys = Object.keys (obj);"));
+        expect (base).not.toMatch (/fn keyed\([^\n]*\) -> crate::value::List/);
+    });
+    test('negative: handing back the argument (wrong kind) keeps `Value`', () => {
+        const [ base ] = run ('pass', built.replace ('return result;', 'return obj;'));
+        expect (base).not.toMatch (/fn keyed\([^\n]*\) -> crate::value::List/);
+    });
+    test('negative: a venue redeclaring the method keeps `Value`', () => {
+        const [ base ] = run ('override', built, "    keyed (obj: any): Dict[] {\n        return obj;\n    }\n");
+        expect (base).not.toMatch (/fn keyed\([^\n]*\) -> crate::value::List/);
+    });
+});
