@@ -940,6 +940,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the census walked, so a sticky batch program and an in-memory snippet never answer for
     // each other
     csharpBooleanParamProofs = new WeakMap<Program, Map<Node, Set<number>>>();
+    csharpVenueNumberParamProofs = new WeakMap<Program, Map<Node, string>>();
 
     // ==== configuration, class/method-override lookup and identifiers ====
 
@@ -2875,6 +2876,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
         const wanted = row === undefined ? undefined : row[method.parameters.indexOf(node)];
         if (wanted === undefined) {
+            const numberParam = this.csharpVenueNumberParamCensus().get(node);
+            if (numberParam !== undefined) {
+                return numberParam;
+            }
             const booleanParam = this.csharpBooleanParamType(node);
             return (booleanParam === undefined) ? super.printParameterType(node) : booleanParam;
         }
@@ -3070,6 +3075,99 @@ export class CSharpTranspiler extends BaseTranspiler {
         const declaration: any = (name === undefined) ? undefined : this.getChecker().getSymbolAtLocation(target.name)?.valueDeclaration?.resolve();
         const key = this.csharpNodePositionKey(declaration);
         return (key === undefined) ? undefined : { name: name as string, key, arguments: node.arguments.slice(1) };
+    }
+
+    // A required `number` / `int` parameter of a venue-private method (one declaration in its venue
+    // class chain, no base member) prints the numeric kind every `this.` caller of that chain already
+    // passes; one `object` argument, a rebinding body or a non-call reference keeps it `object`.
+    csharpVenueNumberParamCensus(): Map<Node, string> {
+        const program: any = this.getProgram();
+        const cached = this.csharpVenueNumberParamProofs.get(program);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const decided = new Map<Node, string>();
+        this.csharpVenueNumberParamProofs.set(program, decided);
+        if ((program === undefined) || (this.checkerOrUndefined() === undefined)) {
+            return decided;
+        }
+        const declarations = new Map<string, any[]>();
+        const references = new Map<string, any[]>();
+        const collect = (node: any) => {
+            if (isMethodDeclaration(node) && isIdentifier(node.name)) {
+                const lineage = this.csharpListParamLineage(node);
+                csharpMultiMapAdd(declarations, node.name.text + (lineage.startsWith('@') ? lineage : ''), node);
+            } else if (isPropertyAccessExpression(node) && isIdentifier(node.name)) {
+                csharpMultiMapAdd(references, node.name.text, node);
+            }
+        };
+        this.csharpParamCensus({ walks: [ collect ], settle: () => {
+            for (const [ key, methods ] of declarations) {
+                const at = key.indexOf('@');
+                const name = (at < 0) ? key : key.substring(0, at);
+                // one body in the chain, nothing in the base tier: no override binds the signature
+                if ((at < 0) || (methods.length !== 1) || declarations.has(name) || (methods[0].body === undefined)
+                    || (this.getMethodOverride(methods[0]) !== undefined)) {
+                    continue;
+                }
+                const method = methods[0];
+                const lineage = key.substring(at);
+                const calls: any[] = [];
+                let blocked = false;
+                for (const reference of references.get(name) ?? []) {
+                    const fromThis = reference.expression?.kind === SyntaxKind.ThisKeyword;
+                    if (fromThis && (this.csharpListParamLineage(reference) !== lineage)) {
+                        continue; // another venue chain binds its own method
+                    }
+                    const call: any = reference.parent;
+                    if (!fromThis || !isCallExpression(call) || (call.expression !== reference)) {
+                        blocked = true;
+                        break;
+                    }
+                    calls.push(call);
+                }
+                if (blocked || (calls.length === 0)) {
+                    continue;
+                }
+                Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
+                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls);
+                    if (kind !== undefined) {
+                        decided.set(parameter, kind);
+                    }
+                });
+            }
+        } });
+        return decided;
+    }
+
+    // the one numeric kind every call passes at `index` (int widens to Int64), or undefined
+    csharpVenueNumberParamKind(method, parameter, index: number, calls: any[]): string | undefined {
+        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || (parameter.initializer !== undefined)
+            || (parameter.type === undefined) || !isIdentifier(parameter.name)) {
+            return undefined;
+        }
+        const declared = this.getChecker().getTypeFromTypeNode(parameter.type);
+        if ((declared === undefined) || (declared.flags !== TypeFlags.Number) || this.csharpNameIsRebound(parameter, method)) {
+            return undefined;
+        }
+        const kinds = new Set<string>();
+        for (const call of calls) {
+            const argument = call.arguments?.[index];
+            const type = (argument === undefined) ? undefined : this.csharpArithmeticOperandType(argument);
+            const kind = this.csharpArithmeticOperandKind(type);
+            if ((kind === undefined) || (call.arguments.length > method.parameters.length)) {
+                return undefined;
+            }
+            kinds.add(((kind === 'double') ? 'double' : 'Int64') + (type.endsWith('?') ? '?' : ''));
+        }
+        const all = [ ...kinds ];
+        if (all.every((k) => k.startsWith('Int64'))) {
+            return all.some((k) => k.endsWith('?')) ? 'Int64?' : 'Int64';
+        }
+        if (all.every((k) => k.startsWith('double'))) {
+            return all.some((k) => k.endsWith('?')) ? 'double?' : 'double';
+        }
+        return undefined;
     }
 
     // `boolean`, `boolean | undefined` / `| null` and the literal-boolean unions; a mixed union
