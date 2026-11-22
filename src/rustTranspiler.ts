@@ -30861,10 +30861,14 @@ export class RustTranspiler extends BaseTranspiler {
             const d: any = this.rustDeclarationOfIdentifier(x);
             if (d === undefined || !isVariableDeclaration(d) || this.rustLocalReassigned(d)) return undefined;
             const i: any = this.rustStripWrappers(d.initializer);
-            if (!isCallExpression(i) || !isPropertyAccessExpression(i.expression) || i.expression.expression.kind !== SyntaxKind.ThisKeyword
-                || String(i.expression.name.text) !== 'safeList' || !isStringLiteralLikeNode(i.arguments[1])) return undefined;
+            if (!isCallExpression(i) || !isPropertyAccessExpression(i.expression) || i.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+            // `this.safeStringList (sub, [ 'k' ])` reads the same field k (a lone string is its one element)
+            const one: any = String(i.expression.name.text) === 'safeStringList' && i.arguments.length === 2 && isArrayLiteralExpression(this.rustStripWrappers(i.arguments[1]))
+                ? this.rustStripWrappers(i.arguments[1]) : undefined;
+            const key: any = one !== undefined && one.elements.length === 1 ? one.elements[0] : (String(i.expression.name.text) === 'safeList' ? i.arguments[1] : undefined);
+            if (key === undefined || !isStringLiteralLikeNode(key)) return undefined;
             source = i.arguments[0];
-            return String(i.arguments[1].text);
+            return String(key.text);
         };
         if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword
             && String(n.expression.name.text) === 'safeString' && n.arguments.length === 2) {
@@ -33580,7 +33584,8 @@ export class RustTranspiler extends BaseTranspiler {
     // `&x`, and a `Value` slot of a `this.` method gets `x.clone().map_or(Value::Null, Value::Arr)` (the shared
     // handle, no element copy; a move at `return x`). A list that is only handed on keeps its box.
 
-    private static readonly RUST_OPT_LIST_SOURCES = new Set([ 'marketSymbols', 'marketIds', 'marketCodes', 'safeList', 'safeList2', 'safeListN' ]);
+    // safeStringList answers its declared `Strings` (a string list or undefined), as safeList* with no default
+    private static readonly RUST_OPT_LIST_SOURCES = new Set([ 'marketSymbols', 'marketIds', 'marketCodes', 'safeList', 'safeList2', 'safeListN', 'safeStringList' ]);
 
     private rustOptListDecisions = new WeakMap<any, boolean>();
 
