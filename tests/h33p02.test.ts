@@ -20,6 +20,10 @@ describe ('go: a []string slice stored into a map is boxed as []any', () => {
         "        const lit: Dict = { 'orders': ids };\n" +
         '        return [ request, lit ];\n' +
         '    }\n' +
+        '    unWatchMany (symbolsAndTimeframes: string[][], params: Dict = {}) {\n' +
+        "        const sub: Dict = { 'symbolsAndTimeframes': symbolsAndTimeframes };\n" +
+        '        return sub;\n' +
+        '    }\n' +
         '    untouched (rows: any[], n: number) {\n' +
         '        const request: Dict = {};\n' +
         "        request['rows'] = rows;\n" +
@@ -34,7 +38,7 @@ describe ('go: a []string slice stored into a map is boxed as []any', () => {
         fs.mkdirSync (path.join (root, 'base'), { recursive: true });
         fs.writeFileSync (path.join (root, 'base', 'Exchange.ts'), BASE);
         fs.writeFileSync (path.join (root, 'v.ts'), VENUE);
-        const t = new Transpiler ({ verbose: false, go: {} });
+        const t = new Transpiler ({ verbose: false, go: { 'unifiedSliceParams': { 'unWatchMany': { 0: '[][]any' } } } });
         installCcxtGoHooks (t.goTranspiler);
         out = t.transpileGoByPath (path.join (root, 'v.ts')).content;
     });
@@ -45,8 +49,14 @@ describe ('go: a []string slice stored into a map is boxed as []any', () => {
         expect (out).toMatch (/"orders": +StringSliceToList\(ids\)/);
     });
 
+    test ('positive: a string[][] parameter printed [][]any is boxed row by row', () => {
+        expect (out).toMatch (/\[\]\[\]any/);
+        expect (out).toMatch (/"symbolsAndTimeframes": +AnyMatrixToList\(symbolsAndTimeframes\)/);
+    });
+
     test ('negative: an any list, a scalar and a literal value are stored as they are', () => {
         expect (out).not.toMatch (/StringSliceToList\(rows\)/);
+        expect (out).not.toMatch (/AnyMatrixToList\(rows\)/);
         expect (out).not.toMatch (/StringSliceToList\(n\)/);
         expect (out).not.toMatch (/StringSliceToList\("x"\)/);
     });

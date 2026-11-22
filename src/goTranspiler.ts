@@ -58049,21 +58049,29 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
 export interface GoTranspiler {
     h33p02BoxedStores: Set<any> | undefined;
     h33p02StringSliceValue(node): boolean;
+    h33p02Converter(node): string | undefined;
 }
 GoTranspiler.prototype.h33p02StringSliceValue = function (node): boolean {
     if (node?.kind !== SyntaxKind.Identifier) {
         return false;
     }
-    // only a TS `string[]` can print `[]string`; asking the Go type of anything else would seed the type caches early
+    // only a TS `string[]` / `string[][]` is asked for its Go type: anything else would seed the type caches early
+    return this.h33p02Converter(node) !== undefined;
+};
+// the runtime converter that boxes a typed slice as `[]any`: `[]string` rows, or the `[][]any` a `string[][]` parameter prints
+GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     const checker: any = this.checkerOrUndefined();
     const tsType = (checker === undefined) ? undefined : checker.typeToString(checker.getNonNullableType(checker.getTypeAtLocation(node)));
-    return (tsType === 'string[]') && (this.goResolvedLocalGoType(node) === GO_STRING_LIST_LOCAL_TYPE);
+    if (tsType === 'string[]') {
+        return (this.goResolvedLocalGoType(node) === GO_STRING_LIST_LOCAL_TYPE) ? 'StringSliceToList' : undefined;
+    }
+    return ((tsType === 'string[][]') && (this.goResolvedLocalGoType(node) === '[][]any')) ? 'AnyMatrixToList' : undefined;
 };
 {
     const identifierH33P02 = GoTranspiler.prototype.printIdentifier;
     GoTranspiler.prototype.printIdentifier = function (node) {
         const printed = identifierH33P02.call(this, node);
-        return ((this.h33p02BoxedStores !== undefined) && this.h33p02BoxedStores.has(node) && (printed === node.text)) ? `StringSliceToList(${printed})` : printed;
+        return ((this.h33p02BoxedStores !== undefined) && this.h33p02BoxedStores.has(node) && (printed === node.text)) ? `${this.h33p02Converter(node)}(${printed})` : printed;
     };
     const boxing = function (self: any, value: any, print: () => string): string {
         if (!self.h33p02StringSliceValue(value)) {
