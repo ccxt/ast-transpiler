@@ -17495,7 +17495,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const goType = this.goOperandStaticType(arg, this.printNode(arg, 0)) ?? '';
-        return (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(goType) >= 0)
+        // Math.min / Math.max over int64 operands print the Go builtin, whose result is an int64
+        const nativeMinMax = (this.go92g7MinMaxName(arg) !== undefined) && (this.go92g7Int64Operands(arg) !== undefined);
+        return nativeMinMax || (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(goType) >= 0)
             || ((arg.kind === SyntaxKind.Identifier) && this.goNarrowedNumberPointerArg(arg, this.goDeclaredTypeOfIdentifier(arg)));
     }
 
@@ -40700,6 +40702,10 @@ GoTranspiler.prototype.go92g7HasNumericUse = function (declaration): boolean {
         const call = n.parent;
         if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments.indexOf(n) < 0)) {
             return false;
+        }
+        // the base numberToString formats an int64 as a non-nil string
+        if (this.goBaseThisCall(call, 'numberToString', 1)) {
+            return true;
         }
         if (!this.go92g7IsBaseSum(call) && (this.go92g7MinMaxName(call) === undefined)) {
             return false;
