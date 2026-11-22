@@ -2526,7 +2526,20 @@ export class RustTranspiler extends BaseTranspiler {
 
     printBinaryExpression(node, identation) {
         this.rustFormatPrints.delete(node);
-        return this.printCustomBinaryExpressionIfAny(node, identation) || super.printBinaryExpression(node, identation);
+        const text = this.printCustomBinaryExpressionIfAny(node, identation) || super.printBinaryExpression(node, identation);
+        return node.operatorToken?.kind === SyntaxKind.EqualsToken ? this.rustOwnContainerUnwrap(node.right, text) : text;
+    }
+
+    /** The boxed own-container call converted straight back (`Value::Dict(c).into_dict()`) is the call `c` itself. */
+    rustOwnContainerUnwrap(init: any, text: string): string {
+        const node: any = this.rustSkipWrappers(init);
+        if (node === undefined || typeof text !== 'string') return text;
+        const kind = this.rustOwnContainerCallKind(node.kind === SyntaxKind.AwaitExpression ? node.expression : node);
+        if (kind === undefined) return text;
+        const bare = this.rustOwnContainerBareText(node);
+        const box = `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${bare})`;
+        const native = kind === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
+        return text.split(`${box}.into_${kind}()`).join(bare).split(`${box}.into_opt_${kind}()`).join(`Some(${bare})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare}`);
     }
 
     // `Date.now()` → runtime helper returning current epoch millis.
@@ -2544,6 +2557,12 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printVariableDeclarationList(node, identation) {
+        const text = this.printVariableDeclarationListInner(node, identation);
+        const only: any = node.declarations?.length === 1 ? node.declarations[0] : undefined;
+        return only?.initializer === undefined ? text : this.rustOwnContainerUnwrap(only.initializer, text);
+    }
+
+    printVariableDeclarationListInner(node, identation) {
         const handleDecl = this.printClientHandleDeclaration(node, identation); if (handleDecl !== undefined) return handleDecl;
         const declaration = node.declarations[0];
         const indent = this.getIden(identation);
@@ -17373,6 +17392,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNativeStrReturnKind(node) === 'str') {
             return 'Option<String>';
         }
+        const container = this.rustOwnContainerReturn(node); if (container !== undefined) return container === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
         try {
             const checker = this.getChecker();
             if (checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(node)).flags === TypeFlags.Void) return '';
@@ -18089,6 +18109,7 @@ export class RustTranspiler extends BaseTranspiler {
         const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
         const typedReturn = this.printRustBaseTypedReturnCall(node); if (typedReturn !== undefined) return typedReturn;
         const untilBox = this.printRustUntilPairBox(node); if (untilBox !== undefined) return untilBox;
+        const containerBox = this.printOwnContainerCallBox(node); if (containerBox !== undefined) return containerBox;
         const bytesCall = this.printRustBytesCall(node, identation); if (bytesCall !== undefined) return bytesCall;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
         const marketRead = this.printTypedMarketRead(node);
@@ -21720,6 +21741,8 @@ export class RustTranspiler extends BaseTranspiler {
     printAwaitExpression(node, identation) {
         const typedCall = isCallExpression(node.expression) ? this.printTypedUnifiedCall(node.expression) : undefined;
         if (typedCall !== undefined) return typedCall;
+        const containerKind = this.rustOwnContainerCallKind(node.expression);
+        if (containerKind !== undefined && !this.rustOwnContainerBare.has(node)) return `${containerKind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node.expression)}.await)`;
         const outcomeBox = this.printOptOutcomeAwaitBox(node, identation); if (outcomeBox !== undefined) return outcomeBox;
         // a local in a method that inlines a value-position spawn holds the spawn's resolved result
         if (isIdentifier(node.expression) && this.rustInlinesValueSpawn(findAncestor(node, isMethodDeclaration))) {
@@ -22204,6 +22227,7 @@ export class RustTranspiler extends BaseTranspiler {
         const fn: any = findAncestor(node.parent, isFunctionLike);
         const typedReturn = this.printRustBaseTypedReturn(fn, exp); if (typedReturn !== undefined) return `${idn}return ${typedReturn};`;
         const untilPair = this.printRustUntilPairReturn(fn, exp); if (untilPair !== undefined) return `${idn}return ${untilPair};`;
+        const containerReturn = this.printOwnContainerReturn(fn, exp); if (containerReturn !== undefined) return `${idn}return ${containerReturn};`;
         if (this.rustReturnsMarket(fn)) return `${idn}return ${this.printMarketReturnValue(exp)};`;
         const byIdReturn = this.print65eByIdReturnValue(exp); if (byIdReturn !== undefined) return `${idn}return ${byIdReturn};`;
         if (this.rustReturnsOptMarket(fn)) return `${idn}return ${this.printOptMarketReturnValue(exp)};`;
@@ -22293,6 +22317,132 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     private rustUntilPairRaw = new Set<any>();
+
+    // ── own container returns: a venue method declared `Dict` / `List` returns `Dict` / `List` ──
+    // Fires when the method is venue-private (rustVenueContainerReturnKind, never null) and every `return` operand is
+    // statically a map / list (no `any`), so the native result is exactly the map / list the boxed `Value` held.
+    private rustOwnContainerDecisions = new WeakMap<any, 'dict' | 'list' | null>();
+    private rustOwnContainerBare = new Set<any>();
+
+    rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || !isIdentifier(node.name)) return undefined;
+        let d = this.rustOwnContainerDecisions.get(node);
+        if (d === undefined) {
+            this.rustOwnContainerDecisions.set(node, null);
+            try {
+                d = this.rustOwnContainerReturnUncached(node) ?? null;
+            } catch (e) {
+                d = null;
+            }
+            this.rustOwnContainerDecisions.set(node, d);
+        }
+        return d ?? undefined;
+    }
+
+    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined {
+        if (this.checkerOrUndefined() === undefined) return undefined;
+        const kind = this.rustVenueContainerDecisionOf(node);
+        const declared = String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
+        if (kind === undefined || kind.nullable || !/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared)) return undefined;
+        const checker = this.getChecker();
+        let returns = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok || (n !== node.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                returns++;
+                const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
+                if (v === undefined || !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined) ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        node.body.forEachChild(visit);
+        return ok && returns > 0 ? kind.kind : undefined;
+    }
+
+    /** A checker type that is a map (object, never any / unknown / nullable / array) or a list (array or tuple). */
+    rustStaticContainerType(type: any, kind: 'dict' | 'list'): boolean {
+        if (type === undefined || (type.flags & (TypeFlags.Any | TypeFlags.Unknown | TypeFlags.Undefined | TypeFlags.Null | TypeFlags.Union | TypeFlags.Never)) !== 0) return false;
+        if ((type.flags & TypeFlags.Object) === 0) return false;
+        const checker: any = this.getChecker();
+        const isList = checker.isArrayType?.(type) || checker.isTupleType?.(type);
+        if (kind === 'list') return !!isList;
+        return !isList && type.getCallSignatures().length === 0 && !/^Promise</.test(checker.typeToString(type));
+    }
+
+    /** The venue container decision of a declaration (the call-site rule's own cache). */
+    rustVenueContainerDecisionOf(declaration: any): { kind: 'dict' | 'list', nullable: boolean } | undefined {
+        let decision = this.rustVenueContainerDecisions.get(declaration);
+        if (decision === undefined) {
+            try {
+                decision = this.rustVenueContainerReturnKindUncached(declaration) ?? null;
+            } catch (e) {
+                decision = null;
+            }
+            this.rustVenueContainerDecisions.set(declaration, decision);
+        }
+        return decision ?? undefined;
+    }
+
+    /** `[await] this.m (..)` of an own-container method: its kind. */
+    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined {
+        const call: any = this.unwrapParens(expr);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration === undefined ? undefined : this.rustOwnContainerReturn(declaration);
+    }
+
+    rustOwnContainerBareText(node: any): string {
+        this.rustOwnContainerBare.add(node);
+        try {
+            return this.printNode(node, 0).trim();
+        } finally {
+            this.rustOwnContainerBare.delete(node);
+        }
+    }
+
+    /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
+    printOwnContainerCallBox(node: any): string | undefined {
+        if (this.rustOwnContainerBare.has(node)) return undefined;
+        let up: any = node;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        if (up.parent?.kind === SyntaxKind.AwaitExpression) return undefined;
+        const kind = this.rustOwnContainerCallKind(node);
+        return kind === undefined ? undefined : `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node)})`;
+    }
+
+    /** The native text of `[await] this.m (..)` for a typed local of the same kind, else undefined. */
+    rustOwnContainerNativeText(expr: any, kind: 'dict' | 'list'): string | undefined {
+        const node: any = this.rustSkipWrappers(expr);
+        if (node === undefined) return undefined;
+        const awaited = node.kind === SyntaxKind.AwaitExpression;
+        if (this.rustOwnContainerCallKind(awaited ? node.expression : node) !== kind) return undefined;
+        return this.rustOwnContainerBareText(node);
+    }
+
+    /** Brackets balance and never close below depth 0 (string contents aside, as the literal rule does). */
+    rustBalancedText(text: string): boolean {
+        let depth = 0;
+        for (const ch of text) { depth += ch === '(' || ch === '[' || ch === '{' ? 1 : (ch === ')' || ch === ']' || ch === '}' ? -1 : 0); if (depth < 0) return false; }
+        return depth === 0;
+    }
+
+    /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
+    rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined {
+        const own = this.rustOwnContainerNativeText(exp, kind);
+        if (own !== undefined) return own;
+        const printed = this.printNode(exp, 0).trim();
+        const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
+        if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
+        const inner = printed.slice(box[0].length, -1);
+        return box[1] === 'Map' ? `std::sync::Arc::new(${inner})` : inner;
+    }
+
+    /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
+    printOwnContainerReturn(fn: any, exp: any): string | undefined {
+        const kind = this.rustOwnContainerReturn(fn);
+        return kind === undefined ? undefined : this.rustOwnContainerPayload(exp, kind);
+    }
 
     /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
     printRustUntilPairBox(node): string | undefined {

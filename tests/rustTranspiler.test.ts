@@ -11353,7 +11353,7 @@ describe('typed market slots of required / plural parse methods', () => {
         const base = typed.transpileRustByPath (path.join (dir, 'ts/src/base/Exchange.ts')).content;
         expect(base).toContain('ohlcvs: Value, market: Option<&crate::types::Market>, optional_args: &[Value]) -> Value');
         const out = typed.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
-        expect(out).toContain('settlement: Value, market: Option<&crate::types::Market>) -> Value');
+        expect(out).toContain('settlement: Value, market: Option<&crate::types::Market>) -> crate::value::Dict');
         expect(out).toContain('pub fn requestId(&self, market: Option<&crate::types::Market>)');
         expect(out).toContain('let mut market: Option<crate::types::Market> = (if ');
         expect(out).toContain('market = Some(crate::types::Market::clone(&symbolMarket));');
@@ -12766,7 +12766,8 @@ describe('ral-qd: parse* map results named like their method, moved into an exte
         const dir = path.join (rustFixtureRoot, 'ral-qd-own-name');
         write (dir);
         const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
-        expect(out).toMatch(/let mut transfer: crate::value::Dict = self\.parseTransfer\(.*\)\.into_dict\(\);/);
+        expect(out).toMatch(/let mut transfer: crate::value::Dict = self\.parseTransfer\([^;]*\);/);
+        expect(out).not.toContain('self.parseTransfer(response).into_dict()');
         expect(out).toContain('std::sync::Arc::make_mut(&mut transfer).insert("amount".into()');
         expect(out).toContain('return Value::Dict(transfer);');
     });
@@ -27081,5 +27082,33 @@ describe('h33-P21: a `Dict[]` local read from `safeList (.., [])` holds converte
     test('an untyped local keeps the boxed list', () => {
         const out = run ("    m (response: Dict) {\n        const rows = this.safeList (response, 'rows', []);\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
         expect (out).not.toContain ('dict_rows');
+    });
+});
+
+describe('a venue method declared Dict / Dict[] returns the native container', () => {
+    const base = "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    keep (p: any): any { return p; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n}\n";
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a literal return makes the method return Dict and its typed caller takes the call as is', () => {
+        const out = run ('own-dict-lit', "    build (x: any): Dict {\n        return { 'x': x };\n    }\n    a (x: any) {\n        const r: Dict = this.build (x);\n        r['y'] = 1;\n        return r;\n    }\n");
+        expect(out).toMatch(/fn build\([^\n]*\) -> crate::value::Dict \{/);
+        expect(out).not.toContain('self.build(x).into_dict()');
+    });
+    test('negative: a list return that prints a conversion (`Value::from(vec)`) keeps Value', () => {
+        const out = run ('own-list-local', "    rows (x: any): Dict[] {\n        const out: Dict[] = [];\n        out.push (x);\n        return out;\n    }\n");
+        expect(out).toMatch(/fn rows\([^\n]*\) -> Value \{/);
+    });
+    test('negative: an any return (nil or a wrong kind may come back) keeps Value', () => {
+        const out = run ('own-dict-any', "    build (x: any): Dict {\n        return this.keep (x);\n    }\n");
+        expect(out).toMatch(/fn build\([^\n]*\) -> Value \{/);
+    });
+    test('negative: a nullable return keeps Value', () => {
+        const out = run ('own-dict-null', "    build (x: any): Dict {\n        if (x === undefined) {\n            return undefined;\n        }\n        return { 'x': x };\n    }\n");
+        expect(out).toMatch(/fn build\([^\n]*\) -> Value \{/);
     });
 });
