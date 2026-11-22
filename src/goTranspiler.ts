@@ -57966,3 +57966,46 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     return `${m[1]}var ${m[2]}, _ = ${m[3]}[${m[4]}].(map[string]any)`;
 };
 // ===== end H33-P43
+// ===== H33-P02: a `[]string` slice stored into a map is boxed as `[]any`, the element type every list reader of a map member assumes
+export interface GoTranspiler {
+    h33p02BoxedStores: Set<any> | undefined;
+    h33p02StringSliceValue(node): boolean;
+}
+GoTranspiler.prototype.h33p02StringSliceValue = function (node): boolean {
+    if (node?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    // only a TS `string[]` can print `[]string`; asking the Go type of anything else would seed the type caches early
+    const checker: any = this.checkerOrUndefined();
+    const tsType = (checker === undefined) ? undefined : checker.typeToString(checker.getNonNullableType(checker.getTypeAtLocation(node)));
+    return (tsType === 'string[]') && (this.goResolvedLocalGoType(node) === GO_STRING_LIST_LOCAL_TYPE);
+};
+{
+    const identifierH33P02 = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        const printed = identifierH33P02.call(this, node);
+        return ((this.h33p02BoxedStores !== undefined) && this.h33p02BoxedStores.has(node) && (printed === node.text)) ? `StringSliceToList(${printed})` : printed;
+    };
+    const boxing = function (self: any, value: any, print: () => string): string {
+        if (!self.h33p02StringSliceValue(value)) {
+            return print();
+        }
+        const previous = self.h33p02BoxedStores;
+        self.h33p02BoxedStores = new Set([ ...(previous ?? []), value ]);
+        try {
+            return print();
+        } finally {
+            self.h33p02BoxedStores = previous;
+        }
+    };
+    const writeH33P02 = GoTranspiler.prototype.goElementWriteAssignment;
+    GoTranspiler.prototype.goElementWriteAssignment = function (node, identation) {
+        const store = (node?.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.left?.kind === SyntaxKind.ElementAccessExpression);
+        return store ? boxing(this, node.right, () => writeH33P02.call(this, node, identation)) : writeH33P02.call(this, node, identation);
+    };
+    const propertyH33P02 = GoTranspiler.prototype.printPropertyAssignment;
+    GoTranspiler.prototype.printPropertyAssignment = function (node, identation) {
+        return boxing(this, node?.initializer, () => propertyH33P02.call(this, node, identation));
+    };
+}
+// ===== end H33-P02
