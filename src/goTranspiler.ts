@@ -7288,6 +7288,58 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     };
 }
 
+// an unannotated local takes the declared `Promise<Dict>` / `Promise<List>` of the venue's own `this.m (..)`;
+// abstract API stubs (raw JSON of either shape), unions and `any` keep the box
+function ccxtGoAwaitedVenueMethodType (goTranspiler, call) {
+    const callee = call?.expression;
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (callee?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+        return undefined;
+    }
+    let method = undefined;
+    try {
+        method = goTranspiler.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
+    } catch (e) {
+        return undefined;
+    }
+    const fileName = String (method?.getSourceFile?. ()?.fileName ?? '');
+    if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || /[\\/]abstract[\\/]/.test (fileName)) {
+        return undefined;
+    }
+    const m = /^Promise<\s*(Dict|List)\s*>$/.exec ((method.type?.getText?. () ?? '').trim ());
+    return (m === null) ? undefined : CCXT_GO_DECLARED_AWAIT_TYPES[m[1]];
+}
+
+// `const x: Dict = await this.m (..)` (or `List`): the local's declared type decides; one comma-ok read of the
+// received value binds it, so nil and a value of the other kind read as a nil map / slice, as SafeDict / SafeList answer
+const CCXT_GO_DECLARED_AWAIT_TYPES = { 'Dict': 'map[string]any', 'List': '[]any' };
+function ccxtGoDeclaredAwaitReceive (goTranspiler, awaitNode, printedInitializer) {
+    const declaration = ccxtGoAsyncReceiveLocal (awaitNode);
+    const goType = (declaration === undefined) ? undefined : ((declaration.type !== undefined)
+        ? CCXT_GO_DECLARED_AWAIT_TYPES[declaration.type.getText?. () ?? ''] : ccxtGoAwaitedVenueMethodType (goTranspiler, awaitNode.expression));
+    const text = (printedInitializer ?? '').trim ();
+    if ((goType === undefined) || !/^\(<-[\s\S]*\)$/.test (text)) {
+        return undefined;
+    }
+    let depth = 0;
+    for (let i = 0; i < text.length - 1; i++) {
+        depth += (text[i] === '(') ? 1 : ((text[i] === ')') ? -1 : 0);
+        if (depth === 0) {
+            return undefined;                   // `(<-a)` is not the whole initializer
+        }
+    }
+    const endpoint = ccxtGoEndpointElement (goTranspiler, awaitNode.expression);
+    if ((endpoint !== undefined) && (endpoint !== goType)) {
+        return undefined;
+    }
+    // a local handed on as a value would carry the nil container instead of the other kind
+    if (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, goType, (n) => ccxtGoAsyncReceiveReadsTheValue (goTranspiler, n, goType),
+        (n) => ccxtGoIsNotAReference (goTranspiler, n, declaration)) === undefined) {
+        return undefined;
+    }
+    return { goType, commaOk: true, wrap: (recv) => 'PanicOnError(' + recv.trim () + ').(' + goType + ')' };
+}
+
 // `x := (<-core(..))` + `PanicOnError(x)` + `ch <- x` for an untyped core: the boxed temporary
 // only relays the value, so the send receives straight through PanicOnError (same checks, same value)
 const CCXT_GO_BOXED_FORWARD = /^\n([ \t]*)(retRes\d+) := (\(?<-[^\n]*)\n\1PanicOnError\(\2\)\n((?:[ \t]*\/\/[^\n]*\n)*)\1ch <- \2((?:[ \t]+\/\/[^\n]*)?)\n/;
@@ -7714,7 +7766,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoSafeListWrappedReads (goTranspiler);
     // name the async-receive locals whose element type the core's channel carries
     goTranspiler.goAwaitReceiveUnbox = function (awaitNode, printedInitializer) {
-        return ccxtGoAwaitReceiveUnbox (this, awaitNode, printedInitializer);
+        return ccxtGoAwaitReceiveUnbox (this, awaitNode, printedInitializer) ?? ccxtGoDeclaredAwaitReceive (this, awaitNode, printedInitializer);
     };
     installCcxtGoAsyncForwardRebox (goTranspiler);
     installCcxtGoEndpointConsumers (goTranspiler);
@@ -21237,7 +21289,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // Typed async receive: an extension that knows the core's channel element type replaces
     // `x := (<-this.FooAsync(..))` + `PanicOnError(x)` with a typed declaration that runs PanicOnError
     // first (same frame and message). The default returns undefined and changes nothing.
-    goAwaitReceiveUnbox(awaitNode, printedInitializer: string): { goType: string, wrap: (recv: string) => string, holder?: boolean } | undefined {
+    goAwaitReceiveUnbox(awaitNode, printedInitializer: string): { goType: string, wrap: (recv: string) => string, holder?: boolean, commaOk?: boolean } | undefined {
         return undefined;
     }
 
@@ -21276,6 +21328,10 @@ ${this.getIden(identation)}var ${parsedName} map[string]Ticker = PanicOnError(${
 ${this.getIden(identation)}${holderName} := ${parsedInitializer.trim().slice(0, -'.Raw'.length)}
 ${this.getIden(identation)}PanicOnError(${holderName}.Raw)
 ${this.getIden(identation)}var ${parsedName} ${awaitUnbox.goType} = ${holderName}.Value`;
+            }
+            if (awaitUnbox?.commaOk === true) {
+                return `
+${this.getIden(identation)}${parsedName}, _ := ${awaitUnbox.wrap(parsedInitializer)}`;
             }
             if (awaitUnbox !== undefined) {
                 const wrapped = awaitUnbox.wrap(parsedInitializer);
