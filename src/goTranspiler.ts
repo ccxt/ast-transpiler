@@ -1090,7 +1090,7 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
     'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
     'CommonCurrencyCode', 'MarketId', 'GetBaseDomainFromUrl', 'CostToPrecision', 'FeeToPrecision',
-    'ParsePrecision', 'IntegerPrecisionToAmount', 'ConvertExpireDate', 'ConvertExpireDateToMarketIdDate', 'CreateCcxtTradeId', 'OmitZero' ];
+    'ParsePrecision', 'IntegerPrecisionToAmount', 'ConvertExpireDate', 'ConvertExpireDateToMarketIdDate', 'CreateCcxtTradeId', 'OmitZero', 'FormatVaultAddress' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
@@ -30020,6 +30020,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const h28g05 = this.h28G05StringSliceCopyUse(n, param, goType, nilable, boxed, seen); if (h28g05 !== undefined) return h28g05;
             if ((goType === '*string') && h28g08StrParamDerefArg (n)) { return true; }
             const parent: any = n.parent;
+            // `return x` from the *string family method that owns x: handed on as the same *string
+            if ((goType === '*string') && (parent?.kind === SyntaxKind.ReturnStatement) && strPtrFamilyOwnParamReturn(param, parent)) {
+                return true;
+            }
             if (parent === param) {
                 return true;                     // the parameter's own name is not a use
             }
@@ -40406,7 +40410,7 @@ function go92g2LoopListLocal (goTranspiler: GoTranspiler, declaration): boolean 
 // prints its `*string` signature here, so the ccxt text pass no longer boxes each return: an absent
 // return prints `nil`, a proven *string bare, a Go string local `&x`, anything else SafeStringPtr(..).
 // All or nothing per method: a bare `return;` or a return inside try keeps the printed `any`.
-type StrPtrReturnKind = 'nil' | 'bare' | 'addr' | 'wrap';
+type StrPtrReturnKind = 'nil' | 'bare' | 'addr' | 'wrap' | 'temp';
 const strPtrFamilyVerdicts = new WeakMap<object, Map<object, StrPtrReturnKind> | null>();
 function strPtrFamilyVerdict(goTranspiler: GoTranspiler, method): Map<object, StrPtrReturnKind> | undefined {
     if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body?.kind !== SyntaxKind.Block) || goTranspiler.isAsyncFunction(method)) {
@@ -40445,6 +40449,8 @@ function strPtrFamilyVerdict(goTranspiler: GoTranspiler, method): Map<object, St
             kinds.set(statement, 'bare');
         } else if ((goType === 'string') && (expression.kind === SyntaxKind.Identifier)) {
             kinds.set(statement, 'addr');
+        } else if ((goType === 'string') && !/\bretStrVal\b/.test(method.body.getText())) {
+            kinds.set(statement, 'temp');
         } else {
             kinds.set(statement, 'wrap');
         }
@@ -40454,6 +40460,25 @@ function strPtrFamilyVerdict(goTranspiler: GoTranspiler, method): Map<object, St
     }
     strPtrFamilyVerdicts.set(method, kinds);
     return kinds;
+}
+// the method is a sync *string family member whose every return carries a value outside any try (strPtrFamilyVerdict's
+// own conditions, read without printing): its own parameter returned bare stays the *string the signature names
+function strPtrFamilyOwnParamReturn(param, statement): boolean {
+    const method = param?.parent;
+    const name = String(method?.name?.text ?? '');
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body?.kind !== SyntaxKind.Block) || (strPtrFamilyEnclosingMethod(statement) !== method)
+        || !CCXT_GO_STRING_PTR_METHOD_NAMES.includes(name.charAt(0).toUpperCase() + name.slice(1))
+        || (method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword)) {
+        return false;
+    }
+    return collectReturnStatements(method.body).every((r) => {
+        for (let up = r.parent; (up !== undefined) && (up !== method.body); up = up.parent) {
+            if (up.kind === SyntaxKind.TryStatement) {
+                return false;
+            }
+        }
+        return r.expression !== undefined;
+    });
 }
 function strPtrFamilyEnclosingMethod(node) {
     for (let up = node?.parent; up !== undefined; up = up.parent) {
@@ -40508,13 +40533,18 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
         return strPtrFamilyReturnStatement.call(this, node, identation);
     }
     const value = (kind === 'nil') ? 'nil' : this.printNode(node.expression, identation).trim();
+    if (kind === 'temp') {
+        // a Go string expression: its address through a fresh local, no SafeStringPtr box
+        const iden = this.getIden(identation);
+        return this.printNodeCommentsIfAny(node, identation, iden + 'retStrVal := ' + value + '\n' + iden + 'return &retStrVal');
+    }
     const text = (kind === 'addr') ? '&' + value : ((kind === 'wrap') ? 'SafeStringPtr(' + value + ')' : value);
     return this.printNodeCommentsIfAny(node, identation, this.getIden(identation) + 'return ' + text);
 };
 // `x = this.currencyToPrecision|networkCodeToId (..)` into a local that stays `any`: the box held the
 // plain string before these returned *string, so store the pointee (nil for a nil pointer)
 const STR_PTR_FAMILY_NEW = [ 'currencyToPrecision', 'networkCodeToId', 'handleTimeInForce', 'costToPrecision', 'feeToPrecision',
-    'parsePrecision', 'integerPrecisionToAmount', 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'createCcxtTradeId' ];
+    'parsePrecision', 'integerPrecisionToAmount', 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'createCcxtTradeId', 'formatVaultAddress' ];
 const strPtrFamilyExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
 GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     const write = node?.expression;

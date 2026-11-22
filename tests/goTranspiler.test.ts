@@ -20554,3 +20554,39 @@ describe ('go dict param argument hoisted into a comma-ok local', () => {
         expect(out).not.toMatch(/xsDict\d+/);
     });
 });
+
+describe('formatVaultAddress answers *string from a *string parameter', () => {
+    const FVA = '    formatVaultAddress (address: Str = undefined): Str {\n        if (address === undefined) {\n            return undefined;\n        }\n'
+        + '        if (address.startsWith (\'0x\')) {\n            return address.replace (\'0x\', \'\');\n        }\n        return address;\n    }\n';
+    const run = (body: string) => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        return x.transpileGo ('class X {\n' + FVA + body + '}\n').content;
+    };
+    test('the parameter binds as *string and every return keeps the pointer, no SafeStringPtr', () => {
+        const out = run ('');
+        expect (out).toContain ('FormatVaultAddress(optionalArgs ...any) *string {');
+        expect (out).toContain ('var address *string = GetArgStringPtr(optionalArgs, 0, nil)');
+        expect (out).toContain ('if address == nil {');
+        expect (out).toContain ('retStrVal := strings.Replace(*address, "0x", "", 1)');
+        expect (out).toContain ('return &retStrVal');
+        expect (out).toContain ('return address\n');
+        expect (out).not.toContain ('SafeStringPtr(');
+    });
+    test('a nil-seeded Str local written from it is a *string with a native nil test', () => {
+        const out = run ('    f (params = {}) {\n        let v: Str = undefined;\n        const o = this.safeString (params, \'x\');\n'
+            + '        v = this.formatVaultAddress (o);\n        const r: Dict = {};\n        if (v !== undefined) {\n            r[\'v\'] = v;\n        }\n        return r;\n    }\n');
+        expect (out).toContain ('var v *string = nil');
+        expect (out).toContain ('v = this.FormatVaultAddress(o)');
+        expect (out).toContain ('if v != nil {');
+    });
+    test('a local that stays `any` stores the pointee, nil for a nil pointer', () => {
+        const out = run ('    f () {\n        let v = undefined;\n        v = this.formatVaultAddress (v);\n        return v;\n    }\n');
+        expect (out).toContain ('if derefPtr := this.FormatVaultAddress(v); derefPtr != nil {');
+        expect (out).toContain ('v = nil');
+    });
+    test('a return of the parameter in a method outside the family keeps the box', () => {
+        const out = run ('    other (address: Str = undefined): Str {\n        return address;\n    }\n');
+        expect (out).not.toContain ('Other(optionalArgs ...any) *string');
+    });
+});
