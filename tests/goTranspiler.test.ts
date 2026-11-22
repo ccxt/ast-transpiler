@@ -19792,3 +19792,51 @@ describe('a declared string method returning a nil-tested *string local prints s
         expect(out).not.toContain('return *v');
     });
 });
+
+describe('venue [boolean, Dict] pair: multiple Go results and native caller binds', () => {
+    const venue = (body: string) =>
+        "import { Exchange } from './base/Exchange';\n" +
+        "type Dict = { [key: string]: any };\n" +
+        "export class a extends Exchange {\n" + body + "}\n";
+    const run = (name: string, body: string) => {
+        const root = path.join(__dirname, 'files', name);
+        const src = path.join(root, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), "export class Exchange {\n    safeString (a, b, c?) { return undefined; }\n}\n");
+        fs.writeFileSync(path.join(src, 'a.ts'), venue(body));
+        const cwd = process.cwd();
+        try {
+            process.chdir(root);
+            const inst = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes((inst as any).goTranspiler);
+            return inst.transpileGoByPath('ts/src/a.ts').content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    const producer = (ret: string) => "    pick (m: string, params: Dict): " + ret + " {\n        if (m === 'x') {\n            return [ true, params ];\n        }\n        return [ false, params ];\n    }\n";
+    const reader = "    f (params: Dict = {}) {\n        const [ s, q ] = this.pick ('x', params);\n        if (s) {\n            return q;\n        }\n        return params;\n    }\n";
+    const unread = "    g (params: Dict = {}) {\n        const [ s2, q2 ] = this.pick ('y', params);\n        return q2;\n    }\n";
+    const bare = "    h (params: Dict = {}) {\n        this.pick ('z', params);\n        return params;\n    }\n";
+    test('a boolean keyword slot prints (bool, map) and binds the read slot natively', () => {
+        const out = run('tmp-p08-a', producer('[ boolean, Dict ]') + reader);
+        expect(out).toContain('Pick(m string, params any) (bool, map[string]any) {');
+        expect(out).toContain('s, q := this.Pick("x", params)');
+        expect(out).not.toContain('GetValue(');
+    });
+    test('an unread slot 0 binds as _ and a bare-statement caller keeps the pair', () => {
+        const out = run('tmp-p08-b', producer('[ Bool, Dict ]') + unread + bare);
+        expect(out).toContain('(bool, map[string]any) {');
+        expect(out).toContain('_, q2 := this.Pick("y", params)');
+        expect(out).not.toContain('s2');
+    });
+    test('negative: a caller reading the tuple by index keeps the []any return', () => {
+        const out = run('tmp-p08-c', producer('[ boolean, Dict ]') + reader + "    k (params: Dict = {}) {\n        const t = this.pick ('w', params);\n        return t[1];\n    }\n");
+        expect(out).not.toContain('(bool, map[string]any)');
+    });
+    test('negative: a slot 0 that may be undefined keeps the []any return', () => {
+        const out = run('tmp-p08-d', "    pick (m: string, params: Dict): [ boolean, Dict ] {\n        const v = this.safeString (params, m);\n        return [ v, params ];\n    }\n" + reader);
+        expect(out).not.toContain('(bool, map[string]any)');
+    });
+});

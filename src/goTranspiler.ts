@@ -11063,10 +11063,12 @@ function ccxtGoTupleResultJoin (printed, count, declare, untypedOk = false, firs
         const l = lines[i].trim ().replace (/\bccxt\.(SafeStringPtr|MapTyped|GetValue|GetValueBool)\(/g, '$1(')
             .replace (/\bGetValueBool\((\w+), 0, false\)$/, 'GetValueBool(GetValue($1, 0))')
             // a slot an earlier hook already reads by index is the same element
-            .replace (/^((?:var \w+ \S+ = |\w+ = )(?:SafeStringPtr|MapTyped)\()(\w+Variable)\[(\d)\]\)$/, '$1GetValue($2, $3))');
+            .replace (/^((?:var \w+ \S+ = |\w+ = )(?:SafeStringPtr|SafeBoolPtr|MapTyped)\()(\w+Variable)\[(\d)\]\)$/, '$1GetValue($2, $3))');
 
         const m = declare
             ? (/^var (\w+) (?:\*string|bool|map\[string\]any) = (SafeStringPtr|GetValueBool|MapTyped)\(GetValue\((\w+), (\d)\)\)$/.exec (l)
+                // slot 0 of a venue (bool, map) pair: the holder read prints the *bool view, the join binds the plain bool
+                ?? ((first === 'SafeBoolPtr') ? /^var (\w+) \*bool = (SafeBoolPtr)\(GetValue\((\w+), (0)\)\)$/.exec (l) : null)
                 ?? /^var (\w+) map\[string\]any = ()(\w+)\[(\d)\]\.\(map\[string\]any\)$/.exec (l)
                 ?? (untypedOk ? /^(\w+) := ()GetValue\((\w+), (\d)\)$/.exec (l) : null))
             : (/^(\w+) = (SafeStringPtr|GetValueBool|MapTyped)\(GetValue\((\w+), (\d)\)\)$/.exec (l) ?? /^(\w+) = ()GetValue\((\w+), (\d)\)$/.exec (l));
@@ -11127,6 +11129,22 @@ function ccxtGoJoinedParamsLocal (goTranspiler, node) {
     return !rebound && (scope !== undefined);
 }
 
+// a venue (bool, map) pair binds slot 0 as `_` when the function never reads that name (Go rejects an unused local)
+function ccxtGoVenueBoolPairBlankUnread (goTranspiler, declaration, joined) {
+    const element = declaration.name.elements[0];
+    const scope = goTranspiler.goEnclosingFunction?.(declaration);
+    if ((scope === undefined) || (element?.kind !== ts.SyntaxKind.BindingElement) || !ts.isIdentifier (element.name)) {
+        return joined;
+    }
+    const name = element.name.text;
+    const read = goTranspiler.hasNodeWhere (scope, (n) => isIdentifierNamed (n, name) && (n !== element.name));
+    if (read) {
+        return joined;
+    }
+    const m = new RegExp ('^(\\s*)' + name + ', (\\w+) := ').exec (joined);
+    return (m === null) ? joined : m[1] + '_, ' + m[2] + ' := ' + joined.slice (m[0].length);
+}
+
 // ===== venue [Str|Dict, Dict] tuple producers bind as a Go (T, map[string]any) pair =====
 // A sync venue method annotated `[ Str, Dict ]` / `[ Dict, Dict ]` whose every own return is a two-element literal joins the
 // tuple-result family: it prints `(*string|map[string]any, map[string]any)`, destructuring callers bind `a, b := call`.
@@ -11143,7 +11161,8 @@ function ccxtGoVenuePairOf (method) {
     cache.set (method, undefined);
     const file = String (method?.getSourceFile?.()?.fileName ?? '');
     const type = method?.type;
-    const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
+    const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text
+        : ((t?.kind === ts.SyntaxKind.BooleanKeyword) ? 'Bool' : undefined);
     const slot0 = (type?.kind === ts.SyntaxKind.TupleType) && (type.elements.length === 2) && (ref (type.elements[1]) === 'Dict')
         ? (CCXT_GO_VENUE_PAIR_SLOT_0[ref (type.elements[0])] ?? h26g39VenueStringSlot0 (method)) : ccxtGoVenueTripleOf (type);
     const h28 = h28g11BoolSlotRejected (method, slot0); if (h28) return undefined;
@@ -11241,6 +11260,8 @@ function ccxtGoVenuePairCallersDestructure (name, file = '', holders = false) {
         for (const text of texts) {
             calls += (text.match (call) ?? []).length;
             bound += (text.match (destructured) ?? []).length;
+            // a call whose result is discarded (a bare statement) is legal on a Go multiple-value return
+            bound += (text.match (new RegExp ('\\n[ \\t]*this\\.' + name + ' \\([^;\\n]*\\);', 'g')) ?? []).length;
             if (holders) {
                 // a triple's holder may be kept only when every use of it is a literal-index read
                 for (const h of text.matchAll (new RegExp ('const (\\w+) = this\\.' + name + ' \\(', 'g'))) {
@@ -11518,7 +11539,10 @@ function installCcxtGoTupleResults (goTranspiler) {
             return pairFirst;
         }
         const untypedOk = ccxtGoTupleResultUntypedElementsAreSafe (this, declaration);
-        const joined = ccxtGoTupleResultJoin (printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst (declaration.initializer));
+        let joined = ccxtGoTupleResultJoin (printed, declaration.name.elements.length, true, untypedOk, ccxtGoTupleResultFirst (declaration.initializer));
+        if ((joined !== undefined) && (ccxtGoVenuePairOfCall (declaration.initializer)?.type === 'bool')) {
+            joined = ccxtGoVenueBoolPairBlankUnread (this, declaration, joined);
+        }
         if (joined !== undefined) {
             // `a, b := call`: the params element is the callee's map[string]any result itself
             const params = declaration.name.elements[1];
