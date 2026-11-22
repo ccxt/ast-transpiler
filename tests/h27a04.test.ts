@@ -77,7 +77,9 @@ describe ('h27a04 JSON-origin safeList with an empty-list default', () => {
         expect (out).toContain ('\titems, _ = data["items"].([]any)\n');
     });
     test ('negative: a list written through its elements keeps the wrap', () => {
-        expect (out).not.toMatch (/buys, _ = /);
+        // the awaited Promise<Dict> answer is a typed map: the list is read from it, the row is written under its own map test
+        expect (out).toMatch (/buys, _ = response\["buys"\]\.\(\[\]any\)\n\s*if buys == nil \{\n\s*buys = \[\]any\{\}/);
+        expect (out).toMatch (/if row, ok := buys\[i\]\.\(map\[string\]any\); ok && \(row != nil\) \{\n\s*row\["side"\] = "buy"/);
     });
     test ('negative: a parameter container keeps the wrap', () => {
         expect (out).not.toMatch (/loose, _ = /);

@@ -38,7 +38,10 @@ describe ('h28g31 map store of a base safe container read', () => {
         expect (out).not.toContain ('AddElementToObject(d,');
     });
     test ('negative: a safeString read (a *string) keeps the helper', () => {
-        expect (print (W ('this.safeString (r, \'t\')'))).toContain ('AddElementToObject(d, "v", this.SafeString(r, "t"))');
+        // the never-nil map takes the nil-guarded store: the pointer never reaches the slot
+        const out = print (W ('this.safeString (r, \'t\')'));
+        expect (out).toContain ('if ptrValue := this.SafeString(r, "t"); ptrValue != nil {\n\t\td["v"] = *ptrValue\n\t} else {\n\t\td["v"] = nil\n\t}');
+        expect (out).not.toContain ('d["v"] = this.SafeString');
     });
     test ('negative: a non-literal default that may be nil keeps the helper', () => {
         const out = print (W ('this.safeList (r, \'t\', dflt)', '        const dflt = this.safeList (r, \'x\');\n'));
