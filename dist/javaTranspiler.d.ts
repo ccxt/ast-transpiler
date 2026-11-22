@@ -7,6 +7,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     private overrideChainCache;
     private javaFieldAssignmentKindsCache;
     javaExpressionTypeResolver?: (node: any) => string | undefined;
+    javaDeclaredStringResolver?: (node: any) => string | undefined;
     javaBoxedLongResolver?: (node: any) => boolean;
     private _baseExchangeMethodsByName;
     binaryExpressionsWrappers: any;
@@ -361,6 +362,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrintedCallKind(node: any): "double" | "int" | "long";
     printJavaArrayDestructuring(left: any, right: any, identation: any): string;
     printJavaElementWrite(node: any, left: any, right: any): string;
+    javaTypedViewReceiver(expression: any): boolean;
     printJavaInExpression(left: any, right: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): any;
     javaConstIndexOfLocal(node: any): boolean;
@@ -371,6 +373,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaPrimitiveBaseFieldKind(node: any): 'long' | 'double' | undefined;
     printDeclaredNumericComparison(left: any, right: any, op: any): string | undefined;
+    printJavaStringComparison(left: any, right: any, op: any): string | undefined;
     javaIntegralModOperand(node: any): boolean;
     printJavaModComparison(left: any, right: any, op: any): string | undefined;
     isJavaPrimitiveCounterReference(node: any): boolean;

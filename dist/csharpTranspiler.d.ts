@@ -175,6 +175,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     }): void;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
     csharpArgumentMayBeList(type: any): boolean;
+    csharpClassExtendsArray(type: any, depth: number): boolean;
     printArgsForCallExpression(node: any, identation: any): string;
     csharpListParamArgs(node: any, identation: any): string[];
     csharpCallSiteReceiverTier(node: any): 'source' | 'restTest' | 'wsTest' | undefined;

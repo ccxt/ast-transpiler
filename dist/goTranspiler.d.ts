@@ -925,6 +925,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictMapLocal(declaration: any): string | undefined;
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
+    goMapLocalFreshMapWrite(write: any, name: string): boolean;
     goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
     goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
     goClientSubscriptionsContainer(container: any): boolean;
@@ -1661,6 +1662,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
+    printReverseCall(node: any, identation: any, name?: any): string;
     printPopCall(node: any, identation: any, name?: any): string;
     printAssertCall(node: any, identation: any, parsedArgs: any): string;
     goSliceLiteralBound(node: any): number | undefined;
@@ -2169,6 +2171,9 @@ export interface GoTranspiler {
     h27a05KeyText(keyNode: any): string | undefined;
     h27a05JsonOriginContainer(node: any): boolean;
     goTypedMapDictRead(args: any, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
+}
+export interface GoTranspiler {
+    goTypedMapReceiverStaysPlain(container: any): boolean;
 }
 export interface GoTranspiler {
     h27a06OptionsDictRead(node: any, printed: string): string | undefined;

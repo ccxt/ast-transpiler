@@ -2358,7 +2358,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `delete x[k]`), or something that would need the local to still be a
      *  `Value`. */
     private rustDictLocalClassifyUse;
-    printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
         name: string;
         init: string;
@@ -3272,7 +3271,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     printReturnStatement(node: any, identation: any): string;
     printBreakStatement(node: any, identation: any): string;
     printContinueStatement(node: any, identation: any): string;
-    printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
     /** Base-tier methods whose every return is a fresh tag-free object
      *  literal (no venue override, no hand-written stub replaces them). */
@@ -4017,6 +4015,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrKeyParam(declaration: any): boolean;
     rustBorrowedStrKeyTest(name: string, node: any): string;
     rustBorrowedDictName(node: any): string | undefined;
+    /** The printed name of a typed `const x: Dict = this.extend (..)` local (rustDeclaredDictExtendCopy). */
+    rustExtendCopyDictName(recv: any): string | undefined;
     /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
     rustOptKeySetDictName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
@@ -4939,6 +4939,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.m (..)` resolved to the base tier, `m` in `names`. */
     rustBaseCallNamed(call: any, names: Set<string>): boolean;
     rustHandedDictLocalUncached(declaration: any): boolean;
+    /** `const x: Dict = this.extend (..)` (base `extend`, which builds a `Value::Map` on every input). */
+    rustDeclaredDictExtendCopy(declaration: any): boolean;
     private static readonly RUST_ALWAYS_MAP_HELPERS;
     private static readonly RUST_84G_GROUP_HELPERS;
     /** The initialiser of a reassigned handed local answers a map on every path. */
