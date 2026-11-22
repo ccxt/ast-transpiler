@@ -26070,6 +26070,23 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return rebound;
     }
 
+    // the local is assigned inside a nested function of the scope (a call may run it at any point)
+    goLocalIsReboundInClosure(scope, nameNode): boolean {
+        let found = false;
+        const visit = (n) => {
+            if (found) {
+                return;
+            }
+            if ((n !== scope) && (isArrowFunction(n) || isFunctionExpression(n) || isFunctionDeclaration(n) || isMethodDeclaration(n))) {
+                found = this.goLocalIsRebound(n, nameNode);
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        visit(scope);
+        return found;
+    }
+
     // walks up from the identifier to the assignment it targets: `x = …` / `x += …` /
     // `[x, y] = …` / `for (x of …)` rebind the local, `x[k] = v` does not
     goRebindingTargetOf(identifier) {
@@ -29413,7 +29430,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const declaration = checker.getSymbolAtLocation(ident)?.valueDeclaration?.resolve();
-        if (this.goLocalIsRebound(this.goEnclosingFunction(declaration ?? ident), ident)) {
+        const scope = this.goEnclosingFunction(declaration ?? ident);
+        // a rebound local keeps only a guard of its own `&&` chain with no write in the chain or in a closure
+        const rebound = this.goLocalIsRebound(scope, ident);
+        if (rebound && ((scope === undefined) || this.goLocalIsReboundInClosure(scope, ident))) {
             return false;
         }
         let child = ident;
@@ -29436,8 +29456,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (kind === SyntaxKind.BinaryExpression) {
                 const op = parent.operatorToken?.kind;
                 if ((op === SyntaxKind.AmpersandAmpersandToken) && (child === parent.right)
-                    && this.goConditionProvesNonNil(parent.left, ident)) {
+                    && this.goConditionProvesNonNil(parent.left, ident) && (!rebound || !this.goLocalIsRebound(parent, ident))) {
                     return true;
+                }
+                if (rebound && ((op === SyntaxKind.BarBarToken) || (op === SyntaxKind.QuestionQuestionToken))) {
+                    return false;
                 }
                 // `a || b` and a left conjunct are evaluated before the guard, so they
                 // prove nothing; the guard of an enclosing construct still applies
@@ -29446,6 +29469,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             const guard = this.goNilGuardFields[kind];
+            if (rebound) {
+                return false;
+            }
             if (guard !== undefined) {
                 if ((child === parent[guard[0]]) && this.goConditionProvesNonNil(parent[guard[1]], ident)) {
                     return true;

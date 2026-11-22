@@ -2605,6 +2605,42 @@ describe('go ordered comparisons with signed literals and pointer locals', () =>
         expect(output).toContain("return []any{(a != nil && (b == nil || *a > *b)), (b == nil || (a != nil && *a >= *b)), (b != nil && (a == nil || *a < *b)), (a == nil || (b != nil && *a <= *b))}");
         expect(output).not.toContain("IsGreaterThan(a, b)");
     });
+    const reboundChain = (cond: string, tail = '') =>
+        "class Exchange {\n" + pointerStubs +
+        "    f (item, flag) {\n" +
+        "        let threshold = undefined;\n" +
+        "        if (flag) {\n" +
+        "            threshold = this.safeInteger (item, 'n');\n" +
+        "        }\n" +
+        "        const t = this.safeInteger (item, 't');\n" +
+        "        if (" + cond + ") {\n" +
+        "            return 1;\n" +
+        "        }\n" + tail +
+        "        return 0;\n" +
+        "    }\n" +
+        "}\n";
+    test('a rebound local guarded earlier in the same && chain gets no second nil guard', () => {
+        const output = squash(transpiler.transpileGo(reboundChain("(threshold !== undefined) && (t !== undefined) && (t < threshold)")).content);
+        expect(output).toContain("if (threshold != nil) && (t != nil) && (*t < *threshold) {");
+        expect(output).not.toContain("threshold != nil && threshold != nil");
+    });
+    test('a rebound local in an || chain keeps its nil guard', () => {
+        const output = squash(transpiler.transpileGo(reboundChain("(threshold === undefined) || (t !== undefined) && (t < threshold)")).content);
+        expect(output).toContain("(threshold != nil && *t < *threshold)");
+    });
+    test('a different identifier guarded earlier keeps the nil guard', () => {
+        const output = squash(transpiler.transpileGo(reboundChain("(t !== undefined) && (item !== undefined) && (t < threshold)")).content);
+        expect(output).toContain("(threshold != nil && *t < *threshold)");
+    });
+    test('a rebound local reassigned inside the chain keeps its nil guard', () => {
+        const output = squash(transpiler.transpileGo(reboundChain("(threshold !== undefined) && (t !== undefined) && ((threshold = this.safeInteger (item, 'm')) !== 5) && (t < threshold)")).content);
+        expect(output).toContain("(threshold != nil && *t < *threshold)");
+    });
+    test('a rebound local guarded by an enclosing if keeps its nil guard', () => {
+        const input = reboundChain("flag", "        if (threshold !== undefined) {\n            if (t !== undefined && t < threshold) {\n                return 2;\n            }\n        }\n");
+        const output = squash(transpiler.transpileGo(input).content);
+        expect(output).toContain("(threshold != nil && *t < *threshold)");
+    });
     test('two guarded pointers compare their derefs', () => {
         const input =
         "class Exchange {\n" +
