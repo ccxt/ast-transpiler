@@ -82,6 +82,8 @@ describe ('go list-declared local seeded by safeList (c, k, []) prints []any', (
     });
 
     test ('negative: an undeclared local is not typed by this rule', () => {
-        expect (out).not.toMatch (/var loose \[\]any = this\.SafeListSlice/);
+        // the list reader is printed as SafeListSlice directly (H34-X04); the declared-list rule's nil-guard form stays absent
+        expect (out).toContain ('var loose []any = this.SafeListSlice(data, "items", []any{})');
+        expect (out).not.toMatch (/var looseList \[\]any/);
     });
 });

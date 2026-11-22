@@ -74,7 +74,8 @@ describe('rust: rows of a declared Dict[] list and a written row next to a dict-
     if (process.env.H22DUMP) console.log(out);
     test('a counter row of a Dict[] local reads through safe_dict_t, no into_dict', () => {
         expect(out).toContain('let mut row: crate::value::Dict = self.safe_dict_t(&rows, Value::Int(i));');
-        expect(out).toContain('let mut linearEntry: crate::value::Dict = self.safe_dict_t(&linearRows, Value::Int(i));');
+        // a const Dict[] list read with a [] default is Vec<Dict> (H34-P25), so its row is a bounds-tested slice read
+        expect(out).toContain('let mut linearEntry: crate::value::Dict = linearRows.get(i as usize).cloned().unwrap_or_default();');
         expect(out).not.toMatch(/\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_dict\(\)/);
     });
     test('a row the source declares any stays the boxed element', () => {
