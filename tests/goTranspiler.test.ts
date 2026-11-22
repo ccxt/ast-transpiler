@@ -12515,6 +12515,7 @@ describe ('goPointerHelperTupleSlots', () => {
         + '    handleOptionIntegerAndParams (params: Dict, m: string, o: string, d?: number): [Int, Dict] { return [ undefined, params ]; }\n'
         + '    checkAddress (a: any, c?: any, t?: any): any { return a; }\n'
         + '    other (a: any): any { return a; }\n'
+        + '    p (): number { return 1; }\n'
         + '}\n';
 
     const TABLED = { 'goTupleSlotTypes': { 'HandleOptionIntegerAndParams': [ '*int64' ] } };
@@ -12607,6 +12608,19 @@ describe ('goPointerHelperTupleSlots', () => {
                 "        const data: Dict = {};\n        let out = {};\n        out = this.extend (data, { 'tag': tag });\n        request['b'] = out;\n" ]) {
                 const out = fnx(TAG, use);
                 expect(out).not.toContain('var tag *string');
+            }
+        });
+        test('a guarded int64 difference reads the pointer value', () => {
+            const out = fn("        const [ until, paramsUntil ] = this.handleParamInteger (params, 'until');\n", "        if (until !== undefined) {\n            request['s'] = until - 1000;\n        }\n        if (until !== undefined) {\n            request['e'] = until;\n        }\n");
+            expect(out).toContain('var until *int64 = nil');
+            expect(out).toContain('request["s"] = *until - 1000');
+            expect(out).not.toContain('Subtract(');
+        });
+        test('an unguarded difference or an untyped operand keeps the box', () => {
+            for (const use of [ "        request['s'] = until - 1000;\n", "        if (until !== undefined) {\n            request['s'] = until - this.p () * 2;\n        }\n" ]) {
+                const out = fn("        const [ until, paramsUntil ] = this.handleParamInteger (params, 'until');\n", use);
+                expect(out).not.toContain('var until *int64');
+                expect(out).toContain('Subtract(');
             }
         });
         test('a store without a nil proof stores the value or nil', () => {

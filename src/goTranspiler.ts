@@ -30547,6 +30547,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (op === SyntaxKind.PlusToken) {
                 return true;
             }
+            if ((op === SyntaxKind.MinusToken) && (goType === '*int64') && this.h38p10Int64Difference(parent, current, ident)) {
+                return true;
+            }
             if ((op === SyntaxKind.AmpersandAmpersandToken) || (op === SyntaxKind.BarBarToken)) {
                 return (goType === '*bool') && this.goTuplePointerSlotTruthyOperand(parent);
             }
@@ -58709,6 +58712,7 @@ GoTranspiler.prototype.h37p04PassiveUse = function (node, name: string): boolean
 export interface GoTranspiler {
     h37p10StoreSite(current): 'element' | 'entry' | 'extendEntry' | undefined;
     h38p10ExtendDeclaration(literal): any;
+    h38p10Int64Difference(binary, current, ident): boolean;
     h37p10TypedSlot(node): boolean;
     h37p10Skip: Map<any, Set<any>>;
 }
@@ -59137,6 +59141,15 @@ GoTranspiler.prototype.h38p10ExtendDeclaration = function (literal) {
         return printed.trimEnd() + '\n' + stores.join('\n');
     };
 }
+// `slot - other` under a nil guard, other an int64 operand: the difference prints `*slot - other` (int64)
+GoTranspiler.prototype.h38p10Int64Difference = function (binary, current, ident) {
+    const other: any = (binary.left === current) ? binary.right : binary.left;
+    if (!this.goTuplePointerSlotNilProven(ident) || this.hasNodeWhere(other, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === ident.text))) {
+        return false;
+    }
+    const operand = this.goInt64ProductOperand(other, this.printNode(other, 0));
+    return (operand !== undefined) && !operand.pointer;
+};
 // ===== end H38-P10 =====
 // ===== H38-H01: undeclared locals seeded by a `[]`-defaulted safeList (begin) =====
 // `const xs = this.safeList (c, k, [])` with no annotation: SafeList answers the member list or the literal empty
