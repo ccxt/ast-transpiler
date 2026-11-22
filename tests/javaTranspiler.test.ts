@@ -10892,3 +10892,53 @@ describe('java Math.min/Math.max over a guarded Long local and a nested native c
         expect(run([])).toContain("Helpers.mathMax(1, Helpers.mathMin(r, 100))");
     });
 });
+
+// a base-tier `: Dict` method whose returns all print a Map carries the Map return when the repo declares the
+// name once, nothing mentions it by name and no hand-written Java calls it
+describe('java base-tier Map returns', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-base-map-returns');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const CLEAN = { declared: 1, mentions: 0, handWritten: false, calls: [] as any[] };
+    const BASE_SOURCE =
+        "export class BaseExchange {\n" +
+        "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+        "    first (): void {\n" +
+        "    }\n" +
+        "    buildMap (a: number): { [key: string]: any } {\n" +
+        "        if (a > 1) {\n" +
+        "            return { 'a': a };\n" +
+        "        }\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "    opaque (x: any): { [key: string]: any } {\n" +
+        "        return x;\n" +
+        "    }\n" +
+        "}\n";
+    const print = (uses: any) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        if (uses !== undefined) {
+            printer.javaRepoMethodUses = (name: string) => uses(name);
+        }
+        return byPath.transpileJavaByPath(BASE_FIXTURE).content as string;
+    };
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+    test('a sole Map-returning base method prints the Map return', () => {
+        expect(print(() => CLEAN)).toMatch(/java\.util\.Map<String, Object> buildMap\(Object a\)/);
+    });
+    test('a return that is not a Map (an any value) keeps Object', () => {
+        expect(print(() => CLEAN)).toMatch(/public Object opaque\(Object x\)/);
+    });
+    test('a redeclared, mentioned or hand-written name, or no repo facts, keeps Object', () => {
+        expect(print(() => ({ ...CLEAN, declared: 2 }))).toMatch(/public Object buildMap\(/);
+        expect(print(() => ({ ...CLEAN, mentions: 1 }))).toMatch(/public Object buildMap\(/);
+        expect(print(() => ({ ...CLEAN, handWritten: true }))).toMatch(/public Object buildMap\(/);
+        expect(print(undefined)).toMatch(/public Object buildMap\(/);
+    });
+});

@@ -2909,7 +2909,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (target === undefined && !baseTier) {
             target = this.javaReturnTypeFromBody(node);
         }
-        if (target === undefined || (baseTier && target !== 'Boolean')) {
+        if (target === undefined || (baseTier && target !== 'Boolean' && !this.javaBaseMapReturnIsSole(node, target))) {
             return undefined;
         }
         // an override prints the base declaration's boxed signature; a Boolean base
@@ -2927,6 +2927,17 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return target;
+    }
+
+    // a base-tier `: Dict` method may print its Map return when the name is declared once in ts/src,
+    // overrides nothing and no hand-written Java calls it (Java return types are covariant only)
+    javaBaseMapReturnIsSole(node, target: string): boolean {
+        if (target !== JAVA_NATIVE_RETURN_MAP_TYPE || !isIdentifier(node.name) || typeof this.javaRepoMethodUses !== 'function') {
+            return false;
+        }
+        const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
+        return uses !== undefined && uses.declared === 1 && uses.mentions === 0 && !uses.handWritten
+            && this.javaTry(() => this.getMethodOverride(node)) === undefined;
     }
 
     javaNativeReturnTypeTarget(node): string | undefined {
