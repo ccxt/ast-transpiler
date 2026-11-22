@@ -2,6 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 export declare class PythonTranspiler extends BaseTranspiler {
     constructor(config?: {});
     initConfig(): void;
+    printArrayBindingPattern(node: any, identation: any): string;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;

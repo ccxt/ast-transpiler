@@ -1014,6 +1014,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Option<f64>` (rustOptParamKind). Its result local is typed only for a native use (rustScalarNeedsNativeUse): boxed
      *  straight back it stays the `Value` it is handed as. */
     rust90rgParseNumberOfNumParam(call: Node): boolean;
+    /** The whole initializer of a local annotated `number`: `this.parseNumber (x)` (base tier, one argument). The runtime answers
+     *  `x` for an `Int` / `Float`, `Float` or `Null` for a `Str`, `Null` otherwise, so its `as_f64()` is what every native
+     *  compare or arithmetic read of the `Value` takes. Boxed uses are vetoed by rustScalarLocalKindCore. */
+    rustParseNumberNumLocalInit(node: Node): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
     /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
@@ -2057,6 +2061,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarExpressionText(kind: string, node: any): string | undefined;
     /** `a OP b` with an optional operand: `Some(..)` only when every optional side is present, as the helpers
      *  (`add`/`subtract`/`multiply`/`divide` by a non-zero literal) answer `Null` when either operand is `Null`. */
+    /** `k / x`: a numeric literal over an `Option<f64>` local seeded from `parseNumber` (rustParseNumberNumLocalInit). */
+    rustLitOverOptNumDivision(node: any): boolean;
     rustScalarOptArithText(base: string, node: any, sign: string): string;
     /** The `Value` box of a native scalar text. */
     rustScalarBoxText(kind: string, text: string, node: any): string;
@@ -3708,6 +3714,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust65iSelfExtendLiteral(up: any, d: any): boolean;
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
     rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
+    /** `x = s` (statement) where `s` is a `const s = this.safeDict (..)` with no default (43f source) and the write sits directly in
+     *  the then-branch of `if (s !== undefined)` (no else): the map there is never Null, so `x` keeps its map. */
+    private rustGuardedOptDictWrites;
+    rustGuardedOptDictWrite(write: any, fn: any): boolean;
+    rustGuardedOptDictSourceUse(n: any, declaration: any, fn: any): boolean;
+    /** The guarded write printed by the source's form: `s.unwrap_or_default()` (optional) or `s.into_dict()` (boxed). */
+    printGuardedOptDictWrite(node: any, left: any, right: any): string | undefined;
     /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */
     rustOptAliasInitTargetUse(n: any, declaration: any, fn: any): boolean;
     private rustBorrowedIndexReads;
@@ -4105,6 +4118,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustByRefParamDecisions;
     rustParamReadsByReference(param: any): boolean;
     rustParamReadsByReferenceUncached(param: any): boolean;
+    /** A venue-only method's first `any` / `Market` parameter that is only key-read (`m['k']` with a literal key, or the
+     *  container of a by-reference reader) takes `impl KeyRead`: a typed market is lent, a `Value` still passes. */
+    rustVenueKeyReadParam(method: any, param: any, name: string): boolean;
+    /** A typed market local (plain or optional) handed to a `rustVenueKeyReadParam` slot: lent as `&m` (both read its map). */
+    printVenueKeyReadMarketArg(node: any): string | undefined;
+    /** `m['k']` on a parameter `rustVenueKeyReadParam` lends: the `KeyRead` read of the same slot. */
+    printVenueKeyReadParamRead(node: any): string | undefined;
     /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
     rustReaderTakesContainerByReference(call: any): boolean;
     rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined;
@@ -4165,6 +4185,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
     rustHandedSlotIdentifier(rhs: any): boolean;
     rustOmitOfDict(init: any): boolean;
+    /** A base-tier `params: Dict` parameter, never reassigned: `omit` of it answers the map its `Dict` declaration names (a
+     *  non-map passes through and every consumer takes it back as the empty map, which the typed `omit_t` answers too). */
+    rustBaseDictParam(d: any): boolean;
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
      *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
     rustDeepExtendOfMaps(call: any): boolean;
@@ -4928,6 +4951,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-58i: `let x: T = undefined` / `let x: T;` (one `let` declarator, nil or no initializer). */
     rustOptListNilInit(declaration: any): boolean;
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** `safeList (message, 'k')` with no default on the ws-handler view: a list moves into `Some`, any other kind,
+     *  an absent key or `Null` is `None` (the answer of `into_opt_list` on the `_k` read). */
+    rustProHandlerOptListRead(init: any): string | undefined;
     printOptListWrite(left: any, right: any): string | undefined;
     printOptListNullTest(left: any, right: any, op: any): string | undefined;
     printOptListIsArray(node: any): string | undefined;

@@ -208,6 +208,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpVenueNumberParamCensus(): Map<Node, string>;
     csharpVenueNumberParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpVenueStringParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpResolvedStringArgument(argument: any): boolean;
     csharpParamIsBooleanTyped(parameter: any): boolean;
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;
     printParameter(node: any, defaultValue?: boolean): string;
@@ -457,8 +459,13 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
     csharpInt64BindingNeverNull(symbol: any): boolean;
+    csharpNeverNullInt64Read(node: any): boolean;
+    csharpNeverNullArithmeticComparison(node: any): string | undefined;
+    csharpNeverNullIntegralArithmetic(node: any, op: any): string | undefined;
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
-    csharpIntegralBindingIsRewritten(symbol: any): boolean;
+    csharpSelfMinMaxLiteralWrite(right: any): any;
+    csharpSelfMinMaxWriteIsNative(right: any): boolean;
+    csharpIntegralBindingIsRewritten(symbol: any, allowSelfMinMax?: boolean): boolean;
     csharpNativeParseCall(node: any): string;
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;
     csharpNativeModExpression(left: any, right: any, leftText: any): string;
@@ -533,6 +540,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpWsCacheMapEntryLocalType(declaration: any): string | undefined;
     csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
+    csharpElementTupleLocalType(declaration: any, parsedValue: string): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
     csharpBindingNames(name: any): string[];
     csharpElementRowUseIsDictionaryShaped(use: any): boolean;

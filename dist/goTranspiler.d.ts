@@ -662,7 +662,7 @@ export declare function installCcxtGoLimitLocals(goTranspiler: any): void;
 declare function ccxtGoTupleResultCall(node: any): boolean;
 declare function ccxtGoTupleResultFirst(call: any): any;
 declare function ccxtGoTupleResultUnwrap(text: any): any;
-declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, untypedOk?: boolean, first?: string): string;
+declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, untypedOk?: boolean, first?: string, named?: any): string;
 export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
 export declare function installCcxtGoTupleSlotReads(goTranspiler: any): void;
 export declare function installCcxtGoParamTypes(goTranspiler: any): any;
@@ -2759,11 +2759,17 @@ export interface GoTranspiler {
     h37p04PassiveUse(node: any, name: string): boolean;
 }
 export interface GoTranspiler {
-    h37p10StoreSite(current: any): 'element' | 'entry' | undefined;
+    h37p10StoreSite(current: any): 'element' | 'entry' | 'extendEntry' | undefined;
+    h38p10ExtendDeclaration(literal: any): any;
     h37p10TypedSlot(node: any): boolean;
     h37p10Skip: Map<any, Set<any>>;
 }
 export interface GoTranspiler {
     h37p11StringOptionSlotWrite(declaration: any, right: any, index: number): boolean;
     h37p11StringOptionLocal(node: any): boolean;
+}
+export interface GoTranspiler {
+    h38p04ParseRowReadOnly(fn: any, param: any): boolean;
+    h38p04Cache: Map<any, boolean>;
+    h38p04Active: Set<any>;
 }

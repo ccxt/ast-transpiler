@@ -64,8 +64,6 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaReassigningMethods: string[];
     javaStrictEffectivelyFinal: boolean;
     javaIntegralDeclaredTypes: Set<string>;
-    javaTypedSliceMaxLength: number;
-    csModifiers: {};
     builderObjectLiterals: WeakSet<Node>;
     javaNonSharedSourceVerdicts: WeakMap<any, boolean>;
     javaMapSourceInProgress: Set<any>;
@@ -179,7 +177,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueCalleeReturnType(call: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaIntReturnIsLong(node: any): boolean;
     javaBaseMapReturnIsSole(node: any, target: string): boolean;
+    javaBaseStringReturnIsSole(node: any, target: string): boolean;
     javaNativeReturnTypeTarget(node: any): string | undefined;
     javaArrayReturnType(type: any): boolean;
     javaReturnSitesPrintType(method: any, target: string): boolean;
@@ -191,6 +191,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaIsThisOrSuperCall(node: any): boolean;
     javaFailedFutureOfThrow(statement: Node, identation: number): string | undefined;
     printReturnStatement(node: any, identation: any): string;
+    javaEnclosingMethodReturnsLong(node: any): boolean;
     private allBranchesTerminate;
     javaAsyncParameterLocalType(node: any): string | undefined;
     getFinalVarName(varName: string): string;
@@ -393,6 +394,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDeclaredNumericTypeKind(javaType: any): string | undefined;
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
+    javaProductFeedsDivide(node: any, leftKind: any, rightKind: any): boolean;
     javaLiteralFractionalProduct(left: any, right: any): boolean;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaNestedAddKind(node: any): string | undefined;
