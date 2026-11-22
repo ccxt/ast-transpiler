@@ -20079,3 +20079,34 @@ describe('safeDict on an optional parameter bound by GetArgMap reads the typed m
         expect(key).not.toContain('].(map[string]any)');
     });
 });
+
+describe('costToPrecision / feeToPrecision results are *string locals', () => {
+    const run = (call: string, extra = '') => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        const ts = 'class X {\n'
+            + '    costToPrecision (s: string | undefined, c: any): string | undefined { return s; }\n'
+            + '    feeToPrecision (s: string | undefined, c: any): string | undefined { return s; }\n'
+            + '    f (symbol: string, cost: any) {\n'
+            + '        const v = this.' + call + ' (symbol, cost);\n'
+            + extra
+            + '        if (v !== undefined) {\n'
+            + '            return v;\n'
+            + '        }\n'
+            + '        return undefined;\n'
+            + '    }\n'
+            + '}\n';
+        return x.transpileGo (ts).content;
+    };
+    test('costToPrecision prints a *string local with a native nil test', () => {
+        const out = run ('costToPrecision');
+        expect (out).toContain ('var v *string = this.CostToPrecision(symbol, cost)');
+        expect (out).toContain ('if v != nil {');
+    });
+    test('feeToPrecision prints a *string local', () => {
+        expect (run ('feeToPrecision')).toContain ('var v *string = this.FeeToPrecision(symbol, cost)');
+    });
+    test('a write of another kind keeps the box', () => {
+        expect (run ('costToPrecision', '        v = 1;\n')).not.toContain ('var v *string');
+    });
+});
