@@ -18549,13 +18549,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // map[string]any (the OmitDict twin), so the field keeps its Go type without an assertion
     goMapFieldOmitWriteText(node): string | undefined {
         const right: any = this.goUnwrapParenthesizedNode(node.right);
-        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (this.goFieldContainerTypeNative(node.left) !== 'map[string]any')
+        // a local declared map[string]any takes Omit of a proven map the same way (the compiler checks the target)
+        const mapLocal = (n) => (n?.kind === SyntaxKind.Identifier) && (this.goResolvedLocalGoType(n) === 'map[string]any');
+        const local = mapLocal(node.left);
+        const mapArg = (arg) => local ? (mapLocal(arg) || ral84g6OmitArgIsMap(this, arg)) : (this.goFieldContainerTypeNative(arg) === 'map[string]any');
+        if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || !(local || (this.goFieldContainerTypeNative(node.left) === 'map[string]any'))
             || (right?.kind !== SyntaxKind.CallExpression) || (right.expression?.kind !== SyntaxKind.PropertyAccessExpression)
             || (right.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (right.expression.name?.text !== 'omit')
-            || ((right.arguments?.length ?? 0) < 2) || (this.goFieldContainerTypeNative(this.goUnwrapParenthesizedNode(right.arguments[0])) !== 'map[string]any')) {
+            || ((right.arguments?.length ?? 0) < 2) || !mapArg(this.goUnwrapParenthesizedNode(right.arguments[0]))) {
             return undefined;
         }
-        const text = this.printNode(right, 0).trim();
+        const text = this.printNode(right, 0).trim().replace(/^(?:ccxt\.)?MapTyped\((this\.Omit\(.*\))\)$/s, '$1');
         return text.startsWith('this.Omit(') ? `${this.printNode(node.left, 0)} = this.OmitDict(${text.slice('this.Omit('.length)}` : undefined;
     }
 

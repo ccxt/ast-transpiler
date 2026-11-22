@@ -9408,6 +9408,26 @@ describe ('goTupleFirstResultBinds', () => {
         expect (run (undefined)).not.toContain ('OmitDict');
     });
 
+    test('x = this.omit (m, ..) into a local resolved map[string]any prints OmitDict; a boxed operand keeps Omit', () => {
+        // the local's Go type comes from a later join (the ccxt tuple-pair rule); the stub answers it the same way
+        const src = BASE.replace ('    options: Dict = {};', '    options: Dict = {};\n    omit (x: any, k: any): any { return x; }\n    safeInteger (o: any, k: string): any { return undefined; }')
+            + '\nclass Ex extends BaseExchange {\n    f (params: Dict = {}, other = undefined) {\n        let q: Dict = params;\n        let r = other;\n        const until = this.safeInteger (q, "until");\n        if (until !== undefined) {\n            q = this.omit (q, "until");\n            q = this.omit (r, "until");\n            r = this.omit (r, "until");\n        }\n        return [ q, r ];\n    }\n}\n';
+        const run = (typedLocal: boolean): string => {
+            const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes (x.goTranspiler);
+            if (typedLocal) {
+                const shipped = (x.goTranspiler as any).goResolvedLocalGoType;
+                (x.goTranspiler as any).goResolvedLocalGoType = function (n) { return (n?.text === 'q') ? 'map[string]any' : shipped.call (this, n); };
+            }
+            return x.transpileGo (src).content;
+        };
+        const out = run (true);
+        expect (out).toMatch (/\n\t+q = this\.OmitDict\(q, "until"\)\n/);
+        // an `any` operand (nil, missing or another kind at run time) keeps the boxed helper
+        expect (out).not.toContain ('this.OmitDict(r,');
+        expect (out).toMatch (/\n\t+r = this\.Omit\(r, "until"\)\n/);
+    });
+
     test('m[k] = p !== undefined ? p : this.sum (a, b) over *int64 p and int64 a, b is a native if/else', () => {
         const src = BASE.replace ('    options: Dict = {};', '    options: Dict = {};\n    sum (a: any, b: any): any { return a; }\n    safeInteger (o: any, k: string): Int { return undefined; }\n    seconds (): number { return 0; }') .replace ('type Bool', 'type Int = number | undefined;\ntype Bool') + '\nclass Ex extends BaseExchange {\n    g (params: Dict = {}) {\n        const request: Dict = {};\n        const until: Int = this.safeInteger (params, "until");\n        const start = this.seconds ();\n        const w = this.seconds ();\n        request["end"] = (until !== undefined) ? until : this.sum (start, w);\n        return request;\n    }\n}\n';
         const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
