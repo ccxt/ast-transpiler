@@ -58382,3 +58382,31 @@ GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     };
 }
 // ===== end H35-P07 =====
+// ===== H36-P04 =====
+// `const rows = this.safeList (R, 'lit'[, []])` printed SafeListTyped, R a local whose every write is an awaited map
+// endpoint (h28a03JoinedEndpointLocal, read-only otherwise): the member is []any, another JSON kind or absent, so the
+// comma-ok assertion answers what SafeListTyped did (the slice, else nil; a nil R reads nil)
+{
+    const printVariableDeclarationListH36p04 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printVariableDeclarationListH36p04.call(this, node, identation);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const args: any = this.goSafeAccessorLocalArgs(declaration?.initializer, 'safeList');
+        if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (args === undefined)
+            || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier)
+            || !/^[A-Za-z0-9_]+$/.test(args.key.text) || !this.h28a03JoinedEndpointLocal(args.container)
+            || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+            return printed;
+        }
+        const name = this.printNode(declaration.name, 0).trim();
+        const container = this.printNode(args.container, 0).trim();
+        const iden = this.getIden(identation);
+        const shipped = `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE} = SafeListTyped(${container}, "${args.key.text}")`;
+        const lead = /^\n*/.exec(printed)[0];
+        if (printed.substring(lead.length) !== shipped) {
+            return printed;
+        }
+        return `${lead}${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${GO_SAFE_LIST_LOCAL_TYPE})`;
+    };
+}
+// ===== end H36-P04 =====

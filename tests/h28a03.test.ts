@@ -54,4 +54,26 @@ describe ('h28a03: a let / branch local joining awaited map endpoints is JSON or
         const out = print (fn ('let response = undefined;', branches, '        this.keep (response);\n'));
         expect (out).not.toContain (native);
     });
+    // a list member of the joined endpoint local reads comma-ok as well
+    const listFn = (decl: string, writes: string, use = '') => '    async f (params = {}) {\n        ' + decl + '\n' + writes + use
+        + '        const rows = this.safeList (response, \'rows\', []);\n        return rows.length;\n    }\n';
+    const listNative = 'rows, _ = response["rows"].([]any)';
+    test ('list read of a branch-assigned let of map endpoints: comma-ok read', () => {
+        const out = print (listFn ('let response = undefined;', branches));
+        expect (out).toContain (listNative);
+        expect (out).not.toContain ('SafeListTyped(response');
+    });
+    test ('list read: a write that is not an endpoint keeps the wrap', () => {
+        const out = print (listFn ('let response = undefined;', branches + '        response = this.keep (params);\n'));
+        expect (out).not.toContain (listNative);
+    });
+    test ('list read: an untyped (any) endpoint write keeps the wrap', () => {
+        const out = print (listFn ('let response = undefined;', '        response = await this.privateGetB (params);\n'));
+        expect (out).not.toContain ('response["rows"].([]any)');
+    });
+    test ('list read: a local handed to a callee keeps the wrap', () => {
+        const out = print (listFn ('let response = undefined;', branches, '        this.keep (response);\n'));
+        expect (out).not.toContain (listNative);
+    });
 });
+
