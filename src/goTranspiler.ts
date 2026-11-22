@@ -58511,3 +58511,55 @@ GoTranspiler.prototype.h36p11StringSliceIndexCompare = function (left, right, le
     };
 }
 // ===== end H36-P11 =====
+// ===== H37-P04 =====
+// a decoded-JSON local stored as `'info'` in a literal that only a `return` hands on (directly, or through a const
+// local whose other uses write its own keys): no callee can reach `info` before the method has returned, so every
+// read of the document or of a member keeps its JSON answer
+export interface GoTranspiler {
+    h37p04PassiveUse(node, name: string): boolean;
+}
+GoTranspiler.prototype.h37p04PassiveUse = function (node, name: string): boolean {
+    const parent: any = node?.parent;
+    if ((node?.kind !== SyntaxKind.Identifier) || this.goWritesOrRebindsName(node, name, [])) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(node);
+    if ((parent?.kind !== SyntaxKind.PropertyAssignment) || (parent.initializer !== node) || (scope === undefined)
+        || (parent.parent?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || ((parent.name?.kind !== SyntaxKind.Identifier) && (parent.name?.kind !== SyntaxKind.StringLiteral)) || (String(parent.name.text) !== 'info')) {
+        return false;
+    }
+    const inReturn = (n: any): boolean => {
+        for (let up: any = n.parent; (up !== undefined) && (up !== scope); up = up.parent) {
+            if (up.kind === SyntaxKind.ReturnStatement) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const literal: any = parent.parent;
+    const holder: any = literal.parent;
+    if ((holder?.kind !== SyntaxKind.VariableDeclaration) || (holder.initializer !== literal) || (holder.name?.kind !== SyntaxKind.Identifier)
+        || ((holder.parent?.flags & NodeFlags.Const) === 0)) {
+        return inReturn(literal);
+    }
+    const held: string = holder.name.text;
+    return !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== held) || (n === holder.name)) {
+            return false;
+        }
+        const write: any = n.parent;
+        const keyWrite = (write?.kind === SyntaxKind.ElementAccessExpression) && (write.expression === n)
+            && (write.parent?.kind === SyntaxKind.BinaryExpression) && (write.parent.left === write)
+            && (write.parent.operatorToken.kind === SyntaxKind.EqualsToken) && (write.argumentExpression?.kind !== SyntaxKind.StringLiteral
+                || write.argumentExpression.text !== 'info');
+        return !keyWrite && !inReturn(n);
+    });
+};
+{
+    const goJsonOriginUseIsReadOnlyH37p04 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        return goJsonOriginUseIsReadOnlyH37p04.call(this, node, name) || this.h37p04PassiveUse(node, name);
+    };
+}
+// ===== end H37-P04 =====
