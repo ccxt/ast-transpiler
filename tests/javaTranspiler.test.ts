@@ -10942,3 +10942,26 @@ describe('java base-tier Map returns', () => {
         expect(print(undefined)).toMatch(/public Object buildMap\(/);
     });
 });
+describe('java ordering of two printed String operands', () => {
+    const withStrings = (strings, input) => {
+        transpiler.javaTranspiler.javaDeclaredStringResolver = (node) => strings[node?.text];
+        try {
+            return transpiler.transpileJava(input).content;
+        } finally {
+            transpiler.javaTranspiler.javaDeclaredStringResolver = undefined;
+        }
+    };
+    const body = (op) => "class T {\n    f(a: string, b: string): boolean {\n        return a " + op + " b;\n    }\n}";
+    test('two declared String locals compare with compareTo inside the helper null table', () => {
+        const s = { 'a': 'String', 'b': 'String' };
+        expect(withStrings(s, body('<='))).toContain('(a == null || (b != null && a.compareTo(b) <= 0))');
+        expect(withStrings(s, body('>='))).toContain('(b == null || (a != null && a.compareTo(b) >= 0))');
+        expect(withStrings(s, body('<'))).toContain('(b != null && (a == null || a.compareTo(b) < 0))');
+        expect(withStrings(s, body('>'))).toContain('(a != null && (b == null || a.compareTo(b) > 0))');
+        expect(withStrings(s, body('<='))).not.toContain('Helpers.');
+    });
+    test('one operand not a printed String keeps the helper', () => {
+        expect(withStrings({ 'a': 'String' }, body('<='))).toContain('Helpers.isLessThanOrEqual(a, b)');
+        expect(withStrings({}, body('>'))).toContain('Helpers.isGreaterThan(a, b)');
+    });
+});

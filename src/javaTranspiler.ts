@@ -801,6 +801,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // build layer for the locals it retypes (ccxt: build/java-local-types.js); it must match the
     // declared type or the operator will not compile. Only `String` is consumed (native `+` anchor).
     javaExpressionTypeResolver?: (node) => string | undefined;
+    javaDeclaredStringResolver?: (node) => string | undefined;
     // optional proof, installed by the embedding build layer, that a local's final printed declaration
     // is the nullable box `Long <name> = `; consumed only by the `x + <int literal>` null-propagating add.
     javaBoxedLongResolver?: (node) => boolean;
@@ -6510,7 +6511,8 @@ export class JavaTranspiler extends BaseTranspiler {
             if (leftKind !== undefined && rightKind !== undefined && orderingSafe) {
                 return `${this.printNode(left, 0)} ${this.SupportedKindNames[op]} ${this.printNode(right, 0)}`;
             }
-            const declaredCompare = this.printDeclaredNumericComparison(left, right, op);
+            const declaredCompare = this.printDeclaredNumericComparison(left, right, op)
+                ?? this.printJavaStringComparison(left, right, op);
             if (declaredCompare !== undefined) {
                 return declaredCompare;
             }
@@ -6648,6 +6650,26 @@ export class JavaTranspiler extends BaseTranspiler {
         const [guardTest, otherTest, otherJoin] = rule.join === '&&' ? ['!=', '==', '||'] : ['==', '!=', '&&'];
         const parts = [guard[1] ? `${guard[0]} ${guardTest} null` : undefined, other[1] ? `(${other[0]} ${otherTest} null ${otherJoin} ${cmp})` : cmp];
         return `(${parts.filter((x) => x !== undefined).join(` ${rule.join} `)})`;
+    }
+
+    // `< > <= >=` on two operands whose printed Java is String: compareTo is the JS string order, and each
+    // row keeps the helper's null table (GT: a != null && b == null; LT = !GT && !EQ; GE/LE add EQ)
+    printJavaStringComparison(left, right, op): string | undefined {
+        // identifiers and literals only: each operand prints more than once
+        const printsString = (n) => isStringLiteral(n) || (isIdentifier(n) && this.javaDeclaredStringResolver !== undefined
+            && this.javaTry(() => this.javaDeclaredStringResolver(n) === 'String', false));
+        if (!printsString(left) || !printsString(right)) {
+            return undefined;
+        }
+        const a = this.printNode(left, 0);
+        const b = this.printNode(right, 0);
+        const cmp = `${a}.compareTo(${b}) ${this.SupportedKindNames[op]} 0`;
+        return {
+            [SyntaxKind.GreaterThanToken]: `(${a} != null && (${b} == null || ${cmp}))`,
+            [SyntaxKind.LessThanToken]: `(${b} != null && (${a} == null || ${cmp}))`,
+            [SyntaxKind.GreaterThanEqualsToken]: `(${b} == null || (${a} != null && ${cmp}))`,
+            [SyntaxKind.LessThanEqualsToken]: `(${a} == null || (${b} != null && ${cmp}))`,
+        }[op];
     }
 
     // `(a % N) <op> M` (N a non-zero integer literal, a an int/long operand, M an int literal): the
