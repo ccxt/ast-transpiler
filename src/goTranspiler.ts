@@ -47545,7 +47545,10 @@ GoTranspiler.prototype.h27a05TypedMapRead = function (declaration, declaredType:
 // non-map member); the `{}` default is restored after the read
 GoTranspiler.prototype.goTypedMapDictRead = function (args, unboxValue: string, container: string, key: string, varName: string, identation: number) {
     const keyText = (args.key?.kind === SyntaxKind.StringLiteral) ? key : this.h27a05KeyText(args.key);
-    if ((keyText === undefined) || (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+    // an optional parameter bound as `var p map[string]any = GetArgMap(..)` is a map by its Go declaration
+    const paramDecl: any = (args.container?.kind === SyntaxKind.Identifier) ? this.goGetArgCalleeDeclaration(args.container) : undefined;
+    const mapParam = (paramDecl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(paramDecl) === GO_SAFE_DICT_LOCAL_TYPE);
+    if ((keyText === undefined) || (!mapParam && (this.h27a01ReceiverType(args.container) !== GO_SAFE_DICT_LOCAL_TYPE))) {
         return undefined;
     }
     // other rules print writes into the local, stores of it and its Object.keys natively only from the helper declaration

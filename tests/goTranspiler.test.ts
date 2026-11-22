@@ -20023,3 +20023,34 @@ describe('typed-map dict read on a row whose declaration prints the unfolded Map
         expect(out).not.toContain('row["b"].(map[string]any)');
     });
 });
+
+describe('safeDict on an optional parameter bound by GetArgMap reads the typed map', () => {
+    const BASE = 'export default class Exchange {\n    safeDict (a: any, k: any, d: any = undefined): any { return a; }\n    safeString (a: any, k: any, d: any = undefined): string | undefined { return a; }\n}\n';
+    const run = (sig: string, body: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'getargmap-dict-read-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange from './base/Exchange.js';\ntype Dict = { [key: string]: any };\nclass X extends Exchange {\n    f (" + sig + '): any {\n' + body + '    }\n}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    const READ = "        const stopLoss = this.safeDict (params, 'stopLoss');\n        return this.safeString (stopLoss, 'price');\n";
+    test('a Dict parameter with a {} default prints the comma-ok read', () => {
+        const out = run('symbol: string, params: Dict = {}', READ);
+        expect(out).toContain('GetArgMap(optionalArgs, 0, map[string]any{})');
+        expect(out).toContain('var stopLoss, _ = params["stopLoss"].(map[string]any)');
+        expect(out).not.toContain('SafeMapTyped(params, "stopLoss")');
+    });
+    test('an untyped parameter, a required parameter and an unguarded *string key keep the wrap', () => {
+        expect(run('symbol: string, params = undefined', READ)).not.toContain('params["stopLoss"].(map[string]any)');
+        expect(run('symbol: string, params: Dict', READ)).not.toContain('params["stopLoss"].(map[string]any)');
+        const key = run('symbol: string, params: Dict = {}', "        const k = this.safeString (params, 'kind');\n        const stopLoss = this.safeDict (params, k);\n        return this.safeString (stopLoss, 'price');\n");
+        expect(key).not.toContain('].(map[string]any)');
+    });
+});
