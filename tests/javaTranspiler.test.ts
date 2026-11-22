@@ -3415,7 +3415,7 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         expect(output).not.toContain("addElementToObject");
     });
 
-    test('element read as key keeps the helper (GetValue returns Object)', () => {
+    test('element read as key on a fresh map local prints the raw Map put', () => {
         const input =
         "class T {\n" +
         "    test(market: { [key: string]: any }): void {\n" +
@@ -3424,9 +3424,9 @@ describe('java element-access write: native Map.put for proven dictionaries', ()
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        // the key is a plain read, so the d3 rule rewrites it; the write stays the helper
-        // because the key is not a string literal
-        expect(output).toContain('Helpers.addElementToObject(request, ((java.util.Map<String, Object>)market).get("id"), 1)');
+        // the key is a plain read, so the d3 rule rewrites it; the fresh local takes the raw put
+        // with the Object key, as the helper does
+        expect(output).toContain('((java.util.Map<Object, Object>) (java.util.Map<?, ?>) request).put(((java.util.Map<String, Object>)market).get("id"), 1)');
         expect(output).not.toContain("Helpers.GetValue(");
     });
 
@@ -3647,7 +3647,7 @@ describe('java element-access write: proven-String keys and HashMap receivers', 
         expect(output).not.toContain("addElementToObject");
     });
 
-    test('an any-typed key on a dictionary receiver keeps the helper', () => {
+    test('an any-typed key on a fresh dictionary local prints the raw Map put', () => {
         const input =
         "class T {\n" +
         "    test(code: any): void {\n" +
@@ -3656,7 +3656,7 @@ describe('java element-access write: proven-String keys and HashMap receivers', 
         "    }\n" +
         "}"
         const output = transpiler.transpileJava(input).content;
-        expect(output).toContain("Helpers.addElementToObject(result, code, 2)");
+        expect(output).toContain("((java.util.Map<Object, Object>) (java.util.Map<?, ?>) result).put(code, 2)");
     });
 
     test('a number-typed key on a proven HashMap local keeps the helper', () => {

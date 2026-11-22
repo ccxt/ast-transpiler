@@ -6373,6 +6373,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaMapPutIsNative(baseExpr, keys)) {
             return `${acc}.put(${keyArg}, ${rhs})`;
         }
+        // a declared Map local that only ever holds a fresh HashMap, any non-numeric key: the helper's raw Map put
+        if (this.javaDeclaredMapReceiver(baseExpr) && this.isPlainHashMapReceiver(baseExpr, keys)
+            && !(this.getChecker().getTypeAtLocation(keys[0]).flags & TypeFlags.NumberLike)) {
+            return `((java.util.Map<Object, Object>) (java.util.Map<?, ?>) ${acc}).put(${lastKey}, ${rhs})`;
+        }
         // `this.<field>[k] = v` where the file only ever builds the field as a plain HashMap
         if (keys.length === 1 && isPropertyAccessExpression(baseExpr)
             && this.javaFileBuiltMapField(baseExpr, baseExpr.name.text, true)) {
