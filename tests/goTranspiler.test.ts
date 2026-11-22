@@ -19984,3 +19984,42 @@ describe('a Str local copied from a string tuple reader slot', () => {
         expect(out).not.toContain('var id *string');
     });
 });
+describe('typed-map dict read on a row whose declaration prints the unfolded MapTyped(SafeDict) read', () => {
+    const head = 'type Str = string | undefined;\ntype Dict = { [key: string]: any };\nclass T {\n    safeString (o, k, d = undefined): Str { return o[k]; }\n    safeDict (o, k, d = undefined): Dict | undefined { return o[k]; }\n    safeList (o, k, d = undefined): any[] | undefined { return o[k]; }\n    g (x: Dict) { return x; }\n';
+    const byPath = (body: string): string => {
+        const name = 'tmp-p13-' + process.pid + '-' + Math.random().toString(36).slice(2);
+        const root = path.join(__dirname, 'files', name);
+        fs.mkdirSync(path.join(root, 'ts', 'src'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts', 'src', 'ex.ts'), head + body + '}\n');
+        const cwd = process.cwd();
+        try {
+            process.chdir(root);
+            const x = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(x.goTranspiler);
+            installCcxtGoLocalTypes(x.goTranspiler);
+            return x.transpileGoByPath('ts/src/ex.ts').content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    };
+    const loop = (inner: string) => "    f (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n" + inner + "        }\n        return out;\n    }\n";
+    test('a `{}`-defaulted literal-key read prints the comma-ok assertion with the default restored', () => {
+        const out = byPath(loop("            const sub = this.safeDict (row, 'b', {});\n            const c = this.safeString (sub, 'asset');\n            if (c !== undefined) {\n                out.push (this.g (sub));\n            }\n"));
+        expect(out).toContain('sub, _ = row["b"].(map[string]any)\n');
+        expect(out).toMatch(/if sub == nil \{\n\t+sub = map\[string\]any\{\}\n/);
+        expect(out).not.toContain('SafeDict(row, "b"');
+    });
+    test('negative: a non-`{}` default keeps the helper', () => {
+        const out = byPath(loop("            const sub = this.safeDict (row, 'b', response);\n            out.push (this.safeString (sub, 'id'));\n"));
+        expect(out).not.toContain('row["b"].(map[string]any)');
+    });
+    test('negative: a local whose keys are written keeps the helper read', () => {
+        const out = byPath(loop("            const sub = this.safeDict (row, 'b', {});\n            sub['x'] = 1;\n            out.push (sub);\n"));
+        expect(out).not.toContain('row["b"].(map[string]any)');
+    });
+    test('negative: a receiver written through keeps the helper read', () => {
+        const out = byPath(loop("            row['z'] = 1;\n            const sub = this.safeDict (row, 'b', {});\n            out.push (this.safeString (sub, 'id'));\n"));
+        expect(out).not.toContain('row["b"].(map[string]any)');
+    });
+});

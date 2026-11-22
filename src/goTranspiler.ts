@@ -47569,14 +47569,61 @@ GoTranspiler.prototype.goTypedMapDictRead = function (args, unboxValue: string, 
         return undefined;
     }
     const value = unboxValue.trim().replace(/^ccxt\./, '');
-    const plain = (value === `SafeMapTyped(${container}, ${key})`) || (value === `this.SafeDictMap(${container}, ${key})`);
-    if (!plain && (value !== `this.SafeDictMap(${container}, ${key}, map[string]any{})`)) {
+    // SafeDictMap is MapTyped of the SafeDict read, so the unfolded spelling is the same read
+    const plain = (value === `SafeMapTyped(${container}, ${key})`) || (value === `this.SafeDictMap(${container}, ${key})`)
+        || (value === `MapTyped(this.SafeDict(${container}, ${key}))`);
+    if (!plain && (value !== `this.SafeDictMap(${container}, ${key}, map[string]any{})`) && (value !== `MapTyped(this.SafeDict(${container}, ${key}, map[string]any{}))`)) {
+        return undefined;
+    }
+    if (value.startsWith('MapTyped(') && !this.goTypedMapReceiverStaysPlain(args.container)) {
         return undefined;
     }
     const iden = this.getIden(identation);
     const read = `${container}[${keyText}].(${GO_SAFE_DICT_LOCAL_TYPE})`;
     return plain ? `${iden}var ${varName}, _ = ${read}` : `${iden}var ${varName} ${GO_SAFE_DICT_LOCAL_TYPE}\n${iden}${varName}, _ = ${read}\n`
         + `${iden}if ${varName} == nil {\n${this.getIden(identation + 1)}${varName} = ${GO_SAFE_DICT_LOCAL_TYPE}{}\n${iden}}`;
+};
+// the unfolded spelling keeps the helper when the receiver is rebound, written through or handed to a callee
+// other than a safe reader: a callee may store a value the comma-ok assertion would not read as a map
+export interface GoTranspiler {
+    goTypedMapReceiverStaysPlain(container): boolean;
+}
+GoTranspiler.prototype.goTypedMapReceiverStaysPlain = function (container): boolean {
+    const name: string | undefined = (container?.kind === SyntaxKind.Identifier) ? container.text : undefined;
+    const scope: any = this.goEnclosingFunction(container);
+    const declaration: any = this.goAnyBoxLocalDeclaration(container);
+    if ((name === undefined) || (scope === undefined) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    return !this.hasNodeWhere(scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        if (this.goWritesOrRebindsName(n, name, [])) {
+            return true;
+        }
+        let o: any = n;
+        while (((o.parent?.kind === SyntaxKind.AsExpression) || (o.parent?.kind === SyntaxKind.ParenthesizedExpression)
+            || (o.parent?.kind === SyntaxKind.NonNullExpression)) && (o.parent.expression === o)) {
+            o = o.parent;
+        }
+        const up: any = o.parent;
+        if ((up?.kind === SyntaxKind.ElementAccessExpression) && (up.expression === o)) {
+            let read: any = up;
+            while (((read.parent?.kind === SyntaxKind.ElementAccessExpression) || (read.parent?.kind === SyntaxKind.PropertyAccessExpression)) && (read.parent.expression === read)) {
+                read = read.parent;
+            }
+            return (read.parent?.kind === SyntaxKind.BinaryExpression) && (read.parent.left === read)
+                && (read.parent.operatorToken.kind >= SyntaxKind.FirstAssignment) && (read.parent.operatorToken.kind <= SyntaxKind.LastAssignment);
+        }
+        if ((up?.kind === SyntaxKind.CallExpression) && (up.arguments.indexOf(o) >= 0)) {
+            const callee: any = up.expression;
+            const reader = (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+                && (up.arguments[0] === o) && /^safe[A-Z]/.test(callee.name?.text ?? '');
+            return !reader;
+        }
+        return false;
+    });
 };
 // ===== h27-A06 =====
 // `const x = this.safeDict (this.options, k)` with k a Go string prints the comma-ok read of the typed
