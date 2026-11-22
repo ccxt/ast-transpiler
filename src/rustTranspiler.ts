@@ -27258,6 +27258,13 @@ export class RustTranspiler extends BaseTranspiler {
         return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     }
 
+    /** The printed name of a typed `const x: Dict = this.extend (..)` local (rustDeclaredDictExtendCopy). */
+    rustExtendCopyDictName(recv: any): string | undefined {
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration.name === recv || !this.rustDeclaredDictExtendCopy(declaration) || !this.rustHandedDictLocal(declaration)) return undefined;
+        return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    }
+
     /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
     rustOptKeySetDictName(node: any): string | undefined {
         const recv: any = this.rustSkipWrappers(node);
@@ -27271,7 +27278,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-61n: `None` enumerates nothing, exactly the empty list `object_keys` / `object_values` answer for Null
         const opt = arg === undefined ? undefined : this.rustOptKeySetDictName(arg);
         if (opt !== undefined) return kind === 'keys' ? `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect())` : `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::values).cloned().collect())`;
-        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg);
+        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg);
         if (name === undefined) return undefined;
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
     }
@@ -34289,6 +34296,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-59a: `this.omit (x, k1, k2, ..)` (extra keys ride in the `optional_args` slice as printed today) lends `&x` too
                 || (call.arguments[0] === n && this.rustHandedRestOmit(call))
                 || this.rustHandedDictExtendOperand(call) === n || this.rustLentParamsSlot(call, n) || this.rustExtendHeadUse(n)
+                // `Object.keys/values (x)` of a `Dict`-declared `extend` copy reads the map's own iterators
+                || (this.bearerEnumArg(call) === n && this.rustDeclaredDictExtendCopy(declaration))
                 // ral-55a: a reassigned handed map read by a hand-written any-key reader (`safeString2 (x, 'a', 'b')`) is lent;
                 // ral-57a: so is an omit result that is never reassigned (`const p = this.omit (q, k)` read by `safeString2`)
                 || ((rewritten || this.rustOmitOfDictInit(declaration)) && call.arguments[0] === n && !this.rustTestTierSource(call) && this.rustBorrowedAnyKeyReader(call));
@@ -34307,6 +34316,14 @@ export class RustTranspiler extends BaseTranspiler {
         // a slot the callee's own tuple type declares `Dict` is that map even when nothing reads it
         const declared = declaration.kind === SyntaxKind.BindingElement && uses === 0 && boxes === 0 && (this.rustDeclaredDictSlot(declaration) || this.rustBaseHandleLastDictSlot(declaration));
         return safe && (uses > 0 || declared || ((declaration.kind === SyntaxKind.BindingElement || this.rustHandedTernaryLocal(declaration)) && boxes > 0 && !longBox));
+    }
+
+    /** `const x: Dict = this.extend (..)` (base `extend`, which builds a `Value::Map` on every input). */
+    rustDeclaredDictExtendCopy(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || declaration.initializer === undefined || declaration.type === undefined || !/^Dict$/.test(String(declaration.type.getText()))) return false;
+        // REST files only: a ws subscription copy may carry the tag keys `object_keys` filters out
+        if (!RustTranspiler.RUST_REST_FILE.test(String(declaration.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        return this.rustBaseCallNamed(this.rustSkipWrappers(declaration.initializer), new Set([ 'extend' ]));
     }
 
     // ── ral-ra: reassigned handed maps ──
