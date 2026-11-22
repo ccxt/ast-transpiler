@@ -12526,6 +12526,8 @@ describe ('goPointerHelperTupleSlots', () => {
         + decl + uses + '        return request;\n    }\n', tables);
 
     const TAG = "        const [ tag, paramsTag ] = this.handleParamString (params, 'tag');\n";
+    const fnx = (decl: string, uses: string): string => go('    extend (a: Dict, b: Dict): Dict { return a; }\n    f (address: string, params: Dict = {}): any {\n        const request: Dict = {};\n'
+        + decl + uses + '        return request;\n    }\n');
 
     describe('tuple slot 0 of the pointer helpers is the typed pointer', () => {
         test('nil test, guarded map store, literal compare and a deref-ing callee keep the pointer', () => {
@@ -12589,6 +12591,21 @@ describe ('goPointerHelperTupleSlots', () => {
         test('a nested literal entry and a write into an untyped receiver keep the box', () => {
             for (const use of [ "        const body: Dict = { 'o': { 'tag': tag } };\n        request['b'] = body;\n", "        const x = this.other (1);\n        x['tag'] = tag;\n        request['x'] = x;\n" ]) {
                 const out = fn(TAG, use);
+                expect(out).not.toContain('var tag *string');
+            }
+        });
+        test('an entry of a literal handed to extend is stored into the fresh result', () => {
+            const out = fnx(TAG, "        const data: Dict = {};\n        const out = this.extend (data, {\n            'a': address,\n            'tag': tag,\n        });\n        request['b'] = out;\n");
+            expect(out).toContain('var tag *string = SafeStringPtr(tagparamsTagVariable[0])');
+            expect(out).toContain('if tag != nil {\n\t\tout["tag"] = *tag\n\t} else {\n\t\tout["tag"] = nil\n\t}');
+            expect(out).not.toContain('"tag": ');
+            expect(out).not.toContain('func() any {');
+        });
+        test('extend with a nested entry, a returned extend or an assigned extend keeps the box', () => {
+            for (const use of [ "        const data: Dict = {};\n        const out = this.extend (data, { 'o': { 'tag': tag } });\n        request['b'] = out;\n",
+                "        const data: Dict = {};\n        request['b'] = this.extend (data, { 'tag': tag });\n",
+                "        const data: Dict = {};\n        let out = {};\n        out = this.extend (data, { 'tag': tag });\n        request['b'] = out;\n" ]) {
+                const out = fnx(TAG, use);
                 expect(out).not.toContain('var tag *string');
             }
         });
