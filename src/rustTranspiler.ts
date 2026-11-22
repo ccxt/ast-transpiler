@@ -5558,6 +5558,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (nativeUses === 0 && kind === 'str' && this.rustReaderCaseStrRecv(this.unwrapParens(declaration.initializer)) !== undefined) return undefined;
         // ral-90rg R2a: a `parseNumber` of a typed float parameter is typed only for a native use (box-only stays `Value`)
         if (nativeUses === 0 && this.rust90rgParseNumberOfNumParam(this.unwrapParens(declaration.initializer))) return undefined;
+        // a `number` local seeded from `parseNumber` of any scalar is an `Option<f64>` only where no use boxes it (an `Int` stays `Int` in a box)
+        if ((nativeUses === 0 || boxed > 0) && this.rustParseNumberNumLocalInit(declaration.initializer) && !this.rustParseNumberStrCall(declaration.initializer)) return undefined;
         // ral-84h R1: a ternary with an arm read from a defaulted base `Str` parameter is typed only for a native use (box-only stays `Value`)
         const init84h: Node = this.unwrapParens(declaration.initializer);
         if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: Node) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
@@ -6059,6 +6061,7 @@ export class RustTranspiler extends BaseTranspiler {
         const baseReturn = this.rustBaseReturnScalarKind(node, name);
         if (baseReturn !== undefined) return baseReturn;
         if (this.rustParseNumberStrCall(node)) return 'onum';
+        if (fresh && this.rustParseNumberNumLocalInit(node)) return 'onum';
         if (this.rustVenueParseToInt(node)) return 'int';
         if ((this.rustVenueInitializer(node) || this.rustNilVenueWrite(node)) && this.rustVenueStrCall(node)) return 'ostr';
         // 51k: a venue `Str` method as an arm of a ternary initializer (`p !== undefined ? p : this.walletAddressOrUndefined ()`)
@@ -7109,6 +7112,20 @@ export class RustTranspiler extends BaseTranspiler {
         const arg: Node = this.unwrapParens(call.arguments[0]);
         if (!isIdentifier(arg) || this.rustScalarIdentifierKind(arg) !== undefined) return false;
         return [ 'num', 'onum' ].includes(this.rustOptParamKind(arg) ?? '');
+    }
+
+    /** The whole initializer of a local annotated `number`: `this.parseNumber (x)` (base tier, one argument). The runtime answers
+     *  `x` for an `Int` / `Float`, `Float` or `Null` for a `Str`, `Null` otherwise, so its `as_f64()` is what every native
+     *  compare or arithmetic read of the `Value` takes. Boxed uses are vetoed by rustScalarLocalKindCore. */
+    rustParseNumberNumLocalInit(node: Node): boolean {
+        const call: any = this.unwrapParens(node);
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'parseNumber') return false;
+        let up: any = call.parent;
+        while (up !== undefined && isParenthesizedExpression(up)) up = up.parent;
+        if (up === undefined || !isVariableDeclaration(up) || up.type?.kind !== SyntaxKind.NumberKeyword) return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile?.()?.fileName ?? ''));
     }
 
     // Any other callee: a base one whose checker return is a string, or one declaring `string`/`Str`/`int`/`Int`
@@ -12402,6 +12419,7 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-56n: the sole argument of `Math.ceil` over two typed numeric operands (polymarket `maxPages`, limitless
                 // `cappedPages`): `divide` answers `Float(x / y)`, `Null` for a zero / `Null` divisor, so an `Option<f64>`
                 if (divisor === undefined && numeric(a) && numeric(this.rustScalarNumericKind(node.right)) && this.rust56nCeilDivisionArg(node)) return 'onum';
+                if (this.rustLitOverOptNumDivision(node)) return 'onum';
                 if (!numeric(a) || divisor === undefined || Number(divisor) === 0) return undefined;
                 return a.startsWith('o') ? 'onum' : 'num';
             }
@@ -12997,6 +13015,12 @@ export class RustTranspiler extends BaseTranspiler {
             const intLit = (k: string, n) => k === 'int' && this.rustScalarIntLiteral(n) !== undefined;
             if (base(lk) === 'num' && intLit(rk, right)) return this.rustScalarCompareText(node, dry, 'num');
             if (base(rk) === 'num' && intLit(lk, left)) return this.rustScalarCompareText(node, dry, 'num');
+            // an `Option<f64>` ordered against an `i64`: `None` is false (the boxed NaN compare), `Some(p)` orders against the i64 as f64
+            if (!equality && ((lk === 'onum' && rk === 'int') || (lk === 'int' && rk === 'onum'))) {
+                if (dry) return '_';
+                const test = lk === 'onum' ? `__p ${sign} (${text('int', right)} as f64)` : `(${text('int', left)} as f64) ${sign} __p`;
+                return `matches!(${text('onum', lk === 'onum' ? left : right)}, Some(__p) if ${test})`;
+            }
             if (base(lk) !== base(rk)) return undefined;
             // `None` orders below every `Some`; a JS compare with `undefined` is false, so the
             // smaller side of an ordering is tested with `is_some()` first (locals only: read twice)
@@ -13460,6 +13484,16 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `a OP b` with an optional operand: `Some(..)` only when every optional side is present, as the helpers
      *  (`add`/`subtract`/`multiply`/`divide` by a non-zero literal) answer `Null` when either operand is `Null`. */
+    /** `k / x`: a numeric literal over an `Option<f64>` local seeded from `parseNumber` (rustParseNumberNumLocalInit). */
+    rustLitOverOptNumDivision(node: any): boolean {
+        if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.SlashToken) return false;
+        const left: any = this.unwrapParens(node.left);
+        const right: any = this.unwrapParens(node.right);
+        if (!isNumericLiteral(left) || !isIdentifier(right)) return false;
+        const own = this.rustScalarLocalOf(right);
+        return own !== undefined && own.kind === 'onum' && this.rustParseNumberNumLocalInit(own.declaration.initializer);
+    }
+
     rustScalarOptArithText(base: string, node, sign: string): string {
         const sides = [ node.left, node.right ].map((n, i) => {
             const k = this.rustArithSideKind(n);
