@@ -13870,7 +13870,37 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-46b: likewise a dict-shaped field insert (`fundingRates`): the same native insert, the same one key allocation
         const keyField: any = this.rustKeyWrapped(key).parent?.expression;
         if (kind === 'str' && (this.rustFieldKeyReceiver(keyField) !== undefined || this.rustDictShapedFieldInsert(keyField))) return `${super.printIdentifier(key)}.to_string()`;
+        if (kind === 'str' && this.rustInsertKeyMoves(key)) return super.printIdentifier(key);
         return kind === 'str' ? `${super.printIdentifier(key)}.clone()` : undefined;
+    }
+
+    /** A `String` local (a `let` of this function) whose insert key is its last use, outside any loop or closure between
+     *  it and the declaration, with no other use in the statement: the insert takes the key by move, no clone. */
+    rustInsertKeyMoves(key: any): boolean {
+        const declaration: any = this.rustDeclaredNode(key);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+        if (this.rustEnclosingFunction(declaration) !== this.rustEnclosingFunction(key)) return false;
+        if (this.rustLocalLastUse(key, declaration)) return true;
+        // the insert ends the then-branch of an `if` and every later use sits in its else-branch (never both run)
+        let statement: any = key;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        const ifs: any = statement.parent?.kind === SyntaxKind.Block ? statement.parent.parent : statement.parent;
+        if (ifs === undefined || !isIfStatement(ifs) || ifs.elseStatement === undefined || ifs.thenStatement.pos > statement.pos || statement.end > ifs.thenStatement.end) return false;
+        if (statement.parent.kind === SyntaxKind.Block && statement.parent.statements[statement.parent.statements.length - 1] !== statement) return false;
+        for (let up: any = ifs; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        const own = this.rustSymbolOf(key);
+        const scope = this.rustEnclosingFunction(declaration);
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === key || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (n.pos >= statement.pos && n.end <= statement.end) return false;
+            if (n.pos > key.pos && !(n.pos >= ifs.elseStatement.pos && n.end <= ifs.elseStatement.end)) return false;
+        }
+        return true;
     }
 
     // rustScalarOptKeyText: an `Option<String>` local as a dynamic insert key. `stringify_param` of the
