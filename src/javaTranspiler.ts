@@ -6385,6 +6385,16 @@ export class JavaTranspiler extends BaseTranspiler {
             && !this.elementWriteValueMayBeNull(right)) {
             return `${acc}.put(${lastKey}, ${rhs})`;
         }
+        // a List<Object> local of a TS tuple type, literal index below the tuple's required length:
+        // the helper's List branch overwrites in place, as List.set does (the native tuple read's proof)
+        if (keys.length === 1 && isNumericLiteral(keys[0]) && node.parent?.kind === SyntaxKind.ExpressionStatement
+            && /^(java\.util\.)?List<Object>$/.test(this.javaDeclaredTypeOf(baseExpr) ?? '')) {
+            const tuple = this.javaTry(() => this.getChecker().getTypeAtLocation(baseExpr), undefined);
+            const index = Number(keys[0].text);
+            if (this.isJavaListStructureType(tuple) && Number.isInteger(index) && index < this.tupleRequiredElementCount(tuple)) {
+                return `${acc}.set(${index}, ${rhs})`;
+            }
+        }
         return `Helpers.addElementToObject(${acc}, ${lastKey}, ${rhs})`;
     }
 
