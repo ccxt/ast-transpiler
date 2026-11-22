@@ -99,8 +99,8 @@ describe ('go nested loop rows of a JSON-origin list carry the JSON-origin proof
     test ('a loop row of a parameter list keeps the wrap', () => {
         expect (out).not.toMatch (/pcoins, _ = prow\["coins"\]/);
     });
-    test ('a row read outside a bounded loop does not prove the nested list', () => {
-        expect (out).not.toMatch (/fcoins, _ = first\["coins"\]/);
+    test ('a row read by index out of a JSON-origin list proves the nested list too', () => {
+        expect (out).toMatch (/fcoins, _ = first\["coins"\]\.\(\[\]any\)/);
         expect (out).toMatch (/var fcoin, _ = fcoins\[j\]/);
     });
 });

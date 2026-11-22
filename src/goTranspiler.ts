@@ -58221,3 +58221,34 @@ GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     };
 }
 // ===== end H34-P08
+// ===== H35-P07 =====
+// `const row = this.safeDict (xs, K[, {}])` printed as a typed map local, xs a read-only list cut by safeList out of a
+// decoded JSON document: the row is one element of that document, so it is JSON-origin too (one more hop)
+{
+    const h35p07Busy = new Set<any>();
+    const jsonOriginH35p07 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        if (jsonOriginH35p07.call(this, node, depth)) {
+            return true;
+        }
+        const declaration: any = ((depth <= 5) && (node?.kind === SyntaxKind.Identifier)) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || h35p07Busy.has(declaration)) {
+            return false;
+        }
+        const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeDict');
+        const list: any = args?.container;
+        if ((list?.kind !== SyntaxKind.Identifier) || (args.key?.kind === SyntaxKind.StringLiteral)
+            || (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE) || !this.goDeclaredListIdentifier(list)) {
+            return false;
+        }
+        h35p07Busy.add(declaration);
+        try {
+            return (this.h27a09JsonOriginList(list) || this.h27a08JsonList(list))
+                && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+        } finally {
+            h35p07Busy.delete(declaration);
+        }
+    };
+}
+// ===== end H35-P07 =====
