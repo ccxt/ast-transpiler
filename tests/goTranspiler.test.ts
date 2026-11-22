@@ -20607,3 +20607,45 @@ describe('formatVaultAddress answers *string from a *string parameter', () => {
         expect (out).not.toContain ('Other(optionalArgs ...any) *string');
     });
 });
+
+describe('a venue Str parameter whose caller casts a *string local to a string-literal union', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'str-ptr-cast-arg-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (arg: string): string => {
+        const dir = path.join(tmp, 'ts', 'src');
+        fs.rmSync(path.join(tmp, 'ts'), { 'recursive': true, 'force': true });
+        fs.mkdirSync(path.join(dir, 'base'), { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), "export type Str = string | undefined;\nexport type OrderType = 'limit' | 'market';\nexport class Exchange {\n    safeString (a: any, b: any, c: any = undefined): Str { return c; }\n}\n");
+        const file = path.join(dir, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, Str, OrderType } from './base/Exchange';\nexport class ex extends Exchange {\n"
+            + "    two (o: object) {\n        const type = this.safeString (o, 'type');\n        return this.req (" + arg + ");\n    }\n"
+            + "    req (type: OrderType) {\n        const isMarket = (type === 'market');\n        return isMarket;\n    }\n}\n");
+        const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+        installCcxtGoLocalTypes(inst.goTranspiler);
+        const cwd = process.cwd();
+        process.chdir(tmp);
+        try {
+            return inst.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    test('a cast *string local makes the parameter *string with a nil-guarded compare', () => {
+        const output = run('type as OrderType');
+        expect(output).toContain('Req(typeVar *string)');
+        expect(output).toContain('(typeVar != nil && *typeVar == "market")');
+        expect(output).not.toContain('IsEqual(typeVar');
+    });
+    test('a cast of an untyped index read keeps the box', () => {
+        const output = run("o['type'] as OrderType");
+        expect(output).toContain('Req(typeVar any)');
+        expect(output).not.toContain('*typeVar');
+    });
+    test('a nil argument beside a cast local still takes the pointer; nil compares false', () => {
+        const output = run('undefined');
+        expect(output).toContain('Req(typeVar *string)');
+        expect(output).toContain('(typeVar != nil && *typeVar == "market")');
+    });
+});

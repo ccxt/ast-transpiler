@@ -13016,7 +13016,7 @@ function goStringPtrParamProven (go, param) {
         if (isUndefined (arg) || goStringPtrAssumedArg (go, arg) || (arg.kind === ts.SyntaxKind.StringLiteral)) {
             continue; // a literal is boxed SafeStringPtr("..") at the call (installStringPtrParams), never nil
         }
-        const t = go.goPrintedArgType (arg);
+        const t = go.goPrintedArgType (goStringPtrCastOperand (arg));
         if ((t !== '*string') && !((t === 'string') && (goStringAddressArg (go, arg, arg.text ?? '') !== undefined))) {
             return false;
         }
@@ -13036,6 +13036,11 @@ function goStringPtrParamProven (go, param) {
         }
     }
     return go.goParameterBodyTakes (fn, param, '*string');
+}
+
+// `x as OrderType` (a string-literal union) prints bare `x`: the argument has the type of the identifier
+function goStringPtrCastOperand (arg) {
+    return ((arg?.kind === ts.SyntaxKind.AsExpression) && (arg.expression?.kind === ts.SyntaxKind.Identifier)) ? arg.expression : arg;
 }
 
 // a sibling-file `x: Str = undefined` parameter whose only mention in its method is this argument: its
