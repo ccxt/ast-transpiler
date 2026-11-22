@@ -19774,6 +19774,84 @@ describe ('go dict param from a never-nil safeDict argument', () => {
     });
 });
 
+describe ('go dict param argument of a wrapped base dispatch', () => {
+    const print = (name: string, arg: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parseTransactionWithType (transaction: Dict, c: any = undefined) {\n' +
+            "        return transaction['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[], c: any) {\n' +
+            '        return this.parseTransactionWithType (' + arg + ', c);\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: { wrapCallMethods: [ 'parseTransactionWithType' ] } });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict argument of a callInternal dispatch reads as SafeDictMap', () => {
+        const out = print('tmp-dict-param-wrapped', 'this.safeDict (xs, 0, {})');
+        expect(out).toContain('ParseTransactionWithType(transaction map[string]any');
+        expect(out).toContain('<-this.callInternal("parseTransactionWithType", this.SafeDictMap(xs, 0, map[string]any{}), c)');
+    });
+    test('a wrapped dispatch with a safeDict argument without a default keeps the box', () => {
+        const out = print('tmp-dict-param-wrapped-nil', 'this.safeDict (xs, 0)');
+        expect(out).toContain('ParseTransactionWithType(transaction any');
+        expect(out).not.toContain('SafeDictMap');
+    });
+});
+
+describe ('go dict param from an omit of a proven map local', () => {
+    const print = (name: string, body: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    omit (d: any, ...ks: any[]): any {\n' +
+            '        return d;\n' +
+            '    }\n' +
+            '    parseTransactionWithType (transaction: Dict) {\n' +
+            "        return transaction['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[], r: any) {\n' + body +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a const omit of a {}-defaulted safeDict local types the parameter', () => {
+        const out = print('tmp-dict-param-omit', "        const m = this.safeDict (xs, 0, {});\n        const s = this.omit (m, 'status');\n        return this.parseTransactionWithType (s);\n");
+        expect(out).toContain('ParseTransactionWithType(transaction map[string]any');
+    });
+    test('a const omit of an untyped parameter keeps the box', () => {
+        const out = print('tmp-dict-param-omit-any', "        const s = this.omit (r, 'status');\n        return this.parseTransactionWithType (s);\n");
+        expect(out).toContain('ParseTransactionWithType(transaction any');
+    });
+    test('an omit of a safeDict local with no default (may be nil) keeps the box', () => {
+        const out = print('tmp-dict-param-omit-nil', "        const m = this.safeDict (xs, 0);\n        const s = this.omit (m, 'status');\n        return this.parseTransactionWithType (s);\n");
+        expect(out).toContain('ParseTransactionWithType(transaction any');
+    });
+});
+
 describe('safeDict / safeList results compare against nil through the typed readers', () => {
     const run = (body: string): string => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'safe-reader-nil-'));
@@ -20417,5 +20495,62 @@ describe('`k in m` on a typed SafeDictMap local with a *string key', () => {
     test('an any key keeps the helper', () => {
         const output = go("    f (message: Dict, t: string, k) {\n        const m = this.safeDict (this.balance, t, {});\n        if (k in m) {\n            m['x'] = 1;\n        }\n    }\n");
         expect(output).toContain('InOp(m, k)');
+    });
+});
+
+describe ('go dict param argument hoisted into a comma-ok local', () => {
+    const print = (name: string, body: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    safeList (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    toArray (d: any): any[] {\n' +
+            '        return d;\n' +
+            '    }\n' +
+            '    parseLedgerEntry (item: Dict, c: any = undefined) {\n' +
+            "        return item['a'];\n" +
+            '    }\n' +
+            '    run (data: any, c: any) {\n' + body + '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: { wrapCallMethods: [ 'parseLedgerEntry' ] } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a loop-bounded argument of a typed list reads into a local before the statement', () => {
+        const out = print('tmp-h37p01-loop', '        const xs: Dict[] = this.toArray (data);\n        const r = [];\n        for (let i = 0; i < xs.length; i++) {\n            const e = this.parseLedgerEntry (this.safeDict (xs, i, {}), c);\n            r.push (e);\n        }\n        return r;\n');
+        expect(out).toMatch(/(xsDict\d+), _ := xs\[i\]\.\(map\[string\]any\)\n\s*if \1 == nil \{\n\s*\1 = map\[string\]any\{\}\n\s*\}\n.*callInternal\("parseLedgerEntry", \1, c\)/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('a literal index keeps the {} default for an empty list', () => {
+        const out = print('tmp-h37p01-zero', '        const xs: Dict[] = this.toArray (data);\n        return this.parseLedgerEntry (this.safeDict (xs, 0, {}), c);\n');
+        expect(out).toMatch(/var (xsDict\d+) map\[string\]any\n\s*if len\(xs\) > 0 \{\n\s*\1, _ = xs\[0\]\.\(map\[string\]any\)\n\s*\}\n\s*if \1 == nil \{/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('an untyped receiver keeps the wrap', () => {
+        const out = print('tmp-h37p01-untyped', '        return this.parseLedgerEntry (this.safeDict (data, 0, {}), c);\n');
+        expect(out).toContain('this.SafeDictMap(data, 0, map[string]any{})');
+        expect(out).not.toMatch(/Dict\d+/);
+    });
+    test('a call on the right of && keeps the wrap (evaluation order)', () => {
+        const out = print('tmp-h37p01-and', '        const xs: Dict[] = this.toArray (data);\n        const ok = (c !== undefined) && this.parseLedgerEntry (this.safeDict (xs, 0, {}), c);\n        return ok;\n');
+        expect(out).toContain('this.SafeDictMap(xs, 0, map[string]any{})');
+        expect(out).not.toMatch(/xsDict\d+/);
+    });
+    test('a call inside a loop condition keeps the wrap', () => {
+        const out = print('tmp-h37p01-cond', '        const xs: Dict[] = this.toArray (data);\n        while (this.parseLedgerEntry (this.safeDict (xs, 0, {}), c)) {\n            c = undefined;\n        }\n');
+        expect(out).toContain('this.SafeDictMap(xs, 0, map[string]any{})');
+        expect(out).not.toMatch(/xsDict\d+/);
     });
 });

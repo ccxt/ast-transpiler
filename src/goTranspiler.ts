@@ -13921,6 +13921,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'handleParamString': [ 0 ], 'handleParamString2': [ 0 ], 'handleParamInteger': [ 0 ], 'handleParamInteger2': [ 0 ],
     'handleParamBool': [ 0 ], 'handleParamBool2': [ 0 ], 'handleNetworkCodeAndParams': [ 0 ], 'handleTriggerDirectionAndParams': [ 0 ],
     'handleTriggerAndParams': [ 0 ], 'isTriggerOrder': [ 0 ],
+    // row parsers: the base loops pass `{}`-defaulted safeDict rows, every override reads the row as a map
+    'parseLedgerEntry': [ 0 ], 'parseTransaction': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -13966,6 +13968,11 @@ function goDictParamAwaitedMapArg (go: any, arg: any): boolean {
     if (decl?.kind !== SK.VariableDeclaration) { return false; }
     // a safeDict-seeded local the printer itself declares map[string]any
     if ((go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE) || (go.goSafeDictMapLocal (decl) === GO_BASE_DICT_PARAM_TYPE)) { return true; }
+    // a const `this.omit (m, ..)` of a proven map m prints the OmitDict twin, a fresh map
+    const init: any = decl.initializer;
+    if (((decl.parent?.flags ?? 0) & ts.NodeFlags.Const) && (init?.kind === SK.CallExpression) && (init.expression?.kind === SK.PropertyAccessExpression)
+        && (init.expression.expression?.kind === SK.ThisKeyword) && (init.expression.name?.text === 'omit') && (init.arguments.length >= 2)
+        && (init.arguments[0].kind === SK.Identifier) && (init.arguments[0].text !== arg.text) && goDictParamAwaitedMapArg (go, init.arguments[0])) { return true; }
     return go.goAwaitedMapLocal (decl) || goAwaitedMapWritesOnlyLocal (go, decl);
 }
 
@@ -14075,7 +14082,8 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         // a tabled base method has no override, so every venue call reaches it (an abstract `Exchange extends _Exchange` hides the chain)
         const tabledBase = goIsBaseExchangeFile (fn) && Object.prototype.hasOwnProperty.call (GO_BASE_DICT_PARAMS, name);
         if (!tabledBase && !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
-        const arg = String (site.args?.[index] ?? '').trim ();
+        // `x as Dict` is the same value as `x`: the declaration of `x` decides
+        const arg = String (site.args?.[index] ?? '').trim ().replace (/\s+as\s+Dict$/, '');
         if (arg.startsWith ('{')) { continue; }
         if (/^this\s*\.\s*(extend|deepExtend|keysort|indexBy|groupBy)\s*\(/.test (arg)) { continue; }
         if (goIsDictMethodCall (tree, arg)) { continue; }
@@ -14093,7 +14101,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
             declaration = match;
         }
         const initializer = (declaration === undefined) ? '' : declaration[1].trim ();
-        if (initializer.startsWith ('{') || /^this\s*\.\s*(extend|deepExtend|safeDict)\s*\(/.test (initializer)) { continue; }
+        if (initializer.startsWith ('{') || /^this\s*\.\s*(extend|deepExtend|safeDict|omit)\s*\(/.test (initializer)) { continue; }
         if ((initializer !== '') && goIsDictMethodCall (tree, initializer)) { continue; }
         if (goDictParamSiblingSiteProven (go, tree, name, site, index)) { continue; }
         return false;
@@ -22868,7 +22876,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if (node.expression.expression.kind === SyntaxKind.ThisKeyword) {
                 const methodName = this.printNode(node.expression.name, 0);
                 if (this.wrapThisCalls || (this.wrapCallMethods.includes(methodName))) {
-                    const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? args.map((a) => this.printNode(a, 0)).join(", ");
+                    const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? goDictParamCallArgs(this, node, 0) ?? args.map((a) => this.printNode(a, 0)).join(", ");
                     return `<-this.callInternal("${methodName}"${(args.length > 0) ? ", " + argsParsed : ""})`;
                 }
             }
@@ -58790,3 +58798,70 @@ GoTranspiler.prototype.h37p11StringOptionLocal = function (node): boolean {
     };
 }
 // ===== list local rebound to a defaulted safeList (end) =====
+// ===== H37-P01 =====
+// a `{}`-defaulted safeDict FIRST argument of a map parameter whose receiver is a typed []any local: the comma-ok read
+// into a local on the line before the statement, plus the `{}` SafeDictMap answered for nil, out of range and non-map
+function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
+    let child: any = arg;
+    for (let p: any = arg.parent; p !== statement; child = p, p = p.parent) {
+        if (p === undefined) { return false; }
+        if ((p.kind === SyntaxKind.ParenthesizedExpression) || (p.kind === SyntaxKind.VariableDeclarationList)) { continue; }
+        if ((p.kind === SyntaxKind.VariableDeclaration) && (p.initializer === child)) { continue; }
+        // only argument 0 of a `this.m (..)` call: nothing of the statement runs before the read
+        if ((p.kind === SyntaxKind.CallExpression) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (p.expression.expression?.kind === SyntaxKind.ThisKeyword)) { continue; }
+        return false;
+    }
+    return true;
+}
+function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, identation: number): string {
+    if ((typeof printed !== 'string') || !printed.includes('this.SafeDictMap(')) { return printed; }
+    const root: any = (statement.kind === SyntaxKind.VariableStatement) ? statement.declarationList : statement.expression;
+    if (root === undefined) { return printed; }
+    const found: any[] = [];
+    const visit = (n: any): boolean => {
+        if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (n.arguments.length > 0) && goDictParamSafeDictArg(go, n.arguments[0]) && goDictParamCallTakesMap(go, n, 0)) {
+            found.push(n.arguments[0]);
+        }
+        return false;
+    };
+    visit(root);
+    go.hasNodeWhere(root, visit);
+    if (found.length !== 1) { return printed; }
+    const arg: any = found[0];
+    const call: any = go.goSafeDictCallArgs(arg)?.call;
+    const list: any = call?.arguments?.[0];
+    const key: any = call?.arguments?.[1];
+    if ((call?.arguments?.length !== 3) || (list?.kind !== SyntaxKind.Identifier) || !h37p01FirstArgPath(go, call, statement)
+        || ((go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list))) { return printed; }
+    const xs = list.text;
+    let k: string;
+    let guard: string | undefined;
+    if ((key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(key.text)) {
+        k = key.text;
+        guard = `len(${xs}) > ${k}`;
+    } else if ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && (go.goLoopBoundedIndexRead(call, list, key, xs, key.text) === `${xs}[${key.text}]`)) {
+        k = key.text;
+    } else {
+        return printed;
+    }
+    const wrap = `this.SafeDictMap(${xs}, ${k}, map[string]any{})`;
+    const at = printed.indexOf(wrap);
+    if ((at < 0) || (printed.indexOf(wrap, at + 1) >= 0)) { return printed; }
+    const name = `${xs}Dict${go.getLineBasedSuffix(call)}`;
+    const iden = go.getIden(identation);
+    const inner = go.getIden(identation + 1);
+    const read = (guard === undefined) ? `${iden}${name}, _ := ${xs}[${k}].(map[string]any)\n`
+        : `${iden}var ${name} map[string]any\n${iden}if ${guard} {\n${inner}${name}, _ = ${xs}[${k}].(map[string]any)\n${iden}}\n`;
+    const hoist = `${read}${iden}if ${name} == nil {\n${inner}${name} = map[string]any{}\n${iden}}\n`;
+    const line = printed.lastIndexOf('\n', at) + 1;
+    return printed.substring(0, line) + hoist + printed.substring(line, at) + name + printed.substring(at + wrap.length);
+}
+for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'printReturnStatement' ]) {
+    const shipped = GoTranspiler.prototype[method];
+    GoTranspiler.prototype[method] = function (node, identation) {
+        return h37p01HoistSafeDictArg(this, node, shipped.call(this, node, identation), identation);
+    };
+}
+// ===== end H37-P01 =====
