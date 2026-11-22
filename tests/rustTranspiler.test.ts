@@ -15279,7 +15279,7 @@ describe('ral-zg: a Dict[] row next to a differently sourced same-named sibling 
     const body = (sibling: string, use: string) => "    run (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'data', []);\n        const result = [];\n        if (rows.length > 0) {\n            " + sibling + "\n            result.push (this.safeString (row, 'id'));\n        }\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            " + use + "\n        }\n        return result;\n    }";
     test('read only by a safe* reader: the plain shared map (a Null row reads Null at every string key, as into_dict leaves)', () => {
         const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeString (row, 'id'));"));
-        expect(out).toContain('let mut row: crate::value::Dict = self.safe_dict_t(&rows, Value::Int(i));');
+        expect(out).toContain('let mut row: crate::value::Dict = rows.get(i as usize).cloned().unwrap_or_default();');
     });
     test('handed on whole into a map literal: Option<Dict>, boxed back to exactly Null or the map', () => {
         const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeOrder ({ 'info': row, 'id': this.safeString (row, 'id') }));"));
@@ -27149,5 +27149,34 @@ describe('h34-P22: `safeDict (d, k)` on a plain `Dict` local with a string key r
     test('negative: an untyped receiver keeps the helper', () => {
         const out = run ("    m (response) {\n        const id = this.safeString (response, 'id');\n        const t = this.safeDict (response, id);\n        return this.parseTicker (t);\n    }\n");
         expect (out).not.toContain ('if let Some(Value::Dict(__m))');
+    });
+});
+describe('h34-P25: `rows[k]` on a converted `Dict[]` local reads the same converted row', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p25-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const rows = (decl: string, extra: string) => "    m (response: Dict) {\n        " + decl + "\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            out.push (this.safeString (row, 'id'));\n        }\n" + extra + "        return out;\n    }\n";
+    test('an element row of the converted list is a bounds-tested slice read', () => {
+        const out = run (rows ("const rows: Dict[] = this.safeList (response, 'rows', []);", ''));
+        expect (out).toMatch (/let rows: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('rows.get(i as usize).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('a list also handed on whole keeps the boxed list', () => {
+        expect (run (rows ("const rows: Dict[] = this.safeList (response, 'rows', []);", "        this.hold (rows);\n"))).not.toContain ('dict_rows');
+    });
+    test('no default keeps the boxed list', () => {
+        expect (run (rows ("const rows: Dict[] = this.safeList (response, 'rows');", ''))).not.toContain ('dict_rows');
+    });
+    test('a row whose keys are written keeps the boxed list', () => {
+        expect (run (rows ("const rows: Dict[] = this.safeList (response, 'rows', []);", '').replace ("const row = rows[i];\n", "const row = rows[i];\n            row['x'] = 1;\n"))).not.toContain ('dict_rows');
+    });
+    test('a non-counter key keeps the boxed list', () => {
+        expect (run ("    m (response: Dict, k: any) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        const row = rows[k];\n        return this.safeString (row, 'id');\n    }\n")).not.toContain ('dict_rows');
     });
 });

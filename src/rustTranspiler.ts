@@ -41851,7 +41851,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const parent: any = n.parent;
         if (isPropertyAccessExpression(parent) && parent.expression === n && String(parent.name.text) === 'length') continue;
-        if (this.rustP21RowRead(parent, n) === undefined) return false;
+        if (this.rustP21RowRead(parent, n) === undefined && this.rustP21ElementRowRead(parent, n) === undefined) return false;
         rows++;
     }
     return rows > 0;
@@ -41885,6 +41885,7 @@ export class RustTranspiler extends BaseTranspiler {
 };
 (RustTranspiler.prototype as any).rustP21RowReadText = function (this: any, rowDeclaration: any): string | undefined {
     const call: any = this.rustSkipWrappers(rowDeclaration.initializer);
+    if (call !== undefined && isElementAccessExpression(call)) return this.rustP21ElementRowReadText(call);
     if (call === undefined || !isCallExpression(call) || call.arguments.length !== 2 || !isIdentifier(call.arguments[0])) return undefined;
     const owner: any = this.rustDeclarationOfIdentifier(call.arguments[0]);
     if (!this.rustP21DictRowsLocal(owner) || this.rustP21RowRead(call, call.arguments[0]) === undefined) return undefined;
@@ -41905,6 +41906,35 @@ export class RustTranspiler extends BaseTranspiler {
     const row: any = call.parent;
     const text = this.rustP21RowReadText(row);
     return text === undefined ? undefined : `Value::Dict(${text})`;
+};
+// `const row = rows[k]` on the same list reads the same converted row (k a literal or a `for` counter)
+(RustTranspiler.prototype as any).rustP21ElementRowRead = function (this: any, access: any, recv: any): any {
+    if (access === undefined || !isElementAccessExpression(access) || access.expression !== recv) return undefined;
+    const key: any = this.rustSkipWrappers(access.argumentExpression);
+    if (!isNumericLiteral(key)) {
+        if (!isIdentifier(key)) return undefined;
+        const kd: any = this.rustDeclarationOfIdentifier(key);
+        if (kd === undefined || !isVariableDeclaration(kd) || kd.parent?.parent === undefined || !isForStatement(kd.parent.parent)) return undefined;
+    }
+    const row: any = access.parent;
+    if (row === undefined || !isVariableDeclaration(row) || row.initializer !== access || row.type !== undefined || !isIdentifier(row.name)) return undefined;
+    // a row whose keys are written stays with the optional reader (Null kept apart from a map)
+    const scope: any = this.rustEnclosingFunction(row);
+    for (const n of (scope === undefined ? [] : this.rustScopeNameNodes(scope, String(row.name.text))) as any[]) {
+        const w: any = n.parent;
+        if (isElementAccessExpression(w) && w.expression === n && isBinaryExpression(w.parent) && w.parent.left === w) return undefined;
+    }
+    if (!this.rustBorrowedDictLocal(row) || this.rustOptContainerLocals.has(row)) return undefined;
+    return key;
+};
+(RustTranspiler.prototype as any).rustP21ElementRowReadText = function (this: any, access: any): string | undefined {
+    if (!isIdentifier(access.expression)) return undefined;
+    const owner: any = this.rustDeclarationOfIdentifier(access.expression);
+    if (!this.rustP21DictRowsLocal(owner) || this.rustP21ElementRowRead(access, access.expression) === undefined) return undefined;
+    const key: any = this.rustSkipWrappers(access.argumentExpression);
+    const index = isNumericLiteral(key) ? String(Number(key.text)) : (this.rustI64CounterUse(key) ? `${String(key.text)} as usize` : undefined);
+    if (index === undefined) return undefined;
+    return `${this.printNode(owner.name, 0)}.get(${index}).cloned().unwrap_or_default()`;
 };
 // ===== end h33-H33-P21
 
