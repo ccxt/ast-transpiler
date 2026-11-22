@@ -27045,3 +27045,34 @@ describe('a typed string local boxed before its last use lends instead of clonin
         expect(out).toMatch(/let mut stopPrice: Option<String> = /);
     });
 });
+
+describe('h33-P21: a `Dict[]` local read from `safeList (.., [])` holds converted rows', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p21-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const rows = (extra: string) => "    m (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n            out.push (this.safeString (row, 'id'));\n        }\n" + extra + "        return out;\n    }\n";
+    test('row reads are bounds-tested slice reads of the converted list', () => {
+        const out = run (rows (''));
+        expect (out).toMatch (/let rows: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('rows.get(i as usize).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safeDict(&rows');
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('a list also handed on whole keeps the boxed list', () => {
+        const out = run (rows ("        this.hold (rows);\n"));
+        expect (out).not.toContain ('dict_rows');
+    });
+    test('no default (the list may be undefined) keeps the boxed list', () => {
+        const out = run ("    m (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows');\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
+        expect (out).not.toContain ('dict_rows');
+    });
+    test('an untyped local keeps the boxed list', () => {
+        const out = run ("    m (response: Dict) {\n        const rows = this.safeList (response, 'rows', []);\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
+        expect (out).not.toContain ('dict_rows');
+    });
+});

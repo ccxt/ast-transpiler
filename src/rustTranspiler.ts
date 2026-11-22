@@ -1240,6 +1240,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printArrayLength(node, identation, leftExpr = undefined) {
+        const p21Length = (this as any).printRustP21Length(node); if (p21Length !== undefined) return p21Length;
         const sideLength = this.printBookSideRead(node); if (sideLength !== undefined) return sideLength;
         const scalarLength = this.rustScalarLengthText(node, true) ?? this.printOptListLength(node) ?? this.printWsCacheLength(node); if (scalarLength !== undefined) return scalarLength;
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
@@ -2564,6 +2565,7 @@ export class RustTranspiler extends BaseTranspiler {
             return head + lines.join(';\n');
         }
         const varName = this.printNode(declaration.name, 0);
+        const p21Rows = node.declarations.length === 1 ? (this as any).printRustP21DictRowsDecl(declaration, indent, varName) : undefined; if (p21Rows !== undefined) return p21Rows;
         const currencyLocal = node.declarations.length === 1 ? this.printCurrencyLocalDeclaration(declaration, indent, varName) : undefined;
         if (currencyLocal !== undefined) return currencyLocal;
         const recordElem = node.declarations.length === 1 ? this.printRecordElemLocal(declaration, indent, varName) : undefined;
@@ -2654,7 +2656,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? this.rustDictRowReaderText(declaration, read) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
@@ -18078,6 +18080,7 @@ export class RustTranspiler extends BaseTranspiler {
         const expression = node.expression;
         const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
         const typed67g = this.printTyped67gSafeDict(node, identation); if (typed67g !== undefined) return typed67g;
+        const p21Row = (this as any).printRustP21RowCall(node); if (p21Row !== undefined) return p21Row;
         const mapLookup = this.printWsCacheMapRead(node); if (mapLookup !== undefined) return mapLookup;
         const borrowedRead = this.printBorrowedDictRead(node, identation); if (borrowedRead !== undefined) return borrowedRead;
         const handed = this.printHandedDictExtend(node, identation); if (handed !== undefined) return handed;
@@ -41663,3 +41666,95 @@ export class RustTranspiler extends BaseTranspiler {
 // ===== h28-H28-T02: safeStringList borrows its container like the other generated safe readers (impl KeyRead)
 (RustTranspiler as any).RUST_BY_REF_GENERATED_READERS = new RegExp((RustTranspiler as any).RUST_BY_REF_GENERATED_READERS.source + '|^safeStringList$');
 // ===== end h28-H28-T02
+
+// ===== h33-H33-P21: a `Dict[]` local read once from `safeList (.., [])` is a list of maps
+// Converted once at the read (`crate::value::dict_rows`: a non-map element is the empty map in its slot, the answer
+// `safe_dict_t` gives today); its row reads `const row = this.safeDict (rows, k)` are bounds-tested slice reads.
+(RustTranspiler.prototype as any).rustP21DictRowsLocal = function (this: any, declaration: any): boolean {
+    if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
+    this.rustP21Decisions ??= new WeakMap<any, boolean>();
+    let hit = this.rustP21Decisions.get(declaration);
+    if (hit === undefined) {
+        this.rustP21Decisions.set(declaration, false);
+        try { hit = this.rustP21DictRowsLocalUncached(declaration); } catch (e) { hit = false; }
+        this.rustP21Decisions.set(declaration, hit);
+    }
+    return hit;
+};
+(RustTranspiler.prototype as any).rustP21DictRowsLocalUncached = function (this: any, declaration: any): boolean {
+    const list: any = declaration.parent;
+    if (list?.kind !== SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & NodeFlags.Const) === 0) return false;
+    if (declaration.type === undefined || declaration.type.getText() !== 'Dict[]' || this.rustTestTierSource(declaration)) return false;
+    const init: any = this.rustSkipWrappers(declaration.initializer);
+    if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+    if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
+    const dflt: any = this.rustSkipWrappers(init.arguments[2]);
+    if (!isArrayLiteralExpression(dflt) || dflt.elements.length !== 0) return false;
+    const scope: any = this.rustEnclosingFunction(declaration);
+    if (scope === undefined || isSourceFile(scope)) return false;
+    const name = String(declaration.name.text);
+    let rows = 0;
+    for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+        if (n === declaration.name || n === declaration) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== declaration) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const parent: any = n.parent;
+        if (isPropertyAccessExpression(parent) && parent.expression === n && String(parent.name.text) === 'length') continue;
+        if (this.rustP21RowRead(parent, n) === undefined) return false;
+        rows++;
+    }
+    return rows > 0;
+};
+// `const row = this.safeDict (rows, k)` (k a literal or a `for` counter) whose local is the printer's borrowed map
+(RustTranspiler.prototype as any).rustP21RowRead = function (this: any, call: any, recv: any): any {
+    if (!isCallExpression(call) || call.arguments.length !== 2 || call.arguments[0] !== recv) return undefined;
+    const callee: any = call.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    if (!isNumericLiteral(key)) {
+        if (!isIdentifier(key)) return undefined;
+        const kd: any = this.rustDeclarationOfIdentifier(key);
+        if (kd === undefined || !isVariableDeclaration(kd) || kd.parent?.parent === undefined || !isForStatement(kd.parent.parent)) return undefined;
+    }
+    const row: any = call.parent;
+    if (row === undefined || !isVariableDeclaration(row) || row.initializer !== call || !this.rustBorrowedDictLocal(row)) return undefined;
+    // an `Option<Dict>` row keeps Null apart from a map: it stays with the optional reader
+    if (this.rustOptContainerLocals.has(row)) return undefined;
+    return key;
+};
+(RustTranspiler.prototype as any).printRustP21DictRowsDecl = function (this: any, declaration: any, indent: string, varName: string): string | undefined {
+    if (this.rustP21Printing === declaration || !this.rustP21DictRowsLocal(declaration)) return undefined;
+    // the list the printer reads today, converted once
+    this.rustP21Printing = declaration;
+    let text: string;
+    try { text = this.printVariableDeclarationList(declaration.parent, 0).trim(); } finally { this.rustP21Printing = undefined; }
+    const head = `let mut ${varName}: crate::value::List = `;
+    if (!text.startsWith(head)) return undefined;
+    return `${indent}let ${varName}: Vec<crate::value::Dict> = crate::value::dict_rows(${text.slice(head.length)})`;
+};
+(RustTranspiler.prototype as any).rustP21RowReadText = function (this: any, rowDeclaration: any): string | undefined {
+    const call: any = this.rustSkipWrappers(rowDeclaration.initializer);
+    if (call === undefined || !isCallExpression(call) || call.arguments.length !== 2 || !isIdentifier(call.arguments[0])) return undefined;
+    const owner: any = this.rustDeclarationOfIdentifier(call.arguments[0]);
+    if (!this.rustP21DictRowsLocal(owner) || this.rustP21RowRead(call, call.arguments[0]) === undefined) return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    const index = isNumericLiteral(key) ? String(Number(key.text)) : (this.rustI64CounterUse(key) ? `${String(key.text)} as usize` : undefined);
+    if (index === undefined) return undefined;
+    return `${this.printNode(owner.name, 0)}.get(${index}).cloned().unwrap_or_default()`;
+};
+(RustTranspiler.prototype as any).printRustP21Length = function (this: any, node: any): string | undefined {
+    const recv: any = node.expression;
+    if (!isIdentifier(recv) || !this.rustP21DictRowsLocal(this.rustDeclarationOfIdentifier(recv))) return undefined;
+    return this.printNativeLength(node, this.printNode(this.rustDeclarationOfIdentifier(recv).name, 0));
+};
+// any other print of a row read of such a list boxes the same map
+(RustTranspiler.prototype as any).printRustP21RowCall = function (this: any, call: any): string | undefined {
+    const recv: any = call.arguments?.[0];
+    if (recv === undefined || !isIdentifier(recv) || this.rustP21RowRead(call, recv) === undefined || !this.rustP21DictRowsLocal(this.rustDeclarationOfIdentifier(recv))) return undefined;
+    const row: any = call.parent;
+    const text = this.rustP21RowReadText(row);
+    return text === undefined ? undefined : `Value::Dict(${text})`;
+};
+// ===== end h33-H33-P21
