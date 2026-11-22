@@ -35114,6 +35114,7 @@ GoTranspiler.prototype.goNumericParameterCandidates = function (param) {
     const declared = (param?.type !== undefined) ? String(param.type.getText()).trim() : undefined;
     switch (declared) {
     case 'Int': return ['*int64'];
+    case 'int': return ['int64']; // the TS declaration is a non-nullable integer
     case 'Num': return ['*float64'];
     case 'number': return ['int64', 'float64'];
     }

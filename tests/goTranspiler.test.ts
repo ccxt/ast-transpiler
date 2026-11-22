@@ -20330,3 +20330,47 @@ describe('a declared string method returning a local filled from a defaulted saf
         expect(run(fill("        url = this.safeString (this.options, 'w');\n", "this.safeString (this.options, 'u', '')"))).toContain('WsUrl() any {');
     });
 });
+
+describe ('go: a required `int` parameter of a venue-private method', () => {
+    const SRC = 'import Exchange from \'./base/Exchange.js\';\nexport default class Ex extends Exchange {\n'
+        + '    parseTimeframe (t: string): int {\n'
+        + '        return 60;\n'
+        + '    }\n'
+        + '    run (n: number): string {\n'
+        + '        const d: int = this.parseTimeframe (\'1m\');\n'
+        + '        return this.period (d, n) + this.loose (n);\n'
+        + '    }\n'
+        + '    period (duration: int, limit: number): string {\n'
+        + '        if (duration < 3600) { return \'min\'; }\n'
+        + '        return \'h\';\n'
+        + '    }\n'
+        + '    loose (duration: any): string {\n'
+        + '        if (duration < 3600) { return \'min\'; }\n'
+        + '        return \'h\';\n'
+        + '    }\n'
+        + '}\n';
+    const out = (): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'int-param-'));
+        const cwd = process.cwd ();
+        fs.mkdirSync (path.join (dir, 'ts', 'src'), { recursive: true });
+        const file = path.join (dir, 'ts', 'src', 'ex.ts');
+        try {
+            process.chdir (dir);
+            fs.writeFileSync (file, SRC);
+            const t = new Transpiler ({ verbose: false, go: {} });
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            process.chdir (cwd);
+            fs.rmSync (dir, { recursive: true, force: true });
+        }
+    };
+    test('prints int64 and a native comparison when every caller passes an int64 (fails on the base printer)', () => {
+        const go = out ();
+        expect (go).toMatch (/Period\(duration int64,/);
+        expect (go).toContain ('if duration < 3600 {');
+    });
+    test('negative: an `any` parameter keeps the helper', () => {
+        expect (out ()).toContain ('IsLessThan(duration, 3600)');
+    });
+});
