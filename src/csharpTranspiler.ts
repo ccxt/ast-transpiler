@@ -6408,8 +6408,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((args?.length !== 2) || !this.csharpMinMaxResultIsPlainValue(node)) {
             return undefined;
         }
-        const left = this.csharpIntegralOperand(args[0]);
-        const right = this.csharpIntegralOperand(args[1]);
+        const left = this.csharpIntegralMinMaxOperand(args[0]);
+        const right = this.csharpIntegralMinMaxOperand(args[1]);
         if ((left === undefined) || (right === undefined) || (left.literal && right.literal)) {
             return undefined;
         }
@@ -6426,9 +6426,37 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return undefined;
             }
         }
-        const l = this.csharpIntegralNonNullText(node, left, parsedArg1);
-        const r = this.csharpIntegralNonNullText(node, right, parsedArg2);
+        // a shifted operand prints its own native `x - lit` over the identifier's non-null text
+        const text = (o, printed: string) => {
+            if (!o.shifted) {
+                return this.csharpIntegralNonNullText(node, o, printed);
+            }
+            const id = this.csharpIntegralNonNullText(node, o, this.printNode(o.node, 0).trim());
+            return (id === undefined) ? undefined : `(${id} ${o.shiftOp} ${o.shiftText})`;
+        };
+        const l = text(left, parsedArg1);
+        const r = text(right, parsedArg2);
         return ((l === undefined) || (r === undefined)) ? undefined : `Math.${name}(${l}, ${r})`;
+    }
+
+    // a min/max operand: an integral operand, or `x + lit` / `x - lit` whose identifier is integral (its null
+    // proof is the identifier's); the shifted value keeps the identifier's kind
+    csharpIntegralMinMaxOperand(node): any {
+        const direct = this.csharpIntegralOperand(node);
+        let inner: any = node;
+        while (isParenthesizedExpression(inner)) {
+            inner = inner.expression;
+        }
+        if ((direct !== undefined) || !isBinaryExpression(inner)
+            || ((inner.operatorToken.kind !== SyntaxKind.PlusToken) && (inner.operatorToken.kind !== SyntaxKind.MinusToken))) {
+            return direct;
+        }
+        const base = this.csharpIntegralOperand(inner.left);
+        const shift = this.csharpIntegralOperand(inner.right);
+        if ((base === undefined) || base.literal || (shift === undefined) || !shift.literal || !/^\d{1,9}$/.test(shift.node.text)) {
+            return undefined;
+        }
+        return { ...base, shifted: true, shiftOp: (inner.operatorToken.kind === SyntaxKind.PlusToken) ? '+' : '-', shiftText: shift.node.text };
     }
 
     // `int x = Math.min (a, b)` / `x = Math.min (a, b)`: the sink is printed with a narrow integer type

@@ -6957,6 +6957,43 @@ describe ('Int64 for-counters and literal-default shadows', () => {
             expect(lines.filter((l) => l.includes('Math.Min(limit.Value, 10000)')).length).toBe(1);
         });
     });
+
+    describe('Math.max over a shifted Int64? read', () => {
+        const shifted =
+            'class Exchange {\n' +
+            '    fetchOHLCV (symbol: string, timeframe: string = \'1m\', since: number = undefined, limit: number = 100, params = {}) {\n' +
+            '        let a = undefined;\n' +
+            '        if (since !== undefined) {\n' +
+            '            a = Math.max (since - 1, 0);\n' +
+            '        }\n' +
+            '        const b = Math.max (since - 1, 0);\n' +
+            '        let c = undefined;\n' +
+            '        if (since !== undefined) {\n' +
+            '            c = Math.max (since - limit, 0);\n' +
+            '            c = Math.max (since * 2, 0);\n' +
+            '        }\n' +
+            '        return [ a, b, c ];\n' +
+            '    }\n' +
+            '}';
+        // the build layer's declared-kind answer for the narrowed parameters
+        const typed = (): string => {
+            const transpiler: any = new Transpiler(config);
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node: any) => ((node.kind === SyntaxKind.Identifier) && ([ 'since', 'limit' ].indexOf(node.text) >= 0)) ? 'Int64?' : undefined;
+            return transpiler.transpileCSharp(shifted).content;
+        };
+
+        test('`x - lit` on an Int64? under its null test prints Math.Max', () => {
+            expect(typed()).toContain('Math.Max((since.Value - 1), 0)');
+        });
+
+        test('no null test, a non-literal shift or another operator keeps the helper', () => {
+            const out = typed();
+            expect(out.split('Math.Max(').length - 1).toBe(1);
+            expect(out).toContain('object b = mathMax(subtract(since, 1), 0);');
+            expect(out).toContain('mathMax(subtract(since, limit), 0)');
+            expect(out).toContain('mathMax(multiply(since, 2), 0)');
+        });
+    });
 });
 
 describe ('csharp nullable scalar locals', () => {
