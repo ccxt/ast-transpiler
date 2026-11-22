@@ -35734,37 +35734,6 @@ GoTranspiler.prototype.goTernaryJoinParts = function (declaration) {
     return parts;
 };
 
-// a comparison the printer inlines as the Go operator against an operand of another static Go type
-// (`dataLength == pageSize` with an `int` length) compiled only while the local was `any`; keep the box
-GoTranspiler.prototype.goTernaryJoinHasForeignComparison = function (declaration, goType: string): boolean {
-    const scope = this.goEnclosingFunction(declaration);
-    const name = declaration.name;
-    if (scope === undefined) {
-        return true;
-    }
-    return this.hasNodeWhere(scope, (n: any) => {
-        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
-            return false;
-        }
-        let current: any = n;
-        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-            current = current.parent;
-        }
-        const parent: any = current.parent;
-        if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0)
-            && (ORDERED_COMPARISON_OPERATORS[parent.operatorToken.kind] === undefined))) {
-            return false;
-        }
-        const other: any = this.goUnwrapParenthesizedNode((parent.left === current) ? parent.right : parent.left);
-        if ((other?.kind === SyntaxKind.NullKeyword) || ((other?.kind === SyntaxKind.Identifier) && (other.text === 'undefined'))
-            || (other?.kind === SyntaxKind.NumericLiteral) || (other?.kind === SyntaxKind.StringLiteral) || this.goIsSignedNumericLiteral(other)) {
-            return false;
-        }
-        const otherType = this.goOperandStaticType(other, this.printNode(other, 0));
-        return (otherType !== undefined) && (otherType !== goType);
-    });
-};
-
 GoTranspiler.prototype.goTernaryJoinPartsUncached = function (declaration) {
     const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
     if (ternary?.kind !== SyntaxKind.ConditionalExpression) {
@@ -36824,22 +36793,6 @@ GoTranspiler.prototype.goTernaryJoinParts = function (declaration) {
     const parts = goTernaryJoinSettledParts.call(this, declaration);
     GO_TERNARY_JOIN_MEMO.delete(declaration);
     return parts;
-};
-
-// is the local read as an arm of another conditional expression in its function?
-GoTranspiler.prototype.goTernaryJoinFeedsAnotherTernary = function (declaration): boolean {
-    const scope = this.goEnclosingFunction(declaration);
-    const name = declaration.name;
-    return (scope === undefined) || this.hasNodeWhere(scope, (n) => {
-        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
-            return false;
-        }
-        let current = n;
-        while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-            current = current.parent;
-        }
-        return (current.parent?.kind === SyntaxKind.ConditionalExpression) && (current.parent.condition !== current);
-    });
 };
 
 const goTernaryJoinSettledDeclaredType = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
