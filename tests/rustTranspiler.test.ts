@@ -6657,7 +6657,7 @@ describe('empty-declared endpoint responses and flag slots', () => {
         expect(out).toContain('auth.push_str(jsonBody.as_deref().unwrap_or("null"));');
         expect(out).toContain('let mut messageHash: String = ');
         expect(out).toContain('messageHash.push_str(suffix.as_deref().unwrap_or("null"));');
-        expect(out).toContain('Value::from(vec![Value::from(messageHash.clone())]), messageHash.as_str(), ');
+        expect(out).toContain('Value::from(vec![Value::from(messageHash.as_str())]), messageHash.as_str(), ');
         expect(out).not.toContain('messageHash.clone().as_str()');
     });
 
@@ -13527,7 +13527,7 @@ describe('ud: a reader string boxed at a lending slot before its last use', () =
         // ral-70f: typed (the box at the free-function slot converts once: `code.clone().map(Value::from)..`, the copy the
         // `Value` clone made; ccxt's narrowStrNullLocals pass printed this)
         expect(out).toContain('let mut code: Option<String> = self.safe_string_k_opt(u.clone(), "code"');
-        expect(out).toContain('json_stringify(&code.clone().map(Value::from).unwrap_or(Value::Null))');
+        expect(out).toContain('json_stringify(&Value::from(code.as_deref()))');
     });
     test('a reader string that is a split receiver lends at its earlier self-call box instead of staying a Value', () => {
         const out = write ('ud-recv', "    m (u: any) {\n        const topic = this.safeString (u, 'topic');\n        this.hold (topic, 'x');\n        const parts = topic.split (':');\n        return this.hold (parts, topic);\n    }\n");
@@ -14447,7 +14447,7 @@ describe('ral-xf: a list literal with a bare local element read only by index is
     });
     test('[ ticker, ticker + .. ] (the box copies ticker): the vec! holds the same element texts, reads go native', () => {
         const body = out.slice (out.indexOf ('fn pair('), out.indexOf ('fn pairKept'));
-        expect(body).toMatch(/let mut ids: crate::value::List = std::sync::Arc::new\(vec!\[ticker\.clone\(\)\.map\(Value::from\)/);
+        expect(body).toMatch(/let mut ids: crate::value::List = std::sync::Arc::new\(vec!\[Value::from\(ticker\.as_deref\(\)\)/);
         expect(body).toMatch(/ids\.get\(i as usize\)/);
     });
     test('negative: a list read inside its own push keeps the box', () => {
@@ -20654,7 +20654,7 @@ describe('ral-59x: an Option<String> reader receiver lends at a same-function st
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut ms: Option<String> = ');
         expect(out).toContain('let mut base: Option<String> = ms.clone();');
-        expect(out).toContain('m.insert("base".to_string(), base.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('m.insert("base".to_string(), Value::from(base.as_deref()));');
         expect(out).toContain('m.insert("baseId".to_string(), base.map(Value::from).unwrap_or(Value::Null));');
         expect(out).not.toMatch(/let mut (?:ms|base): Value/);
     });
@@ -20671,7 +20671,7 @@ describe('a typed string local moves at its last object-literal property read', 
     test('the earlier property lends a copy, the last one moves', () => {
         const out = run ('mv-last-prop', "        const stopPrice = this.safeString (order, 'stop_price');\n        return this.safeOrder ({\n            'stopPrice': stopPrice,\n            'triggerPrice': stopPrice,\n        });\n");
         expect(out).toContain('let mut stopPrice: Option<String> = ');
-        expect(out).toContain('m.insert("stopPrice".to_string(), stopPrice.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('m.insert("stopPrice".to_string(), Value::from(stopPrice.as_deref()));');
         expect(out).toContain('m.insert("triggerPrice".to_string(), stopPrice.map(Value::from).unwrap_or(Value::Null));');
     });
     test('a nil-declared string local moves at its last property read', () => {
@@ -20685,7 +20685,7 @@ describe('a typed string local moves at its last object-literal property read', 
     });
     test('negative: a later statement read keeps the clone', () => {
         const out = run ('mv-last-prop-later', "        const stopPrice = this.safeString (order, 'stop_price');\n        const o = { 'triggerPrice': stopPrice };\n        o['x'] = stopPrice;\n        return this.safeOrder (o);\n");
-        expect(out).toContain('"triggerPrice".to_string(), stopPrice.clone()');
+        expect(out).toContain('"triggerPrice".to_string(), Value::from(stopPrice.as_deref())');
     });
 });
 
@@ -20906,7 +20906,7 @@ describe('ral-60i: an element of a declared Dict[] read at a string-typed variab
     test('a string-typed key keeps the Dict element typed and lent', () => {
         const out = transpiler.transpileRustByPath (write ('ral-60i-elem-pos', "        const key = this.safeString (message, 'w', 'wb');\n")).content;
         expect(out).toContain('let mut entry: crate::value::Dict = ');
-        expect(out).toContain('(&entry, Value::from(key.clone()), &[])');
+        expect(out).toContain('(&entry, Value::from(key.as_str()), &[])');
     });
     test('an untyped key keeps the element Value', () => {
         const out = transpiler.transpileRustByPath (write ('ral-60i-elem-neg', "        const key = this.safeValue (message, 'w');\n")).content;
@@ -22163,7 +22163,7 @@ describe('ral-64b: build-pass locals typed by the printer', () => {
         // INT-72: re-spelled to the `_opt` reader form 62o prints (was the long `.as_str().map(str::to_owned)` form)
         expect(out).toContain('let mut sessionToken: Option<String> = self.safe_string_k_opt(response.clone(), "SessionToken", &[]);');
         expect(out).toContain('sessionToken = self.safe_string_k_opt(responseInner.clone(), "SessionToken", &[]);');
-        expect(out).toContain('insert("sessionToken".into(), sessionToken.clone().map(Value::from).unwrap_or(Value::Null));');
+        expect(out).toContain('insert("sessionToken".into(), Value::from(sessionToken.as_deref()));');
         expect(out).toContain('insert("sessionToken".into(), sessionToken.map(Value::from).unwrap_or(Value::Null));');
         expect(out).not.toContain('let mut sessionToken: Value');
     });
@@ -22474,7 +22474,7 @@ describe('ral-65b: build-pass locals typed by the printer (second round)', () =>
     });
     test('gate handleErrorMessage `id`: a safeStringN local keying a client `in` test the handle does not print is Option<String>', () => {
         expect(out).toContain('let mut id: Option<String> = self.safe_string_n_opt(message.clone(), Value::from(vec![Value::Str("id".into()), Value::Str("requestId".into()), Value::Str("request_id".into())]), &[]);');
-        expect(out).toContain('let mut messageHash: Option<String> = self.safe_string_opt(__ch.subscriptions.clone(), id.clone().map(Value::from).unwrap_or(Value::Null), &[]);');
+        expect(out).toContain('let mut messageHash: Option<String> = self.safe_string_opt(__ch.subscriptions.clone(), Value::from(id.as_deref()), &[]);');
         // ral-90rb R1: every write of client.subscriptions in the method is a handle statement, so the later test reads the handle
         expect(out).toContain('if (id.is_some()) && (__ch.has_subscription((&id).as_deref())) {');
         expect(out).toContain('__ch.remove_subscription(id.as_deref());');
@@ -24567,7 +24567,7 @@ describe('ral-84c R2: a nil-declared Str local keys an insert into a typed liter
         expect(out).toMatch(/networks\.insert\(networkCode\.as_deref\(\)\.unwrap_or\("null"\)\.to_string\(\)/);
     });
     test('the last box in an object literal moves the local, earlier boxes clone it', () => {
-        expect(out).toMatch(/"id"\.to_string\(\), networkCode\.clone\(\)\.map\(Value::from\)/);
+        expect(out).toMatch(/"id"\.to_string\(\), Value::from\(networkCode\.as_deref\(\)\)/);
         expect(out).toMatch(/"last"\.to_string\(\), networkCode\.map\(Value::from\)/);
     });
 });
@@ -27040,5 +27040,24 @@ describe('rust shadow safeString read keyed by a declared string parameter', () 
         const out = transpiler.transpileRust(D + "    f (key: Str, mapping: Dict = {}): any {\n        if (key in mapping) { return this.safeDict (mapping, key); }\n        return Object.keys (mapping);\n    }\n}").content;
         expect(out).toContain('self.safeDict(mapping, key');
         expect(out).toContain('object_keys(&mapping)');
+    });
+});
+
+describe('a typed string local boxed before its last use lends instead of cloning', () => {
+    const run = (name: string, body: string) => {
+        const dir = path.join (rustFixtureRoot, name);
+        fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeOrder (m: Dict): Dict { return m; }\n}\n");
+        fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    parseOrder (order: Dict): Dict {\n" + body + "    }\n}\n");
+        return transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+    };
+    test('a reader string boxed in a call and then stored: the call lends, the store moves', () => {
+        const out = run ('lend-before-last', "        const stopPrice = this.safeString (order, 'stop_price');\n        const n = this.parseNumber (stopPrice);\n        return this.safeOrder ({ 'triggerPrice': stopPrice, 'n': n });\n");
+        expect(out).toContain('Value::from(stopPrice.as_deref())');
+        expect(out).not.toContain('stopPrice.clone()');
+    });
+    test('negative: a missing key still reads as Null (None maps to Value::Null through From<Option<&str>>)', () => {
+        const out = run ('lend-before-last-nil', "        const stopPrice = this.safeString (order, 'stop_price');\n        const o = { 'a': stopPrice };\n        o['b'] = stopPrice;\n        return this.safeOrder (o);\n");
+        expect(out).toMatch(/let mut stopPrice: Option<String> = /);
     });
 });

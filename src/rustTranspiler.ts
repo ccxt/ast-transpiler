@@ -11583,8 +11583,11 @@ export class RustTranspiler extends BaseTranspiler {
         const lent = !last && (this.rustStrLentLocals.has(local.declaration) || local.kind === 'ostr' && this.rustNilStrLentLocals.has(local.declaration));
         if (local.kind === 'ostr' && this.rustInArrayNeedle(node)) return `&${name}`;
         if (local.kind === 'ostr' && !last && this.rustStrSlotSelfDefault(node)) return `Value::from(&${name})`;
-        if (local.kind === 'ostr') return lent ? `Value::from(${name}.as_deref())` : `${moved}.map(Value::from).unwrap_or(Value::Null)`;
-        if (local.kind === 'str') return lent ? `Value::from(${name}.as_str())` : `Value::from(${moved})`;
+        // a box before the last use lends (`From<&str>` makes the one copy the clone made); not inside a destructure
+        // write, whose slot typing measured the cloned spelling
+        const lend = lent || (!last && !this.rustInDestructureWrite(node));
+        if (local.kind === 'ostr') return lend ? `Value::from(${name}.as_deref())` : `${moved}.map(Value::from).unwrap_or(Value::Null)`;
+        if (local.kind === 'str') return lend ? `Value::from(${name}.as_str())` : `Value::from(${moved})`;
         if (local.kind === 'obool') return `${name}.map_or(Value::Null, Value::Bool)`;
         return local.kind === 'bool' ? `Value::Bool(${name})` : `Value::from(${name})`;
     }
