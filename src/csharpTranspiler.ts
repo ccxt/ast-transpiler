@@ -6537,9 +6537,39 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if ((symbol === undefined) || (!this.csharpIntegralTestedInExpression(call, symbol)
             && (this.csharpIntegralBindingIsRewritten(symbol) || !this.csharpNullGuardAdmitsRead(call, operand.node)))) {
-            return undefined;
+            // the compiler cannot follow this proof (CS8629 on `.Value`); GetValueOrDefault gives the same value
+            return ((symbol !== undefined) && this.csharpInt64BindingNeverNull(symbol)) ? `${printed}.GetValueOrDefault()` : undefined;
         }
         return `${printed}.Value`;
+    }
+
+    // a local never written after `x = this.safeInteger (o, k, <int literal>)` (safeInteger2 / safeIntegerN alike):
+    // SafeIntegerN answers the converted default on a missing key, null and an unparsable value, so x is never null
+    csharpInt64BindingNeverNull(symbol): boolean {
+        let declaration: any;
+        try {
+            declaration = symbol?.valueDeclaration?.resolve();
+        } catch (e) {
+            return false;
+        }
+        let init: any = declaration?.initializer;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init === undefined) || this.csharpIntegralBindingIsRewritten(symbol)) {
+            return false;
+        }
+        while (isParenthesizedExpression(init)) {
+            init = init.expression;
+        }
+        const callee: any = isCallExpression(init) ? init.expression : undefined;
+        const position = ((callee !== undefined) && isPropertyAccessExpression(callee) && (callee.expression.kind === SyntaxKind.ThisKeyword))
+            ? ({ 'safeInteger': 2, 'safeInteger2': 3, 'safeIntegerN': 2 })[callee.name.text] : undefined;
+        if ((position === undefined) || (init.arguments.length !== position + 1)) {
+            return false;
+        }
+        let fallback: any = init.arguments[position];
+        if (isPrefixUnaryExpression(fallback) && (fallback.operator === SyntaxKind.MinusToken)) {
+            fallback = fallback.operand;
+        }
+        return isNumericLiteral(fallback) && /^\d{1,15}$/.test(fallback.text);
     }
 
     // the null test sits in the same expression as the read (`x == null ? a : f(x)`, `x != null && f(x)`)

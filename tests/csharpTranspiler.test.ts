@@ -8732,3 +8732,33 @@ describe ('csharp inferred collection return of an async method', () => {
         expect(bare).toContain('object rows = await this.rowsOf(r);');
     });
 });
+
+describe('csharp Int64? local seeded by a safeInteger literal default', () => {
+    const transpiler = new Transpiler({ csharp: { parser: { 'ELEMENT_ACCESS_WRAPPER_OPEN': 'getValue(' } } } as any);
+    const kinds = { limit: 'Int64?', maxLimit: 'Int64?', other: 'Int64?' };
+    const emit = (body: string) => {
+        transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node) => kinds[node?.text];
+        try {
+            return transpiler.transpileCSharp('class Exchange {\n safeInteger (o, k, d = undefined): number { return d; }\n' + body + '\n}').content;
+        } finally {
+            transpiler.csharpTranspiler.csharpExpressionTypeResolver = undefined;
+        }
+    };
+    test('a literal default proves the binding non-null: Math.Min over GetValueOrDefault', () => {
+        const output = emit('f (o, limit: number = undefined) { const maxLimit = this.safeInteger (o, "limit", 1000); return (limit === undefined) ? maxLimit : Math.min (limit, maxLimit); }');
+        expect(output).toContain('Math.Min(limit.Value, maxLimit.GetValueOrDefault())');
+        expect(output).not.toContain('mathMin(');
+    });
+    test('no default keeps the helper: a missing key answers null', () => {
+        const output = emit('f (o, limit: number = undefined) { const maxLimit = this.safeInteger (o, "limit"); return (limit === undefined) ? maxLimit : Math.min (limit, maxLimit); }');
+        expect(output).toContain('mathMin(');
+    });
+    test('a rewritten binding keeps the helper: the write may put null back', () => {
+        const output = emit('f (o, limit: number = undefined, other = undefined) { let maxLimit = this.safeInteger (o, "limit", 1000); maxLimit = other; return (limit === undefined) ? maxLimit : Math.min (limit, maxLimit); }');
+        expect(output).toContain('mathMin(');
+    });
+    test('a non-literal default keeps the helper: the default may itself be null', () => {
+        const output = emit('f (o, limit: number = undefined, other = undefined) { const maxLimit = this.safeInteger (o, "limit", other); return (limit === undefined) ? maxLimit : Math.min (limit, maxLimit); }');
+        expect(output).toContain('mathMin(');
+    });
+});
