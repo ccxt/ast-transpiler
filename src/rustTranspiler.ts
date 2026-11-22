@@ -15373,15 +15373,6 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
 
-    printPropertyDeclaration(node, identation) {
-        const name = this.printNode(node.name, 0);
-        if (node.initializer) {
-            const init = this.printNode(node.initializer, 0);
-            return `${this.getIden(identation)}${name}: Value, // default: ${init}`;
-        }
-        return `${this.getIden(identation)}${name}: Value,`;
-    }
-
     // Collect property declarations with their initializers for use in new()
     getStructFields(node): Array<{ name: string, init: string }> {
         return node.members.filter(m => m.kind === SyntaxKind.PropertyDeclaration).map(p => ({
@@ -22262,10 +22253,6 @@ export class RustTranspiler extends BaseTranspiler {
 
     printContinueStatement(node, identation) {
         return `${this.getIden(identation)}continue;`;
-    }
-
-    printConstructorDeclaration(node, identation) {
-        return ''; // handled in printNewMethod
     }
 
     printSpreadElement(node, identation) {
