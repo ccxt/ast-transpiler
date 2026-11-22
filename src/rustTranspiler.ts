@@ -14923,7 +14923,10 @@ export class RustTranspiler extends BaseTranspiler {
                     // (the signature already printed `-> Option<String>` while it was a `Value`: no S1 kept arm for it)
                     // (an unannotated `let x = 'lit'` only: an annotated `let x: Str = 'lit'` was typed before and keeps its S1 arm)
                     || (inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && (this.rustDeclaredNode(inner) as VariableDeclaration).type === undefined
-                        && this.rustScalarLocalOf(inner)?.kind === 'ostr');
+                        && this.rustScalarLocalOf(inner)?.kind === 'ostr')
+                    // a returned own unannotated literal-seeded local the scalar rule types `String`: `Some(x)` is the payload
+                    || (inner !== undefined && isIdentifier(inner) && this.rust56xStrReturnLocal(inner, fn) && (this.rustDeclaredNode(inner) as VariableDeclaration).type === undefined
+                        && this.rustScalarLocalOf(inner)?.kind === 'str');
                 if (!own && !this.rustStrReturnValueConverts(n.expression)) { ok = false; return; }
             }
             n.forEachChild(visit);

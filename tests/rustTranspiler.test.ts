@@ -4613,6 +4613,26 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
         expect(output).not.toContain('Option<String>');
     });
 
+    test('a returned own literal-seeded String local makes the `: string` method return Option<String>', () => {
+        const ts = HEAD + "class E {\n    group (m: any): string {\n        let g = 'Spot';\n        if (m) {\n            g = 'Swap';\n        }\n        return g;\n    }\n    use (m: any) {\n        const s = this.group (m);\n        return s === 'Spot';\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn group(&self, m: Value) -> Option<String> {');
+        expect(output).toContain('return Some(g);');
+        expect(output).toContain('let mut s: Option<String> = self.group(m);');
+    });
+
+    test('negative: a returned non-literal value beside the String local keeps -> Value', () => {
+        const ts = HEAD + "class E {\n    group (m: any): string {\n        let g = 'Spot';\n        if (m) {\n            return this.safeValue (m);\n        }\n        return g;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).toContain('pub fn group(&self, m: Value) -> Value');
+    });
+
+    test('negative: an async `: string` method keeps its signature', () => {
+        const ts = HEAD + "class E {\n    async group (m: any): Promise<string> {\n        let g = 'Spot';\n        return g;\n    }\n}";
+        const output = transpiler.transpileRust(ts).content;
+        expect(output).not.toContain('-> Option<String>');
+    });
+
     test('an override of a venue method printed -> Option<String> joins its group (xd)', () => {
         const ts = HEAD +
             "class A {\n    parseStatus (status: any): Str { return 'x'; }\n}\n" +
