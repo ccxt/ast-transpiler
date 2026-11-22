@@ -41,7 +41,9 @@ describe ('h27-g06: sum / min / max writes with an int64 base call operand keep 
     test ('Math.min with the int64 base call keeps the local int64', () => {
         const out = print (body ('0', 'Math.min (this.milliseconds (), ttl)'));
         expect (out).toContain ('var deadline int64 = 0');
-        expect (out).toContain ('deadline = min(this.Milliseconds(), *ttl)');
+        // H38-P09 types the literal-defaulted `ttl` as a plain int64, so it is read without a dereference
+        expect (out).toContain ('var ttl int64 = *this.SafeInteger(');
+        expect (out).toContain ('deadline = min(this.Milliseconds(), ttl)');
     });
     test ('negative: a base call answering any keeps the box', () => {
         const out = print (body ('0', 'this.sum (this.note (1), ttl)'));

@@ -121,6 +121,8 @@ describe ('go declared int / number local keeps its type across reassignment', (
             '        }\n' +
             '        return until > 3;\n' +
             '    }\n');
-        expect (out).toContain ('until = *s + *w * d');
+        // H38-P09 types the literal-defaulted `w` as a plain int64, so it is read without a dereference
+        expect (out).toContain ('var w int64 = *this.SafeInteger(');
+        expect (out).toContain ('until = *s + w*d');
     });
 });
