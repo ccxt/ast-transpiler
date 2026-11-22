@@ -13018,6 +13018,13 @@ describe('ral-tf: map literals settled whole and list literals with moved bare e
     test('negative: an element read again later keeps the Value literal', () => {
         expect(out).toMatch(/fn wrapRead[\s\S]*?let mut orders: Value = /);
     });
+    test('negative: a map widened by a string-local `in` test and then settled keeps its Value box', () => {
+        const dir = path.join (rustFixtureRoot, 'ral-tf-moves');
+        fs.writeFileSync (path.join (dir, 'ts/src/pro/venue2.ts'), "import Exchange from '../base/Exchange';\nimport type { Dict } from '../base/Exchange';\nimport Client from '../base/ws/Client';\nexport default class venue2 extends Exchange {\n    handleBidAsk (client: Client, symbol: string, row: Dict): void {\n        const k: string = row['x'];\n        const fresh: Dict = {};\n        if (k in fresh) { symbol = 'a'; }\n        client.resolve (fresh, 'x');\n    }\n}\n");
+        const ws2 = transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue2.ts')).content;
+        expect(ws2).toContain('let mut fresh: Value = ');
+        expect(ws2).toContain('client.resolve(fresh.clone(), "x");');
+    });
 });
 
 describe('safe scalar locals, seventh pass: nested balance / options writes', () => {

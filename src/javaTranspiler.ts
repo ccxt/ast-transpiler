@@ -2843,7 +2843,7 @@ export class JavaTranspiler extends BaseTranspiler {
                 this.javaVenueCalleeDeclarations.set(call, declaration);
             }
             if (declaration === undefined || declaration.kind !== SyntaxKind.MethodDeclaration
-                || declaration.body === undefined) {
+                || (declaration as any).body === undefined) {
                 return undefined;
             }
             const fileName = String(declaration.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
@@ -6639,7 +6639,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return false;
         }
         const divisor = node.right;
-        if (this.javaIntegerLiteralKind(divisor) !== 'int' || Number(divisor.text) === 0) {
+        if (this.javaIntegerLiteralKind(divisor) !== 'int' || Number((divisor as any).text) === 0) {
             return false;
         }
         return true;

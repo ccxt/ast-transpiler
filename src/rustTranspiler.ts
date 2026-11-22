@@ -23172,9 +23172,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (siblings > 0 && elementUses === 0 && !siblingMove) return false;
         // a list-element / settle hand-off moves the map: only its single last use, with no other escape, may take it
         if (moveEscapes.length > 0) {
-            // ral-tf: a map widened by string-local keys (written at `m[k] = v`) still moves whole into a ws settle value at
-            // its last use: that is its only escape, so the move is the box the helper form made (no copy)
-            if (moveEscapes.length > 1 || escapes.length > 0 || (rebuilds > 0 && !this.rust76gTernaryMoveUse(moveEscapes[0])) || (widened && !siblingMove && !this.rustWsSettleMove(moveEscapes[0]) && !this.rust73aThisFieldStore(moveEscapes[0])) || enumUses > 0 || (prediction && !this.rust73aThisFieldStore(moveEscapes[0]))
+            // a map widened by string-local keys, with no sibling move, keeps its `Value` box
+            if (moveEscapes.length > 1 || escapes.length > 0 || (rebuilds > 0 && !this.rust76gTernaryMoveUse(moveEscapes[0])) || (widened && !siblingMove) || enumUses > 0 || (prediction && !this.rust73aThisFieldStore(moveEscapes[0]))
                 || !this.rustLocalLastUse(moveEscapes[0], declaration) || !this.rustBoxLineOk(moveEscapes[0])) return false;
             this.rustLiteralMoves.add(moveEscapes[0]);
         }
@@ -25785,7 +25784,7 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-48d never-list guard: an omit of an unproven head (a list body passes through) never reaches a slot that
             // tells a list from the empty map, and never inside `sign` (whose params may be a list body)
             if ((unprovenOmit || String(fn?.name?.text ?? '') === 'sign') && (RustTranspiler.RUST_LIST_TELLING_SLOTS.has(String((up as any).expression?.name?.text ?? '')) || String(fn?.name?.text ?? '') === 'sign')) return false;
-            return !this.rustLentHelperSlot(up, n, from) || RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String(up.expression.name.text));
+            return !this.rustLentHelperSlot(up, n, from) || RustTranspiler.RUST_LENT_OPTIONAL_HELPERS.has(String((up.expression as any).name.text));
         });
     }
 
@@ -27848,12 +27847,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(up)) return !(isBinaryExpression(up.parent) && up.parent.left === up);
         // `m[k] = x` (one level, statement) stores the handle
         if (isBinaryExpression(up) && up.right === n && up.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(up.left) && up.parent?.kind === SyntaxKind.ExpressionStatement) {
-            return isIdentifier(up.left.expression) && !this.rustIdentifierRefersToDeclaration(up.left.expression, this.rustDeclarationOfIdentifier(n));
+            return isIdentifier(up.left.expression) && !this.rustIdentifierRefersToDeclaration(up.left.expression, this.rustDeclarationOfIdentifier(n) as any);
         }
         if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression)) return false;
         const callee = String(up.expression.name.text);
         const at = Array.from(up.arguments).indexOf(n);
-        if (isIdentifier(up.expression.expression)) return at === 0 && RustTranspiler.RUST_BUILT_BOX_RECEIVER_METHODS.has(callee) && !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n));
+        if (isIdentifier(up.expression.expression)) return at === 0 && RustTranspiler.RUST_BUILT_BOX_RECEIVER_METHODS.has(callee) && !this.rustIdentifierRefersToDeclaration(up.expression.expression, this.rustDeclarationOfIdentifier(n) as any);
         // `this.orders.append (x)` (a base `ArrayCache | undefined` field, statement): `CacheSlot::append` takes the handle as a `Value`
         if (callee === 'append' && at === 0 && up.arguments.length === 1 && up.parent?.kind === SyntaxKind.ExpressionStatement && this.rustWsCacheField(up.expression.expression)) return true;
         if (up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
