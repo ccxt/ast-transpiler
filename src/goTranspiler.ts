@@ -34594,7 +34594,8 @@ export interface GoTranspiler {
 GoTranspiler.prototype.goGuardedStringTupleSlot = function (node) {
     const slot = (node?.kind === SyntaxKind.Identifier) && (((this.goDeclaredTypeOfIdentifier(node) === undefined)
         && (this.goBoundIdentifierType(node) === '*string')) || this.goGuardedTupleSlot0(node));
-    return slot && (this.goHasExitingNilGuard(node) || this.goHasEnclosingNilGuard(node) || this.goNonNilStringOverloadSlot(node));
+    return slot && (this.goHasExitingNilGuard(node) || this.goHasEnclosingNilGuard(node) || this.goNonNilStringOverloadSlot(node)
+        || this.h26g33NonNilMarketTypeSlotArg(node));
 };
 
 export interface GoTranspiler {
@@ -58103,3 +58104,31 @@ GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     };
 }
 // ===== end H33-P02
+// ===== H34-P08: a `Str` local copied from slot 0 of a string tuple reader =====
+// `let x: Str = t` where `const [ t, p ] = this.<reader> (..)` and the Go reader returns `(*string, map[string]any)`
+// (CCXT_GO_PAIR_SLOT_0): x holds that pointer, so it prints `*string` when every write keeps one
+{
+    const getGoLocalTypeH34P08 = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        const answer = getGoLocalTypeH34P08.call(this, declaration, parsedValue);
+        if ((answer !== 'any') || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.type?.kind !== SyntaxKind.TypeReference) || (declaration.type.typeName?.text !== 'Str')
+            || (declaration.initializer?.kind !== SyntaxKind.Identifier)) {
+            return answer;
+        }
+        const element: any = this.checkerOrUndefined()?.getSymbolAtLocation(declaration.initializer)?.valueDeclaration?.resolve?.();
+        const pattern: any = element?.parent;
+        const holder: any = pattern?.parent;
+        const call: any = holder?.initializer;
+        if ((element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements[0] !== element)
+            || (pattern.elements.length !== 2) || (holder?.kind !== SyntaxKind.VariableDeclaration) || (((holder.parent?.flags ?? 0) & NodeFlags.Const) === 0)
+            || (call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (CCXT_GO_PAIR_SLOT_0[call.expression.name?.text] !== '*string')
+            || !this.goIsBaseExchangeMethod(call.expression.name)) {
+            return answer;
+        }
+        const scope = this.goEnclosingFunction(declaration);
+        return (!this.goTypeNameIsShadowed(scope, '*string') && this.goLocalIsSafeToType(scope, declaration, declaration.name.text, '*string')) ? '*string' : answer;
+    };
+}
+// ===== end H34-P08

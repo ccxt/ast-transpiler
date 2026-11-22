@@ -19902,3 +19902,43 @@ describe ('goPostOnlyParamsSlot', () => {
         expect (run (body ('this.handlePostOnly (false, false, query)', '        query = raw;\n'))).toContain ('var query any = this.Omit(params, "x")');
     });
 });
+
+describe('a Str local copied from a string tuple reader slot', () => {
+    const BASE = 'export default class Exchange {\n    options: any = {};\n' +
+        '    handleOptionStringAndParams (params: any, methodName: string, optionName: string, defaultValue: string = undefined): [string, any] { return [ defaultValue, params ]; }\n' +
+        '    handleMarketTypeAndParams (methodName: string, market: any = undefined, params: any = {}, defaultValue: string = undefined): [string, any] { return [ defaultValue, params ]; }\n' +
+        '    safeString (a: any, k: any, d: any = undefined): string | undefined { return a; }\n}\n';
+    const run = (body: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'str-tuple-slot-local-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync(path.join(tmp, 'ts/src/base/Exchange.ts'), BASE);
+            const file = path.join(tmp, 'ts/src/x.ts');
+            fs.writeFileSync(file, "import Exchange from './base/Exchange.js';\ntype Str = string | undefined;\nclass X extends Exchange {\n    f (params: any, other: any): Str {\n" + body + '        return undefined;\n    }\n}\n');
+            const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    };
+    test('nil test, a *string write and a guarded store keep the local *string', () => {
+        const out = run("        const [ opt, rest ] = this.handleOptionStringAndParams (params, 'm', 'k');\n        let id: Str = opt;\n" +
+            "        if (id === undefined) {\n            id = this.safeString (other, 'k');\n        }\n        if (id !== undefined) {\n            this.options['k'] = id;\n            return id;\n        }\n");
+        expect(out).toContain('var id *string = opt');
+        expect(out).toContain('if id == nil {');
+        expect(out).not.toContain('IsEqual(id, nil)');
+    });
+    test('handleMarketTypeAndParams slot works the same', () => {
+        const out = run("        const [ t, rest ] = this.handleMarketTypeAndParams ('m', undefined, params);\n        let kind: Str = t;\n        if (kind === undefined) {\n            kind = 'spot';\n        }\n        return kind;\n");
+        expect(out).not.toContain('var kind any');
+    });
+    test('a write of another kind keeps the box', () => {
+        const out = run("        const [ opt, rest ] = this.handleOptionStringAndParams (params, 'm', 'k');\n        let id: Str = opt;\n        id = other;\n        return id;\n");
+        expect(out).toContain('var id any = opt');
+    });
+    test('a let tuple or a non-reader source keeps the box', () => {
+        const out = run("        let [ opt, rest ] = this.handleOptionStringAndParams (params, 'm', 'k');\n        let id: Str = opt;\n        if (id === undefined) {\n            return id;\n        }\n");
+        expect(out).not.toContain('var id *string');
+    });
+});
