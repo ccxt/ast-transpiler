@@ -1138,6 +1138,7 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
         'ParseMarginLoan', 'ParseIsolatedBorrowRates',
         'ParseBalanceCustom', 'ParseUtaBalance', 'ParseBalanceByType', 'ParseBalanceForSingleCurrency', 'ParseCustomBalance', 'ParseSwapBalance', 'ParseSpotBalance', 'CustomParseBalance', 'ParseFundingBalance', 'ParseTradingBalance', 'ParseBalanceList',
         'ParseADLRank',
+        'ParseLastPrice',
         'ParseDepositAddressSpecial',
         'ParseEvent', 'ParseMarketToEvent',
         'SafePosition', 'ParsePosition', 'ParseOptionPosition',
