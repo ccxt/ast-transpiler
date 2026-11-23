@@ -18079,7 +18079,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goConstDefaultedSafeIntegerLocal(ident): boolean {
         const declaration = (ident?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(ident) : undefined;
         return (declaration?.parent?.kind === SyntaxKind.VariableDeclarationList) && ((declaration.parent.flags & NodeFlags.Const) !== 0)
-            && this.goDefaultedSafeIntegerCall(declaration.initializer);
+            && (this.goDefaultedSafeIntegerCall(declaration.initializer) || this.goClockDefaultedSafeIntegerCall(declaration.initializer));
+    }
+
+    // `this.safeInteger (o, k, this.milliseconds ())`: the int64 clock default makes the reader's pointer non-nil
+    goClockDefaultedSafeIntegerCall(node): boolean {
+        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (node.expression.name?.text !== 'safeInteger')
+            || (node.arguments?.length !== 3)) {
+            return false;
+        }
+        const last = node.arguments[2];
+        return (last.kind === SyntaxKind.CallExpression) && (last.expression?.kind === SyntaxKind.PropertyAccessExpression) && (last.expression.expression?.kind === SyntaxKind.ThisKeyword) && (last.expression.name?.text === 'milliseconds') && (last.arguments.length === 0);
     }
 
     // a union every member of which is a number (`5 | 50` after `(x === 5) || (x === 50)`): no nil member
@@ -60574,3 +60585,18 @@ GoTranspiler.prototype.h42g22EndpointArmsContainer = function (node): boolean {
     };
 }
 // ===== H42-G29 (end) =====
+// ===== H42-G10: a base `this.sum (a, b)` over a clock-defaulted const safeInteger local, printed as native `*a + b`, is int64
+{
+    const goOperandStaticTypeH42G10 = GoTranspiler.prototype.goOperandStaticType;
+    GoTranspiler.prototype.goOperandStaticType = function (node, printedText: string): string | undefined {
+        const shipped = goOperandStaticTypeH42G10.call(this, node, printedText);
+        if ((shipped !== undefined) || (typeof printedText !== 'string') || /\bSum\(/.test(printedText) || !this.go92g7IsBaseSum(node)
+            || !node.arguments.some((a: any) => (a.kind === SyntaxKind.Identifier) && this.goClockDefaultedSafeIntegerCall(this.goDeclarationOfIdentifier(a)?.initializer)
+                && this.goConstDefaultedSafeIntegerLocal(a))
+            || (this.go93g4PointerOperands(node) === undefined)) {
+            return shipped;
+        }
+        return 'int64';
+    };
+}
+// ===== end H42-G10
