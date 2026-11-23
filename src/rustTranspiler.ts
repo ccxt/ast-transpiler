@@ -40855,13 +40855,24 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isIdentifier(root)) {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
-                    if (init === undefined || !(isObjectLiteralExpression(init) || isArrayLiteralExpression(init)) || root !== n.left.expression) aliasWrite = true;
+                    const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init));
+                    if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
             }
             n.forEachChild(visit);
         };
         method.body?.forEachChild(visit);
         return !aliasWrite;
+    }
+
+    /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
+     *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
+    rustCallReturnsFreshLiteral(init: any): boolean {
+        if (!isCallExpression(init) || init.arguments.length !== 0 || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const decl: any = this.rustCalleeDeclaration(init);
+        const stmts: any[] = decl !== undefined && isMethodDeclaration(decl) && decl.body !== undefined ? Array.from(decl.body.statements) : [];
+        const ret: any = stmts.length === 1 && isReturnStatement(stmts[0]) ? stmts[0].expression : undefined;
+        return ret !== undefined && isObjectLiteralExpression(ret) && ret.properties.every((p: any) => isPropertyAssignment(p) && (isIdentifier(p.initializer) && p.initializer.text === 'undefined' || isStringLiteral(p.initializer) || isNumericLiteral(p.initializer)));
     }
 
     /** Another ts/src/pro file calls `.name (` and declares no method of that name (an inherited copy answers it). */
