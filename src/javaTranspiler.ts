@@ -405,6 +405,9 @@ const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 // the Java spelling of a dict slot: the annotation tables above and the inheritance arm below
 const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 
+// unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
+const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost']);
+
 // Parameter positions whose Java signature cannot move to the annotated type even though
 // the base declaration carries it. Java overrides are invariant, so one excluded position
 // boxes every declaration of the name at once.
@@ -2287,6 +2290,10 @@ export class JavaTranspiler extends BaseTranspiler {
             // and Java generics are invariant, so a typed slot rejects them
             return undefined;
         }
+        const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type);
+        if (unifiedInt !== undefined) {
+            return unifiedInt;
+        }
         if (name === undefined) {
             return this.javaPlainParameterTypeOf(node, type, checker);
         }
@@ -2297,6 +2304,28 @@ export class JavaTranspiler extends BaseTranspiler {
         const declaration = symbol?.declarations?.[0]?.resolve();
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
+    }
+
+    // a fixed `int` (base/types.ts) parameter of an async method first declared in the Exchange tier prints `Long`,
+    // a plain `number` amount / cost of the unified money methods `Double`; every override shares the annotation
+    javaUnifiedIntParameterType(name, symbol, method, type): string | undefined {
+        const numberSlot = name === undefined && (type.flags & TypeFlags.Number) !== 0
+            && JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(String((method.name as any)?.text));
+        if ((name !== 'int' && !numberSlot) || !isIdentifier(method.name) || !this.isAsyncFunction(method)) {
+            return undefined;
+        }
+        let root = method;
+        for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
+            root = m;
+        }
+        if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
+            return undefined;
+        }
+        if (numberSlot) {
+            return 'Double';
+        }
+        const fileName = symbol?.declarations?.[0]?.resolve()?.getSourceFile?.()?.fileName;
+        return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? 'Long' : undefined;
     }
 
     // a fixed plain `any[]` / `number[]` base-tier parameter prints `java.util.List<Object>` when the body never
