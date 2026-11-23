@@ -6490,6 +6490,8 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_TYPED_METHODS: { [name: string]: [ string, string ] } = {
         parseToInt: [ 'number', 'oint' ], incrementingNonce: [ 'int', 'int' ], symbol: [ 'string', 'str' ],
         findTimeframe: [ 'Str', 'ostr' ], networkIdToCode: [ 'Str', 'ostr' ], requestId: [ 'int', 'int' ],
+        // the request clock: every override returns a milliseconds / seconds integer
+        nonce: [ 'int', 'int' ],
         isPostOnly: [ 'boolean', 'bool' ],
         usesPrivateKey: [ 'boolean', 'bool' ],
         isGateFuturesContractWithDecimalSize: [ 'boolean', 'bool' ],
@@ -11808,7 +11810,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = this.printNode(node, 0).trim();
         if (this.rustClockCall(node)) return kind === 'int' || kind === 'oint' ? wrap(`${text}.as_i64().unwrap_or_default()`) : undefined;
         const clock: any = base === 'str' && (this.rustClockString(node) || (this.rustIdString(node) && !this.rustIntToStringShape(node))) && isPropertyAccessExpression(node.expression) ? node.expression.expression : undefined;
-        if (clock !== undefined && this.rustNonceCall(this.unwrapParens(clock))) return wrap(`format!("{}", ${this.printNode(this.unwrapParens(clock), 0).trim()})`);
+        if (clock !== undefined && this.rustNonceCall(this.unwrapParens(clock))) return wrap(`format!("{}", ${this.rustBaseTypedReturnKindAll(this.unwrapParens(clock)) === 'int' ? this.rustBaseTypedBareText(this.unwrapParens(clock)) : this.printNode(this.unwrapParens(clock), 0).trim()})`);
         if (clock !== undefined) return wrap(`format!("{}", ${this.rustScalarNativeText('int', clock)})`);
         // ral-45g: `p.toString()` of a `number` parameter: the String the `format!` box held
         if (base === 'str' && this.rust87rhToStringWrite(node)) return wrap(this.rustUnboxedFormatOf(node));
@@ -15626,7 +15628,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustVirtualDispatchMethod(node: any, methodDef: string, body: string): string {
         const sig = this.rustSignatureTable.get(node);
         const slots = sig === undefined ? undefined : this.rustVirtualDispatch[sig.name];
-        if (sig === undefined || slots === undefined || (sig.ret !== 'value' && sig.ret !== 'typed')) return methodDef + body;
+        if (sig === undefined || slots === undefined || (sig.ret !== 'value' && sig.ret !== 'typed' && sig.ret !== 'keptint')) return methodDef + body;
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''))) return methodDef + body;
         const sliceAt = sig.params.findIndex(p => p.type === '&[Value]');
         const callArgs = slots.map((_slot, i) => {
@@ -15641,7 +15643,7 @@ export class RustTranspiler extends BaseTranspiler {
             return 'crate::Value::Null';
         });
         const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n`
-            + `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
+            + `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : sig.ret === 'keptint' ? '__v.as_i64().unwrap_or_default()' : '__v'}; } }\n`;
         let open = body.indexOf('{') + 1;
         // a lent parameter is bound to its `Value` first
         for (const p of sig.params.filter(q => q.type === 'impl Into<crate::Value>')) {

@@ -27523,3 +27523,27 @@ describe('typed locals: a declared const string list of literals', () => {
         expect(out).not.toContain('let mut keys: Vec<Value>');
     });
 });
+
+// nonce () declared int: base and overrides print -> i64
+
+const nonceFixture = (tag: string, baseDecl: string, venueBody: string) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), `astfx-nonce-${tag}-`));
+    fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), 'export interface Dict { [key: string]: any }\nexport type int = number;\nexport default class Exchange {\n    options: Dict = {};\n    seconds (): int {\n        return 1;\n    }\n    milliseconds (): int {\n        return 1000;\n    }\n    safeInteger (d: Dict, k: string, v: any = undefined): any {\n        return v;\n    }\n    ' + baseDecl + ' {\n        return this.seconds ();\n    }\n}\n');
+    fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), 'import Exchange from \'./base/Exchange.js\';\nimport type { int } from \'./base/Exchange.js\';\nexport default class venue extends Exchange {\n    override nonce (): int {\n        ' + venueBody + '\n    }\n}\n');
+    const t = new Transpiler({ 'verbose': false, 'rust': { 'virtualDispatch': { nonce: [] }, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+    return { base: t.transpileRustByPath(path.join(root, 'ts/src/base/Exchange.ts')).content, venue: t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content };
+};
+
+describe('nonce () declared int returns i64', () => {
+    test('base and override print -> i64; the base keeps its dispatch preamble and unboxes the slot once', () => {
+        const { base, venue } = nonceFixture('ok', 'nonce (): int', 'return this.milliseconds () - this.safeInteger (this.options, \'timeDifference\', 0);');
+        expect(base).toMatch(/fn nonce\(&self\) -> i64/);
+        expect(base).toContain('DerivedExchange::nonce(self, ); if !matches!(__v, crate::Value::Null) { return __v.as_i64().unwrap_or_default(); }');
+        expect(venue).toMatch(/fn nonce\(&self\) -> i64/);
+    });
+    test('negative: a nonce not declared int stays Value', () => {
+        const { base } = nonceFixture('no', 'nonce (): any', 'return this.milliseconds ();');
+        expect(base).toMatch(/fn nonce\(&self\) -> Value/);
+    });
+});
