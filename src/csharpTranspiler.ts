@@ -2301,9 +2301,17 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!checker.isArrayType(type) && !checker.isTupleType(type)) {
             return undefined;
         }
-        const element = (checker.getTypeArguments(type) || [])[0];
+        let element = (checker.getTypeArguments(type) || [])[0];
         if (element === undefined) {
             return undefined;
+        }
+        // a nullable cell (`Market` = `MarketInterface | undefined`) is the same box: null is a list element
+        if (element.isUnionType && element.isUnionType()) {
+            const arms = element.getTypes() ?? [];
+            const cells = arms.filter((arm) => (arm.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+            if (cells.length === 1 && arms.length > 1) {
+                element = cells[0];
+            }
         }
         if (element.flags & (TypeFlags.Any | TypeFlags.Unknown)) {
             return 'IList<object>';
@@ -2886,7 +2894,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (this.csharpNameIsRebound(declaration, findAncestor(declaration, (n) => isFunctionLike(n)))) {
                 return false;
             }
-            const type: string | undefined = this.getCSharpLocalType(declaration);
+            // the final declared type: an embedding build layer may retype the printed `object` local
+            const type: string | undefined = this.csharpFinalDeclaredLocalType(declaration);
             return (type === 'List<object>') || (type === 'IList<object>');
         }
         const type: string | undefined = this.csharpTypeOfInitializer(node);
