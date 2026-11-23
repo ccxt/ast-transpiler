@@ -17564,6 +17564,7 @@ export class RustTranspiler extends BaseTranspiler {
             return 'Option<String>';
         }
         const container = this.rustOwnContainerReturn(node); if (container !== undefined) return container === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
+        if (this.rustAsyncNoValueMethod(node)) return '';
         try {
             const checker = this.getChecker();
             if (checker.getReturnTypeOfSignature(checker.getSignatureFromDeclaration(node)).flags === TypeFlags.Void) return '';
@@ -36274,6 +36275,68 @@ export class RustTranspiler extends BaseTranspiler {
         }
         this.rustVenueMethodDeclCountsByRoot.set(srcRoot, counts);
         return counts;
+    }
+
+    private rustAsyncNoValueByRoot = new Map<string, Set<string>>();
+
+    /** An async venue method (no base-tier declaration) whose every declaration returns no value and whose every
+     *  reference is a statement call or a `spawn` / `delay` handle: nothing reads its result, so it prints no return. */
+    rustAsyncNoValueMethod(node: any): boolean {
+        if (!isMethodDeclaration(node) || !isIdentifier(node.name) || node.body === undefined || !(node.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword)) return false;
+        const file = String(node.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+        if (at < 0) return false;
+        const root = file.slice(0, at) + '/ts/src';
+        let names = this.rustAsyncNoValueByRoot.get(root);
+        if (names === undefined) {
+            names = new Set<string>();
+            const texts: string[] = [];
+            for (const dir of [ '', '/pro', '/prediction' ]) {
+                try { for (const f of fs.readdirSync(root + dir).filter(isRustTsIndexSource)) texts.push(readRustTsIndexSource(`${root}${dir}/${f}`) ?? ''); } catch (e) { continue; }
+            }
+            const counts = this.rustVenueMethodDeclCounts(root);
+            const decl = /^ {4}((?:(?:override|async|public|protected|private|static)\s+)*)([A-Za-z_]\w*)\s*\(/gm;
+            const verdict = new Map<string, boolean>();
+            const venueCounts = new Map<string, number>();
+            for (const text of texts) {
+                for (const m of text.matchAll(decl)) {
+                    const name = m[2];
+                    venueCounts.set(name, (venueCounts.get(name) ?? 0) + 1);
+                    const close = this.rustIndexMatchClose(text, text.indexOf('(', m.index + m[0].length - 1), '(', ')');
+                    const open = close < 0 ? -1 : text.indexOf('{', close);
+                    const end = open < 0 ? -1 : this.rustIndexMatchClose(text, open, '{', '}');
+                    const ok = end > 0 && /\basync\b/.test(m[1]) && /^\s*(?::\s*Promise<void>\s*)?$/.test(text.slice(close + 1, open))
+                        && !/\breturn\s+[^;\s]/.test(text.slice(open, end));
+                    verdict.set(name, (verdict.get(name) ?? true) && ok);
+                }
+            }
+            for (const [ name, ok ] of verdict) {
+                if (!ok || counts.get(name) !== venueCounts.get(name)) continue;
+                const refs = new RegExp(`(^[^\\n]*?)this\\.${name}\\b(\\s*\\()?`, 'gm');
+                let read = false;
+                for (const text of texts) {
+                    for (const r of text.matchAll(refs)) {
+                        const handle = /this\.(?:spawn \(|delay \([^,()]+,\s*)$/.test(r[1]);
+                        const statement = r[2] !== undefined && /^\s*(?:await\s+)?$/.test(r[1]);
+                        if (!handle && !statement) read = true;
+                    }
+                }
+                if (!read) names.add(name);
+            }
+            this.rustAsyncNoValueByRoot.set(root, names);
+        }
+        return names.has(String(node.name.text));
+    }
+
+    /** Index of the bracket closing the one at `open` in raw source text, or -1. */
+    rustIndexMatchClose(text: string, open: number, o: string, c: string): number {
+        if (open < 0) return -1;
+        let depth = 0;
+        for (let i = open; i < text.length; i++) {
+            if (text[i] === o) depth++;
+            else if (text[i] === c && --depth === 0) return i;
+        }
+        return -1;
     }
 
     /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
