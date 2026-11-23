@@ -59769,7 +59769,12 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
                 return undefined;
             }
             const d: any = this.goAnyBoxLocalDeclaration (n);
-            return (d?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType (d) : this.goResolvedLocalGoType (n);
+            if (d?.kind === SyntaxKind.Parameter) {
+                return this.goNativeParameterType (d);
+            }
+            // a nil-seeded let the endpoint join declares map[string]any is a typed map receiver too
+            const t = this.goResolvedLocalGoType (n);
+            return (((t === undefined) || (t === 'any')) && h43g11JoinLetStaysLocal (this, n)) ? (ccxtGoNilJoinDeclarationType (this, n) ?? t) : t;
         };
         const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
         if (((goTypeOf (container) !== 'map[string]any') && !h40g23MapLet (this, container, false)) || (!literalKey && (goTypeOf (key) !== 'string'))) {
@@ -59967,6 +59972,31 @@ function h40g23MapLet (goTranspiler: GoTranspiler, container, endpointOnly: bool
     return ok && (((endpoints > 0) && (markets === 0)) || (!endpointOnly && (markets > 0) && (endpoints === 0)));
 }
 // ===== H40-G23 (end) =====
+// the endpoint-join let never leaves the method before its reads: every use is an endpoint write, a nil or `in` test,
+// a reader argument, or an argument of the call the method returns (nothing runs after it)
+function h43g11JoinLetStaysLocal (goTranspiler: GoTranspiler, container): boolean {
+    const declaration: any = goTranspiler.goAnyBoxLocalDeclaration (container);
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    return goTranspiler.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+        const parent: any = n.parent;
+        if (goTranspiler.h28a03EndpointWrite (n, name)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        if (goTranspiler.goWritesOrRebindsName (n, name, [])) {
+            return false;
+        }
+        const returnedArg = (parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n)
+            && (parent.parent?.kind === SyntaxKind.ReturnStatement) && (parent.parent.expression === parent)
+            && (goTranspiler.goEnclosingFunction (parent) === goTranspiler.goEnclosingFunction (declaration));
+        return returnedArg || goTranspiler.goIsNilComparisonOperand (n, parent) || goTranspiler.goJsonOriginUseIsReadOnly (n, name)
+            || goTranspiler.h42g22ReaderArgument (n) || goTranspiler.h27a02ScalarReaderUse (n);
+    });
+}
 // ===== H40-G24: list member of a decoded ws frame parameter, `as List` cast or `[]` default (begin) =====
 // `const xs = this.safeList (frame, 'lit'[, []]) [as List]` with `frame` a handler parameter proven to hold the decoded
 // frame (h27a11JsonContainer): the member is []any, another JSON kind or absent, so the comma-ok read answers what
