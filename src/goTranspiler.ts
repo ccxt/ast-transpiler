@@ -14047,6 +14047,7 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseAccount': [ 0 ],
     'parseOption': [ 0 ],
     'parseMarginMode': [ 0 ],
+    'parseMarginMode': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -59361,7 +59362,8 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
     // a string key on a decoded ws frame map (JSON values only): the comma-ok read, `{}` when missing or not a map
     const frameKey = ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && go.h29a13FrameMap(list))
         ? (go.h27a05KeyText(key) ?? ((go.goResolvedLocalGoType(key) === 'string') ? key.text : undefined)) : undefined;
-    if ((frameKey === undefined) && (go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list)) { return printed; }
+    if ((frameKey === undefined) && (go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list)
+        && (ccxtGoNilJoinDeclarationType(go, list) !== GO_SAFE_LIST_LOCAL_TYPE)) { return printed; }
     let k: string;
     let guard: string | undefined;
     if (frameKey !== undefined) {
