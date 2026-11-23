@@ -406,7 +406,10 @@ const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 
 // unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
-const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer', 'createMarketOrderWithCost', 'createMarketSellOrderWithCost']);
+const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer', 'createMarketOrderWithCost', 'createMarketSellOrderWithCost',
+    'borrowCrossMargin', 'repayCrossMargin', 'borrowIsolatedMargin', 'repayIsolatedMargin', 'borrowMargin', 'repayMargin', 'setMargin']);
+// unified convert methods whose defaulted `amount: Num = undefined` prints `Double` (null when omitted)
+const JAVA_UNIFIED_OPTIONAL_NUMBER_PARAMETER_METHODS = new Set<string>(['fetchConvertQuote', 'createConvertTrade']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
@@ -2094,6 +2097,10 @@ export class JavaTranspiler extends BaseTranspiler {
             const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has((node.name as any)?.text)
                 && !JAVA_STRINGS_EXCLUDED_METHODS.has((method.name as any)?.text);
             return listName ? JAVA_STRING_LIST_TYPE : undefined;
+        }
+        if (name === 'Num' && (node.name as any)?.text === 'amount' && this.isAsyncFunction(method)
+            && JAVA_UNIFIED_OPTIONAL_NUMBER_PARAMETER_METHODS.has(String((method.name as any)?.text))) {
+            return 'Double';
         }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
             return undefined;

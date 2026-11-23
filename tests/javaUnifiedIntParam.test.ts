@@ -75,19 +75,24 @@ describe('java unified money amount parameter', () => {
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'types.ts'),
             'export type Num = number | undefined;\nexport interface Dictionary<T> { [key: string]: T; }\nexport type Dict = Dictionary<any>;\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts'),
-            "import type { Dict } from './types';\n" +
+            "import type { Dict, Num } from './types';\n" +
             'export default class Exchange {\n' +
             '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
             '    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '    async setMargin (symbol: string, amount: number, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '    async createMarketSellOrderWithCost (symbol: string, cost: number, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '    async borrowCrossMargin (code: string, amount: number, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '    async fetchConvertQuote (fromCode: string, toCode: string, amount: Num = undefined, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '}\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
-            "import type { Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
+            "import type { Dict, Num } from './base/types';\nimport Exchange from './base/Exchange';\n" +
             'class Venue extends Exchange {\n' +
             "    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
             "    async setMargin (symbol: string, amount: number, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
             "    async createMarketSellOrderWithCost (symbol: string, cost: number, params: Dict = {}): Promise<{}> {\n        return { 'cost': cost };\n    }\n" +
+            "    async borrowCrossMargin (code: string, amount: number, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
+            "    async fetchConvertQuote (fromCode: string, toCode: string, amount: Num = undefined, params: Dict = {}): Promise<{}> {\n        if (amount === undefined) {\n            return {};\n        }\n        return { 'amount': amount };\n    }\n" +
+            "    async fetchOtherQuote (fromCode: string, amount: Num = undefined, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
             '}\n');
         out = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } })
             .transpileJavaByPath(path.join(TMP, 'ts', 'src', 'probe.ts')).content;
@@ -100,8 +105,18 @@ describe('java unified money amount parameter', () => {
     test('withdraw amount prints Double', () => {
         expect(out).toMatch(/withdraw\(\w+ code, Double amount, /);
     });
-    test('a money method outside the group keeps the Object slot', () => {
-        expect(out).toMatch(/setMargin\(\w+ symbol, Object amount/);
+    test('borrowCrossMargin amount prints Double', () => {
+        expect(out).toMatch(/borrowCrossMargin\w*\(\w+ code, Double amount, /);
+    });
+    test('the defaulted convert amount prints Double, null tested natively', () => {
+        expect(out).toMatch(/fetchConvertQuote\w*\(\w+ fromCode, \w+ toCode, Double amount, /);
+        expect(out).not.toMatch(/fetchConvertQuote\w*\([^)]*Object amount/);
+    });
+    test('a defaulted Num amount of another method keeps the Object slot', () => {
+        expect(out).toMatch(/fetchOtherQuote\w*\(\w+ fromCode, Object amount/);
+    });
+    test('setMargin amount prints Double', () => {
+        expect(out).toMatch(/setMargin\(\w+ symbol, Double amount/);
     });
 });
 
