@@ -40,12 +40,12 @@ const BASE = 'ts/src/base/ex.ts';
 describe ('h26 G48 ws client presence tests', () => {
     test ('a subscription presence bool prints a native nil compare (fails on the base printer)', () => {
         const out = go ('client: Client, h: string', '        const isNew = this.safeValue (client.subscriptions, \'a\') === undefined;\n        return isNew;', PRO);
-        expect (out).toContain ('var isNew bool = client.(ClientInterface).SubscriptionSafe("a") == nil');
+        expect (out).toContain ('var isNew bool = client.SubscriptionSafe("a") == nil');
         expect (out).not.toContain ('IsEqual(');
     });
     test ('!== undefined prints != nil', () => {
         const out = go ('client: Client, h: string', '        const has = this.safeValue (client.subscriptions, \'a\') !== undefined;\n        return has;', PRO);
-        expect (out).toContain ('client.(ClientInterface).SubscriptionSafe("a") != nil');
+        expect (out).toContain ('client.SubscriptionSafe("a") != nil');
     });
     test ('negative: a boxed key keeps the helper', () => {
         const out = go ('client: Client, h', '        const isNew = this.safeValue (client.subscriptions, h) === undefined;\n        return isNew;', PRO);

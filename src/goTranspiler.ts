@@ -14681,8 +14681,7 @@ export function installCcxtGoSignTyping (goTranspiler: any) {
 //   `Object.keys / values (R.subscriptions)` -> R.SubscriptionKeys() / R.SubscriptionValues()
 //   `local = this.safeDict (R.subscriptions, k)` typed dict local -> R.SubscriptionDict(k)
 //   any other read of the table       -> R.SubscriptionsSnapshot() (a copy taken on the owner)
-// R prints `R.(ClientInterface)` in the ws and prediction trees (the handler frame holds `client any`
-// there) and plain `R` in the base class (`client *Client`).
+// R prints as is: a ClientInterface in the ws and prediction trees, `client *Client` in the base class.
 const SUBSCRIPTIONS_CLASS = 'Client';
 
 function clientSubscriptions (go: any, node: any) {
@@ -14726,7 +14725,7 @@ export function installFmGo5G01 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goPointerDefaultsInstalled')) { return; }
     const owner = (go: any, access: any) => {
         const printed = go.printNode (access.expression, 0);
-        return clientIsInterfaceFrame (access) ? printed + '.(ClientInterface)' : printed;
+        return printed;
     };
     const printAccess = goTranspiler.printPropertyAccessExpression;
     goTranspiler.printPropertyAccessExpression = function (this: any, node: any, identation: number) {
@@ -32364,7 +32363,7 @@ ${this.getIden(identation)}${returnStatement}`;
             return undefined;
         }
         // the ws Client's `rejections` table: `client.Rejections` reads the map through the ClientInterface getter
-        return this.goIsClientParameter(node.expression) ? `${this.printNode(node.expression, 0)}.(ClientInterface).GetRejections()` : undefined;
+        return this.goIsClientParameter(node.expression) ? `${this.printNode(node.expression, 0)}${clientIsInterfaceFrame(node) ? '' : '.(ClientInterface)'}.GetRejections()` : undefined;
     }
 
     goDeleteKeyText(keyNode): string | undefined {
@@ -36544,7 +36543,7 @@ GoTranspiler.prototype.goClientFutureLocal = function (declaration) {
             const key = this.goClientFutureReadKey(declaration.initializer);
             if (this.getGoLocalType(declaration, '') === '*Future') {
                 if ((key.kind !== SyntaxKind.StringLiteral) && !this.goIsStringKeyExpression(key)) {
-                    return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.(ClientInterface).FutureTyped(${this.printNode(key, 0)})`;
+                    return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.FutureTyped(${this.printNode(key, 0)})`;
                 }
                 return `${this.getIden(identation)}var ${this.printNode(declaration.name, 0)} *Future = client.Futures[${this.printNode(key, 0)}]`;
             }
@@ -47260,7 +47259,7 @@ GoTranspiler.prototype.h26g48BaseClientFutures = function (node) {
             if (key !== undefined) {
                 const absent = (op === SyntaxKind.EqualsEqualsEqualsToken) ? ' == nil' : ' != nil';
                 const owner = this.printNode(read.arguments[0].expression, 0);
-                return `${owner}.(ClientInterface).SubscriptionSafe(${this.printNode(key, 0)})${absent}`;
+                return `${owner}.SubscriptionSafe(${this.printNode(key, 0)})${absent}`;
             }
         }
         return printBinaryExpression.call(this, node, identation);

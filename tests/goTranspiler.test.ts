@@ -14988,7 +14988,7 @@ describe('go 77g3 ws reusable-future locals', () => {
         const x = new Transpiler ({ verbose: false, go: {} });
         installFmGo5G01 (x.goTranspiler);
         const out = x.transpileGoByPath (file).content;
-        expect (out).toContain ('var subs map[string]any = client.(ClientInterface).SubscriptionsSnapshot()');
+        expect (out).toContain ('var subs map[string]any = client.SubscriptionsSnapshot()');
     });
     test ('a future stored into a table keeps the any local', () => {
         const out = goPath ("export class ex extends Exchange {\n    async authenticate (url: string) {\n        const client: Client = this.client (url);\n        const future = client.reusableFuture ('authenticated');\n        client.subscriptions['a'] = future;\n        return await future;\n    }\n}\n");
@@ -15408,7 +15408,7 @@ describe('go 84g3 subscription presence locals', () => {
     afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
     test ('a subscription read only nil-tested is a presence bool', () => {
         const out = goPath ("export class ex extends Exchange {\n    auth (client: Client) {\n        const messageHash = 'authenticated';\n        const authenticated = this.safeValue (client.subscriptions, messageHash);\n        if (authenticated === undefined) {\n            this.watch (1, 2);\n        }\n    }\n}\n");
-        expect (out).toContain ('var authenticated bool = this.SafeValue(client.(ClientInterface).SubscriptionsSnapshot(), messageHash) != nil');
+        expect (out).toContain ('var authenticated bool = this.SafeValue(client.SubscriptionsSnapshot(), messageHash) != nil');
         expect (out).toContain ('if !authenticated {');
     });
     test ('a subscription read handed on keeps the box', () => {
@@ -16009,7 +16009,7 @@ describe('go 87g3 client futures read with a boxed string key', () => {
     afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
     test ('a string-typed parameter key reads the typed FutureTyped twin', () => {
         const out = goPath ("export class ex extends Exchange {\n    async loadSnapshot (client: Client, messageHash: string) {\n        if (messageHash in client.futures) {\n            const future = this.safeValue (client.futures, messageHash);\n            future.resolve (true);\n        }\n    }\n}\n");
-        expect (out).toContain ('var future *Future = client.(ClientInterface).FutureTyped(messageHash)');
+        expect (out).toContain ('var future *Future = client.FutureTyped(messageHash)');
         expect (out).toContain ('future.Resolve(true)');
     });
     test ('an untyped key keeps the box', () => {
@@ -16034,7 +16034,7 @@ describe('go 87g3 awaited client futures reads', () => {
     afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
     test ('a nil-tested, awaited futures read keyed by a string-or-undefined reader result declares *Future', () => {
         const out = goPath ("export class ex extends Exchange {\n    async auth (client: Client, message) {\n        const messageHash = this.safeString (message, 'oid');\n        const future = this.safeValue (client.futures, messageHash);\n        if (future !== undefined) {\n            return await future;\n        }\n        return undefined;\n    }\n}\n");
-        expect (out).toContain ('var future *Future = client.(ClientInterface).FutureTyped(messageHash)');
+        expect (out).toContain ('var future *Future = client.FutureTyped(messageHash)');
         expect (out).toContain ('(<-future.Await())');
     });
     test ('an awaited futures read handed out keeps the box', () => {

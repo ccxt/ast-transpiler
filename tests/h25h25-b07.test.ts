@@ -38,7 +38,7 @@ const go = (body: string, file: string, install = true) => {
 describe ('h25 B07 ws subscription read into a local', () => {
     test ('a pro-source local reads the owner, not GetValue of the snapshot', () => {
         const out = go ('        const sub = client.subscriptions[h];\n        if (sub === undefined) { return 1; }\n        return [ sub ];', PRO);
-        expect (out).toContain ('var sub any = client.(ClientInterface).SubscriptionGet(h)');
+        expect (out).toContain ('var sub any = client.SubscriptionGet(h)');
         expect (out).not.toContain ('SubscriptionsSnapshot');
     });
     test ('an element-of-list key also reads the owner', () => {
