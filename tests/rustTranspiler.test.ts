@@ -5847,7 +5847,8 @@ describe('override typed calls and store-backed dict returns', () => {
         expect(out).toMatch(/fn isUTAEnabled\([^)]*\) -> Value/);
     });
     test('a venue method returning a typed store entry by safeDict is held as a Dict', () => {
-        expect(out).toMatch(/let mut contracts: crate::value::Dict = self\.queryContracts\([^;]*\)\.await\.into_dict\(\);/);
+        expect(out).toMatch(/let mut contracts: crate::value::Dict = self\.queryContracts\([^;]*\)\.await;/);
+        expect(out).toMatch(/fn queryContracts\([^)]*\) -> crate::value::Dict/);
         expect(out).not.toMatch(/let mut (uta|contracts): Value/);
     });
 });

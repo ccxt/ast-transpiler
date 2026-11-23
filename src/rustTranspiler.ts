@@ -22608,6 +22608,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a list the method builds (`Vec<Value>` local or literal) of untyped / map elements hands on its own vector
         if (kind === 'list' && this.rustBoxedElementList(exp) && !this.rustUntypedLocalCaller(fn)) { const built = this.rustBaseListPayload(this.unwrapParens(exp)); if (built !== undefined) return built; }
         const printed = this.printNode(exp, 0).trim();
+        const read = this.rustEmptyDefaultReaderPayload(exp, printed, kind);
+        if (read !== undefined) return read;
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
@@ -22649,6 +22651,36 @@ export class RustTranspiler extends BaseTranspiler {
     printOwnContainerReturn(fn: any, exp: any): string | undefined {
         const kind = this.rustOwnContainerReturn(fn);
         return kind === undefined ? undefined : this.rustOwnContainerPayload(exp, kind);
+    }
+
+    /** `this.safeDict (x, 'k', {})` / `this.safeList (x, 'k', [])`: the member when it is that container, else the empty one,
+     *  which is exactly the typed `safe_dict_k_t` / `safe_list_k_t` answer (missing key, Null, wrong kind -> empty). */
+    rustEmptyDefaultReaderPayload(exp: any, printed: string, kind: 'dict' | 'list'): string | undefined {
+        let v: any = this.unwrapParens(exp);
+        // `as Dict[]` only names the element: the reader still answers a list on every input
+        if (v !== undefined && isAsExpression(v)) v = this.unwrapParens(v.expression);
+        if (v === undefined || !isCallExpression(v) || !isPropertyAccessExpression(v.expression) || v.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        const name = String(v.expression.name.text);
+        if (name !== (kind === 'dict' ? 'safeDict' : 'safeList') || v.arguments.length !== 3 || !isStringLiteral(v.arguments[1])) return undefined;
+        // the checker can fail to resolve an overloaded reader: then the venue class must not declare its own member of that name
+        const cls: any = findAncestor(v, (n: any) => isClassDeclaration(n));
+        const own = cls === undefined || cls.members.some((m: any) => isIdentifier(m.name) && String(m.name.text) === name);
+        let base = false;
+        try { base = this.rustCalleeIsRuntimeBase(v); } catch (e) { base = false; }
+        if (!base && (own || RustTranspiler.RUST_BASE_TIER_FILE.test(String(v.getSourceFile?.()?.fileName ?? '')))) return undefined;
+        const def: any = this.unwrapParens(v.arguments[2]);
+        if (kind === 'dict' ? !(isObjectLiteralExpression(def) && def.properties.length === 0) : !(isArrayLiteralExpression(def) && def.elements.length === 0)) return undefined;
+        // the boxed reader (`self.safeList(r, Value::Str("k".into()), ..)`) or the borrowed one (`self.safe_list_k(&r, "k", ..)`)
+        const key = JSON.stringify(String(v.arguments[1].text));
+        const forms: [string, string][] = [ [ `self.${name}(`, `, Value::Str(${key}.into()), &[` ], [ `self.${kind === 'dict' ? 'safe_dict_k' : 'safe_list_k'}(&`, `, ${key}, &[` ] ];
+        const form = forms.find(([h]) => printed.startsWith(h));
+        if (form === undefined || !printed.endsWith(')')) return undefined;
+        const inner = printed.slice(form[0].length, -1);
+        const at = inner.indexOf(form[1]);
+        // the receiver is a plain local or a `self` field, borrowed by the typed reader
+        const recv = /^[\u0004&]/.test(inner) ? inner.slice(1, at) : inner.slice(0, at);
+        if (at <= 0 || !/^(?:self\.)?[A-Za-z_]\w*$/.test(recv)) return undefined;
+        return `self.${kind === 'dict' ? 'safe_dict_k_t' : 'safe_list_k_t'}(&${recv}, ${key})`;
     }
 
     /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
