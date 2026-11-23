@@ -15667,8 +15667,11 @@ export class RustTranspiler extends BaseTranspiler {
             if (sliceAt >= 0 && i >= sliceAt) return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
             return 'crate::Value::Null';
         });
-        const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n`
-            + `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : sig.ret === 'keptint' ? '__v.as_i64().unwrap_or_default()' : '__v'}; } }\n`;
+        // a kept-int slot is `Option<i64>` on the trait: None means not overridden
+        const probe = sig.ret === 'keptint'
+            ? `        if let Some(__v) = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}) { return __v; }\n`
+            : `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
+        const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n` + probe;
         let open = body.indexOf('{') + 1;
         // a lent parameter is bound to its `Value` first
         for (const p of sig.params.filter(q => q.type === 'impl Into<crate::Value>')) {
