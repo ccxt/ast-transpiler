@@ -41238,19 +41238,6 @@ export class RustTranspiler extends BaseTranspiler {
         return dflt === undefined || (isObjectLiteralExpression(dflt) && dflt.properties.length === 0) || this.rustCallReturnsFreshLiteral(dflt);
     }
 
-    /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
-    rustParamNeverNamed(method: any, param: any): boolean {
-        const name = String(param.name.text);
-        let named = false;
-        const visit = (n: any): void => {
-            if (named) return;
-            if (isIdentifier(n) && n.text === name) { named = true; return; }
-            n.forEachChild(visit);
-        };
-        method.body?.forEachChild(visit);
-        return !named;
-    }
-
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
      *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
     rustCallReturnsFreshLiteral(init: any): boolean {
