@@ -24650,8 +24650,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const myClass = this.goEnclosingClassName(fn);
         const callRx = new RegExp('\\.\\s*' + methodName + '\\s*\\(', 'g');
         let passes = true;
+        const baseName = (f) => String(f ?? '').replace(/\.nooverloads\.\d+\.ts$/, '.ts');
         tree.fileText.forEach((text: string, file: string) => {
-            if ((file === myFile) || h29g22SameSourceCopy(file, myFile) || !passes || !this.goTsSrcFileDerivesFrom(tree, file, myClass)) {
+            if ((file === myFile) || h29g22SameSourceCopy(file, myFile) || (baseName(file) === baseName(myFile)) || !passes || !this.goTsSrcFileDerivesFrom(tree, file, myClass)) {
                 return;
             }
             callRx.lastIndex = 0;
@@ -25265,6 +25266,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return this.goArrayLiteralSliceType(arg, 0, want);
         }
         const printed = this.goPrintedArgType(arg);
+        if ((printed === undefined) && (arg?.kind === SyntaxKind.Identifier)) {
+            // a defaulted `xs: string[]` parameter bound by GetArgStringSlice hands its []string on
+            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+            if ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === '[]string')) {
+                return '[]string';
+            }
+        }
         return ((printed === '[]string') || (printed === '[][]string')) ? printed : undefined;
     }
 
@@ -25293,6 +25301,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             for (const site of (tree.callIndex.get(name) ?? [])) {
                 if (site.file === myFile) {
                     continue; // proven above off the checker
+                }
+                // the base file is read through its no-overloads copy: its own call sites are the copy's, proven above
+                if (((goType === '[]string') || (goType === '[][]string')) && (String(myFile ?? '').replace(/\.nooverloads\.\d+\.ts$/, '.ts') === String(site.file).replace(/\.nooverloads\.\d+\.ts$/, '.ts'))) {
+                    continue;
                 }
                 if (!this.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
                     continue; // a same-named method of another exchange
