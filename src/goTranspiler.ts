@@ -60678,3 +60678,45 @@ GoTranspiler.prototype.h42g22EndpointArmsContainer = function (node): boolean {
     };
 }
 // ===== end H42-G10
+// ===== H44-G10: a `Bool` method of the Go interface whose every return is undefined or a bool literal prints `*bool`
+// (nil, or the address of a fresh literal local); the interface line and every override then agree on the pointer
+function h44g10NullableBoolMethod(go: any, method: any): boolean {
+    const name = String(method?.name?.text ?? '');
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body?.kind !== SyntaxKind.Block) || go.isAsyncFunction(method)
+        || (String(method.type?.getText?.() ?? '') !== 'Bool')) {
+        return false;
+    }
+    const reserved = ccxtGoReservedMethodNames(method);
+    if ((reserved === undefined) || !reserved.has(name.charAt(0).toUpperCase() + name.slice(1))) {
+        return false;
+    }
+    const returns = collectReturnStatements(method.body);
+    return (returns.length > 0) && returns.every((r: any) => {
+        for (let up = r.parent; (up !== undefined) && (up !== method.body); up = up.parent) {
+            if (up.kind === SyntaxKind.TryStatement) {
+                return false;
+            }
+        }
+        const e = r.expression;
+        return (e !== undefined) && (isAbsentExpression(e) || (e.kind === SyntaxKind.TrueKeyword) || (e.kind === SyntaxKind.FalseKeyword));
+    });
+}
+{
+    const returnTypeH44G10 = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+    GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+        return h44g10NullableBoolMethod(this, node) ? '*bool' : returnTypeH44G10.call(this, node);
+    };
+    const printReturnH44G10 = GoTranspiler.prototype.printReturnStatement;
+    GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+        const method = strPtrFamilyEnclosingMethod(node);
+        const e = node.expression;
+        if ((method === undefined) || (e === undefined) || isAbsentExpression(e) || !h44g10NullableBoolMethod(this, method)) {
+            return printReturnH44G10.call(this, node, identation);
+        }
+        const iden = this.getIden(identation);
+        const value = (e.kind === SyntaxKind.TrueKeyword) ? 'true' : 'false';
+        return this.printNodeCommentsIfAny(node, identation, iden + 'retBoolVal := ' + value + '\n' + iden + 'return &retBoolVal');
+    };
+}
+Object.assign (CCXT_GO_HELPER_RETURN_TYPES, { 'this.HandleErrors': '*bool', 'exchange.HandleErrors': '*bool' });
+// ===== end H44-G10
