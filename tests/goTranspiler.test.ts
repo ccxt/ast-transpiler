@@ -20916,3 +20916,40 @@ describe('*string family stores follow CCXT_GO_STRING_PTR_METHOD_NAMES', () => {
         expect (out).not.toContain ('derefPtr');
     });
 });
+describe('an element of an awaited endpoint list read in a loop over its own length is the plain index', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-g25awaitedlist');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n    async publicGetMarkets (p: any = {}): Promise<any[]> { return []; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            // ccxt's receive table declares this endpoint's receive []any
+            const g: any = t.goTranspiler;
+            const inner = g.goAwaitReceiveUnbox.bind(g);
+            g.goAwaitReceiveUnbox = (n: any, p: string) => (p.includes('PublicGetMarkets') ? { goType: '[]any', wrap: (r: string) => r + '.([]any)' } : inner(n, p));
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const loop = (read: string, extra = '') => "    async fetchIds (): Promise<string[]> {\n        const result: string[] = [];\n        const response = await this.publicGetMarkets ();\n" + extra + "        for (let i = 0; i < response.length; i++) {\n            const entry = " + read + ";\n            result.push (this.safeString (entry, 'id', ''));\n        }\n        return result;\n    }\n";
+    test('bounded read (fails on the base printer when the receive prints []any)', () => {
+        const out = run(loop('response[i]'));
+        expect(out).toContain('MapTyped(response[i])');
+        expect(out).not.toContain('GetValue(response, i)');
+    });
+    test('negative: an unbounded index keeps the helper', () => {
+        expect(run(loop('response[i + 1]'))).not.toContain('= response[i + 1]');
+    });
+    test('negative: a list written in the loop keeps the helper', () => {
+        const out = run("    async fetchIds (): Promise<string[]> {\n        const result: string[] = [];\n        let response = await this.publicGetMarkets ();\n        for (let i = 0; i < response.length; i++) {\n            const entry = response[i];\n            response = [];\n            result.push (this.safeString (entry, 'id', ''));\n        }\n        return result;\n    }\n");
+        expect(out).not.toContain('= response[i]\n');
+    });
+});

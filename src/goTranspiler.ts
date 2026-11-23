@@ -34237,6 +34237,25 @@ ${tryBodyBlock}
         }
     }
 
+    // `xs[i]` where `const xs = await this.<endpoint> (..)` prints as a `[]any` receive and the read sits in a
+    // loop over xs's own length (goBoundedLoopListRead): in range, and decoded JSON holds no scalar pointer
+    // (goListElementsArePointerFree), so GetValue's nil and deref answers are dead: the plain index.
+    goBoundedAwaitedListRead(node): boolean {
+        const base: any = node?.expression;
+        const listDecl: any = this.goCheckerVariableDeclaration(base);
+        const awaited: any = this.goUnwrapParenthesizedNode(listDecl?.initializer);
+        if ((awaited?.kind !== SyntaxKind.AwaitExpression) || (listDecl.name?.kind !== SyntaxKind.Identifier)
+            || this.goDeclaredTypeInProgress.has(listDecl) || !this.goBoundedLoopListRead(node) || !this.goListElementsArePointerFree(base)) {
+            return false;
+        }
+        this.goDeclaredTypeInProgress.add(listDecl);
+        try {
+            return this.goAwaitReceiveUnbox(awaited, this.printNode(awaited, 0))?.goType === GO_SAFE_LIST_LOCAL_TYPE;
+        } finally {
+            this.goDeclaredTypeInProgress.delete(listDecl);
+        }
+    }
+
     // ordered printer arms: the first one that answers (not undefined) wins, later arms never run
     goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined {
         for (const arm of arms) {
@@ -34364,6 +34383,10 @@ ${tryBodyBlock}
         if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n') && !keyStrs[0].includes('\n')
             && !this.isGoElementAccessAssignmentTarget(node) && this.goIntIndexExpression(keys[0])
             && this.goAwaitedObjectListRead(node, keys[0])) {
+            return `${containerStr}[${keyStrs[0]}]`;
+        }
+        if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n') && !keyStrs[0].includes('\n')
+            && !this.isGoElementAccessAssignmentTarget(node) && this.goIntIndexExpression(keys[0]) && this.goBoundedAwaitedListRead(node)) {
             return `${containerStr}[${keyStrs[0]}]`;
         }
 
