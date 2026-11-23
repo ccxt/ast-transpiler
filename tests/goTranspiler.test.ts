@@ -20768,3 +20768,37 @@ describe('go unified float64 order-amount params', () => {
         expect(() => run(src('        amount = "1" as any;\n        return amount;'), { 'createOrder': [ 3 ] })).toThrow(/written with another type/);
     });
 });
+
+describe ('a Dict method whose paths are a ternary of fresh maps or an omit of one prints map[string]any', () => {
+    const BASE = 'export type Dict = { [key: string]: any };\n' +
+        'export default class Exchange {\n' +
+        '    extend (a: any, b: any): Dict { return a; }\n' +
+        '    omit (a: any, b: any): Dict { return a; }\n' +
+        '    safeDict (a: any, k: any, d: any = undefined): Dict { return a; }\n';
+    const run = (members: string): string => {
+        const tmp = fs.mkdtempSync (path.join (os.tmpdir (), 'h39g16-'));
+        try {
+            fs.mkdirSync (path.join (tmp, 'ts/src/base'), { recursive: true });
+            fs.writeFileSync (path.join (tmp, 'ts/src/base/Exchange.ts'), BASE + '}\n');
+            const file = path.join (tmp, 'ts/src/x.ts');
+            fs.writeFileSync (file, "import Exchange, { Dict } from './base/Exchange.js';\nclass X extends Exchange {\n" + members + '}\n');
+            const t = new Transpiler ({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            fs.rmSync (tmp, { recursive: true, force: true });
+        }
+    };
+    test ('a ternary of an extend and an omit of it', () => {
+        const out = run ('    g (p: Dict, t: Dict, u: boolean): Dict {\n        const m: Dict = this.extend (p, t);\n        const r: Dict = u ? this.omit (m, \'until\') : m;\n        return r;\n    }\n');
+        expect (out).toContain ('u any) map[string]any {');
+    });
+    test ('negative: a ternary with a nil arm keeps any', () => {
+        const out = run ('    g (p: Dict, t: Dict, u: boolean): Dict {\n        const m: Dict = this.extend (p, t);\n        const r: Dict = u ? undefined : m;\n        return r;\n    }\n');
+        expect (out).not.toContain (') map[string]any {');
+    });
+    test ('negative: an omit of a safeDict that can be nil keeps any', () => {
+        const out = run ('    g (p: Dict): Dict {\n        const m: Dict = this.omit (this.safeDict (p, \'k\'), \'until\');\n        return m;\n    }\n');
+        expect (out).not.toContain (') map[string]any {');
+    });
+});

@@ -4145,6 +4145,9 @@ function ccxtGoContainerNeverNil (goTranspiler, expression) {
     if (ts.isIdentifier (expression)) {
         return goLocalContainerNeverNil (goTranspiler, expression);
     }
+    if (ts.isConditionalExpression (expression)) {
+        return ccxtGoContainerNeverNil (goTranspiler, expression.whenTrue) && ccxtGoContainerNeverNil (goTranspiler, expression.whenFalse);
+    }
     if (!ts.isCallExpression (expression) || !ts.isPropertyAccessExpression (expression.expression)
         || (expression.expression.expression.kind !== ts.SyntaxKind.ThisKeyword)) {
         return false;
@@ -4152,6 +4155,9 @@ function ccxtGoContainerNeverNil (goTranspiler, expression) {
     const callee = expression.expression.name.text;
     if ((callee === 'extend') || (callee === 'deepExtend')) {
         return true; // ExtendMap / DeepExtend always build a fresh map
+    }
+    if ((callee === 'omit') && (expression.arguments.length > 0) && ccxtGoContainerNeverNil (goTranspiler, expression.arguments[0])) {
+        return true; // Omit copies a never-nil map into a fresh one
     }
     const h27g14 = h27g14NeverNilMethodCall (goTranspiler, expression, callee); if (h27g14 !== undefined) { return h27g14; }
     let declaration;
