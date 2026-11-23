@@ -27659,3 +27659,40 @@ describe ('rust borrowed venue dict parameter stored whole', () => {
         expect (printed).not.toMatch (/fn parseLastRow\(&self, row: &/);
     });
 });
+
+describe('a typed `List` local read only by map rows holds converted rows', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'tldr-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    toArray (o: any): any[] { return Object.values (o); }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const loop = (init: string, extra = '') => "    m (response: Dict) {\n        const rows = " + init + ";\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n            out.push (this.safeString (row, 'id'));\n        }\n" + extra + "        return out;\n    }\n";
+    test('toArray: row reads are bounds-tested slice reads', () => {
+        const out = run (loop ('this.toArray (response)'));
+        expect (out).toMatch (/let rows: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('rows.get(i as usize).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('safeList with no default (typed empty for missing / null / non-list): converted', () => {
+        const out = run (loop ("this.safeList (response, 'rows')"));
+        expect (out).not.toContain ('safe_dict_t(&rows');
+    });
+    test('negative: a list handed on whole keeps the boxed list', () => {
+        expect (run (loop ('this.toArray (response)', "        this.hold (rows);\n"))).not.toContain ('dict_rows');
+    });
+    test('negative: a list tested against undefined keeps the optional reader', () => {
+        const out = run ("    m (response: Dict) {\n        const rows = this.safeList (response, 'rows');\n        if (rows === undefined) {\n            return undefined;\n        }\n        const row = this.safeDict (rows, 0);\n        return this.safeString (row, 'id');\n    }\n");
+        expect (out).not.toContain ('dict_rows');
+    });
+    test('negative: a row whose key is written keeps the reader', () => {
+        const out = run ("    m (response: Dict) {\n        const rows = this.toArray (response);\n        const first = rows[0];\n        first['x'] = 1;\n        return first;\n    }\n");
+        expect (out).not.toContain ('dict_rows');
+    });
+    test('negative: infoList of an awaited local (ccxt moves the local into the reader line) keeps the boxed list', () => {
+        const out = run ("    async m (params: Dict = {}) {\n        const response = await this.fetchRows (params);\n        const rows = this.infoList (response);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n            out.push (this.safeString (row, 'id'));\n        }\n        return out;\n    }\n    infoList (r: any): any[] {\n        return Array.isArray (r) ? r : [];\n    }\n    async fetchRows (params: Dict = {}): Promise<any> {\n        return params;\n    }\n");
+        expect (out).not.toContain ('dict_rows');
+    });
+});

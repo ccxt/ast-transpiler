@@ -42733,11 +42733,10 @@ export class RustTranspiler extends BaseTranspiler {
         const isAll = all !== undefined && isCallExpression(all) && isPropertyAccessExpression(all.expression) && isIdentifier(all.expression.expression)
             && String(all.expression.expression.text) === 'Promise' && String(all.expression.name.text) === 'all';
         if (!isAll && !this.rustDeclaredListProducer(init)) return false;
-    } else {
-        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
-        const dflt: any = this.rustSkipWrappers(init.arguments[2]);
-        if (!isArrayLiteralExpression(dflt) || dflt.elements.length !== 0) return false;
+    } else if (!this.rustP21SafeListEmpty(init)) {
+        // any other local the printer already holds as a non-optional `List` (missing / Null / non-list read as empty)
+        if (this.rustOptContainerLocals.has(declaration) || !this.rustP21TypedListLocal(declaration)) return false;
+        if (this.rustP21ReadsAwaitedLocal(init)) return false;
     }
     const scope: any = this.rustEnclosingFunction(declaration);
     if (scope === undefined || isSourceFile(scope)) return false;
@@ -42755,6 +42754,29 @@ export class RustTranspiler extends BaseTranspiler {
         rows++;
     }
     return rows > 0;
+};
+// the declaration forms printed `let mut x: crate::value::List = ..` (read-only bearer, lent list, borrowed list)
+(RustTranspiler.prototype as any).rustP21TypedListLocal = function (this: any, declaration: any): boolean {
+    if (this.rustBorrowedLocalKind(declaration) === 'list' || this.rustLentListLocal(declaration)) return true;
+    if (this.rustReadBearerKindOfDeclaration(declaration) !== 'list') return false;
+    const init: any = this.rustSkipWrappers(declaration.initializer);
+    return this.rustAlwaysListProducer(init) || this.rustDefaultedListRead(init) || this.rust90rMoveBearer(declaration);
+};
+// `this.infoList (r)` where `r` holds an awaited answer: ccxt moves `r` into that reader's line, which a
+// `dict_rows(..)` wrap would stop, leaving `r` a `Value` local
+(RustTranspiler.prototype as any).rustP21ReadsAwaitedLocal = function (this: any, init: any): boolean {
+    if (init === undefined || !isCallExpression(init) || init.arguments.length !== 1 || !isPropertyAccessExpression(init.expression)) return false;
+    if (init.expression.expression.kind !== SyntaxKind.ThisKeyword || String(init.expression.name.text) !== 'infoList') return false;
+    const arg: any = this.rustSkipWrappers(init.arguments[0]);
+    if (!isIdentifier(arg)) return false;
+    const decl: any = this.rustDeclarationOfIdentifier(arg);
+    return decl !== undefined && isVariableDeclaration(decl) && this.rustSkipWrappers(decl.initializer)?.kind === SyntaxKind.AwaitExpression;
+};
+(RustTranspiler.prototype as any).rustP21SafeListEmpty = function (this: any, init: any): boolean {
+    if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+    if (String(init.expression.name.text) !== 'safeList' || init.arguments.length !== 3) return false;
+    const dflt: any = this.rustSkipWrappers(init.arguments[2]);
+    return isArrayLiteralExpression(dflt) && dflt.elements.length === 0;
 };
 // `const row = this.safeDict (rows, k)` (k a literal or a `for` counter) whose local is the printer's borrowed map
 (RustTranspiler.prototype as any).rustP21RowRead = function (this: any, call: any, recv: any): any {
