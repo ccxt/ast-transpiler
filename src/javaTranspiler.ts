@@ -394,7 +394,7 @@ const JAVA_WS_ORDERBOOK_READ_KEYS: Set<string> = new Set([
 ]);
 
 // `Strings` (and a `string[]` spelling of the same slot) is typed only on parameters named `symbols` / `codes`
-const JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = new Set<string>(['symbols', 'codes']);
+const JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = new Set<string>(['symbols', 'codes', 'api', 'section']);
 const JAVA_STRING_LIST_TYPE = 'java.util.List<String>';
 // base symbol-list helpers keep their Object slot (hand-written java callers pass Object)
 const JAVA_STRINGS_EXCLUDED_METHODS = new Set<string>(['marketSymbols', 'marketIds', 'marketsForSymbols', 'getMarketFromSymbols', 'marketCodes']);
