@@ -15,16 +15,19 @@ describe('java unified string list parameter', () => {
             'export type Str = string | undefined;\nexport type Strings = string[] | undefined;\n' +
             'export interface Dictionary<T> { [key: string]: T; }\nexport type Dict = Dictionary<any>;\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts'),
-            "import type { Str, Dict } from './types';\n" +
+            "import type { Str, Strings, Dict } from './types';\n" +
             'export default class Exchange {\n' +
             '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
             '    async cancelOrders (ids: string[], symbol: Str = undefined, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '    async fetchTickers (outcomes: Strings = undefined, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '}\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
             "import type { Str, Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
             'class Venue extends Exchange {\n' +
             "    async cancelOrders (ids: string[], symbol: Str = undefined, params: Dict = {}): Promise<{}> {\n        return { 'ids': ids };\n    }\n" +
             "    async cancelOrder (id: string, symbol: Str = undefined, params: Dict = {}): Promise<{}> {\n        return await this.cancelOrders ([ id ], symbol, params);\n    }\n" +
+            "    async fetchTickers (outcomes: string[] = undefined, params: Dict = {}): Promise<{}> {\n        return { 'n': outcomes.length };\n    }\n" +
+            "    async venueOnly (outcomes: string[] = undefined): Promise<{}> {\n        return { 'o': outcomes };\n    }\n" +
             "    async other (names: string[]): Promise<{}> {\n        return { 'names': names };\n    }\n" +
             "    plain (names: string[]): any {\n        return names;\n    }\n" +
             "    async loose (x: any): Promise<{}> {\n        return await this.cancelOrders (x);\n    }\n" +
@@ -45,6 +48,11 @@ describe('java unified string list parameter', () => {
     test('an untyped argument converts through the list helper, not a checkcast', () => {
         expect(out).toMatch(/cancelOrders\(Helpers\.toStringListArg\(x\)/);
         expect(out).not.toMatch(/\(java\.util\.List<String>\) \(x\)/);
+    });
+    test('an optional Strings parameter of a unified method prints List<String>', () => {
+        expect(out).toMatch(/fetchTickers\(java\.util\.List<String> outcomes, /);
+        expect(base).toMatch(/fetchTickers\(java\.util\.List<String> outcomes, /);
+        expect(out).toMatch(/venueOnly\(Object outcomes/);
     });
     test('a venue-only method keeps the Object slot', () => {
         expect(out).toMatch(/other\(Object names\)/);

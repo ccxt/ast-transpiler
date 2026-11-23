@@ -2094,8 +2094,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.javaInheritedOptionalParameterType(node);
         }
         if (name === 'Strings' || this.javaIsStringArrayType(checker, type)) {
-            const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has((node.name as any)?.text)
-                && !JAVA_STRINGS_EXCLUDED_METHODS.has((method.name as any)?.text);
+            const listName = (JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has((node.name as any)?.text)
+                && !JAVA_STRINGS_EXCLUDED_METHODS.has((method.name as any)?.text))
+                || this.javaUnifiedOptionalStringListParameter(node, method);
             return listName ? JAVA_STRING_LIST_TYPE : undefined;
         }
         if (name === 'Num' && (node.name as any)?.text === 'amount' && this.isAsyncFunction(method)
@@ -2350,6 +2351,19 @@ export class JavaTranspiler extends BaseTranspiler {
             root = m;
         }
         return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName) ? JAVA_STRING_LIST_TYPE : undefined;
+    }
+
+    // an `x: Strings = undefined` parameter of an async method first declared in the (Prediction)Exchange tier
+    javaUnifiedOptionalStringListParameter(node, method): boolean {
+        if (node.initializer === undefined || !isIdentifier(node.initializer) || node.initializer.text !== 'undefined'
+            || !isIdentifier(method.name) || !this.isAsyncFunction(method)) {
+            return false;
+        }
+        let root = method;
+        for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
+            root = m;
+        }
+        return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName);
     }
 
     // a fixed `int` / `Int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
