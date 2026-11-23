@@ -18320,7 +18320,8 @@ describe('ral-52x W1: a safeValue read of client.futures with a literal key is a
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('null-tested and settled: Flight read through the handle, presence on its hash', () => {
-        expect(out).toContain('let mut future: crate::pro::ws_client::Flight = __ch.get_future("authenticated")');
+        // the by-name handler takes the typed handle itself, so the read is on `client`, not a `__ch` binding
+        expect(out).toContain('let mut future: crate::pro::ws_client::Flight = client.get_future("authenticated")');
         expect(out).toContain('if ((future != crate::pro::ws_client::Flight::default())) {');
     });
     test('negative: a local handed back whole stays Value', () => {

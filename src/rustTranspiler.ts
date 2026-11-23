@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -285,6 +285,8 @@ export const rustDispatch = {
         case 'vlist': return `args.get(${i}).and_then(crate::Value::as_array).map(Vec::as_slice).unwrap_or_default()`;
         // a list-of-maps slot: bound once (a non-list is the empty list, a non-map row the empty map)
         case 'dictrows': return `crate::value::dict_rows(std::sync::Arc::new(args.get(${i}).and_then(crate::Value::as_array).cloned().unwrap_or_default()))`;
+        // a ws client handle slot: the arm builds the handle from the boxed client once
+        case 'client': return `&crate::pro::ws_client::ClientHandle::from_value(args.get(${i}).unwrap_or(&crate::Value::Null))`;
         default: return arg;
         }
     },
@@ -305,6 +307,7 @@ export const rustDispatch = {
         case 'vlist': return rustDispatch.arg(kind, i);
         case 'dictrows': return rustDispatch.arg(kind, i);
         case 'mapref': return rustDispatch.arg(kind, i);
+        case 'client': return rustDispatch.arg(kind, i);
         default: return undefined;
         }
     },
@@ -4354,6 +4357,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
+        if (this.rustWsHandleParam(param)) return `&${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
         if (this.rustMarketSlotParam(param)) return 'Option<&crate::types::Market>';
         if (this.rustCurrencySlotParam(param)) return 'Option<&crate::types::Currency>';
         if (this.rustParamPrintsBool(param)) return 'bool';
@@ -9822,7 +9826,7 @@ export class RustTranspiler extends BaseTranspiler {
             const key = String(p.name.text);
             if (!firstWrite.has(key) || line < firstWrite.get(key)) firstWrite.set(key, line);
         }
-        const plan: any = { kind, decl, bindPos, firstWrite, mut, typed: false, touched: false, declOk: kind === 'param' };
+        const plan: any = { kind, decl, bindPos, firstWrite, mut, typed: kind === 'param' && this.rustWsHandleParam(decl), touched: false, declOk: kind === 'param' };
         if (kind === 'local') plan.typed = this.rustClientHandleTypedLocal(plan, refs);
         return plan;
     }
@@ -9994,6 +9998,8 @@ export class RustTranspiler extends BaseTranspiler {
         const recv = this.rustClientHandleReceiver(access.plan, true);
         // a method receiver (`client.url.indexOf(..)`) reads the snapshot field in place
         const receiver = isPropertyAccessExpression(node.parent) && node.parent.expression === node;
+        // a typed handle parameter reads its url through the accessor (Str or Null, as the boxed `client.url()`)
+        if (access.plan.typed && access.plan.kind === 'param' && access.key === 'url' && !access.write && !receiver) return `Value::from(${this.rustClientHandleReceiver(access.plan, false)}.url())`;
         return access.write || receiver ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
     }
 
@@ -15592,7 +15598,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
         'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
         'Vec<crate::value::Dict>': 'dictrows',
-        '&indexmap::IndexMap<String, Value>': 'mapref',
+        '&indexmap::IndexMap<String, Value>': 'mapref', '&crate::pro::ws_client::ClientHandle': 'client',
     };
 
     private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
@@ -41431,6 +41437,48 @@ export class RustTranspiler extends BaseTranspiler {
         return receiver;
     }
     // ===== end h27-R07
+    // ws handler `client: Client` printed as the typed `&ClientHandle`: a sync pro/prediction method reached only by name
+    // (a handler table entry, never a direct call) whose `client` is used only for handle field reads and
+    // resolve / reject / send / future / reusableFuture calls; the dispatch arm builds the handle from the boxed client.
+    private rustWsHandleParamCache = new WeakMap<Node, boolean>();
+    rustWsHandleParam(param: any): boolean {
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.name.text !== 'client') return false;
+        const cached = this.rustWsHandleParamCache.get(param); if (cached !== undefined) return cached;
+        const result = this.rustWsHandleParamUncached(param);
+        this.rustWsHandleParamCache.set(param, result);
+        return result;
+    }
+    rustWsHandleParamUncached(param: any): boolean {
+        const method: any = param.parent;
+        if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!/ts\/src\/(?:pro|prediction)\//.test(file) || /\/(?:test|base)\//.test(file)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword || m.kind === SyntaxKind.StaticKeyword)) return false;
+        if (Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client').length !== 1) return false;
+        if (!this.rustClientHandleClassType(this.getCheckedTypeOf(param.name))) return false;
+        if (this.rustCallSitesForName(String(method.name.text)).length > 0) return false;
+        const nodes: any[] = this.rustScopeNameNodes(method, 'client');
+        return nodes.every((n: any) => {
+            if (n === param.name || n === param) return true;
+            if (n.kind !== SyntaxKind.Identifier) return false;
+            const p: any = n.parent;
+            if (p === undefined) return false;
+            if (isPropertyAccessExpression(p) && p.name === n) return true;
+            if (p.kind === SyntaxKind.PropertyAssignment && p.name === n) return true;
+            if (!isPropertyAccessExpression(p) || p.expression !== n) return false;
+            const name = String(p.name.text);
+            if (RustTranspiler.RUST_CLIENT_HANDLE_METHODS.has(name)) return isCallExpression(p.parent) && p.parent.expression === p;
+            if (!RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(name) || this.isNativeWriteTargetBase(p)) return false;
+            // a field used as a method receiver (`client.url.indexOf (..)`) keeps the in-place read on the boxed client
+            if (isPropertyAccessExpression(p.parent) && p.parent.expression === p) return false;
+            let up: any = p.parent;
+            while (up !== undefined && (isElementAccessExpression(up) || isParenthesizedExpression(up))) {
+                if (this.isNativeWriteTargetBase(up) || isDeleteExpression(up.parent)) return false;
+                up = up.parent;
+            }
+            return true;
+        });
+    }
     // ===== h27-H27-R08
     private static readonly RUST_H27R08_WS_FNS = /^parseWs(?:Trade|Order|Ticker|UpdatedTicker|BidAsk)$/;
     private static readonly RUST_H27R08_RECORD_RETURN = /^(?:safeOrder|safeTrade|safeTicker|parseOrder|parseTrade|parseTicker)$/;
