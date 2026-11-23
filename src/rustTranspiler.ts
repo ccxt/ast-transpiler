@@ -2509,6 +2509,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (op === SyntaxKind.InKeyword) {
             const shadow = this.rustParamShadowOf(right);
             return this.printWsBookMapHas(left, right) ?? this.printWsCacheMapHas(left, right) ?? this.printBorrowedInOp(left, right) ?? this.printFieldKeyInOp(left, right) ?? this.printElemKeyInOp(left, right) ?? this.printClientHandleInOp(left, right, false) ?? (shadow !== undefined ? this.printShadowInOperator(shadow, left) : undefined)
+                ?? this.printProHandlerViewInOp(left, right)
                 ?? this.print65bWsInKey(left, right) ?? this.bearerInOp(left, right) ?? this.printNativeInOperator(left, right)
                 ?? this.literalInOp(left, right) ?? this.provenDictFieldInOp(left, right) ?? this.rustDictInOp(left, right)
                 ?? `Value::Bool(in_op(&${this.printNode(right, 0)}, &${this.printNode(left, 0)}))`;
@@ -27739,6 +27740,15 @@ export class RustTranspiler extends BaseTranspiler {
         const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg);
         if (name === undefined) return undefined;
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
+    }
+
+    /** `k in message` on a pro handler's borrowed `Dict` slot that reads through the handler view: the view's own key test. */
+    printProHandlerViewInOp(key: any, obj: any): string | undefined {
+        const recv: any = this.rustSkipWrappers(obj);
+        if (recv === undefined || !isIdentifier(recv)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration !== this.rustProHandlerShadowParam || !this.rustVenueDictParam(declaration)) return undefined;
+        return this.printBorrowedInOpOn(RustTranspiler.PRO_HANDLER_SHADOW_NAME, key, true);
     }
 
     printBorrowedInOp(key: any, obj: any): string | undefined {

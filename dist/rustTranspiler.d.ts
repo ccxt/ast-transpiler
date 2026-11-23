@@ -4078,6 +4078,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
     rustOptKeySetDictName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
+    /** `k in message` on a pro handler's borrowed `Dict` slot that reads through the handler view: the view's own key test. */
+    printProHandlerViewInOp(key: any, obj: any): string | undefined;
     printBorrowedInOp(key: any, obj: any): string | undefined;
     /** The `contains_key` test of `key` on the map printed as `name` (boxed `Value::Bool(..)` when `boxed`). */
     printBorrowedInOpOn(name: string | undefined, key: any, boxed?: boolean): string | undefined;
