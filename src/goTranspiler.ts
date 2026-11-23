@@ -11764,7 +11764,8 @@ function installCcxtGoTupleResults (goTranspiler) {
 // or a const holder read only as `h[0]` / `h[1]`, so no []any box is ever handed on.
 const CCXT_GO_ASYNC_VENUE_PAIRS = new WeakMap ();
 // slot 0 Go type by declared TS type; a `Bool` slot carries exactly the value the []any box held (true, false or nil)
-const CCXT_GO_ASYNC_VENUE_PAIR_SLOT0 = { 'int': 'int64', 'Bool': 'any', 'boolean': 'bool', 'string': 'string' };
+// a `Str` slot carries a `*string` (nil for undefined), so every binding prints and dereferences as one
+const CCXT_GO_ASYNC_VENUE_PAIR_SLOT0 = { 'int': 'int64', 'Bool': 'any', 'Str': '*string', 'boolean': 'bool', 'string': 'string' };
 const ccxtGoAsyncVenuePairSlot0Of = (t) => CCXT_GO_ASYNC_VENUE_PAIR_SLOT0[(t?.kind === ts.SyntaxKind.BooleanKeyword) ? 'boolean' : ((t?.kind === ts.SyntaxKind.StringKeyword) ? 'string'
     : (((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : '-'))];
 const ccxtGoAsyncVenuePairCarrier = (slot0) => 'AsyncResult[MapPair[' + slot0 + ']]';
@@ -11793,7 +11794,7 @@ function ccxtGoAsyncVenuePairOf (method) {
             const e = n.expression;
             ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === 2) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement)
                 && ((ref (tuple.elements[0]) !== 'int') || (ccxtGoVenueIntSlot (e.elements[0]) !== undefined))
-                && (!/^(?:bool|string)$/.test (ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])) || ccxtGoAsyncVenuePairTypedSlot0 (CCXT_GO_VENUE_PAIR_STATE.go, e.elements[0], ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])));
+                && (!/^(?:bool|string|\*string)$/.test (ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])) || ccxtGoAsyncVenuePairTypedSlot0 (CCXT_GO_VENUE_PAIR_STATE.go, e.elements[0], ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])));
             pairs += 1;
             return;
         }
@@ -11846,7 +11847,8 @@ function ccxtGoAsyncVenuePairCallersBind (name, file, boxed = false) {
             bound -= [ ...text.matchAll (new RegExp ('const (\\w+) = await this\\.' + name + ' \\(', 'g')) ].filter ((h) => (text.match (new RegExp ('\\b' + h[1] + '\\b(?!\\[[01]\\])', 'g')) ?? []).length === (text.match (new RegExp ('const ' + h[1] + ' = ', 'g')) ?? []).length).length;
         }
         // a quoted name as a call's first argument is a method label (options lookup), not a dispatch
-        stray += (text.match (new RegExp ('(?<!\\w \\()[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()', 'g')) ?? []).length;
+        // so is the method-name argument of an option reader (`this.handleOptionAndParams (params, 'm', 'k')`)
+        stray += (text.match (new RegExp ('(?<!\\w \\()(?<!\\.handle\\w*AndParams\\w* \\(\\w+, )[\'"]' + name + '[\'"]|\\.' + name + '\\b(?! \\()', 'g')) ?? []).length;
     }
     return (calls > 0) && (calls === bound) && (stray === 0);
 }
@@ -11938,6 +11940,8 @@ function ccxtGoAsyncVenuePairTypedSlot0 (goTranspiler, e, slot0) {
         if ((e?.kind === ts.SyntaxKind.TrueKeyword) || (e?.kind === ts.SyntaxKind.FalseKeyword) || ((e?.kind === ts.SyntaxKind.BinaryExpression) && cmp.includes (e.operatorToken?.kind))) {
             return true;
         }
+    } else if (slot0 === '*string') {
+        return (e?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goDeclaredTypeOfIdentifier?.(e) === '*string');
     } else if ((e?.kind === ts.SyntaxKind.StringLiteral) || (e?.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
         return true;
     }
