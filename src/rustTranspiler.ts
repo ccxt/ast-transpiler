@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -285,6 +285,8 @@ export const rustDispatch = {
         case 'dictref': return `&match args.get(${i}) { Some(crate::Value::Dict(__d)) => std::sync::Arc::clone(__d), _ => Default::default() }`;
         // ral-ve: an order-book side slot wraps the boxed side marker once
         case 'side': return `crate::pro::order_book::Side::of(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
+        // a book slot lends the boxed book once (a non-book value is no book)
+        case 'book': return `&mut <Option<crate::pro::order_book::Book>>::from(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
         // a lent string-list slot: a non-list argument reads as the empty list, as the shadow did
         case 'vlist': return `args.get(${i}).and_then(crate::Value::as_array).map(Vec::as_slice).unwrap_or_default()`;
         // a list-of-maps slot: bound once (a non-list is the empty list, a non-map row the empty map)
@@ -308,6 +310,7 @@ export const rustDispatch = {
         case 'str': return rustDispatch.arg(kind, i);
         case 'optstr': return rustDispatch.arg(kind, i);
         case 'side': return rustDispatch.arg(kind, i);
+        case 'book': return rustDispatch.arg(kind, i);
         case 'vlist': return rustDispatch.arg(kind, i);
         case 'dictrows': return rustDispatch.arg(kind, i);
         case 'mapref': return rustDispatch.arg(kind, i);
@@ -4379,6 +4382,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustVenueDictParam(param)) return this.rustVenueDictValueParam(param) ? '&crate::value::Dict' : '&indexmap::IndexMap<String, Value>';
         if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param) || this.rustLentSlotParam(param) || this.rustPriceSlotParam(param)) return 'impl Into<crate::Value>';
         if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
+        if (this.rustBookParam(param)) return `&mut Option<${this.rustWsBookPath(param, RustTranspiler.RUST_BOOK_TYPE)}>`;
         if (this.rustVenueStrListParam(param)) return '&[crate::Value]';
         return this.rustVenueStrParamType(param) ?? 'Value';
     }
@@ -15637,6 +15641,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Vec<crate::value::Dict>': 'dictrows',
         '&indexmap::IndexMap<String, Value>': 'mapref', '&crate::pro::ws_client::ClientHandle': 'client',
         '&crate::value::Dict': 'dictref',
+        '&mut Option<crate::pro::order_book::Book>': 'book', '&mut Option<ccxt::pro::order_book::Book>': 'book',
     };
 
     private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
@@ -16838,6 +16843,89 @@ export class RustTranspiler extends BaseTranspiler {
         return `${path}::of(${this.printNode(arg, identation).trim()})`;
     }
 
+    // ── the handleBookDelta group: slot 0 is declared `WsOrderBook` on the base and every ts/src/pro override; it lends
+    // the caller's optional book (`&mut Option<Book>`), read and written through the book-local forms; any other use fails loudly.
+    private static readonly RUST_BOOK_PARAM_GROUP: Record<string, number> = { 'handleBookDelta': 0 };
+    private rustBookParams = new WeakMap<any, boolean>();
+
+    rustBookParam(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter) return false;
+        let decision = this.rustBookParams.get(param);
+        if (decision !== undefined) return decision;
+        const method: any = param.parent;
+        decision = false;
+        if (isMethodDeclaration(method) && method.body !== undefined && isIdentifier(method.name) && isClassDeclaration(method.parent) && isIdentifier(param.name)) {
+            const at = RustTranspiler.RUST_BOOK_PARAM_GROUP[String(method.name.text)];
+            const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+            const type: any = param.type;
+            decision = at !== undefined && Array.from(method.parameters as any).indexOf(param) === at
+                && type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeName.text === 'WsOrderBook'
+                && /(?:^|\/)ts\/src\/(?:pro\/[^/]+|base\/(?:Exchange|\.__ExchangeNoOverloads))\.ts$/.test(file);
+        }
+        this.rustBookParams.set(param, decision);
+        if (decision) {
+            this.rustWsBookLocals.delete(param);
+            if (this.rustBookParamUses(param) === undefined) throw new Error(`book group ${String(method.name.text)}: ${String(param.name.text)} used outside the book forms`);
+        }
+        return decision;
+    }
+
+    /** Proves every use of a book parameter with the book-local forms (no write of the parameter itself). */
+    rustBookParamUses(param: any): 'opt' | undefined {
+        const known = this.rustWsBookLocals.get(param);
+        if (known !== undefined) return known ?? undefined;
+        this.rustWsBookLocals.set(param, null);
+        const forms = new Map<Node, 'box' | 'test' | 'field' | 'meta' | 'bare' | 'lend'>();
+        const ok = this.rustLocalUsesAll(param, String(param.name.text), false, (n: any) => {
+            const p: any = n.parent;
+            if ((isPropertyAccessExpression(p) || p?.kind === SyntaxKind.PropertyAssignment) && p.name === n) return true;
+            if (!this.rustIdentifierRefersToDeclaration(n, param)) return false;
+            if (isBinaryExpression(p) && this.isEqualityOp(p.operatorToken.kind) && this.rustWsCacheUndefined(p.left === n ? p.right : p.left)) { forms.set(n, 'test'); return true; }
+            if (this.rustWsBookMethodReceiver(n)) { forms.set(n, 'bare'); return true; }
+            const key = this.rustWsBookFieldKey(n);
+            if (key !== undefined && RustTranspiler.RUST_BOOK_SIDE_FIELDS.has(key) && key !== 'cache') {
+                const write: any = p.parent;
+                if (isBinaryExpression(write) && write.left === p && write.operatorToken.kind === SyntaxKind.EqualsToken) {
+                    if (!RustTranspiler.RUST_BOOK_META_WRITES.has(key) || write.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+                    forms.set(n, 'meta'); return true;
+                }
+                if (this.isNativeWriteTargetBase(p) || isDeleteExpression(write) || (isCallExpression(write) && write.expression === p)) return false;
+                let outer: any = p;
+                while (isParenthesizedExpression(outer.parent) || isAsExpression(outer.parent)) outer = outer.parent;
+                if (isPropertyAccessExpression(outer.parent) && outer.parent.expression === outer && (String(outer.parent.name.text) !== 'length' || this.isNativeWriteTargetBase(outer.parent))) return false;
+                forms.set(n, 'field'); return true;
+            }
+            if (key !== undefined && isPropertyAccessExpression(p)) return false;
+            if (isBinaryExpression(p) && p.left === n) return false;
+            if (this.rustBookParamArgSlot(n)) { forms.set(n, 'lend'); return true; }
+            if (this.rustWsBookBoxUse(n)) { forms.set(n, 'box'); return true; }
+            return false;
+        });
+        if (!ok) return undefined;
+        for (const [n, form] of forms) this.rustWsBookUses.set(n, form);
+        this.rustWsBookLocals.set(param, 'opt');
+        return 'opt';
+    }
+
+    /** The argument lands in a book parameter slot of a `this.<m>(..)` call. */
+    rustBookParamArgSlot(n: any): boolean {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        const at = Array.from(call.arguments).indexOf(n);
+        const params = this.rustCalleeParams(call);
+        return at >= 0 && params !== undefined && at < params.length && this.rustBookParam(params[at]);
+    }
+
+    /** Argument text for a book slot: an optional book local or book parameter is lent, anything else is boxed once. */
+    printBookParamArg(arg: any, identation: number): string {
+        const inner: any = this.unwrapParens(arg);
+        if (isIdentifier(inner) && this.rustWsBookUses.get(inner) === 'lend' && this.rustWsBookLocalOf(inner) === 'opt') return this.printNode(arg, identation).trim();
+        let text = this.printNode(arg, identation).trim();
+        if (RustTranspiler.isBareLocal(text)) text += '.clone()';
+        return `&mut <Option<${this.rustWsBookPath(arg, RustTranspiler.RUST_BOOK_TYPE)}>>::from(${text})`;
+    }
+
     printBookSideLocal(declaration: any, indent: string, varName: string): string | undefined {
         if (!this.rustBookSideLocal(declaration)) return undefined;
         const path = this.rustWsBookPath(declaration, 'pro::order_book::Side');
@@ -18006,6 +18094,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustStrListSliceLent(arg)) return RustTranspiler.rustLentMark(String((arg as any).text));
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
             if (at < params.length && this.rustBookSideParam(params[at])) return this.printBookSideArg(arg, identation);
+            if (at < params.length && this.rustBookParam(params[at])) return this.printBookParamArg(arg, identation);
             // a lent `Option<&Market>` is `Copy`: a bare one is marked so the by-value clone step leaves it
             if (this.rustMarketSlot(params, at)) return RustTranspiler.rustLentMark(this.rustMarketSlotArgText(arg, identation));
             if (this.rustCurrencySlot(params, at)) return this.rustCurrencySlotArgText(arg, identation);
@@ -19796,7 +19885,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!isParameterDeclaration(param) || !isIdentifier(param.name)) continue;
             const name = String(param.name.text);
             if (name === 'optional_args') continue;
-            if (param.type === undefined || this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param)) continue;
+            if (param.type === undefined || this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustBookParam(param)) continue;
             const type = this.getCheckedTypeOf(param.type);
             if (type === undefined) continue;
             // A ws order-book parameter is a `Value::Dict` in the port, but its TS class
@@ -32578,7 +32667,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BOOK_META_WRITES = new Set([ 'timestamp', 'datetime', 'nonce', 'symbol', 'cache' ]);
     private rustWsBookMapFields = new WeakMap<Node, boolean>();
     private rustWsBookLocals = new WeakMap<Node, 'opt' | 'book' | null>();
-    private rustWsBookUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush'>();
+    private rustWsBookUses = new WeakMap<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush' | 'lend'>();
     private rustWsBookCtorPrinting = new WeakSet<Node>();
     private rustWsBookCtorBare = new WeakSet<Node>();
 
@@ -32763,6 +32852,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** 'opt' for a local bound to a map read, 'book' for one bound to a constructor; undefined when it stays `Value`. */
     rustWsBookLocal(declaration: any): 'opt' | 'book' | undefined {
+        if (declaration?.kind === SyntaxKind.Parameter) return this.rustBookParam(declaration) ? 'opt' : undefined;
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return undefined;
         let known = this.rustWsBookLocals.get(declaration);
         if (known === undefined) {
@@ -32773,7 +32863,7 @@ export class RustTranspiler extends BaseTranspiler {
             const kind = init === undefined || this.isTestSource(declaration) ? undefined
                 : (this.rustWsBookOptSource(init, false) || this.rustWsCacheUndefined(init) || this.rustWsWatchResultKind(init) === 'book' ? 'opt' : (this.rustWsBookCtorLike(init) ? 'book' : undefined));
             if (kind !== undefined && list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1) {
-                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush'>();
+                const forms = new Map<Node, 'bare' | 'box' | 'test' | 'field' | 'meta' | 'cpush' | 'lend'>();
                 let reads = 0;
                 let sourced = !this.rustWsCacheUndefined(init);
                 // ral-54h: a binding of the same name in a sibling block (`if (a) { const b = .. } else { const b = .. }`)
@@ -32817,6 +32907,7 @@ export class RustTranspiler extends BaseTranspiler {
                             return ok;
                         }
                         if (this.rustWsBookMapWriteValue(n)) { forms.set(n, 'bare'); return true; }
+                        if (kind === 'opt' && this.rustBookParamArgSlot(n)) { forms.set(n, 'lend'); reads++; return true; }
                         if (this.rustWsBookBoxUse(n)) { forms.set(n, 'box'); reads++; return true; }
                         return false;
                     });
@@ -32901,10 +32992,13 @@ export class RustTranspiler extends BaseTranspiler {
     /** A use of a typed book local: the handle itself, or boxed once at a `Value` hand-off. */
     printWsBookLocalUse(node: any): string | undefined {
         const form = this.rustWsBookUses.get(node);
-        if (form !== 'bare' && form !== 'box') return undefined;
+        if (form !== 'bare' && form !== 'box' && form !== 'lend') return undefined;
         if (this.rustWsBookLocalOf(node) === undefined) return undefined;
         const name = super.printIdentifier(node);
-        return form === 'bare' ? name : `Value::from(&${name})`;
+        // a book parameter is already the lent `&mut Option<Book>`
+        const param = this.rustDeclarationOfIdentifier(node)?.kind === SyntaxKind.Parameter;
+        if (form === 'lend') return param ? name : `&mut ${name}`;
+        return form === 'bare' ? name : `Value::from(${param ? '&*' : '&'}${name})`;
     }
 
     /** `x['bids']` / `x.nonce` on a book local: the shared-store read. */
