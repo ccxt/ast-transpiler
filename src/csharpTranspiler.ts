@@ -3178,7 +3178,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     continue;
                 }
                 Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
-                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls);
+                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
+                        ?? this.csharpVenueDictParamsKind(method, parameter, index, calls);
                     if (kind === 'string') {
                         this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
                     }
@@ -3246,6 +3247,81 @@ export class CSharpTranspiler extends BaseTranspiler {
             return all.some((k) => k.endsWith('?')) ? 'double?' : 'double';
         }
         return undefined;
+    }
+
+    // the trailing `params: Dict = {}` bag of a venue-private method prints `IDictionary<string, object>`
+    // when no subclass overrides it, the body never rebinds it and every `this.` call passes nothing or a
+    // value whose printed C# type is already a dictionary; one boxed argument keeps `object`
+    csharpVenueDictParamsKind(method, parameter, index: number, calls: any[]): string | undefined {
+        const initializer = parameter.initializer;
+        if ((index !== method.parameters.length - 1) || !isIdentifier(parameter.name) || (parameter.name.text !== 'params')
+            || (parameter.dotDotDotToken !== undefined) || (initializer === undefined) || !isObjectLiteralExpression(initializer)
+            || ((initializer as any).properties.length !== 0) || this.csharpVenueOverriddenMethods.has(method) || this.csharpIsDictParamsBag(parameter)
+            || ((parameter.type !== undefined) && (parameter.type.getText().trim() !== 'Dict')) || this.csharpDictParamsRebound(method)) {
+            return undefined;
+        }
+        const proKinds = this.csharpProFileCallKinds(method, index);
+        if ((proKinds === undefined) || (proKinds.length !== 0)) {
+            return undefined;
+        }
+        for (const call of calls) {
+            const args: any[] = Array.from(call.arguments ?? []);
+            if ((args.length > method.parameters.length) || args.some((a) => isSpreadElement(a))) {
+                return undefined;
+            }
+            if ((args[index] !== undefined) && !this.csharpDictArgumentIsTyped(args[index])) {
+                return undefined;
+            }
+        }
+        return 'IDictionary<string, object>';
+    }
+
+    // `params` written anywhere in the body, destructuring targets included
+    csharpDictParamsRebound(method): boolean {
+        let written = false;
+        const walk = (node: any) => {
+            if (written) {
+                return;
+            }
+            if (isIdentifier(node) && (node.text === 'params')) {
+                let target: any = node;
+                while ((target.parent !== undefined) && (isArrayLiteralExpression(target.parent) || isParenthesizedExpression(target.parent)
+                    || isObjectLiteralExpression(target.parent) || (target.parent.kind === SyntaxKind.ShorthandPropertyAssignment)
+                    || (target.parent.kind === SyntaxKind.PropertyAssignment) || isSpreadElement(target.parent))) {
+                    target = target.parent;
+                }
+                const parent: any = target.parent;
+                if ((parent !== undefined) && (((isBinaryExpression(parent) && (parent.left === target) && this.csharpIsAssignmentOperator(parent.operatorToken.kind)))
+                    || isPostfixUnaryExpression(parent) || isPrefixUnaryExpression(parent) && (parent.operator !== SyntaxKind.ExclamationToken))) {
+                    written = true;
+                    return;
+                }
+            }
+            node.forEachChild(walk);
+        };
+        method.body?.forEachChild(walk);
+        return written;
+    }
+
+    // an argument whose printed C# value is statically a dictionary: `{}` / an object literal, a `this.extend`
+    // style call the return table names, or a binding the printer or the host layer declares a dictionary
+    csharpDictArgumentIsTyped(argument): boolean {
+        const value = this.csharpUnparenthesized(argument);
+        if (isObjectLiteralExpression(value)) {
+            return true;
+        }
+        const dict = (t) => (typeof t === 'string') && /^I?Dictionary<string, object>\??$/.test(t.trim());
+        if (isCallExpression(value)) {
+            return dict(this.csharpCallReturnType(value));
+        }
+        if (!isIdentifier(value)) {
+            return false;
+        }
+        const binding: any = this.csharpReceiverBinding(value);
+        if ((binding !== undefined) && (binding.kind === SyntaxKind.Parameter) && this.csharpIsDictParamsBag(binding)) {
+            return true;
+        }
+        return dict(this.csharpResolvedReadType(value)) || ((binding !== undefined) && isVariableDeclaration(binding) && dict(this.csharpDeclaredLocalType(value)));
     }
 
     // the venue's pro subclass (ts/src/pro/<file>) is transpiled in another batch, so its file is parsed here:
