@@ -40589,7 +40589,8 @@ export class RustTranspiler extends BaseTranspiler {
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword) || this.isAsyncFunction(method)) return false;
         const name = String(method.name.text);
         if (!this.rustVenueOnlyMethod(method, name)) return false;
-        if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+        const handler = this.rustWsHandlerMessageSlot(method, param);
+        if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || (!handler && this.rustMethodReferencedAsValue(method))) return false;
         const params: any[] = Array.from(method.parameters);
         const at = params.indexOf(param);
         if (params.slice(0, at).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined || p.dotDotDotToken !== undefined)) return false;
@@ -40601,10 +40602,57 @@ export class RustTranspiler extends BaseTranspiler {
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
         const calls: any[] = [ ...this.rustVenueStrCallSites(method), ...sibling ];
-        if (calls.length === 0 || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length) return false;
+        if ((calls.length === 0 && !handler) || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length) return false;
+        // another pro file declares and calls this handler directly (its slot stays `Value`): one type for the family
+        if (handler && this.rustWsHandlerCalledElsewhere(method, name)) return false;
         // syntactic test first: a typed-local decision is asked only when every argument could lend
         if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
+    }
+
+    /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
+     *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
+    rustWsHandlerMessageSlot(method: any, param: any): boolean {
+        const params: any[] = Array.from(method.parameters);
+        if (params.length !== 2 || params[1] !== param || !/^handle[A-Z]/.test(String(method.name.text))) return false;
+        if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        if (params[0].type === undefined || !this.rustParameterIsClientHandle(params[0])) return false;
+        // a key write into a local not built as a fresh literal may alias a row of the message: keep `Value`
+        let aliasWrite = false;
+        const visit = (n: any): void => {
+            if (aliasWrite) return;
+            if (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken && isElementAccessExpression(n.left)) {
+                let root: any = n.left;
+                while (isElementAccessExpression(root) || isPropertyAccessExpression(root)) root = root.expression;
+                if (isIdentifier(root)) {
+                    const decl: any = this.rustDeclarationOfIdentifier(root);
+                    const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
+                    if (init === undefined || !(isObjectLiteralExpression(init) || isArrayLiteralExpression(init)) || root !== n.left.expression) aliasWrite = true;
+                }
+            }
+            n.forEachChild(visit);
+        };
+        method.body?.forEachChild(visit);
+        return !aliasWrite;
+    }
+
+    /** Another ts/src/pro file declares a method of this name and calls it as `.name (`. */
+    rustWsHandlerCalledElsewhere(method: any, name: string): boolean {
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const dir = file.slice(0, file.lastIndexOf('/'));
+        const declares = new RegExp('^ {4}(?:(?:override|async|public|protected|private)\\s+)*' + name + '\\s*\\(', 'm');
+        const call = new RegExp('\\.' + name + '\\s*\\(');
+        let entries: string[] = [];
+        try {
+            entries = fs.readdirSync(dir).filter(isRustTsIndexSource);
+        } catch (e) {
+            return true;
+        }
+        return entries.some((f: string) => {
+            if (`${dir}/${f}` === file) return false;
+            const text = readRustTsIndexSource(`${dir}/${f}`) ?? '';
+            return declares.test(text) && call.test(text);
+        });
     }
 
     /** `.name (` calls in the method's own file and ws sibling (`own` when every other file calling it declares its own
