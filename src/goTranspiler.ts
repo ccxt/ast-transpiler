@@ -59703,3 +59703,38 @@ function h40g15IntReturnPaths (goTranspiler, node, allowed): string | undefined 
     return 'int64';
 }
 // ===== h40-g15 (end) =====
+// ===== H40-G22: nil test of a safeDict read of the typed Options map (begin) =====
+// `if (this.safeDict (this.options, 'k') === undefined)` prints the comma-ok read in the if header: a missing key,
+// nil, "" or a non-map value is a nil map there exactly as SafeDictMap answers (same ground as h27-A06).
+function h40g22OptionsDictNilTest (goTranspiler: GoTranspiler, node, printed: string): string | undefined {
+    const test: any = goTranspiler.goUnwrapParenthesizedNode (node?.expression);
+    const call: any = test?.left;
+    const op = test?.operatorToken?.kind;
+    if ((typeof printed !== 'string') || (test?.kind !== SyntaxKind.BinaryExpression)
+        || ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.ExclamationEqualsEqualsToken))
+        || (test.right?.kind !== SyntaxKind.Identifier) || (test.right.text !== 'undefined')
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 2)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments[1].kind !== SyntaxKind.StringLiteral)
+        || !/^[\w.-]+$/.test (call.arguments[1].text) || (baseMemberDecl (goTranspiler, call.arguments[0], 'options') === undefined)
+        || printed.includes ('optionsEntry')) {
+        return undefined;
+    }
+    const goOp = (op === SyntaxKind.EqualsEqualsEqualsToken) ? '==' : '!=';
+    const head = `if this.SafeDictMap(this.Options, "${call.arguments[1].text}") ${goOp} nil {`;
+    const at = printed.indexOf (head);
+    if ((at < 0) || (printed.indexOf (head, at + 1) >= 0) || !/^\s*$/.test (printed.slice (0, at))) {
+        return undefined;
+    }
+    const native = `if optionsEntry, _ := this.Options["${call.arguments[1].text}"].(map[string]any); optionsEntry ${goOp} nil {`;
+    return printed.slice (0, at) + native + printed.slice (at + head.length);
+}
+{
+    const printIfH40g22 = GoTranspiler.prototype.printIfStatement;
+    GoTranspiler.prototype.printIfStatement = function (node, identation) {
+        const printed = printIfH40g22.call (this, node, identation);
+        const h = h40g22OptionsDictNilTest (this, node, printed);
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H40-G22 (end) =====

@@ -54,4 +54,14 @@ describe ('h27a06: safeDict reads of the typed Options map', () => {
         const out = print ("        const o = this.safeDict (this.options, 'networks', {});\n        o['a'] = 1;\n        return o;\n");
         expect (out).toContain ('\tvar o map[string]any\n\to, _ = this.Options["networks"].(map[string]any)\n\tif o == nil {\n\t\to = map[string]any{}\n\t}\n');
     });
+    test ('a nil test of a literal-key safeDict read of this.options prints the comma-ok read in the if header', () => {
+        const out = print ("        if (this.safeDict (this.options, 'cfg') === undefined) {\n            this.options['cfg'] = other;\n        }\n        if (this.safeDict (this.options, 'acc') !== undefined) {\n            return 1;\n        }\n        return 0;\n");
+        expect (out).toContain ('\tif optionsEntry, _ := this.Options["cfg"].(map[string]any); optionsEntry == nil {\n');
+        expect (out).toContain ('\tif optionsEntry, _ := this.Options["acc"].(map[string]any); optionsEntry != nil {\n');
+        expect (out).not.toContain ('SafeDictMap(this.Options');
+    });
+    test ('a nil test on another receiver, an any key or a defaulted read keeps the helper', () => {
+        const out = print ("        if (this.safeDict (other, 'cfg') === undefined) {\n            return 2;\n        }\n        if (this.safeDict (this.options, k) === undefined) {\n            return 3;\n        }\n        if (this.safeDict (this.options, 'x', {}) === undefined) {\n            return 4;\n        }\n        return 0;\n");
+        expect (out).not.toContain ('optionsEntry');
+    });
 });
