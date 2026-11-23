@@ -2923,6 +2923,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (cacheType !== undefined) {
             return cacheType;
         }
+        const subscriptionType = this.csharpOrderBookSubscriptionParamType(node);
+        if (subscriptionType !== undefined) {
+            return subscriptionType;
+        }
         const method: any = findAncestor(node, (n) => isMethodDeclaration(n));
         const name = method === undefined || method.name === undefined ? undefined : method.name.getText().trim();
         const row = name === undefined ? undefined : CSHARP_OVERRIDE_PARAM_TYPES[name as string];
@@ -2939,6 +2943,21 @@ export class CSharpTranspiler extends BaseTranspiler {
             return super.printParameterType(node);
         }
         return wanted;
+    }
+
+    // `handleOrderBookSubscription (client: Client, message, subscription: Dict)` prints the declared
+    // dictionary: every dispatcher hands the subscription row that holds the method, or a dict local.
+    // A nullable / defaulted / rebound slot, or an override, keeps object
+    csharpOrderBookSubscriptionParamType(node): string | undefined {
+        const method: any = node.parent;
+        if (!isMethodDeclaration(method) || !isIdentifier(method.name) || (method.name.text !== 'handleOrderBookSubscription')
+            || (method.parameters.length !== 3) || (method.parameters[2] !== node) || (node.initializer !== undefined)
+            || (node.questionToken !== undefined) || (node.type === undefined) || (node.type.getText().trim() !== 'Dict')
+            || (this.csharpCheckerTypeName(method.parameters[0]) !== 'Client') || (this.getMethodOverride(method) !== undefined)
+            || this.csharpNameIsRebound(node, method)) {
+            return undefined;
+        }
+        return 'IDictionary<string, object>';
     }
 
     // a parameter annotated with a ws cache class prints that class: every caller passes the
