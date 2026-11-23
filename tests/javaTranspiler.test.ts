@@ -11140,3 +11140,51 @@ describe('java parseOrder row parameter', () => {
         expect(output).not.toContain('parseOrder(Object order');
     });
 });
+
+// a default-valued `codes: Strings` slot prints java.util.List<String> like `symbols`; other names keep Object
+describe('java Strings codes parameters', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-strings-codes-params');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'venuecodes.ts');
+    let out: string;
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, DICT_STR_TYPES + "export type Strings = string[];\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict, Str, Strings } from './base/types';\n" +
+            "export default class Venue {\n" +
+            "    async fetchFees (codes: Strings = undefined, params: Dict = {}): Promise<any> {\n" +
+            "        return [ codes, params ];\n" +
+            "    }\n" +
+            "    async fetchOther (names: Strings = undefined, params: Dict = {}): Promise<any> {\n" +
+            "        return [ names, params ];\n" +
+            "    }\n" +
+            "    async fetchProbed (codes: Strings = undefined, params: Dict = {}): Promise<any> {\n" +
+            "        if (typeof codes === 'string') {\n" +
+            "            return codes;\n" +
+            "        }\n" +
+            "        return params;\n" +
+            "    }\n" +
+            "    marketCodes (codes: Strings = undefined): Strings {\n" +
+            "        return codes;\n" +
+            "    }\n" +
+            "    async fetchFee (code: string, params: Dict = {}): Promise<any> {\n" +
+            "        return await this.fetchFees ([ code ], params);\n" +
+            "    }\n" +
+            "}\n");
+        out = newJavaTranspiler().transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+    test('a codes slot prints List<String> and a String literal list needs no wrapper', () => {
+        expect(out).toMatch(/fetchFees\(java\.util\.List<String> codes, /);
+        expect(out).toContain('this.fetchFees(new java.util.ArrayList<String>(java.util.Arrays.asList(code))');
+        expect(out).not.toContain('toStringListArg');
+    });
+    test('another name, a typeof-probed codes slot or marketCodes keeps Object', () => {
+        expect(out).toMatch(/fetchOther\(Object names, /);
+        expect(out).toMatch(/fetchProbed\(Object codes, /);
+        expect(out).toMatch(/marketCodes\(Object codes\)/);
+    });
+});

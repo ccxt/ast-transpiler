@@ -393,11 +393,11 @@ const JAVA_WS_ORDERBOOK_READ_KEYS: Set<string> = new Set([
     'asks', 'bids', 'timestamp', 'datetime', 'nonce', 'cache',
 ]);
 
-// `Strings` (and a `string[]` spelling of the same slot) is typed only on parameters named `symbols`
-const JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = new Set<string>(['symbols']);
+// `Strings` (and a `string[]` spelling of the same slot) is typed only on parameters named `symbols` / `codes`
+const JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES = new Set<string>(['symbols', 'codes']);
 const JAVA_STRING_LIST_TYPE = 'java.util.List<String>';
 // base symbol-list helpers keep their Object slot (hand-written java callers pass Object)
-const JAVA_STRINGS_EXCLUDED_METHODS = new Set<string>(['marketSymbols', 'marketIds', 'marketsForSymbols', 'getMarketFromSymbols']);
+const JAVA_STRINGS_EXCLUDED_METHODS = new Set<string>(['marketSymbols', 'marketIds', 'marketsForSymbols', 'getMarketFromSymbols', 'marketCodes']);
 
 // the aliases above have to come from the shared ts/src/base/types.ts declaration
 const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
