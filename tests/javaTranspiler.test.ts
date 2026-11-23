@@ -11222,3 +11222,61 @@ describe('java parseOrder row parameter', () => {
         expect(output).not.toContain('parseOrder(Object order');
     });
 });
+// a base-tier method annotated with a numeric tuple (OHLCV) carries the List<Object> return when every return builds a list
+describe('java base-tier numeric tuple returns', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-base-numeric-tuple-returns');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const CLEAN = { declared: 5, mentions: 1, handWritten: false, calls: [] as any[] };
+    const BASE_SOURCE =
+        "type Num = number | undefined;\n" +
+        "type Candle = [Num, Num];\n" +
+        "export class BaseExchange {\n" +
+        "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+        "    first (): void {\n" +
+        "    }\n" +
+        "    parseCandle (row: any): Candle {\n" +
+        "        if (Array.isArray (row)) {\n" +
+        "            return [ row[0], row[1] ];\n" +
+        "        }\n" +
+        "        return [ row['a'], row['b'] ];\n" +
+        "    }\n" +
+        "    parseWsCandle (row: any): Candle {\n" +
+        "        return this.parseCandle (row);\n" +
+        "    }\n" +
+        "    parseCandleEcho (row: any): Candle {\n" +
+        "        return row;\n" +
+        "    }\n" +
+        "    parsePair (row: any): [Num, { [key: string]: any }] {\n" +
+        "        return [ 1, row ];\n" +
+        "    }\n" +
+        "}\n";
+    const print = (uses: any) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        if (uses !== undefined) {
+            printer.javaRepoMethodUses = (name: string) => uses(name);
+        }
+        return byPath.transpileJavaByPath(BASE_FIXTURE).content as string;
+    };
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+    test('a numeric tuple whose returns all build lists, and its delegate, print List<Object>', () => {
+        const out = print(() => CLEAN);
+        expect(out).toMatch(/public java\.util\.List<Object> parseCandle\(/);
+        expect(out).toMatch(/public java\.util\.List<Object> parseWsCandle\(/);
+    });
+    test('a returned argument or a non-numeric slot keeps Object', () => {
+        const out = print(() => CLEAN);
+        expect(out).toMatch(/public Object parseCandleEcho\(/);
+        expect(out).toMatch(/public Object parsePair\(/);
+    });
+    test('a hand-written caller or no repo facts keeps Object', () => {
+        expect(print(() => ({ ...CLEAN, handWritten: true }))).toMatch(/public Object parseCandle\(/);
+        expect(print(undefined)).toMatch(/public Object parseCandle\(/);
+    });
+});

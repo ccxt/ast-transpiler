@@ -2983,6 +2983,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (target === undefined && !baseTier) {
             target = this.javaReturnTypeFromBody(node);
         }
+        if (target === undefined && baseTier) {
+            return this.javaBaseNumericTupleListReturn(node);
+        }
         if (target !== JAVA_NATIVE_RETURN_MAP_TYPE && this.javaOverridesMapReturn(node)) {
             throw new Error(`java: ${String((node.name as any).text)} overrides a Map base method but its returns do not all print Map`);
         }
@@ -3017,6 +3020,30 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         return target;
+    }
+
+    // a base-tier method annotated with a tuple of numeric slots (OHLCV) prints List<Object> when every
+    // return builds a list and no hand-written Java declares or calls it; overrides are then bound to
+    // List<Object> by javaTupleOverrideListReturn
+    javaBaseNumericTupleListReturn(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        const type = node?.type === undefined || checker === undefined || !isIdentifier(node.name) ? undefined
+            : this.javaTry(() => checker.getTypeAtLocation(node.type));
+        if (type === undefined || !this.javaTry(() => checker.isTupleType(type))) {
+            return undefined;
+        }
+        const slots = this.javaTry(() => checker.getTypeArguments(type)) ?? [];
+        const numeric = (t) => (t.flags & (TypeFlags.Number | TypeFlags.Undefined)) !== 0
+            || ((t.flags & TypeFlags.Union) !== 0 && t.getTypes().every((u) => (u.flags & (TypeFlags.Number | TypeFlags.Undefined)) !== 0));
+        if (slots.length === 0 || !slots.every(numeric) || this.javaTry(() => this.getMethodOverride(node)) !== undefined) {
+            return undefined;
+        }
+        const uses = typeof this.javaRepoMethodUses !== 'function' ? undefined
+            : this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
+        if (uses === undefined || uses.handWritten) {
+            return undefined;
+        }
+        return this.javaReturnSitesPrintType(node, JAVA_NATIVE_RETURN_LIST_TYPE) ? JAVA_NATIVE_RETURN_LIST_TYPE : undefined;
     }
 
     // a generated override of a tuple-annotated method (Java prints tuples as List<Object>) whose
