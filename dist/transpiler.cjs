@@ -102850,15 +102850,16 @@ ${iden}}`;
       return void 0;
     return kind === "keys" ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
   }
-  /** `k in message` on a pro handler's borrowed `Dict` slot that reads through the handler view: the view's own key test. */
+  /** `k in message` on a borrowed venue `Dict` slot: the key test on the map itself (on the handler view where one is bound). */
   printProHandlerViewInOp(key, obj) {
     const recv = this.rustSkipWrappers(obj);
     if (recv === void 0 || !_is.isIdentifier.call(void 0, recv))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(recv);
-    if (declaration === void 0 || declaration !== this.rustProHandlerShadowParam || !this.rustVenueDictParam(declaration))
+    if (declaration === void 0 || declaration.kind !== _ast.SyntaxKind.Parameter || declaration.name === recv || !this.rustVenueDictParam(declaration))
       return void 0;
-    return this.printBorrowedInOpOn(_RustTranspiler.PRO_HANDLER_SHADOW_NAME, key, true);
+    const name = declaration === this.rustProHandlerShadowParam ? _RustTranspiler.PRO_HANDLER_SHADOW_NAME : super.transformIdentifier(recv, _nullishCoalesce(this.ReservedKeywordsReplacements[recv.text], () => ( recv.text)));
+    return this.printBorrowedInOpOn(name, key, true);
   }
   printBorrowedInOp(key, obj) {
     const opt = this.rustOptKeySetDictName(obj);

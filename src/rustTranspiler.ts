@@ -27742,13 +27742,14 @@ export class RustTranspiler extends BaseTranspiler {
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
     }
 
-    /** `k in message` on a pro handler's borrowed `Dict` slot that reads through the handler view: the view's own key test. */
+    /** `k in message` on a borrowed venue `Dict` slot: the key test on the map itself (on the handler view where one is bound). */
     printProHandlerViewInOp(key: any, obj: any): string | undefined {
         const recv: any = this.rustSkipWrappers(obj);
         if (recv === undefined || !isIdentifier(recv)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(recv);
-        if (declaration === undefined || declaration !== this.rustProHandlerShadowParam || !this.rustVenueDictParam(declaration)) return undefined;
-        return this.printBorrowedInOpOn(RustTranspiler.PRO_HANDLER_SHADOW_NAME, key, true);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.Parameter || declaration.name === recv || !this.rustVenueDictParam(declaration)) return undefined;
+        const name = declaration === this.rustProHandlerShadowParam ? RustTranspiler.PRO_HANDLER_SHADOW_NAME : super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+        return this.printBorrowedInOpOn(name, key, true);
     }
 
     printBorrowedInOp(key: any, obj: any): string | undefined {
