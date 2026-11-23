@@ -15447,12 +15447,22 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'integerPrecisionToAmount': [ 0 ],
     // the one caller (hand-written UpdateProxySettings) passes a SafeString `*string`; the body only nil/empty-tests it
     'checkConflictingProxies': [ 0 ],
+    // `requestBody: Str`: the fetch path passes the sent body, ws callers pass undefined; overrides follow the base
+    'handleErrors': [ 8 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
-    if ((fn === undefined) || !goIsBaseExchangeFile (fn) || go.isAsyncFunction (fn)) { return undefined; }
+    if ((fn === undefined) || go.isAsyncFunction (fn)) { return undefined; }
     const indexes = Object.prototype.hasOwnProperty.call (GO_BASE_STR_PTR_PARAMS, fn.name.text) ? GO_BASE_STR_PTR_PARAMS[fn.name.text] : undefined;
-    return ((indexes !== undefined) && indexes.includes (fn.parameters.indexOf (param))) ? '*string' : undefined;
+    if ((indexes === undefined) || !indexes.includes (fn.parameters.indexOf (param))) { return undefined; }
+    const declared = String (param.type?.getText () ?? '').trim ();
+    if (goIsBaseExchangeFile (fn)) { return ((fn.name.text !== 'handleErrors') || (declared === 'Str')) ? '*string' : undefined; }
+    if (!go.goMethodKeepsBaseSignature (fn)) { return undefined; }
+    // an override prints the base signature or the interface breaks: fail the build instead of boxing
+    if ((declared !== 'Str') || !goParamBodyKeepsType (go, fn, param, '*string')) {
+        throw new Error ('go base *string params: ' + fn.name.text + '(' + param.name.text + ') in ' + String (fn.getSourceFile ().fileName ?? '').split (/[\\/]/).slice (-2).join ('/') + ' is not a Str the body keeps');
+    }
+    return '*string';
 }
 export function installCcxtGoBaseStrPtrParams (goTranspiler: any) {
     return goWrapParamTypeHook (goTranspiler, 'goBaseStrPtrParamsInstalled', goBaseStrPtrParamDerived);
