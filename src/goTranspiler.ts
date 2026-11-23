@@ -11764,7 +11764,9 @@ function installCcxtGoTupleResults (goTranspiler) {
 // or a const holder read only as `h[0]` / `h[1]`, so no []any box is ever handed on.
 const CCXT_GO_ASYNC_VENUE_PAIRS = new WeakMap ();
 // slot 0 Go type by declared TS type; a `Bool` slot carries exactly the value the []any box held (true, false or nil)
-const CCXT_GO_ASYNC_VENUE_PAIR_SLOT0 = { 'int': 'int64', 'Bool': 'any' };
+const CCXT_GO_ASYNC_VENUE_PAIR_SLOT0 = { 'int': 'int64', 'Bool': 'any', 'boolean': 'bool', 'string': 'string' };
+const ccxtGoAsyncVenuePairSlot0Of = (t) => CCXT_GO_ASYNC_VENUE_PAIR_SLOT0[(t?.kind === ts.SyntaxKind.BooleanKeyword) ? 'boolean' : ((t?.kind === ts.SyntaxKind.StringKeyword) ? 'string'
+    : (((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : '-'))];
 const ccxtGoAsyncVenuePairCarrier = (slot0) => 'AsyncResult[MapPair[' + slot0 + ']]';
 
 function ccxtGoAsyncVenuePairOf (method) {
@@ -11776,7 +11778,7 @@ function ccxtGoAsyncVenuePairOf (method) {
     const ref = (t) => ((t?.kind === ts.SyntaxKind.TypeReference) && (t.typeName?.kind === ts.SyntaxKind.Identifier)) ? t.typeName.text : undefined;
     const tuple = (ref (method?.type) === 'Promise') ? method.type.typeArguments?.[0] : undefined;
     if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.body === undefined) || (tuple?.kind !== ts.SyntaxKind.TupleType)
-        || (tuple.elements.length !== 2) || !CCXT_GO_ASYNC_VENUE_PAIR_SLOT0[ref (tuple.elements[0])] || (ref (tuple.elements[1]) !== 'Dict')
+        || (tuple.elements.length !== 2) || !ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0]) || (ref (tuple.elements[1]) !== 'Dict')
         || !(method.modifiers ?? []).some ((m) => m.kind === ts.SyntaxKind.AsyncKeyword) || (method.modifiers ?? []).some ((m) => m.kind === ts.SyntaxKind.StaticKeyword)
         || !/(?:^|[\\/])ts[\\/]src[\\/]/.test (file) || /[\\/](?:base|test|abstract)[\\/]/.test (file)) {
         return false;
@@ -11790,15 +11792,16 @@ function ccxtGoAsyncVenuePairOf (method) {
         if (n.kind === ts.SyntaxKind.ReturnStatement) {
             const e = n.expression;
             ok = (e?.kind === ts.SyntaxKind.ArrayLiteralExpression) && (e.elements.length === 2) && e.elements.every ((x) => x.kind !== ts.SyntaxKind.SpreadElement)
-                && ((ref (tuple.elements[0]) !== 'int') || (ccxtGoVenueIntSlot (e.elements[0]) !== undefined));
+                && ((ref (tuple.elements[0]) !== 'int') || (ccxtGoVenueIntSlot (e.elements[0]) !== undefined))
+                && (!/^(?:bool|string)$/.test (ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])) || ccxtGoAsyncVenuePairTypedSlot0 (CCXT_GO_VENUE_PAIR_STATE.go, e.elements[0], ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0])));
             pairs += 1;
             return;
         }
         n.forEachChild (visit);
     };
     method.body.forEachChild (visit);
-    const slot0 = CCXT_GO_ASYNC_VENUE_PAIR_SLOT0[ref (tuple.elements[0])];
-    const result = (ok && (pairs > 0) && ccxtGoAsyncVenuePairCallersBind (method.name?.text, file, slot0 === 'any')) ? slot0 : false;
+    const slot0 = ccxtGoAsyncVenuePairSlot0Of (tuple.elements[0]);
+    const result = (ok && (pairs > 0) && ccxtGoAsyncVenuePairCallersBind (method.name?.text, file, slot0 !== 'int64')) ? slot0 : false;
     CCXT_GO_ASYNC_VENUE_PAIRS.set (method, result);
     return result;
 }
@@ -11925,6 +11928,34 @@ function ccxtGoAsyncVenuePairIndexOnly (goTranspiler, declaration) {
         && !((n.parent?.kind === ts.SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && /^[01]$/.test (n.parent.argumentExpression?.text ?? '')));
 }
 
+// a returned slot 0 Go prints as a plain bool / string: a literal, a comparison or negation, or a local / parameter declared so
+function ccxtGoAsyncVenuePairTypedSlot0 (goTranspiler, e, slot0) {
+    while (e?.kind === ts.SyntaxKind.ParenthesizedExpression) {
+        e = e.expression;
+    }
+    const cmp = [ ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken, ts.SyntaxKind.EqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsToken ];
+    if (slot0 === 'bool') {
+        if ((e?.kind === ts.SyntaxKind.TrueKeyword) || (e?.kind === ts.SyntaxKind.FalseKeyword) || ((e?.kind === ts.SyntaxKind.BinaryExpression) && cmp.includes (e.operatorToken?.kind))) {
+            return true;
+        }
+    } else if ((e?.kind === ts.SyntaxKind.StringLiteral) || (e?.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
+        return true;
+    }
+    // a `boolean` / `string` parameter with a literal default, or a local seeded and only ever assigned a literal of the kind
+    const declaration = (e?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (goTranspiler, e) : undefined;
+    const keyword = (slot0 === 'bool') ? ts.SyntaxKind.BooleanKeyword : ts.SyntaxKind.StringKeyword;
+    const literal = (n) => (slot0 === 'bool') ? ((n?.kind === ts.SyntaxKind.TrueKeyword) || (n?.kind === ts.SyntaxKind.FalseKeyword)) : (n?.kind === ts.SyntaxKind.StringLiteral);
+    if (((declaration?.kind !== ts.SyntaxKind.Parameter) && (declaration?.kind !== ts.SyntaxKind.VariableDeclaration)) || !literal (declaration.initializer)
+        || ((declaration.type !== undefined) && (declaration.type.kind !== keyword)) || (declaration.name?.kind !== ts.SyntaxKind.Identifier)) {
+        return false;
+    }
+    const scope = goTranspiler.goEnclosingFunction?.(declaration);
+    const name = declaration.name.text;
+    return (scope !== undefined) && !goTranspiler.hasNodeWhere (scope, (n) => (n.kind === ts.SyntaxKind.BinaryExpression) && (n.left?.kind === ts.SyntaxKind.Identifier)
+        && (n.left.text === name) && (n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+        && ((n.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || !literal (n.right)));
+}
+
 function installCcxtGoAsyncVenuePairs (goTranspiler) {
     if (!goInstallOnce (goTranspiler, '__ccxtGoAsyncVenuePairsInstalled', 'printAsyncDeclarationPair')) {
         return;
@@ -11957,7 +11988,8 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         const m = /^([\s\S]*?ch <- )\[\]any\{[^\n]*\}(\n[ \t]*return nil\s*)$/.exec (printed);
         const slot0 = ccxtGoAsyncVenuePairOf (method);
         const text0 = String (this.printNode (expr.elements[0], 0)).trim ();
-        const v = (slot0 === 'any') ? (text0.includes ('\n') ? undefined : text0) : ccxtGoVenueIntSlot (expr.elements[0], text0);
+        const v = (slot0 === 'int64') ? ccxtGoVenueIntSlot (expr.elements[0], text0)
+            : ((text0.includes ('\n') || ((slot0 !== 'any') && !ccxtGoAsyncVenuePairTypedSlot0 (this, expr.elements[0], slot0))) ? undefined : text0);
         if ((m === null) || (v === undefined)) {
             return printed;
         }
@@ -11977,7 +12009,7 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         }
         const iden = this.getIden (identation);
         const slot0 = ccxtGoAsyncVenuePairAwait (this, declaration.initializer, true);
-        if ((declaration.name?.kind === ts.SyntaxKind.Identifier) && (slot0 === 'any') && !ccxtGoAsyncVenuePairIndexOnly (this, declaration)) {
+        if ((declaration.name?.kind === ts.SyntaxKind.Identifier) && (slot0 !== 'int64') && !ccxtGoAsyncVenuePairIndexOnly (this, declaration)) {
             // a holder handed on whole (safeBool / safeDict reads) keeps the TS list shape
             const received = ccxtGoFreeLocalName (this, declaration, declaration.name.text + 'Pair');
             const lines = (received === undefined) ? undefined : ccxtGoAsyncVenuePairReceive (this, call, received, identation);
@@ -12004,7 +12036,8 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
             && left.elements.every ((e) => ts.isIdentifier (e)) && (ts.isExpressionStatement (node.parent))) ? ccxtGoAsyncVenuePairAwait (this, node.right) : undefined;
         const declared = (call === undefined) ? [] : left.elements.map ((e) => this.goDeclaredTypeOfIdentifier?.(e));
         const boxed = (t) => (t === undefined) || (t === 'any');
-        if ((call === undefined) || (ccxtGoAsyncVenuePairAwait (this, node.right, true) !== 'any') || !boxed (declared[0])
+        const slot0 = (call === undefined) ? undefined : ccxtGoAsyncVenuePairAwait (this, node.right, true);
+        if ((call === undefined) || (slot0 === 'int64') || !(boxed (declared[0]) || (declared[0] === slot0))
             || !(boxed (declared[1]) || (declared[1] === 'map[string]any'))) {
             return printAssign.call (this, node, identation);
         }

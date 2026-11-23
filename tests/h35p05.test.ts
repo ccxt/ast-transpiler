@@ -52,3 +52,54 @@ describe('an async venue Promise<[Bool, Dict]> method carries a Go MapPair[any]'
         expect(out).not.toContain('MapPair[any]');
     });
 });
+
+describe('an async venue Promise<[boolean | string, Dict]> method carries a typed Go MapPair', () => {
+    const cwd = process.cwd();
+    const dirs: string[] = [];
+    afterAll(() => { process.chdir(cwd); dirs.forEach ((d) => fs.rmSync(d, { 'recursive': true, 'force': true })); });
+    const run = (body: string): string => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'h40g16-'));
+        dirs.push(tmp);
+        process.chdir(tmp);
+        const dir = path.join(tmp, 'ts', 'src');
+        fs.mkdirSync(dir, { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'venue.ts'), 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\nclass Exchange {\n'
+            + '    handleOptionAndParams (a: any, b: any, c: any): [any, Dict] { return [ a, b ]; }\n    async fetchX (a: any): Promise<Dict> { return {}; }\n}\n'
+            + 'class venue extends Exchange {\n' + body + '}\n');
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        return inst.transpileGoByPath(path.join('ts', 'src', 'venue.ts')).content;
+    };
+    const boolProducer = '    async uni (params: Dict, m: Str, defaultValue: boolean = false): Promise<[boolean, Dict]> {\n        const [ v, rest ] = this.handleOptionAndParams (params, m, \'u\');\n'
+        + '        if (v !== undefined) {\n            return [ (v === true), rest ];\n        }\n        let known = false;\n        try {\n            await this.fetchX ({});\n            known = true;\n        } catch (e) {\n            known = false;\n        }\n        if (known) {\n            return [ known, rest ];\n        }\n        return [ defaultValue, rest ];\n    }\n';
+    const callers = '    async a (p: Dict) {\n        const [ u, rest ] = await this.uni (p, \'a\', false);\n        return (u === true) ? rest : p;\n    }\n'
+        + '    async b (p: Dict) {\n        let u: boolean = false;\n        let q: Dict = p;\n        [ u, q ] = await this.uni (q, \'b\', false);\n        return (u !== true) ? q : p;\n    }\n';
+    test('a boolean slot 0 sends MapPair[bool] and binds bool locals', () => {
+        const out = run(boolProducer + callers);
+        expect(out).toContain('UniAsync(params any, m string, optionalArgs ...any) <-chan AsyncResult[MapPair[bool]] {');
+        expect(out).toContain('ch <- AsyncResult[MapPair[bool]]{Value: MapPair[bool]{V: known, P: rest}}');
+        expect(out).toContain('ch <- AsyncResult[MapPair[bool]]{Value: MapPair[bool]{V: defaultValue, P: rest}}');
+        expect(out).toContain('var u bool = urestPair.Value.V');
+        expect(out).toContain('u = uqPair.Value.V');
+        expect(out).not.toContain('GetValue(');
+    });
+    test('a string slot 0 sends MapPair[string]', () => {
+        const out = run('    async acc (params: Dict): Promise<[string, Dict]> {\n        const [ v, rest ] = this.handleOptionAndParams (params, \'loadAcc\', \'id\');\n        if (v === undefined) {\n            return [ \'\', rest ];\n        }\n        return [ \'x\', rest ];\n    }\n'
+            + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return id + \'-\';\n    }\n');
+        expect(out).toContain('ch <- AsyncResult[MapPair[string]]{Value: MapPair[string]{V: "", P: rest}}');
+        expect(out).toContain('var id string = idrestPair.Value.V');
+    });
+    test('a returned boxed (nil-able) value keeps the untyped list', () => {
+        const out = run(boolProducer.replace ('return [ (v === true), rest ]', 'return [ v, rest ]') + callers);
+        expect(out).not.toContain('MapPair[bool]');
+    });
+    test('a string slot fed a nullable Str keeps the untyped list', () => {
+        const out = run('    async acc (params: Dict, s: Str = undefined): Promise<[string, Dict]> {\n        return [ s, params ];\n    }\n'
+            + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return id;\n    }\n');
+        expect(out).not.toContain('MapPair[string]');
+    });
+    test('a caller that hands the result on whole keeps the untyped list', () => {
+        const out = run(boolProducer + '    async a (p: Dict) {\n        return await this.uni (p, \'a\', false);\n    }\n');
+        expect(out).not.toContain('MapPair[bool]');
+    });
+});
