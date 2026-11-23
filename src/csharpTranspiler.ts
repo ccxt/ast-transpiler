@@ -7605,7 +7605,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const own = super.printFunctionType(node);
         if (own === 'Task<object>') {
             // a typed core (config.csharp.typedCores) prints its own Task<T> through the wrapper
-            const box = (this.csharpTypedCoreType(node, node.name?.text) === '') ? this.csharpCollectionReturnType(node) : undefined;
+            const box = (this.csharpTypedCoreType(node, node.name?.text) === '') ? (this.csharpCollectionReturnType(node) ?? this.csharpAsyncStringReturnType(node)) : undefined;
             return (box === undefined) ? own : `Task<${box}>`;
         }
         return (own === 'object') ? (this.csharpCollectionReturnType(node) ?? own) : own;
@@ -7620,7 +7620,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const owner = findAncestor(node.parent, isFunctionLike);
         const booleanType = this.csharpBooleanReturnType(owner);
         if (booleanType === undefined) {
-            const stringType = this.csharpStringReturnType(owner);
+            const stringType = this.csharpStringReturnType(owner) ?? this.csharpAsyncStringReturnType(owner);
             if ((stringType === undefined) || !node.expression || this.csharpReturnValuePrintsType(node.expression, stringType)) {
                 return super.printReturnStatement(node, identation);
             }
@@ -10170,7 +10170,49 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (awaited && this.csharpTypedCoreType(declaration, name) !== '') {
             return undefined; // a typed core prints its own Task<T>
         }
-        return this.csharpCollectionReturnType(declaration);
+        return this.csharpCollectionReturnType(declaration) ?? this.csharpAsyncStringReturnType(declaration);
+    }
+
+    // An async uniquely named, non-override method declared `Promise<string>` / `Promise<Str>` whose every return the checker
+    // types string / undefined (never any) returns `Task<string?>`, unboxed at each return like the non-async string returns.
+    csharpAsyncStringReturnType(node): string | undefined {
+        if (node?.kind !== SyntaxKind.MethodDeclaration || !this.isAsyncFunction(node) || !this.hasAsyncModifier(node) || node.body === undefined || node.type === undefined
+            || this.csharpUniqueMethods?.has(node.name?.text) !== true || this.isOverrideMethod(node) || this.getMethodOverride(node) !== undefined) {
+            return undefined;
+        }
+        const cache = ((this as any).csharpAsyncStringReturnTypes ??= new WeakMap<Node, string | undefined>());
+        if (cache.has(node)) {
+            return cache.get(node);
+        }
+        cache.set(node, undefined); // a proof that reaches its own declaration fails
+        const checker: any = this.checkerOrUndefined();
+        const arg = (checker === undefined) ? undefined : this.csharpPromiseArgumentType(checker, checker.getTypeFromTypeNode(node.type));
+        const members = (arg === undefined) ? [] : (arg.isUnionType() ? arg.getTypes() : [ arg ]);
+        const strings = members.filter((m) => (m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+        let proved = (strings.length > 0) && strings.every((m) => this.isStringType(m.flags));
+        let returns = 0;
+        const visit = (n: any) => {
+            if (!proved || isFunctionLike(n)) {
+                return;
+            }
+            if (n.kind === SyntaxKind.ReturnStatement) {
+                returns++;
+                proved = (n.expression !== undefined) && this.csharpCheckerTypeIsStringOrNull(checker, n.expression);
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        node.body.forEachChild(visit);
+        const result = (proved && returns > 0) ? this.STRING_KEYWORD + '?' : undefined;
+        cache.set(node, result);
+        return result;
+    }
+
+    // the checker type of `expression` is string members plus optional undefined / null, and not any
+    csharpCheckerTypeIsStringOrNull(checker, expression): boolean {
+        const type = checker.getTypeAtLocation(expression);
+        const members = type.isUnionType() ? type.getTypes() : [ type ];
+        return members.every((m) => ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) !== 0) || this.isStringType(m.flags));
     }
 
     csharpTypeNameIsShadowed(scope, csharpType: string): boolean {

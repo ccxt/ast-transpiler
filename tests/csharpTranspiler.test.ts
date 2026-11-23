@@ -8855,3 +8855,47 @@ describe('csharp Int64? local clamped by Math.min/max against an integer literal
         expect(output).toContain('mathMin(other, d)');
     });
 });
+
+describe ('csharp async string return', () => {
+    const unique = [ 'connect', 'mixedKind', 'anyReturn', 'user' ];
+    const source =
+        "type Str = string | undefined;\n" +
+        "class Base {\n" +
+        "    options: any;\n" +
+        "    safeString (d: any, k: string): Str { return d[k]; }\n" +
+        "}\n" +
+        "class Venue extends Base {\n" +
+        "    async connect (a: any): Promise<Str> {\n" +
+        "        if (a === undefined) {\n" +
+        "            return undefined;\n" +
+        "        }\n" +
+        "        const url = this.safeString (a, 'url');\n" +
+        "        return url;\n" +
+        "    }\n" +
+        "    async mixedKind (a: any): Promise<Str> {\n" +
+        "        return this.options['x'];\n" +
+        "    }\n" +
+        "    async anyReturn (a: any): Promise<any> {\n" +
+        "        return 'x';\n" +
+        "    }\n" +
+        "    async user () {\n" +
+        "        const url = await this.connect (1);\n" +
+        "        const other = await this.mixedKind (1);\n" +
+        "        return [ url, other ];\n" +
+        "    }\n" +
+        "}";
+    const printed = (table: boolean): string => (new Transpiler({ 'verbose': false, 'csharp': { ...(table ? { 'uniqueMethodNames': unique } : {}), 'parser': WRAPPED_PARSER } }) as any).transpileCSharp(source).content;
+
+    test('every return a string or undefined: Task<string?> and a string? awaited local', () => {
+        const out = printed(true);
+        expect(out).toContain('Task<string?> connect(object a)');
+        expect(out).toContain('string? url = await this.connect(1);');
+    });
+
+    test('a return of an untyped read, a Promise<any> and a missing table keep Task<object>', () => {
+        expect(printed(true)).toContain('Task<object> mixedKind(object a)');
+        expect(printed(true)).toContain('Task<object> anyReturn(object a)');
+        expect(printed(true)).toContain('object other = await this.mixedKind(1);');
+        expect(printed(false)).toContain('Task<object> connect(object a)');
+    });
+});
