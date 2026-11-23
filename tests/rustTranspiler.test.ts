@@ -7461,7 +7461,7 @@ describe('rust typed unified-method signatures', () => {
     });
 
     test('a required int parameter prints i64 and Value / Option<i64> returns decode typed', () => {
-        expect(output).toContain('pub fn setLeverage(&self, leverage: i64, symbol: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<Value>');
+        expect(output).toContain('pub fn setLeverage(&self, leverage: i64, symbol: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<Option<crate::value::Dict>>');
         expect(output).toContain('pub fn fetchTime(&self, params: impl Into<crate::Params> + Send) -> crate::Result<Option<i64>>');
         expect(output).toContain('self.set_leverage(');
     });

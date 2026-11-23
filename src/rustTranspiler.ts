@@ -15805,8 +15805,9 @@ export class RustTranspiler extends BaseTranspiler {
         fetchFundingHistory: 'Vec<crate::types::FundingHistory>',
         fetchLeverage: 'crate::types::Leverage',
         fetchLeverages: 'crate::types::Leverages',
-        setLeverage: 'Value',
-        setMarginMode: 'Value',
+        // TS `Promise<{}>`: the endpoint's map, `None` for any other body
+        setLeverage: 'Option<crate::value::Dict>',
+        setMarginMode: 'Option<crate::value::Dict>',
         // every body answers the endpoint's dict (`None` when the endpoint answered no dict)
         cancelAllOrdersAfter: 'Option<crate::value::Dict>',
         fetchMarginMode: 'crate::types::MarginMode',
