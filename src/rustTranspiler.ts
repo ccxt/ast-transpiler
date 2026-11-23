@@ -41037,10 +41037,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
         const type: any = param.type;
         if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
-        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword) || this.isAsyncFunction(method)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         const name = String(method.name.text);
         if (!this.rustVenueOnlyMethod(method, name)) return false;
         const handler = this.rustWsHandlerMessageSlot(method, param);
+        // an async method borrows its map only as a ws handler (its by-name arm lends the boxed map)
+        if (this.isAsyncFunction(method) && !handler) return false;
         if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || (!handler && this.rustMethodReferencedAsValue(method))) return false;
         const params: any[] = Array.from(method.parameters);
         const at = params.indexOf(param);
