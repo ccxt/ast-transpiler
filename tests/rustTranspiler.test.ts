@@ -19211,12 +19211,12 @@ describe('ral-54w: a watched tuple slot whose every matching resolve passes a ca
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('the cache slot of a resolved tuple local is converted once from the tuple read', () => {
-        expect(out).toMatch(/let mut stored: Option<crate::pro::cache::Cache> = get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)\.into\(\);/);
+        expect(out).toMatch(/let mut stored: Option<crate::pro::cache::Cache> = [A-Za-z]+Variable\.get\(2\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into\(\);/);
         expect(out).toMatch(/stored\.getLimit\(/);
-        expect(out).toMatch(/let mut s: Value = get_value\(/);
+        expect(out).toMatch(/let mut s: Value = [A-Za-z]+Variable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
     });
     test('negative: a second resolve under the hash passes a non-cache at the slot, so the slot stays a Value', () => {
-        expect(out).toMatch(/let mut candles: Value = get_value\(/);
+        expect(out).toMatch(/let mut candles: Value = [A-Za-z]+Variable\.get\(2\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
     });
 });
 
@@ -19268,12 +19268,12 @@ describe('ral-55w: a Null settle or a plain map meeting a watched tuple hash has
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('balance map / Null settle under a leading-unknown hash do not block the cache slot', () => {
-        expect(out).toMatch(/let mut stored: Option<crate::pro::cache::Cache> = get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)\.into\(\);/);
+        expect(out).toMatch(/let mut stored: Option<crate::pro::cache::Cache> = (?:get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)|[A-Za-z]+Variable\.get\(2\)\.cloned\(\)\.unwrap_or\(Value::Null\))\.into\(\);/);
         expect(out).toMatch(/stored\.getLimit\(/);
-        expect(out).toMatch(/let mut s: Value = get_value\(/);
+        expect(out).toMatch(/let mut s: Value = (?:get_value\(&[A-Za-z]+Variable, &Value::Int\(0\)\)|[A-Za-z]+Variable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\))/);
     });
     test('negative: a tuple resolve with a book at the slot still blocks it', () => {
-        expect(out).toMatch(/let mut candles: Value = get_value\(/);
+        expect(out).toMatch(/let mut candles: Value = (?:get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)|[A-Za-z]+Variable\.get\(2\)\.cloned\(\)\.unwrap_or\(Value::Null\))/);
     });
 });
 
@@ -24428,9 +24428,9 @@ describe('ral-80a: a watched tuple cache slot reads helper tuple literals and sk
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('a helper-built tuple and boolean settles under unknown hashes leave the candles slot an optional cache', () => {
-        expect(out).toMatch(/let mut candles: Option<crate::pro::cache::Cache> = get_value\(&[A-Za-z]+Variable, &Value::Int\(2\)\)\.into\(\);/);
+        expect(out).toMatch(/let mut candles: Option<crate::pro::cache::Cache> = [A-Za-z]+Variable\.get\(2\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into\(\);/);
         // ral-84a: the symbol slot is a resolved `string` lent to getLimit natively
-        expect(out).toMatch(/let mut s: Option<String> = get_value\(&[A-Za-z]+Variable, &Value::Int\(0\)\)\.as_str\(\)\.map\(str::to_owned\);/);
+        expect(out).toMatch(/let mut s: Option<String> = [A-Za-z]+Variable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.as_str\(\)\.map\(str::to_owned\);/);
         expect(out).toContain('.getLimit(s.as_deref(), ');
     });
 });
@@ -24477,7 +24477,7 @@ describe('ral-84a: a watched tuple string slot stays boxed when a resolve puts a
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('an any-typed tuple element at the slot keeps s a Value', () => {
-        expect(out).toMatch(/let mut s: Value = get_value\(/);
+        expect(out).toMatch(/let mut s: Value = [A-Za-z]+Variable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)/);
     });
 });
 
