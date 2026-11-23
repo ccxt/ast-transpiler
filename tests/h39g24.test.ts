@@ -95,8 +95,8 @@ describe ('go safeList (R, lit) on a `let R = undefined` local written only by a
         expect (out).not.toMatch (/wList, _ = response/);
     });
 
-    test ('negative: a let compared with nil does not print the comma-ok read', () => {
-        expect (out).not.toMatch (/cList, _ = response/);
+    test ('a let compared with nil reads the typed map (the nil test reads the map, not the member)', () => {
+        expect (out).toMatch (/cList, _ = response\["data"\]\.\(\[\]any\)/);
     });
 
     test ('negative: a let handed to a method that may write it does not print the comma-ok read', () => {

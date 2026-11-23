@@ -59590,7 +59590,7 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
             return (d?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType (d) : this.goResolvedLocalGoType (n);
         };
         const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
-        if ((goTypeOf (container) !== 'map[string]any') || (!literalKey && (goTypeOf (key) !== 'string'))) {
+        if (((goTypeOf (container) !== 'map[string]any') && !h40g23MapLet (this, container, false)) || (!literalKey && (goTypeOf (key) !== 'string'))) {
             return printed;
         }
         const name: string = decl.name.text;
@@ -59639,7 +59639,8 @@ function h39g24ListRead (goTranspiler: GoTranspiler, declaration, printed: strin
     const args: any = goTranspiler.goSafeAccessorLocalArgs (declaration.initializer, 'safeList');
     const argc: number = declaration.initializer?.arguments?.length;
     if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (args.key.text)
-        || (args.container?.kind !== SyntaxKind.Identifier) || !h39g24UndefinedJsonLet (goTranspiler, args.container)) {
+        || (args.container?.kind !== SyntaxKind.Identifier)
+        || !(h39g24UndefinedJsonLet (goTranspiler, args.container) || h40g23MapLet (goTranspiler, args.container, true))) {
         return undefined;
     }
     const name: string = declaration.name.text;
@@ -59738,3 +59739,46 @@ function h40g22OptionsDictNilTest (goTranspiler: GoTranspiler, node, printed: st
     };
 }
 // ===== H40-G22 (end) =====
+// ===== H40-G23: map receivers declared nil first and written later (begin) =====
+// R is `let R = undefined` (or `let R;`) whose every write is an awaited `Promise<Dict>` endpoint, or every write is
+// `this.market (..)`: Go declares it map[string]any. Nil tests and `'k' in R` read the map; anything else vetoes.
+function h40g23MapLet (goTranspiler: GoTranspiler, container, endpointOnly: boolean): boolean {
+    const declaration: any = goTranspiler.goAnyBoxLocalDeclaration (container);
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type !== undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((init !== undefined) && ((init.kind !== SyntaxKind.Identifier) || (init.text !== 'undefined')))) {
+        return false;
+    }
+    let endpoints = 0;
+    let markets = 0;
+    const ok = goTranspiler.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n)) {
+            return true; // `this.market`: a member name, not the local
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            const right: any = goTranspiler.goUnwrapParenthesizedNode (parent.right);
+            if ((right?.kind === SyntaxKind.AwaitExpression) && goTranspiler.h28t07DictEndpointCall (right.expression)) {
+                endpoints++;
+                return true;
+            }
+            const callee: any = right?.expression;
+            if ((right?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+                && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'market') && (right.arguments.length === 1)) {
+                markets++;
+                return true;
+            }
+            return false;
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        return goTranspiler.goIsNilComparisonOperand (n, parent)
+            || goTranspiler.goJsonOriginUseIsReadOnly (n, name) || goTranspiler.h27a09SafeReaderArg (n, name)
+            || (!goTranspiler.goWritesOrRebindsName (n, name, []) && goTranspiler.h27a02ScalarReaderUse (n));
+    });
+    return ok && (((endpoints > 0) && (markets === 0)) || (!endpointOnly && (markets > 0) && (endpoints === 0)));
+}
+// ===== H40-G23 (end) =====
