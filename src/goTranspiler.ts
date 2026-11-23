@@ -59515,3 +59515,67 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
     };
 }
 // ===== H39-G23 (end) =====
+// ===== H39-G24: list member of a `let R = undefined` map local written only by awaited endpoints (begin) =====
+// `const xs = this.safeList (R, 'lit'[, []])` where R prints `var R map[string]any = nil` and every write is an awaited
+// `Promise<Dict>` endpoint: the member is decoded JSON ([]any, another kind or absent), so the comma-ok read answers what
+// SafeListTyped / SafeListSlice did (nil map, absent, "" and non-list read nil; the `[]` default is restored on nil).
+function h39g24UndefinedJsonLet (goTranspiler: GoTranspiler, container): boolean {
+    const declaration: any = goTranspiler.goAnyBoxLocalDeclaration (container);
+    const init: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.Identifier) || (init.text !== 'undefined') || (declaration.type !== undefined)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    let writes = 0;
+    const ok = goTranspiler.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+            && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
+            const right: any = goTranspiler.goUnwrapParenthesizedNode (parent.right);
+            writes++;
+            return (right?.kind === SyntaxKind.AwaitExpression) && goTranspiler.h28t07DictEndpointCall (right.expression);
+        }
+        return !goTranspiler.goIsNilComparisonOperand (n, parent)
+            && (goTranspiler.goJsonOriginUseIsReadOnly (n, name) || goTranspiler.h27a09SafeReaderArg (n, name)
+                || (!goTranspiler.goWritesOrRebindsName (n, name, []) && goTranspiler.h27a02ScalarReaderUse (n)));
+    });
+    return ok && (writes > 0);
+}
+function h39g24ListRead (goTranspiler: GoTranspiler, declaration, printed: string): string | undefined {
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string')) {
+        return undefined;
+    }
+    const args: any = goTranspiler.goSafeAccessorLocalArgs (declaration.initializer, 'safeList');
+    const argc: number = declaration.initializer?.arguments?.length;
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (args.key.text)
+        || (args.container?.kind !== SyntaxKind.Identifier) || !h39g24UndefinedJsonLet (goTranspiler, args.container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const c: string = args.container.text;
+    const k: string = args.key.text;
+    const match = /^(\n*)(\t*)(.*)$/s.exec (printed);
+    if (match === null) {
+        return undefined;
+    }
+    const [ , lead, iden, body ] = match;
+    const read = `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${k}"].([]any)`;
+    // a `[]` default the printer already dropped (SafeListTyped) stays dropped
+    if (((argc === 2) || (argc === 3)) && new RegExp (`^var ${name} \\[\\]any = (?:ccxt\\.)?SafeListTyped\\(${c}, "${k}"\\)$`).test (body)) {
+        return read;
+    }
+    if ((argc === 3) && (body === `var ${name} []any = this.SafeListSlice(${c}, "${k}", []any{})`)) {
+        return `${read}\n${iden}if ${name} == nil {\n${iden}\t${name} = []any{}\n${iden}}`;
+    }
+    return undefined;
+}
+{
+    const printListH39g24 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printListH39g24.call (this, node, identation);
+        const h = (node?.declarations?.length === 1) ? h39g24ListRead (this, node.declarations[0], printed) : undefined;
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H39-G24 (end) =====
