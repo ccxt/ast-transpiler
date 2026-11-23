@@ -60190,3 +60190,58 @@ function h41g13CommaOkWrite (go, node, found, identation: number): string | unde
     return undefined;
 }
 // ===== H40-G17 (end) =====
+// ===== H41-G18 (begin) =====
+// a `handleMessage` frame whose only writes are `F['lit'] = JSON.parse (x)` statements still holds decoded JSON only
+// (JsonParse answers a JSON value or nil), so it proves like an unwritten frame and so do the handlers it dispatches to
+{
+    const h41g18FrameParam = GoTranspiler.prototype.h27a11FrameParam;
+    GoTranspiler.prototype.h27a11FrameParam = function (param) {
+        if (h41g18FrameParam.call(this, param)) {
+            return true;
+        }
+        const fn: any = param?.parent;
+        if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.text !== 'handleMessage') || (fn.body === undefined) || (param.name?.kind !== SyntaxKind.Identifier)
+            || (this.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE) || (this.goWsFrameParameterType(fn, param) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+            return false;
+        }
+        this.h41g18Cache = this.h41g18Cache ?? new Map();
+        if (!this.h41g18Cache.has(param)) {
+            this.h41g18Cache.set(param, h41g18OnlyJsonWrites(this, fn.body, param));
+        }
+        return this.h41g18Cache.get(param);
+    };
+}
+// at least one `F['lit'] = JSON.parse (..);` statement and otherwise no rebinding, shadowing, member write or delete of F
+function h41g18OnlyJsonWrites (go: any, body: any, param: any): boolean {
+    const name: string = param.name.text;
+    let jsonWrites = 0;
+    const bad = go.hasNodeWhere(body, (n: any) => {
+        if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+            return true;
+        }
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name)) {
+            return false;
+        }
+        const access: any = n.parent;
+        const assign: any = access?.parent;
+        const call: any = assign?.right;
+        if ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === n) && (access.argumentExpression?.kind === SyntaxKind.StringLiteral)
+            && (assign?.kind === SyntaxKind.BinaryExpression) && (assign.left === access) && (assign.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (assign.parent?.kind === SyntaxKind.ExpressionStatement) && (call?.kind === SyntaxKind.CallExpression) && (call.arguments?.length === 1)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.Identifier)
+            && (call.expression.expression.text === 'JSON') && (call.expression.name?.text === 'parse')) {
+            jsonWrites++;
+            return false;
+        }
+        if (go.goWritesOrRebindsName(n, name, [])) {
+            return true;
+        }
+        let read: any = n;
+        while ((read.parent?.kind === SyntaxKind.ElementAccessExpression) && (read.parent.expression === read)) {
+            read = read.parent;
+        }
+        return (read !== n) && (go.isGoElementAccessAssignmentTarget(read) || (read.parent?.kind === SyntaxKind.DeleteExpression));
+    });
+    return !bad && (jsonWrites > 0);
+}
+// ===== H41-G18 (end) =====
