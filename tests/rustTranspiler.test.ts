@@ -27496,3 +27496,29 @@ describe('h39-R10: a row read cast `as Dict` of a converted `Dict[]` list is the
         expect (run ("    m (response: Dict) {\n        const data = this.safeList (response, 'data', []);\n        const first = this.safeDict (data, 0, { 'a': 1 }) as Dict;\n        return this.safeString (first, 'ts');\n    }\n")).not.toContain ('dict_rows');
     });
 });
+
+describe('typed locals: a declared const string list of literals', () => {
+    const wrap = (body: string) => `class T {\n    f (params: any = {}) {\n${body}\n    }\n}`;
+    const rs = (body: string) => transpiler.transpileRust(wrap(body)).content;
+    test('a const string[] literal handed to a boxing call at its last use is a Vec', () => {
+        const out = rs("        const keys: string[] = [ 'a', 'b' ];\n        return this.omit (params, keys);");
+        expect(out).toContain('let mut keys: Vec<Value> = vec![Value::Str(\"a\".into()), Value::Str(\"b\".into())];');
+        expect(out).not.toMatch(/let \w+: Value = Value::from\(vec!/);
+    });
+    test('a const string[] literal read by length and index is a Vec', () => {
+        const out = rs("        const keys: string[] = [ 'a', 'b' ];\n        let n = 0;\n        for (let i = 0; i < keys.length; i++) {\n            if (keys[i] in params) { n = n + 1; }\n        }\n        return n;");
+        expect(out).toContain('let mut keys: Vec<Value> = vec![');
+    });
+    test('negative: an unannotated literal with no push keeps the box', () => {
+        const out = rs("        const keys = [ 'a', 'b' ];\n        return this.omit (params, keys);");
+        expect(out).not.toContain('let mut keys: Vec<Value>');
+    });
+    test('negative: a let string[] literal that is reassigned keeps its form', () => {
+        const out = rs("        let keys: string[] = [ 'a' ];\n        if (params['x']) { keys = [ 'b' ]; }\n        return this.omit (params, keys);");
+        expect(out).not.toContain('let mut keys: Vec<Value> = vec![');
+    });
+    test('negative: a const string[] with a non-literal element keeps the box', () => {
+        const out = rs("        const k = this.safeString (params, 'k', '');\n        const keys: string[] = [ k ];\n        return this.omit (params, keys);");
+        expect(out).not.toContain('let mut keys: Vec<Value>');
+    });
+});

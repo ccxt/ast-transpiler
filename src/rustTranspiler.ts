@@ -22992,7 +22992,10 @@ export class RustTranspiler extends BaseTranspiler {
         const siblings = this.literalSiblingBindings;
         this.literalSiblingBindings = outerSiblings;
         // A local admitted past a same-named sibling binding or a cast return hands itself off by move only.
-        return safe && pushes > 0 && ((siblings === 0 && castReturns === 0) || clonedOut === 0);
+        // A `const xs: string[]` of string literals needs no push: its type is declared, every use was checked above.
+        const declaredStrList = pushes === 0 && isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & NodeFlags.Const) !== 0
+            && declaration.type?.getText?.() === 'string[]' && init.elements.length > 0 && init.elements.every((e) => isStringLiteral(e));
+        return safe && (pushes > 0 || declaredStrList) && ((siblings === 0 && castReturns === 0) || clonedOut === 0);
     }
 
     /** The array literal's native `vec![..]`: elements are `Value`s taken by move, so a
