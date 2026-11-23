@@ -312,3 +312,52 @@ describe ('csharp venue-private string parameters fed by a declared string base 
         expect(a).toContain('other(object v)');
     });
 });
+
+describe ('csharp async venue-private number parameters', () => {
+    // an async venue helper whose every caller passes a parameter the core table prints numeric
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-async-number');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    async addMargin (symbol: string, amount: number, params = {}): Promise<any> { return {}; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    async addMargin (symbol: string, amount: number, params = {}) { return await this.helper (symbol, amount, 'add', params) + await this.boxed (params) + await this.optional (amount) + await this.negated (-amount); }\n" +
+            "    async reduceMargin (symbol: string, amount: number, params = {}) { return await this.helper (symbol, amount, 'reduce', params) + await this.negated (amount); }\n" +
+            "    async helper (symbol: string, amount: number, type: string, params = {}): Promise<string> { return (amount < 3) ? 'x' : type; }\n" +
+            "    async boxed (amount: number): Promise<string> { return (amount < 3) ? 'x' : 'y'; }\n" +
+            "    async optional (amount: number = undefined): Promise<string> { return (amount === undefined) ? 'x' : 'y'; }\n" +
+            "    async negated (amount: number): Promise<string> { return (amount < 3) ? 'x' : 'y'; }\n" +
+            '    f (x: any) { return this.boxed (x); }\n' +
+            '}\n');
+        const config = { 'parser': WRAPPED_PARSER, 'coreArgTypes': { 'addMargin': { 1: 'double' }, 'reduceMargin': { 1: 'double' } } };
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': config });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an async helper fed the core-typed double parameter prints double', () => {
+        expect(a).toMatch(/helper\(\w+\?? symbol, double amount, string type/);
+    });
+
+    test('an async helper fed a negated core-typed double prints double', () => {
+        expect(a).toContain('negated(double amount)');
+    });
+
+    test('an async helper with one boxed caller keeps object', () => {
+        expect(a).toContain('boxed(object amount)');
+    });
+
+    test('an async helper with an undefined default keeps object', () => {
+        expect(a).toContain('optional(object amount = null)');
+    });
+});

@@ -3194,7 +3194,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // the one numeric kind every call passes at `index` (int widens to Int64), or undefined
     csharpVenueNumberParamKind(method, parameter, index: number, calls: any[]): string | undefined {
-        // a sync method only: async venue methods also pass through the host's signature tables
+        // an `= undefined` default only on a sync method: async venue methods also pass through the host's signature tables
         const sync = !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword);
         const initializer = parameter.initializer;
         const undefinedDefault = sync && (initializer !== undefined) && isIdentifier(initializer) && (initializer.text === 'undefined');
@@ -3206,7 +3206,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         // `Num` (number | undefined) and an `= undefined` default print the nullable kind
         const members = (declared === undefined) ? [] : (declared.isUnionType() ? declared.getTypes() : [ declared ]);
         const numbers = members.filter((m) => m.flags === TypeFlags.Number).length;
-        if ((numbers !== 1) || (!sync && (members.length > 1)) || members.some((m) => (m.flags !== TypeFlags.Number) && ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0))
+        if ((numbers !== 1) || members.some((m) => (m.flags !== TypeFlags.Number) && ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0))
             || this.csharpNameIsRebound(parameter, method)) {
             return undefined;
         }
@@ -3225,7 +3225,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
                 continue; // omitted: the default null
             }
-            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? (sync ? this.csharpTypedParameterArgument(argument) : undefined));
+            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument));
             const kind = this.csharpArithmeticOperandKind(type);
             if ((kind === undefined) || (call.arguments.length > method.parameters.length)) {
                 return undefined;
@@ -3436,6 +3436,19 @@ export class CSharpTranspiler extends BaseTranspiler {
         };
         scan(caller.body);
         return written ? undefined : printed;
+    }
+
+    // a parameter (or its negation) the core table prints a non-null `double` / `Int64` and the body never writes
+    csharpCoreTypedNumberArgument(argument): string | undefined {
+        let value = this.csharpUnparenthesized(argument);
+        if (isPrefixUnaryExpression(value) && (value.operator === SyntaxKind.MinusToken)) {
+            value = this.csharpUnparenthesized(value.operand);
+        }
+        if (!isIdentifier(value) || (this.csharpReceiverBinding(value)?.kind !== SyntaxKind.Parameter)) {
+            return undefined;
+        }
+        const printed = this.csharpCallSiteDeclaredType(value, value.text);
+        return ((printed === 'double') || (printed === 'Int64')) ? printed : undefined;
     }
 
     // a bare parameter of the calling method whose printed signature the host layer types numeric
