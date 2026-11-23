@@ -17563,6 +17563,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustParamPrintsBool(p)) {
                 return `${this.getIden(identation + 2)}let ${name}: bool = get_arg(optional_args, ${idx}, ${defaultVal}).is_truthy();\n`;
             }
+            if (this.rustParamsDictSlot(p)) return `${this.getIden(identation + 2)}let ${name}: crate::value::Dict = get_arg_dict(optional_args, ${idx});\n`;
             return `${this.getIden(identation + 2)}let ${name} = get_arg(optional_args, ${idx}, ${defaultVal});\n`;
         }).join('');
 
@@ -19631,6 +19632,7 @@ export class RustTranspiler extends BaseTranspiler {
             // a lent string-list parameter is the slice itself: its reads need no binding
             if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustVenueDictParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
+            if (this.rustParamsDictSlot(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             // a typed request-row list parameter is already bound as `Vec<Dict>`: no slice shadow
             if ((this as any).rustP21DictRowsLocal(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustFunctionDeclaresName(fn, empty)) continue;
@@ -27770,10 +27772,14 @@ export class RustTranspiler extends BaseTranspiler {
     printDictTernaryArms(init: any, identation: number): string | undefined {
         const node: any = this.rustSkipWrappers(init);
         if (node === undefined || !isConditionalExpression(node)) return undefined;
-        const slot = (arm: any) => { const a: any = this.rustSkipWrappers(arm); if (!isIdentifier(a)) return false; const d: any = this.rustDeclarationOfIdentifier(a); return d !== undefined && this.rustDictTernarySlotArm(a, d); };
+        const dictParam = (a: any) => isIdentifier(a) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(a));
+        const slot = (arm: any) => { const a: any = this.rustSkipWrappers(arm); if (!isIdentifier(a)) return false; if (dictParam(a)) return true; const d: any = this.rustDeclarationOfIdentifier(a); return d !== undefined && this.rustDictTernarySlotArm(a, d); };
         if (!slot(node.whenTrue) && !slot(node.whenFalse)) return undefined;
         const arm = (n: any) => {
             const a: any = this.rustSkipWrappers(n);
+            // a `Dict`-bound params slot moves at its last use; the omit of it answers the typed map
+            if (dictParam(a)) return this.rustLocalLastUse(a, this.rustDeclarationOfIdentifier(a)) ? String(a.text) : `${a.text}.clone()`;
+            if (isCallExpression(a) && this.rustParamsDictSlotOmit(a)) return this.printNode(a, identation).trim().replace(/^self\.omit\(/, 'self.omit_t(');
             if (slot(a)) { const text = String(a.text); const name = super.transformIdentifier(a, this.ReservedKeywordsReplacements[text] ?? text); return this.rustDictTernaryArmMoves(a, this.rustDeclarationOfIdentifier(a)) ? name : `${name}.clone()`; }
             if (!isCallExpression(a)) return undefined;
             return `${this.printNode(a, identation).trim()}.into_dict()`;
@@ -28603,6 +28609,64 @@ export class RustTranspiler extends BaseTranspiler {
         return slot !== undefined && String(slot.rustType).startsWith('impl Into<crate::Params>') && !this.rustLocalIsReassigned(d, String(d.name.text));
     }
 
+    /** The optional `params` of a typed unified method bound as `Dict` (`get_arg_dict`: the map, else the empty map, which is
+     *  all `Into<Params>` can hand over): every use takes a map by reference (a base literal-key / any-key reader, a base
+     *  two-argument omit) or is the plain arm of a `Dict` ternary whose other arm is a base omit of it. */
+    rustParamsDictSlot(d: any): boolean {
+        if (d?.kind !== SyntaxKind.Parameter || !isIdentifier(d.name) || String(d.name.text) !== 'params') return false;
+        let decision = this.rustParamsDictDecisions.get(d);
+        if (decision === undefined) {
+            this.rustParamsDictDecisions.set(d, false); // re-entrancy guard
+            try {
+                decision = this.rustParamsDictSlotUncached(d);
+            } catch (e) {
+                decision = false;
+            }
+            this.rustParamsDictDecisions.set(d, decision);
+        }
+        return decision;
+    }
+
+    private rustParamsDictDecisions = new WeakMap<any, boolean>();
+
+    rustParamsDictSlotOmit(call: any): boolean {
+        if (!this.rustBaseCallNamed(call, RustTranspiler.RUST_HANDED_DICT_OMIT) || call.arguments.length !== 2) return false;
+        const head: any = this.rustSkipWrappers(call.arguments[0]);
+        return head !== undefined && isIdentifier(head) && this.rustParamsDictDecisions.has(this.rustDeclarationOfIdentifier(head));
+    }
+
+    rustParamsDictSlotUncached(d: any): boolean {
+        if (!this.rustTypedParamsParam(d)) return false;
+        let uses = 0;
+        const safe = this.rustLocalUsesAll(d, 'params', false, (n: any) => {
+            if (this.rustDeclaredNode(n) !== d) return false;
+            const up: any = n.parent;
+            if (isCallExpression(up) && up.arguments[0] === n) {
+                const callee: any = up.expression;
+                if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+                const name = String(callee.name.text);
+                if (name === 'omit') { uses++; return up.arguments.length === 2 && this.rustBaseCallNamed(up, RustTranspiler.RUST_HANDED_DICT_OMIT); }
+                if (!(name in RustTranspiler.RUST_BORROWED_DICT_READERS) && !RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(name)) return false;
+                const callee2: any = this.rustScalarCallee(up);
+                uses++;
+                return callee2 !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee2.getSourceFile().fileName));
+            }
+            let arm: any = n;
+            while (arm.parent?.kind === SyntaxKind.ParenthesizedExpression) arm = arm.parent;
+            const cond: any = arm.parent;
+            if (!isConditionalExpression(cond) || cond.condition === arm) return false;
+            const other: any = this.rustSkipWrappers(cond.whenTrue === arm ? cond.whenFalse : cond.whenTrue);
+            const decl: any = cond.parent;
+            if (other === undefined || !isCallExpression(other) || !this.rustBaseCallNamed(other, RustTranspiler.RUST_HANDED_DICT_OMIT) || other.arguments.length !== 2) return false;
+            const head: any = this.rustSkipWrappers(other.arguments[0]);
+            if (head === undefined || !isIdentifier(head) || this.rustDeclaredNode(head) !== d) return false;
+            if (!isVariableDeclaration(decl) || decl.initializer !== cond || !isIdentifier(decl.name) || decl.type === undefined || String(decl.type.getText()) !== 'Dict') return false;
+            uses++;
+            return this.rustHandedDictLocal(decl);
+        });
+        return safe && uses > 0;
+    }
+
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
      *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
      *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
@@ -29176,6 +29240,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
         // a generated reader's own `impl KeyRead` container is lent on to the next reader (`&T: KeyRead` reads the same)
         if (declaration.kind === SyntaxKind.Parameter && !this.rustTestTierSource(call) && this.rustParamReadsByReference(declaration)) return `&${text}`;
+        // the `Dict`-bound params slot is lent: `&Dict` is the reader container `KeyRead` accepts
+        if (declaration.kind === SyntaxKind.Parameter && this.rustParamsDictSlot(declaration)) return `&${text}`;
         if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration)
             || this.rustSafeMarketLocalOf(node) !== undefined || this.rustMarketSlotParamOf(node) !== undefined || this.rustTypedMarketLocalOf(node) !== undefined
             || this.rustCurrencySlotParamOf(node) !== undefined || this.rustCurrencyLocalOf(node) !== undefined) return `&${text}`;
