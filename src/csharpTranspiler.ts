@@ -75,6 +75,7 @@ const CSHARP_METHOD_RETURN_TYPES: { [name: string]: string } = {
     'toLowerCase': 'string',
     'toString': 'string',
     'trim': 'string',
+    'toFixed': 'string',
     'join': 'string',
     'replace': 'string',
     'replaceAll': 'string',
