@@ -13976,6 +13976,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'handleTriggerAndParams': [ 0 ], 'isTriggerOrder': [ 0 ],
     // row parsers: the base loops pass `{}`-defaulted safeDict rows, every override reads the row as a map
     'parseLedgerEntry': [ 0 ], 'parseTransaction': [ 0 ],
+    // response and request headers: the fetch path passes header maps, ws callers pass `{}` or a defaulted safeDict
+    'handleErrors': [ 4, 7 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -14114,11 +14116,19 @@ function goAwaitedMapWritesOnlyLocal (go: any, decl: any): boolean {
 // every call site of `fn` must pass a printed map. Same-file sites are the printer's own proof;
 // in a sibling file the printer only names an identifier bound to `this.market(...)`, so accept
 // the two declarations whose printed Go IS the map: an object literal and `this.safeDict(...)`
+function goCallAboveTranspileDelimiter (call: any): boolean {
+    const text = String (call.getSourceFile ().text ?? '');
+    const delimiter = text.indexOf ('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
+    return (delimiter >= 0) && (call.getStart () < delimiter);
+}
+
 function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean {
     const name = fn.name.text;
     for (const call of go.goSameFileCallsOf (fn, name)) {
         const arg = call.arguments?.[index];
         if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) { return false; }
+        // a base call above the transpile delimiter is not printed: its hand-written Go twin is compiler-checked
+        if (goIsBaseExchangeFile (fn) && goCallAboveTranspileDelimiter (call)) { continue; }
         if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
         if (h30a18MapArg (go, name, call, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)) { return false; }
