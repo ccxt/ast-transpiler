@@ -200,6 +200,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpNameIsRebound(binding: any, scope: any): boolean;
     csharpListParamArgumentPrintsList(argument: any, decide?: (key: string) => boolean): boolean;
     printParameterType(node: any): any;
+    csharpOrderBookSubscriptionParamType(node: any): string | undefined;
     csharpWsCacheParamType(node: any): string | undefined;
     csharpOverrideParamSpelling(node: any): string | undefined;
     csharpOverrideParamSpellingOfType(type: any, unionArms?: number): string | undefined;

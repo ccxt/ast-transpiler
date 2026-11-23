@@ -44,6 +44,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaReturnTypeCache: WeakMap<Node, string | undefined>;
     javaReturnTypeInProgress: Set<Node>;
     javaReturnTypeUsedDeclaredLocals: boolean;
+    javaDeclarationsOf: ((name: string) => string[][] | undefined) | undefined;
     javaRepoMethodUses: ((name: string, ownFile: string) => {
         declared: number;
         mentions: number;
@@ -95,13 +96,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printOverrideBridges(node: any, identation: any): string;
     printOverrideBridge(node: any, ancestor: any, ancestorTypes: string[], ownTypes: string[], identation: any): string;
     exchangeTierMethods(): Map<string, any>;
-    printArgsForCallExpression(node: any, identation: any): any;
-    javaPrintCallArguments(args: any, node: any, identation: any): any;
+    printArgsForCallExpression(node: any, identation: any): string;
+    javaPrintCallArguments(args: any, node: any, identation: any): string;
     javaCheckcastArgument(arg: any, printed: string, type: string | undefined): string;
     javaHasOptionalParameter(method: any): boolean;
     javaFullArityCallee(node: any): any;
     javaFullArityFits(method: any, args: any): boolean;
-    javaFullArityArguments(method: any, args: any, identation: any): string | undefined;
+    javaFullArityArguments(method: any, args: any, identation: any, call?: any): string | undefined;
+    javaBareNullArguments(call: any, args: any, printed: string[]): string[];
     javaIsUndefinedLiteral(node: any): boolean;
     javaScheduledCallArguments(args: any, node: any, identation: any): string | undefined;
     javaSuperCoreCallArguments(args: any, node: any, identation: any): string | undefined;
@@ -469,6 +471,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeSplitCall(node: any, name: any, parsedArg: any): string | undefined;
     javaNativeSplitText(name: any, parsedArg: any, receiver?: any): string;
     javaStringReceiverText(receiver: any, name: any): string;
+    javaStringParameterRead(node: any, printed: string): boolean;
     javaDeclaredStringElementLocal(node: any, printed: string): boolean;
     javaDeclaredElementLocalType(node: any, printed: string): string | undefined;
     javaNativeSplitIndexRead(node: any, index: number): string | undefined;
@@ -483,6 +486,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printSearchCall(node: any, _identation: any, name?: any, parsedArg?: any): string;
     printStartsWithCall(node: any, _identation: any, name?: any, parsedArg?: any): string;
     printEndsWithCall(node: any, _identation: any, name?: any, parsedArg?: any): string;
+    javaAffixArgumentText(arg: any, parsedArg: any): string;
     printTrimCall(node: any, _identation: any, name?: any): string;
     printJoinCall(_node: any, _identation: any, name?: any, parsedArg?: any): string;
     printSplitCall(node: any, _identation: any, name?: any, parsedArg?: any): string;

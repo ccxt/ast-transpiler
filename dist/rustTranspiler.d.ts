@@ -69,8 +69,8 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -2487,6 +2487,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBookSideParam(param: any): boolean;
     private static readonly RUST_BOOK_SIDE_GROUP;
     rustBookSideGroupParam(param: any): boolean;
+    /** A required list parameter (`deltas: any[]`) of a side-group method (handleDeltas, base and every pro override):
+     *  a lent `&[crate::Value]` like the other list slots; callers lend their list, the by-name arm reads Null as empty. */
+    rustBookDeltasParam(param: any): boolean;
+    /** `this.safeValue / safeList (deltas, i)` on a lent deltas list: the reader takes the slice (`impl KeyRead`). */
+    rustBookDeltasSafeReadUse(id: any): boolean;
     /** Every use of the parameter is a side operation statement, a `length` read, a level read or a side-slot hand-on. */
     rustBookSideUsesOnly(param: any, allowNone: boolean): boolean;
     rustBookSideParamUncached(param: any): boolean;
@@ -2494,6 +2499,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBookSideArgSlot(n: any): boolean;
     /** Argument text for a side slot: a side handle passes whole, anything else is wrapped once. */
     printBookSideArg(arg: any, identation: number): string;
+    private static readonly RUST_BOOK_PARAM_GROUP;
+    private rustBookParams;
+    rustBookParam(param: any): boolean;
+    /** Proves every use of a book parameter with the book-local forms (no write of the parameter itself). */
+    rustBookParamUses(param: any): 'opt' | undefined;
+    /** The argument lands in a book parameter slot of a `this.<m>(..)` call. */
+    rustBookParamArgSlot(n: any): boolean;
+    /** Argument text for a book slot: an optional book local or book parameter is lent, anything else is boxed once. */
+    printBookParamArg(arg: any, identation: number): string;
     printBookSideLocal(declaration: any, indent: string, varName: string): string | undefined;
     /** `s.length` / `s[i]` on a side handle: the marker's own length and level reads. */
     printBookSideRead(node: any): string | undefined;
@@ -3315,6 +3329,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustOwnContainerDecisions;
     private rustOwnContainerBare;
     rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined;
+    private static readonly RUST_OWN_RECORD_RETURNS;
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined;
     /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
      *  local the body builds: it returns `List` (a list on every path, never Null). */
@@ -5448,6 +5463,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal, a plain local, or `this.extend|omit|keysort (plain, …unshared)`. */
     rustPlainBuilder(call: any, depth: number): boolean;
     rustPlainReturn(expr: any, depth: number): boolean;
+    /** A prediction-venue parameter declared as a map type (a list `any` would pass through `omit` unchanged), unshared. */
+    mapParamCopy(arg: any): boolean;
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
      *  overload set), in the calling file or the base tier. */
     /** A sync base method no venue source declares and outside virtual dispatch: a base-tier `self.m()` runs this body. */
@@ -5870,6 +5887,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
+    /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
+    rustParamNeverNamed(method: any, param: any): boolean;
+    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
+     *  every `return` is an object literal (`parseOrderBook`): a top-level key write cannot reach the message. */
+    rustLocalHoldsFreshBook(decl: any, init: any): boolean;
+    /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
+    rustReadOffThisMember(init: any): boolean;
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
      *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
     rustCallReturnsFreshLiteral(init: any): boolean;
@@ -5883,8 +5907,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueDictTextCallCount(method: any, name: string, own: number): number;
     /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
     rustVenueDictArgLends(arg: any): boolean;
-    /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
+    /** The value of an object-literal entry (`'info': x`): the slot takes the dict handle, so the entry shares it. */
     rustVenueDictValueUse(id: any): boolean;
+    /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
+     *  the dict handle is shared into the box, no copy. */
+    rustVenueDictLentValueUse(id: any): boolean;
+    /** `Value::Dict(Arc::clone(x))` for a rustVenueDictParam handed whole to a lent `impl Into<crate::Value>` slot. */
+    printVenueDictLentValue(node: any, text: string): string | undefined;
     /** The container of a base by-reference reader (`this.safeString2 (x, ..)`): it reads the borrowed map as is. */
     rustVenueDictReaderUse(id: any): boolean;
     /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
@@ -6012,7 +6041,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     h27r07KeepBoxedKey(node: any, plan: any): boolean;
     private rustWsHandleParamCache;
     rustWsHandleParam(param: any): boolean;
-    rustWsHandleParamUncached(param: any): boolean;
+    /** The `client` params linked to `param` by a direct `this.h (.., client, ..)` hand-off (either way), or undefined when it
+     *  cannot take the handle. */
+    rustWsHandleParamLinks(param: any): any[] | undefined;
+    /** The caller's own `client` param when `call` passes it bare at `at`. */
+    rustWsHandleArgParam(call: any, at: number): any;
+    /** The callee's `client` param when bare `client` is argument `n` of a `this.h (..)` call to a method with a body. */
+    rustWsHandleSlotOf(n: any): any;
+    rustWsHandleParamUncached(param: any, links: any[]): boolean;
     /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
      *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */
     rustWsRoutedHandler(method: any): boolean;
