@@ -9317,7 +9317,8 @@ describe('rust base list filters answer a fresh container', () => {
             "    candles (rows: any, since: Int) {\n        const filtered = this.filterBySinceLimit (rows, since, 10, 0, true);\n        return this.hold (filtered);\n    }\n" +
             "    closed (orders: any, flag: boolean) {\n        const closedOrders = this.filterByArray (orders, 'status', [ 'closed' ], false);\n        return this.hold (closedOrders);\n    }\n" +
             "    indexed (orders: any) {\n        const byId = this.filterByArray (orders, 'id', [ 'a' ]);\n        return this.hold (byId);\n    }\n" +
-            "    unknown (orders: any, flag: boolean) {\n        const rows = this.filterByArray (orders, 'id', [ 'a' ], flag);\n        return this.hold (rows);\n    }\n}\n",
+            "    unknown (orders: any, flag: boolean) {\n        const rows = this.filterByArray (orders, 'id', [ 'a' ], flag);\n        return this.hold (rows);\n    }\n" +
+            "    literal (row: any) {\n        const one = this.filterByArray ([ row ], 'id', [ 'a' ], false);\n        return this.hold (one);\n    }\n}\n",
     };
     let out: string;
     beforeAll(() => {
@@ -9331,11 +9332,15 @@ describe('rust base list filters answer a fresh container', () => {
     });
     test('filterBySinceLimit and a non-indexed filterByArray hold the shared list', () => {
         expect(out).toMatch(/let mut filtered: crate::value::List = self\.filterBySinceLimit\(.*\)\.into_list\(\);/);
-        expect(out).toMatch(/let mut closedOrders: crate::value::List = self\.filterByArray\(.*\)\.into_list\(\);/);
+        expect(out).toContain('let mut closedOrders: crate::value::List = self.filterByArrayList(orders, Value::Str("status".into()), Value::from(vec![Value::Str("closed".into())]));');
     });
     test('an indexed filterByArray holds the map; an unknown indexed flag keeps the box', () => {
-        expect(out).toMatch(/let mut byId: crate::value::Dict = self\.filterByArray\(.*\)\.into_dict\(\);/);
+        expect(out).toContain('let mut byId: crate::value::Dict = self.filterByArrayDict(orders, Value::Str("id".into()), Value::from(vec![Value::Str("a".into())]));');
         expect(out).toMatch(/let mut rows: Value = self\.filterByArray\(/);
+        expect(out).not.toMatch(/filterByArray(?:List|Dict)\([^;]*flag/);
+        // a list literal of rows keeps the boxed call: its elements print native, which no `Rows` slot takes
+        expect(out).toMatch(/self\.filterByArray\(Value::from\(vec!\[row/);
+        expect(out).not.toMatch(/filterByArrayList\(Value::from\(vec!/);
     });
 });
 
@@ -10120,7 +10125,7 @@ describe('rust filter helpers take their optional scalars as typed positional pa
         expect(out).toContain('let mut symbolResolved: Option<String> = None;');
         expect(out).toContain('return self.filterBySymbolSinceLimit(rows.clone(), symbolResolved.as_deref(), since.as_i64(), limit.as_i64(), &[Value::Bool(true)]);');
         expect(out).toMatch(/let mut symbolsNormalized: Option<crate::value::List> = .*\.into_opt_list\(\);/);
-        expect(out).toContain('return self.filterByArray(rows.clone(), Value::Str("symbol".into()), &symbolsNormalized, &[Value::Bool(false)]);');
+        expect(out).toContain('return Value::Arr(self.filterByArrayList(rows.clone(), Value::Str("symbol".into()), &symbolsNormalized));');
     });
 
     test('negative: a defaulted Int parameter of another helper stays in the slice', () => {
@@ -10791,7 +10796,7 @@ describe('optional containers lent whole', () => {
         expect(base).toMatch(/fn filterByArray\(&self, objects: impl Into<crate::Value>, /);
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'lent-optional-handoffs', 'ts/src/venue.ts')).content;
         expect(out).toMatch(/return self\.parseLedger\(&response, /);
-        expect(out).toMatch(/return self\.filterByArray\(&response, /);
+        expect(out).toMatch(/return Value::Arr\(self\.filterByArrayList\(&response, /);
         expect(base).toMatch(/fn parseBorrowRateHistory\(&self, response: impl Into<crate::Value>, /);
         expect(out).toMatch(/return self\.parseBorrowRateHistory\(&response, /);
     });

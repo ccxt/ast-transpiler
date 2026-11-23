@@ -18258,6 +18258,7 @@ export class RustTranspiler extends BaseTranspiler {
         const strRuntime = this.printRustStrRuntimeCall(node, identation); if (strRuntime !== undefined) return strRuntime;
         const typedReturn = this.printRustBaseTypedReturnCall(node); if (typedReturn !== undefined) return typedReturn;
         const untilBox = this.printRustUntilPairBox(node); if (untilBox !== undefined) return untilBox;
+        const filterTwin = this.printRustFilterTwinBare(node); if (filterTwin !== undefined) return filterTwin;
         const containerBox = this.printOwnContainerCallBox(node); if (containerBox !== undefined) return containerBox;
         const bytesCall = this.printRustBytesCall(node, identation); if (bytesCall !== undefined) return bytesCall;
         const arithCall = this.printRustArithCall(node); if (arithCall !== undefined) return arithCall;
@@ -22567,9 +22568,71 @@ export class RustTranspiler extends BaseTranspiler {
     /** `[await] this.m (..)` of an own-container method: its kind. */
     rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined {
         const call: any = this.unwrapParens(expr);
+        const twin = this.rustFilterTwinKind(call); if (twin !== undefined) return twin;
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
         const declaration: any = this.rustScalarCallee(call);
         return declaration === undefined ? undefined : this.rustOwnContainerReturn(declaration);
+    }
+
+    // A base `filterByArray` with a literal `indexed` prints the typed runtime twin (`filterByArrayList` / `filterByArrayDict`):
+    // the same rows, answered as the list / map the boxed result held. The call is an own-container call of that kind.
+    private rustFilterTwinTexts = new Map<any, string | null>();
+    private rustFilterTwinRaw = new Set<any>();
+
+    rustFilterTwinKind(call: any): 'dict' | 'list' | undefined {
+        if (call === undefined || !isCallExpression(call) || this.rustFilterTwinRaw.has(call) || call.arguments.length < 3 || call.arguments.length > 4) return undefined;
+        if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword || String(call.expression.name.text) !== 'filterByArray') return undefined;
+        // a list literal of rows prints its elements as their native type (`vec![row]`), which no `Rows` slot takes
+        if (isArrayLiteralExpression(this.unwrapParens(call.arguments[0]))) return undefined;
+        const kind = this.rustBaseFilterReturnKind(call, 'filterByArray');
+        if (kind !== 'dict' && kind !== 'list') return undefined;
+        return this.rustFilterTwinText(call, kind) === undefined ? undefined : kind;
+    }
+
+    rustFilterTwinText(call: any, kind: 'dict' | 'list'): string | undefined {
+        let text = this.rustFilterTwinTexts.get(call);
+        if (text === undefined) {
+            this.rustFilterTwinRaw.add(call);
+            let printed: string;
+            try {
+                printed = this.printNode(call, 0).trim();
+            } finally {
+                this.rustFilterTwinRaw.delete(call);
+            }
+            // the printed arguments (objects, key, then values and the flag, positional or in the `&[..]` slice), the flag dropped
+            const head = 'self.filterByArray(';
+            const inner = printed.startsWith(head) && printed.endsWith(')') ? printed.slice(head.length, -1) : '';
+            const parts = this.rustBalancedText(inner) ? this.rustTopLevelArgs(inner) : [];
+            const last = parts[parts.length - 1] ?? '';
+            const args = last.startsWith('&[') && last.endsWith(']') ? [ ...parts.slice(0, -1), ...this.rustTopLevelArgs(last.slice(2, -1)) ] : parts;
+            const flagOk = args.length === 3 || (args.length === 4 && (args[3] === 'Value::Bool(false)' || args[3] === 'Value::Bool(true)'));
+            text = flagOk && args.length === call.arguments.length ? `self.filterByArray${kind === 'list' ? 'List' : 'Dict'}(${args.slice(0, 3).join(', ')})` : null;
+            this.rustFilterTwinTexts.set(call, text);
+        }
+        return text ?? undefined;
+    }
+
+    /** Top-level comma-separated parts of printed argument text (brackets and string literals respected). */
+    rustTopLevelArgs(text: string): string[] {
+        const out: string[] = [];
+        let depth = 0, start = 0, quote = false;
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (quote) { if (ch === '\\') i++; else if (ch === '"') quote = false; continue; }
+            if (ch === '"') quote = true;
+            else if (ch === '(' || ch === '[' || ch === '{') depth++;
+            else if (ch === ')' || ch === ']' || ch === '}') depth--;
+            else if (ch === ',' && depth === 0) { out.push(text.slice(start, i).trim()); start = i + 1; }
+        }
+        if (text.trim() !== '') out.push(text.slice(start).trim());
+        return out;
+    }
+
+    /** The bare twin call where the own-container rule asks for the native result. */
+    printRustFilterTwinBare(node: any): string | undefined {
+        if (!this.rustOwnContainerBare.has(node)) return undefined;
+        const kind = this.rustFilterTwinKind(node);
+        return kind === undefined ? undefined : this.rustFilterTwinText(node, kind);
     }
 
     rustOwnContainerBareText(node: any): string {
