@@ -6084,7 +6084,8 @@ describe('java typed parameters', () => {
     });
 
     test('call sites cast the argument to the declared parameter type', () => {
-        expect(venueOutput).toContain('v.parseZ((java.util.Map<String, Object>) (data), (String) (raw), (java.util.Map<String, Object>) (data), (java.util.Map<String, Object>) (data))');
+        // `data` is a Map parameter of the caller: it passes bare; the Object `raw` keeps its cast
+        expect(venueOutput).toContain('v.parseZ(data, (String) (raw), data, data)');
     });
 
     test('an object literal argument binds a Map parameter with no cast', () => {

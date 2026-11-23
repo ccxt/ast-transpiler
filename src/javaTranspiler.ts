@@ -1757,6 +1757,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === JAVA_NATIVE_RETURN_MAP_TYPE && (isObjectLiteralExpression(arg) || this.javaBaseMapOverloadCall(arg))) {
             return true;
         }
+        // a parameter of the enclosing method printed with this very Map type, read under its own name
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isIdentifier(arg) && this.javaArgumentHasType(arg, type)
+            && this.printNode(arg, 0).trim() === this.javaTry(() => this.printNode(this.javaDeclarationOfIdentifier(arg)?.name, 0).trim())) {
+            return true;
+        }
         // a parameter the printer itself declares as this very class needs no checkcast; a local
         // keeps it: its declaration text is rewritten after printing, so what prints here as
         // `Object` would not accept the argument
