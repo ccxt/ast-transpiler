@@ -38007,19 +38007,9 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         const callee = String(node.expression.name.text);
-        // a copy of an unshared parameter is as plain as extend's copied tail
-        if (callee === 'omit' || callee === 'keysort') return plainHead(node.arguments[0]) || this.mapParamCopy(node.arguments[0]);
+        if (callee === 'omit' || callee === 'keysort') return plainHead(node.arguments[0]);
         return callee === 'extend' && plainHead(node.arguments[0])
             && node.arguments.slice(1).every((a) => plainHead(a) || (this.rustUnsharedDict(a) && this.tierSourceOk(a)));
-    }
-
-    /** A parameter declared as a map type (a list `any` would pass through `omit` unchanged), unshared in its tier. */
-    mapParamCopy(arg: any): boolean {
-        const node: any = this.rustStripWrappers(arg);
-        const declaration: any = node !== undefined && isIdentifier(node) ? this.rustSingleLocalDeclaration(node) : undefined;
-        if (declaration === undefined || !isParameterDeclaration(declaration) || declaration.type === undefined || declaration.dotDotDotToken !== undefined) return false;
-        const type = this.getCheckedTypeOf(declaration.type);
-        return type !== undefined && this.isProvenMapType(type) && this.rustParamStaysPlainDict(declaration) && this.tierSourceOk(node);
     }
 
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
@@ -38722,7 +38712,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (arg === undefined || parsedArg === undefined || !isIdentifier(arg)
             || !/\/ts\/src\/prediction\/[^/]+\.ts$/.test(this.provenDictFieldPath(node))
             || this.rustPlainReceiver(arg) !== 'local') return undefined;
-        const body = kind === 'keys' ? '__m.keys().map(|__k| Value::from(__k.as_str())).collect()' : '__m.values().cloned().collect()';
+        const body = kind === 'keys' ? '__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()' : '__m.values().cloned().collect()';
         return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
     }
 
@@ -39106,8 +39096,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_REST_FILE.test(path) && /\/ts\/src\/[^/]+\.ts$/.test(path)) return 'rest';
         if (RustTranspiler.RUST_BASE_TIER_FILE.test(path) && !/\/base\/ws\//.test(path)) return 'base';
         if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path)) return 'pro';
-        // prediction venues take the base proof: typed non-client dict parameters, untagged locals
-        if (/\/ts\/src\/prediction\/[^/]+\.ts$/.test(path)) return 'base';
         return undefined;
     }
 
