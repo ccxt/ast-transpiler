@@ -2263,12 +2263,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (admitted === true) ? 'IList<object>' : undefined;
     }
 
-    // a top-level function's `string[]` parameter holds a list box; the list interface types it
+    // a top-level function's `string[]` / `Strings` parameter holds a list box; the list interface types it
     // unless the body rebinds the name
     csharpFunctionStringListParamType(node): string | undefined {
         const fn: any = node.parent;
-        if (fn?.kind !== SyntaxKind.FunctionDeclaration || fn.body === undefined || !isIdentifier(node.name)
-            || node.type?.kind !== SyntaxKind.ArrayType || node.type.elementType?.kind !== SyntaxKind.StringKeyword) {
+        const stringArray = (node.type?.kind === SyntaxKind.ArrayType && node.type.elementType?.kind === SyntaxKind.StringKeyword)
+            || (node.type?.kind === SyntaxKind.TypeReference && String(node.type.typeName?.text ?? '') === 'Strings');
+        if (fn?.kind !== SyntaxKind.FunctionDeclaration || fn.body === undefined || !isIdentifier(node.name) || !stringArray) {
             return undefined;
         }
         let written = false;

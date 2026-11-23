@@ -3172,6 +3172,19 @@ describe('csharp function parameters', () => {
         expect(output).toContain('f(object exchange, IList<object> symbols)');
         expect(output).toContain('g(object exchange, object symbols)');
     });
+    test('a Strings parameter of a top-level function prints IList<object> unless rebound', () => {
+        const output = transpiler.transpileCSharp(
+            "type Strings = string[] | undefined;\n" +
+            "function f (exchange, symbols: Strings, other: string) {\n" +
+            "    return symbols;\n" +
+            "}\n" +
+            "function g (exchange, symbols: Strings) {\n" +
+            "    symbols = undefined;\n" +
+            "    return symbols;\n" +
+            "}\n").content;
+        expect(output).toContain('f(object exchange, IList<object> symbols, object other)');
+        expect(output).toContain('g(object exchange, object symbols)');
+    });
 });
 
 describe('csharp helper removal: a for-header counter prints the native ++ / --', () => {
