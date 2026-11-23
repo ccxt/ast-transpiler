@@ -21394,3 +21394,53 @@ describe('a venue-private sync parse parameter fed `x as Dict` takes the map typ
         expect(out).toContain('ParseFee(fee any)');
     });
 });
+
+describe('omit rebinds keep the map type', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'omit-rebinds-map-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    const run = (body: string): string => {
+        const dir = path.join(tmp, 'ts', 'src', 'base');
+        fs.mkdirSync(dir, { 'recursive': true });
+        const file = path.join(dir, 'Exchange.ts');
+        fs.writeFileSync(file, 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\n'
+            + 'export class BaseExchange {\n'
+            + '    handleParamString (params: Dict, paramName: string): [Str, Dict] {\n'
+            + '        const value = this.safeString (params, paramName);\n'
+            + '        return [ value, this.omit (params, paramName) ];\n    }\n'
+            + '    safeString (a: any, b: any): Str { return a; }\n'
+            + '    omit (a: any, ...b: any[]): Dict { return a; }\n}\n'
+            + 'export default class Exchange extends BaseExchange {\n    run (symbol: string, params: Dict = {}) {\n' + body + '    }\n}\n');
+        const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
+        installCcxtGoHooks(inst.goTranspiler);
+        return inst.transpileGoByPath(file).content;
+    };
+    test('a local rebound to the map slot of a handle* tuple and to omits of itself is a map local', () => {
+        const output = run(
+            "        let q: Dict = this.omit (params, [ 'b' ]);\n" +
+            "        q = this.omit (q, 'cost');\n" +
+            "        const [ d, rest ] = this.handleParamString (q, 'triggerDirection');\n" +
+            "        q = rest;\n" +
+            "        return [ d, this.safeString (q, 'x') ];\n");
+        expect(output).not.toContain("var q any");
+        expect(output).toContain("var q map[string]any = ");
+        expect(output).toContain("\tq = rest\n");
+    });
+    test('a rebind to an untyped value keeps the box', () => {
+        const output = run(
+            "        let q: Dict = this.omit (params, [ 'b' ]);\n" +
+            "        q = this.omit (q, 'cost');\n" +
+            "        q = symbol as any;\n" +
+            "        return this.safeString (q, 'x');\n");
+        expect(output).toContain("var q any = ");
+    });
+    test('the map slot of a tuple over another untyped value keeps the box', () => {
+        const output = run(
+            "        let q: Dict = this.omit (params, [ 'b' ]);\n" +
+            "        const [ d, rest ] = this.handleParamString (symbol as any, 'triggerDirection');\n" +
+            "        q = rest;\n" +
+            "        return [ d, this.safeString (q, 'x') ];\n");
+        expect(output).toContain("var q any = ");
+    });
+});

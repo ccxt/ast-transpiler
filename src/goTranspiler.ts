@@ -35975,6 +35975,35 @@ function ral77g6IsOmitOfMap(goTranspiler: GoTranspiler, node): boolean {
         && !node.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)
         && ccxtGoProducerArgIsMap(goTranspiler, node.arguments[0]);
 }
+// `rest` bound as slot 1 of `const [ v, rest ] = this.handleX (.., x, ..)` (a base params-tuple helper) whose params
+// argument is the local x itself or a proven map: every base return path hands back that map or a fresh copy of it
+function ral77g6SelfTupleMapSlot(goTranspiler: GoTranspiler, value, declaration): boolean {
+    if (value?.kind !== SyntaxKind.Identifier) {
+        return false;
+    }
+    const element: any = ccxtGoParamDeclarationOf(goTranspiler, value);
+    const pattern = element?.parent;
+    const holder = pattern?.parent;
+    const call = holder?.initializer;
+    if ((element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements.indexOf(element) !== 1)
+        || (element.dotDotDotToken !== undefined) || (element.initializer !== undefined) || (holder?.kind !== SyntaxKind.VariableDeclaration)
+        || ((holder.parent?.flags & ts.NodeFlags.Const) === 0) || (call?.kind !== SyntaxKind.CallExpression) || (call.questionDotToken !== undefined)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const slot = CCXT_GO_ELEMENT_1_PARAMS_SLOT[String(call.expression.name?.text ?? '')];
+    const arg = (slot === undefined) ? undefined : call.arguments[slot];
+    if ((arg?.kind === SyntaxKind.Identifier) && (ccxtGoParamDeclarationOf(goTranspiler, arg) === declaration)) {
+        let signature;
+        try {
+            signature = goTranspiler.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+        } catch (e) {
+            signature = undefined;
+        }
+        return CCXT_GO_ELEMENT_1_BASE_FILE.test(signature?.getSourceFile?.()?.fileName ?? '');
+    }
+    return ccxtGoElement1BindingIsMap(goTranspiler, value, 1);
+}
 const ral77g6ShippedLocalIsSafeToType = GoTranspiler.prototype.goLocalIsSafeToType;
 GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false): boolean {
     if (ral77g6ShippedLocalIsSafeToType.call(this, scope, declaration, varName, goType, stringWriteProven)) {
@@ -35998,7 +36027,8 @@ GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varNa
                 omits += 1;
                 return false;
             }
-            return true;
+            // the map slot of a params tuple (`[ v, rest ] = this.handleX (..)`, a Go map[string]any) keeps the map
+            return !ral77g6SelfTupleMapSlot(this, parent.right, declaration);
         }
         return ccxtGoWriteSiteShippedVeto(this, n, parent, goType);
     });
@@ -37049,6 +37079,9 @@ function ral84g6OmitLocalType(goTranspiler: GoTranspiler, declaration): string |
             if (h27g07ExtendWrite(goTranspiler, n)) { return false; }
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
                 const write = ral84g6OmitCall(parent.right);
+                if ((write === undefined) && ral77g6SelfTupleMapSlot(goTranspiler, parent.right, declaration)) {
+                    return false;
+                }
                 // `x = this.omit (x, ..)` re-omits the local itself, a map by this very proof
                 return (write === undefined) || !((ccxtGoParamDeclarationOf(goTranspiler, write.arguments[0]) === declaration)
                     || ral84g6OmitArgIsMap(goTranspiler, write.arguments[0]));
