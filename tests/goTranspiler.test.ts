@@ -7382,7 +7382,7 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleTicker(client any, message map[string]any) any {');
+        expect(output).toContain('func (this *ex) HandleTicker(client ClientInterface, message map[string]any) any {');
         expect(output).toContain('var data any = message["data"]');
     });
 
@@ -7398,8 +7398,8 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleBook(client any, message map[string]any) any {');
-        expect(output).toContain('func (this *ex) HandleOrder(client any, message map[string]any) any {');
+        expect(output).toContain('func (this *ex) HandleBook(client ClientInterface, message map[string]any) any {');
+        expect(output).toContain('func (this *ex) HandleOrder(client ClientInterface, message map[string]any) any {');
     });
 
     test('a handler called with a boxed frame keeps the box', () => {
@@ -7414,8 +7414,8 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleMeta(client any, message any) any {');
-        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+        expect(output).toContain('func (this *ex) HandleMeta(client ClientInterface, message any) any {');
+        expect(output).toContain('func (this *ex) HandleTicker(client ClientInterface, message any) any {');
     });
 
     test('the base stub override carries the dict frame (typed ws frame)', () => {
@@ -7429,6 +7429,25 @@ describe('pro handler frame parameters (D-03)', () => {
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
         expect(output).toContain('func (this *ex) HandleMessage(client any, message map[string]any) any {');
+    });
+
+    test('a pro Client parameter prints ClientInterface; any and unannotated ones keep the box', () => {
+        const file = treeFor('tmp-g13-pro-client',
+            "export class ex extends Exchange {\n" +
+            "    handleA (client: Client, message: Dict) {\n" +
+            "        return client.url;\n" +
+            "    }\n" +
+            "    handleB (client: any, message: Dict) {\n" +
+            "        return message;\n" +
+            "    }\n" +
+            "    handleC (client, message: Dict) {\n" +
+            "        return message;\n" +
+            "    }\n" +
+            "}\n");
+        const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) HandleA(client ClientInterface, ');
+        expect(output).toContain('func (this *ex) HandleB(client any, ');
+        expect(output).toContain('func (this *ex) HandleC(client any, ');
     });
 
     test('a non-handler pro method keeps the box', () => {
@@ -7461,7 +7480,7 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleConnection(client any, subscriber any) any {');
+        expect(output).toContain('func (this *ex) HandleConnection(client ClientInterface, subscriber ClientInterface) any {');
     });
 
     test('a body that writes the frame another printed type keeps the box (D2)', () => {
@@ -7473,7 +7492,7 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+        expect(output).toContain('func (this *ex) HandleTicker(client ClientInterface, message any) any {');
     });
 
     test('a sibling pro file passing a boxed frame keeps the box', () => {
@@ -7491,7 +7510,7 @@ describe('pro handler frame parameters (D-03)', () => {
             "    }\n" +
             "}\n");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
-        expect(output).toContain('func (this *ex) HandleTicker(client any, message any) any {');
+        expect(output).toContain('func (this *ex) HandleTicker(client ClientInterface, message any) any {');
     });
 });
 
@@ -10909,7 +10928,7 @@ describe ('goWsFrameParam', () => {
                 "    }\n" +
                 "}\n");
             expect (output).toContain ('func (this *ex) HandleMessage(client any, message map[string]any) any {');
-            expect (output).toContain ('func (this *ex) HandleOrderBook(client any, message map[string]any) any {');
+            expect (output).toContain ('func (this *ex) HandleOrderBook(client ClientInterface, message map[string]any) any {');
             expect (output).toContain ('return message["asks"]');
             expect (output).not.toContain ('GetValue(message, "asks")');
         });
@@ -11000,7 +11019,7 @@ describe ('goWsFrameParam', () => {
                 "        return undefined;\n" +
                 "    }\n" +
                 "}\n");
-            expect (output).toContain ('func (this *ex) OnMessage(client any, message any) any {');
+            expect (output).toContain ('func (this *ex) OnMessage(client ClientInterface, message any) any {');
         });
     });
 });
@@ -11221,7 +11240,7 @@ describe ('goNilProvenStringArg', () => {
             const out = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
             expect(out).toContain('func (this *ex) HandleUnsubscriptionCache(messageHash string) any {');
             expect(out).toContain('this.HandleUnsubscriptionCache(*messageHash)');
-            expect(out).toContain('func (this *ex) HandleUnsubscription(client any, message map[string]any) {');
+            expect(out).toContain('func (this *ex) HandleUnsubscription(client ClientInterface, message map[string]any) {');
         });
 
         test('a pro handle* Str parameter takes the pointer when the body nil-tests it', () => {

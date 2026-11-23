@@ -24199,6 +24199,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return '*int64';
         }
+        const clientType = this.goWsClientParameterType(fn, param);
+        if (clientType !== undefined) {
+            return clientType;
+        }
         // the ws frame. `override handleMessage (client, message: Dict)` is the one
         // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
         const frameType = this.goWsFrameParameterType(fn, param);
@@ -24916,6 +24920,46 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // the ws frame parameter of `override handleMessage (client, message: Dict)`. The
     // printer types it `map[string]any` under the body proofs; the Go ws dispatch asserts the
     // decoded object once, so a text or array frame never reaches an object-framed body.
+    // a pro / prediction parameter whose declaration (or the base stub it overrides) is `Client` prints the
+    // runtime ClientInterface: WsDispatch asserts the transport's client once and every handler forwards it
+    goWsClientParameterType(fn, param): string | undefined {
+        if ((param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined) || !clientIsInterfaceFrame(fn)) {
+            return undefined;
+        }
+        const index = fn.parameters.indexOf(param);
+        const root = this.goBaseExchangeMemberParameter(fn, index);
+        const declared = (root !== undefined) ? root : param;
+        if (declared?.type?.getText() !== 'Client') {
+            return undefined;
+        }
+        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, 'ClientInterface')) {
+            throw new Error(`wsClientParameter: ${fn.name.text} parameter ${param.name.text} is not written only as a Client`);
+        }
+        return 'ClientInterface';
+    }
+
+    // the parameter at `index` of the ts/src/base Exchange member this method overrides, if any
+    goBaseExchangeMemberParameter(fn, index: number): any {
+        const checker: any = this.checkerOrUndefined();
+        let cls = this.goEnclosingClass(fn);
+        while (cls !== undefined) {
+            const clause = (cls.heritageClauses ?? []).find(c => c.token === SyntaxKind.ExtendsKeyword);
+            const expr = clause?.types?.[0];
+            if (expr === undefined) {
+                return undefined;
+            }
+            const decl: any = checker?.getTypeAtLocation(expr)?.getProperty?.(fn.name.text)?.valueDeclaration?.resolve?.();
+            if (decl === undefined) {
+                return undefined;
+            }
+            if (/(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(decl.getSourceFile().fileName))) {
+                return decl.parameters?.[index];
+            }
+            cls = decl.parent;
+        }
+        return undefined;
+    }
+
     goWsFrameParameterType(fn, param): string | undefined {
         if ((fn.name?.text !== 'handleMessage') || (fn.parameters.indexOf(param) !== 1)
             || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)) {
