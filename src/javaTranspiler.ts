@@ -1751,7 +1751,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return true;
         }
         // an object literal prints a `HashMap<String, Object>` instance, already a Map
-        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && isObjectLiteralExpression(arg)) {
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && (isObjectLiteralExpression(arg) || this.javaBaseMapOverloadCall(arg))) {
             return true;
         }
         // a parameter the printer itself declares as this very class needs no checkcast; a local
@@ -5799,6 +5799,22 @@ export class JavaTranspiler extends BaseTranspiler {
             return false;
         }
         const fileName = this.javaCalleeFileName(initializer);
+        return typeof fileName === 'string' && JAVA_FRESH_EXTEND_FILE.test(fileName);
+    }
+
+    // base `this.extend(a, b)` and `this.safeDict(x, k, {..})` bind the hand-written overloads
+    // declared `java.util.Map<String, Object>` (two-argument extend; safeDict with a HashMap default)
+    javaBaseMapOverloadCall(arg): boolean {
+        const node = this.unwrapPrintTransparentExpression(arg);
+        if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression)
+            || node.expression.expression.kind !== SyntaxKind.ThisKeyword) {
+            return false;
+        }
+        const name = node.expression.name.text;
+        const args = node.arguments;
+        const shape = (name === 'extend' && args.length === 2)
+            || (name === 'safeDict' && args.length === 3 && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(args[2])));
+        const fileName = shape ? this.javaCalleeFileName(node) : undefined;
         return typeof fileName === 'string' && JAVA_FRESH_EXTEND_FILE.test(fileName);
     }
 
