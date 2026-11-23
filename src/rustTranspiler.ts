@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'client' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'client' | 'dictrows' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -285,6 +285,8 @@ export const rustDispatch = {
         case 'vlist': return `args.get(${i}).and_then(crate::Value::as_array).map(Vec::as_slice).unwrap_or_default()`;
         // a ws client handle slot: the arm builds the handle from the boxed client once
         case 'client': return `&crate::pro::ws_client::ClientHandle::from_value(args.get(${i}).unwrap_or(&crate::Value::Null))`;
+        // a list-of-maps slot: bound once (a non-list is the empty list, a non-map row the empty map)
+        case 'dictrows': return `crate::value::dict_rows(std::sync::Arc::new(args.get(${i}).and_then(crate::Value::as_array).cloned().unwrap_or_default()))`;
         default: return arg;
         }
     },
@@ -303,6 +305,7 @@ export const rustDispatch = {
         case 'optstr': return rustDispatch.arg(kind, i);
         case 'side': return rustDispatch.arg(kind, i);
         case 'vlist': return rustDispatch.arg(kind, i);
+        case 'dictrows': return rustDispatch.arg(kind, i);
         case 'mapref': return rustDispatch.arg(kind, i);
         case 'client': return rustDispatch.arg(kind, i);
         default: return undefined;
@@ -15592,6 +15595,7 @@ export class RustTranspiler extends BaseTranspiler {
         'impl Into<crate::Params> + Send': 'params', 'crate::value::Dict': 'dict', 'crate::value::List': 'list',
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
         'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
+        'Vec<crate::value::Dict>': 'dictrows',
         '&indexmap::IndexMap<String, Value>': 'mapref', '&crate::pro::ws_client::ClientHandle': 'client',
     };
 
@@ -19626,7 +19630,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustVenueDictParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             // a typed request-row list parameter is already bound as `Vec<Dict>`: no slice shadow
-            if ((this as any).rustP28OrderRowsParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
+            if ((this as any).rustP21DictRowsLocal(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustFunctionDeclaresName(fn, empty)) continue;
             const map = shadow.kind === RUST_PARAM_SHADOWS.MAP;
             const accessor = map ? 'as_map' : 'as_array';
@@ -42324,7 +42328,7 @@ export class RustTranspiler extends BaseTranspiler {
 // Converted once at the read (`crate::value::dict_rows`: a non-map element is the empty map in its slot, the answer
 // `safe_dict_t` gives today); its row reads `const row = this.safeDict (rows, k)` are bounds-tested slice reads.
 (RustTranspiler.prototype as any).rustP21DictRowsLocal = function (this: any, declaration: any): boolean {
-    if (declaration !== undefined && isParameterDeclaration(declaration)) return this.rustP28OrderRowsParam(declaration);
+    if (declaration !== undefined && isParameterDeclaration(declaration)) return this.rustP28OrderRowsParam(declaration) || this.rustR14RowsParam(declaration);
     if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
     this.rustP21Decisions ??= new WeakMap<any, boolean>();
     let hit = this.rustP21Decisions.get(declaration);
@@ -42528,3 +42532,75 @@ export class RustTranspiler extends BaseTranspiler {
     return `${indent}let ${name}: Vec<crate::value::Dict> = crate::value::dict_rows(std::sync::Arc::new(__it.next().unwrap_or_default().as_array().cloned().unwrap_or_default()));\n`;
 };
 // ===== end h38-H38-P28
+
+// ===== h40-R09: a base-tier override's `any[]` row list read only by `.length` and its rows is a list of maps
+// Printed `Vec<Dict>`; the by-name arm binds the argument once through `dict_rows` (a non-list is the empty list, a
+// non-map row the empty map: what `safe_dict_t` answers), and the rows read as P21 typed elements.
+const rustR14VenueCallText = new Map<string, string>();
+(RustTranspiler.prototype as any).rustR14RowsParam = function (this: any, param: any): boolean {
+    if (param?.kind !== SyntaxKind.Parameter) return false;
+    this.rustR14Decisions ??= new WeakMap<any, boolean>();
+    let hit = this.rustR14Decisions.get(param);
+    if (hit === undefined) {
+        this.rustR14Decisions.set(param, false);
+        try { hit = this.rustR14RowsParamUncached(param); } catch (e) { hit = false; }
+        this.rustR14Decisions.set(param, hit);
+    }
+    return hit;
+};
+(RustTranspiler.prototype as any).rustR14RowsParamUncached = function (this: any, param: any): boolean {
+    const method: any = param.parent;
+    if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+    if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
+    if (param.type?.kind !== SyntaxKind.ArrayType || param.type.elementType?.kind !== SyntaxKind.AnyKeyword) return false;
+    const mods: any[] = Array.from(method.modifiers ?? []);
+    if (mods.some((m: any) => m.kind === SyntaxKind.StaticKeyword || m.kind === SyntaxKind.AsyncKeyword) || !mods.some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+    const params: any[] = Array.from(method.parameters);
+    if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined)) return false;
+    const name = String(method.name.text);
+    if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+    const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+    if (at < 0) return false;
+    // the overridden declaration is a base-tier method, and no venue source calls the name directly (base callers
+    // reach the override through the by-name arm, which decodes the slice)
+    const base: any = this.getMethodOverride(method);
+    if (base === undefined || base === method || !RustTranspiler['RUST_BASE_TIER_FILE'].test(String(base.getSourceFile().fileName))) return false;
+    if (this.rustR14VenueCalled(file.slice(0, at) + '/ts/src', name)) return false;
+    if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+    let rows = 0;
+    for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+        if (n === param.name || n === param) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== param) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const up: any = n.parent;
+        if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') continue;
+        if (this.rustP21RowRead(up, n) === undefined && this.rustP21ElementRowRead(up, n) === undefined) return false;
+        rows++;
+    }
+    return rows > 0;
+};
+(RustTranspiler.prototype as any).rustR14VenueCalled = function (this: any, srcRoot: string, name: string): boolean {
+    let text = rustR14VenueCallText.get(srcRoot);
+    if (text === undefined) {
+        const parts: string[] = [];
+        for (const dir of [ '', '/pro', '/prediction' ]) {
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(srcRoot + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+            for (const f of entries) parts.push(readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? '');
+        }
+        text = parts.join('\n');
+        rustR14VenueCallText.set(srcRoot, text);
+    }
+    return new RegExp(`\\.${name}\\s*\\(`).test(text);
+};
+{
+    const proto: any = RustTranspiler.prototype;
+    const paramType = proto.rustParamType;
+    proto.rustParamType = function (this: any, param: any): string {
+        return this.rustR14RowsParam(param) ? 'Vec<crate::value::Dict>' : paramType.call(this, param);
+    };
+}
+// ===== end h40-R09

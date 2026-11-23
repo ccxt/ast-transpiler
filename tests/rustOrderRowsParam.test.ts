@@ -36,3 +36,29 @@ describe ('h38-P28: the orders parameter of a typed createOrders is a list of re
         expect (out).not.toContain ('dict_rows');
     });
 });
+
+// a venue override of a base method whose `any[]` row list is read only by length and `safeDict (p, k)` rows is a `Vec<Dict>`
+const cacheBase = "export default class Exchange {\n    safeDict (x: any, k: any, d: any = undefined): any { return x; }\n    safeInteger (x: any, k: any, d: any = undefined): any { return x; }\n    getCacheIndex (orderbook: any, deltas: any[]): number {\n        return -1;\n    }\n    pickRows (rows: any[]): number {\n        return -1;\n    }\n}\n";
+const cacheVenue = "import Exchange from '../base/Exchange.js';\nexport default class venue extends Exchange {\n    override getCacheIndex (orderbook: any, cache: any[]): number {\n        const first = this.safeDict (cache, 0);\n        const n = this.safeInteger (first, 'u');\n        for (let i = 0; i < cache.length; i++) {\n            const delta = this.safeDict (cache, i);\n            const u = this.safeInteger (delta, 'u');\n            if (u === n) {\n                return i;\n            }\n        }\n        return cache.length;\n    }\n    override pickRows (rows: any[]): number {\n        const first = this.safeDict (rows, 0);\n        this.hold (rows);\n        return rows.length;\n    }\n    hold (x: any): any { return x; }\n}\n";
+
+describe ('h40-R09: the row list of a base-tier override is a list of maps', () => {
+    let out = '';
+    beforeAll (() => {
+        fs.mkdirSync (path.join (root, 'cache/ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (root, 'cache/ts/src/pro'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'cache/ts/src/base/Exchange.ts'), cacheBase);
+        fs.writeFileSync (path.join (root, 'cache/ts/src/pro/venue.ts'), cacheVenue);
+        out = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (root, 'cache/ts/src/pro/venue.ts')).content;
+    });
+    test ('the parameter prints Vec<Dict> and its rows read as typed elements', () => {
+        expect (out).toMatch (/fn getCacheIndex\([^)]*cache: Vec<crate::value::Dict>\)/);
+        expect (out).toContain ('cache.get(i as usize).cloned().unwrap_or_default()');
+        expect (out).toContain ('cache.get(0).cloned().unwrap_or_default()');
+        expect (out).not.toMatch (/safe_dict_t\(&cache/);
+        expect (out).not.toContain ('if let Some(Value::Dict(__m)) = cache.get(');
+    });
+    test ('negative: a list also handed on whole keeps the Value parameter', () => {
+        expect (out).not.toMatch (/fn pickRows\([^)]*rows: Vec<crate::value::Dict>/);
+        expect (out).toMatch (/fn pickRows\(&self, rows: Value\)/);
+    });
+});
