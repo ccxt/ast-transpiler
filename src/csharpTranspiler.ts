@@ -2674,7 +2674,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined; // every admitted caller already passes a list, null or nothing
         }
         if (wanted.endsWith('Dictionary<string, object>')) {
-            const typed = this.csharpTypedDictionaryArgument(argument);
+            const typed = this.csharpTypedDictionaryArgument(argument, wanted);
             if (typed !== undefined) {
                 return (typed === text) ? undefined : { text: typed, tight: false };
             }
@@ -2711,7 +2711,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // a dictionary argument whose C# expression is already typed: a declared IDictionary base member, a chain of getter-only entry views
     // (exceptions['ws']['exact'] -> this.exceptionsWsExact) or a call the build layer types as a dictionary; undefined keeps the conversion
-    csharpTypedDictionaryArgument(argument): string | undefined {
+    csharpTypedDictionaryArgument(argument, wanted = ''): string | undefined {
         const operand = this.csharpUnwrapAssertion(argument);
         const member = (node): string | undefined => {
             node = this.csharpUnwrapAssertion(node);
@@ -2742,6 +2742,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (isIdentifier(operand) && /^I?Dictionary<string,\s*object>$/.test(this.csharpCallSiteDeclaredType(operand, operand.text) ?? '')) {
             return this.printNode(operand, 0);
+        }
+        // a parameter the build layer retyped to exactly the wanted interface is already that type
+        if (isIdentifier(operand) && (wanted === 'IDictionary<string, object>') && (this.csharpParameterDeclaration(operand) !== undefined)
+            && (this.csharpDeclaredLocalResolverType(operand) === wanted) && (this.printNode(operand, 0) === operand.text)) {
+            return operand.text;
         }
         if (!isCallExpression(operand)) {
             return undefined;
