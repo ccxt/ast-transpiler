@@ -2701,8 +2701,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
-        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? this.rustDictTwinText(declaration.initializer, read) ?? `${read}.into_dict()`}`); }
-        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? this.rustDictTwinText(declaration.initializer, parsedValue) ?? parsedValue + '.into_dict()'}`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? `${read}.into_dict()`}`); }
+        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
             return `${indent}let mut ${varName}: bool = ${this.unwrapParens(declaration.initializer).kind === SyntaxKind.TrueKeyword ? 'true' : 'false'}`;
@@ -22502,8 +22502,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustUntilPairMethod(fn)) return undefined;
         const list: any = this.unwrapParens(exp);
         if (!isArrayLiteralExpression(list) || list.elements.length !== 2) return undefined;
-        const [ a, b ] = list.elements.map((e: any) => { const t = this.printNode(e, 0).trim(); return this.rustDictTwinText(e, t) ?? `${t}.into_dict()`; });
-        return `(${a}, ${b})`;
+        const [ a, b ] = list.elements.map((e: any) => this.printNode(e, 0).trim());
+        return `(${a}.into_dict(), ${b}.into_dict())`;
     }
 
     /** The pair call as printed, unboxed (`undefined` when `node` is not one). */
@@ -22773,19 +22773,6 @@ export class RustTranspiler extends BaseTranspiler {
         if (elem === undefined) return false;
         if ((elem.flags & TypeFlags.Any) !== 0) return true;
         return this.rustStaticContainerType(elem, 'dict');
-    }
-
-    /** A runtime-base `this.omit|keysort (..)` read into a map: its typed twin (`omit_t` / `keysort_t`) answers the map, or
-     *  the empty map for a non-map, exactly what `.into_dict()` answered on the boxed result. */
-    rustDictTwinText(init: any, printed: string): string | undefined {
-        const v: any = this.rustSkipWrappers(init);
-        if (v === undefined || !isCallExpression(v) || !isPropertyAccessExpression(v.expression) || v.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
-        const name = String(v.expression.name.text);
-        if ((name !== 'omit' && name !== 'keysort') || !this.rustCalleeIsRuntimeBase(v)) return undefined;
-        const head = `self.${name}(`;
-        const text = printed.trim();
-        if (!text.startsWith(head) || !text.endsWith(')') || !this.rustBalancedText(text.slice(head.length, -1))) return undefined;
-        return `self.${name}_t(` + text.slice(head.length);
     }
 
     /** `this.extend (..)` of the runtime base (never a venue override). */
