@@ -27576,7 +27576,8 @@ describe('nonce () declared int returns i64', () => {
     test('base and override print -> i64; the base keeps its dispatch preamble and unboxes the slot once', () => {
         const { base, venue } = nonceFixture('ok', 'nonce (): int', 'return this.milliseconds () - this.safeInteger (this.options, \'timeDifference\', 0);');
         expect(base).toMatch(/fn nonce\(&self\) -> i64/);
-        expect(base).toContain('DerivedExchange::nonce(self, ); if !matches!(__v, crate::Value::Null) { return __v.as_i64().unwrap_or_default(); }');
+        expect(base).toContain('if let Some(__v) = crate::exchange::DerivedExchange::nonce(self, ) { return __v; }');
+        expect(base).not.toContain('__v.as_i64()');
         expect(venue).toMatch(/fn nonce\(&self\) -> i64/);
     });
     test('negative: a nonce not declared int stays Value', () => {
