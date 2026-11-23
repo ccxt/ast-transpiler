@@ -22500,7 +22500,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isReturnStatement(n)) {
                 returns++;
                 const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
-                if (v === undefined || !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined) ok = false;
+                if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
             }
             n.forEachChild(visit);
         };
@@ -22616,6 +22616,8 @@ export class RustTranspiler extends BaseTranspiler {
         const printed = this.printNode(exp, 0).trim();
         const read = this.rustEmptyDefaultReaderPayload(exp, printed, kind);
         if (read !== undefined) return read;
+        // the runtime `extend` builds a fresh map on every input, so its typed twin answers the same map
+        if (kind === 'dict' && this.rustRuntimeExtendCall(exp) && printed.startsWith('self.extend(') && printed.endsWith(')') && this.rustBalancedText(printed.slice('self.extend('.length, -1))) return 'self.extend_t(' + printed.slice('self.extend('.length);
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
@@ -22651,6 +22653,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (elem === undefined) return false;
         if ((elem.flags & TypeFlags.Any) !== 0) return true;
         return this.rustStaticContainerType(elem, 'dict');
+    }
+
+    /** `this.extend (..)` of the runtime base (never a venue override). */
+    rustRuntimeExtendCall(exp: any): boolean {
+        const v: any = this.unwrapParens(exp);
+        return v !== undefined && isCallExpression(v) && isPropertyAccessExpression(v.expression) && v.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(v.expression.name.text) === 'extend' && this.rustCalleeIsRuntimeBase(v);
     }
 
     /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */

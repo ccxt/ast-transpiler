@@ -27548,3 +27548,33 @@ describe('nonce () declared int returns i64', () => {
         expect(base).toMatch(/fn nonce\(&self\) -> Value/);
     });
 });
+
+// a venue method declared `Dict` whose every return is the runtime `extend` (a fresh map on every input) returns `Dict`
+describe('a venue Dict method returning the runtime extend returns the native map', () => {
+    const run = (body: string, extra = '') => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'extend-dict-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport default class Exchange {\n    extend (...args: any[]): any { return Object.assign ({}, ...args); }\n    keep (p: any): any { return p; }\n" + extra + "}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    test('every return an extend: `-> Dict` and `extend_t`', () => {
+        const out = run ("    build (x: any, params: Dict = {}): Dict {\n        if (x === undefined) {\n            return this.extend ({ 'a': 1 }, params);\n        }\n        return this.extend ({ 'x': x }, params);\n    }\n");
+        expect (out).toMatch (/fn build\([^\n]*\) -> crate::value::Dict \{/);
+        expect (out).toContain ('return self.extend_t(');
+        expect (out).not.toMatch (/return self\.extend\(/);
+    });
+    test('negative: an extend next to an any return (nil may come back) keeps Value', () => {
+        const out = run ("    build (x: any, params: Dict = {}): Dict {\n        if (x === undefined) {\n            return this.keep (x);\n        }\n        return this.extend ({ 'x': x }, params);\n    }\n");
+        expect (out).toMatch (/fn build\([^\n]*\) -> Value \{/);
+    });
+    test('negative: a venue-own extend (not the runtime one) keeps Value', () => {
+        const out = run ("    extend2 (a: any, b: any): any { return a; }\n    build (x: any): Dict {\n        return this.extend2 ({ 'x': x }, x);\n    }\n");
+        expect (out).toMatch (/fn build\([^\n]*\) -> Value \{/);
+    });
+    test('negative: an extend in a method declared any keeps Value', () => {
+        const out = run ("    build (x: any, params: Dict = {}) {\n        return this.extend ({ 'x': x }, params);\n    }\n");
+        expect (out).toMatch (/fn build\([^\n]*\) -> Value \{/);
+    });
+});
