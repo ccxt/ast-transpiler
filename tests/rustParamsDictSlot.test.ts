@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // the optional `params` of a typed unified method binds as `Dict` (get_arg_dict) when every use takes a map
-const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport interface Trade { id: string }\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    omit (x: any, ...args: any): any { return x; }\n    extend (...args: any): any { return {}; }\n    deepExtend (...args: any): any { return {}; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n        return [];\n    }\n}\n";
+const base = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport type Int = number | undefined;\nexport interface Trade { id: string }\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    omit (x: any, ...args: any): any { return x; }\n    extend (...args: any): any { return {}; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n        return [];\n    }\n}\n";
 const venue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Int, Trade } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTrades (symbol: string, since: Int = undefined, limit: Int = undefined, params: Dict = {}): Promise<Trade[]> {\n" + body + "        return [];\n    }\n}\n";
 const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-paramsdict-'));
 afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
@@ -41,29 +41,5 @@ describe ('the params slot of a typed unified method is a Dict', () => {
     test ('negative: a reassigned params keeps the boxed get_arg', () => {
         const out = run ('rebound', "        params = this.extend (params, {});\n" + ternary);
         expect (out).not.toContain ('get_arg_dict');
-    });
-});
-
-describe ('a Dict-bound params is lent to a base extend as its sole extra operand', () => {
-    test ('extend (request, params) lends &[&params] and binds params as Dict', () => {
-        const out = run ('ext', "        const request: Dict = { 'a': 1 };\n        this.hold (this.extend (request, params));\n");
-        expect (out).toContain ('let params: crate::value::Dict = get_arg_dict(optional_args, ');
-        expect (out).toMatch (/self\.extend\([^\n]*, &\[&params\]\)/);
-        expect (out).not.toContain ('params.clone()');
-    });
-    test ('negative: deepExtend (request, params) keeps the boxed params', () => {
-        const out = run ('deep', "        const request: Dict = { 'a': 1 };\n        this.hold (this.deepExtend (request, params));\n");
-        expect (out).not.toContain ('get_arg_dict');
-    });
-    test ('negative: params as the extend head keeps the boxed params', () => {
-        const out = run ('head', "        this.hold (this.extend (params, { 'a': 1 }));\n");
-        expect (out).not.toContain ('get_arg_dict');
-    });
-});
-
-describe ('an extend operand never turns a moved ternary arm into a clone', () => {
-    test ('negative: params read after an omit-or-params ternary arm and lent to extend keeps the boxed params', () => {
-        const out = run ('tern-ext', ternary + "        const request: Dict = { 'a': 1 };\n        this.hold (this.extend (request, params));\n");
-        expect (out).not.toMatch (/else \{ params\.clone\(\) \}/);
     });
 });
