@@ -14035,6 +14035,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseTransfer': [ 0 ], 'parseDepositAddress': [ 0 ],
     // its one base loop passes a `{}`-defaulted safeDict row; every override reads the row as a map
     'parseBorrowInterest': [ 0 ],
+    // row parsers: every tree caller passes a `{}`-defaulted safeDict row, an extend copy or a typed map
+    'parseFundingRate': [ 0 ], 'parseLeverage': [ 0 ], 'parseIncome': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
