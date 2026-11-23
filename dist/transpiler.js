@@ -113656,17 +113656,8 @@ ${this.getIden(identation)}}`;
     }
     const callee = String(node.expression.name.text);
     if (callee === "omit" || callee === "keysort")
-      return plainHead(node.arguments[0]) || this.mapParamCopy(node.arguments[0]);
+      return plainHead(node.arguments[0]);
     return callee === "extend" && plainHead(node.arguments[0]) && node.arguments.slice(1).every((a) => plainHead(a) || this.rustUnsharedDict(a) && this.tierSourceOk(a));
-  }
-  /** A parameter declared as a map type (a list `any` would pass through `omit` unchanged), unshared in its tier. */
-  mapParamCopy(arg) {
-    const node = this.rustStripWrappers(arg);
-    const declaration = node !== void 0 && isIdentifier4(node) ? this.rustSingleLocalDeclaration(node) : void 0;
-    if (declaration === void 0 || !isParameterDeclaration3(declaration) || declaration.type === void 0 || declaration.dotDotDotToken !== void 0)
-      return false;
-    const type = this.getCheckedTypeOf(declaration.type);
-    return type !== void 0 && this.isProvenMapType(type) && this.rustParamStaysPlainDict(declaration) && this.tierSourceOk(node);
   }
   /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
    *  overload set), in the calling file or the base tier. */
@@ -114382,7 +114373,7 @@ ${this.getIden(identation)}}`;
     const arg = this.rustStripWrappers(node?.arguments?.[0]);
     if (arg === void 0 || parsedArg === void 0 || !isIdentifier4(arg) || !/\/ts\/src\/prediction\/[^/]+\.ts$/.test(this.provenDictFieldPath(node)) || this.rustPlainReceiver(arg) !== "local")
       return void 0;
-    const body = kind === "keys" ? "__m.keys().map(|__k| Value::from(__k.as_str())).collect()" : "__m.values().cloned().collect()";
+    const body = kind === "keys" ? "__m.keys().map(|__k| Value::Str(__k.clone().into())).collect()" : "__m.values().cloned().collect()";
     return `Value::Array(${parsedArg.trim()}.as_map().map(|__m| ${body}).unwrap_or_default())`;
   }
   /** A source that is a `Value::Arr` or `Value::Null` (both helpers agree with `len()` / a no-op
@@ -114776,8 +114767,6 @@ ${this.getIden(identation)}}`;
       return "base";
     if (/\/ts\/src\/pro\/[^/]+\.ts$/.test(path4))
       return "pro";
-    if (/\/ts\/src\/prediction\/[^/]+\.ts$/.test(path4))
-      return "base";
     return void 0;
   }
   plainSourceTier(node) {
@@ -116784,7 +116773,7 @@ ${this.getIden(identation)}}`;
       return false;
     if (this.rustLocalIsReassigned(param, String(param.name.text)))
       return false;
-    if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === void 0 && !(handler && this.rustParamNeverNamed(method, param)))
+    if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === void 0)
       return false;
     const sibling = this.rustWsSiblingCallSites(method);
     if (sibling === void 0)
@@ -116828,22 +116817,6 @@ ${this.getIden(identation)}}`;
     };
     method.body?.forEachChild(visit);
     return !aliasWrite;
-  }
-  /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
-  rustParamNeverNamed(method, param) {
-    const name = String(param.name.text);
-    let named = false;
-    const visit = (n) => {
-      if (named)
-        return;
-      if (isIdentifier4(n) && n.text === name) {
-        named = true;
-        return;
-      }
-      n.forEachChild(visit);
-    };
-    method.body?.forEachChild(visit);
-    return !named;
   }
   /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
    *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */

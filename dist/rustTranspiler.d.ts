@@ -5448,8 +5448,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal, a plain local, or `this.extend|omit|keysort (plain, …unshared)`. */
     rustPlainBuilder(call: any, depth: number): boolean;
     rustPlainReturn(expr: any, depth: number): boolean;
-    /** A parameter declared as a map type (a list `any` would pass through `omit` unchanged), unshared in its tier. */
-    mapParamCopy(arg: any): boolean;
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
      *  overload set), in the calling file or the base tier. */
     /** A sync base method no venue source declares and outside virtual dispatch: a base-tier `self.m()` runs this body. */
@@ -5872,8 +5870,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
-    /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
-    rustParamNeverNamed(method: any, param: any): boolean;
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
      *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
     rustCallReturnsFreshLiteral(init: any): boolean;
