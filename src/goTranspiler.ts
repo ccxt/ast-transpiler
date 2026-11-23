@@ -18338,7 +18338,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 return false;
             }
             const declared = this.goDeclaredTypeOfIdentifier(base);
-            return declared === GO_STRING_LIST_LOCAL_TYPE;
+            if (declared === GO_STRING_LIST_LOCAL_TYPE) {
+                return true;
+            }
+            // a defaulted parameter bound `var xs []string = GetArgStringSlice(..)`: its element is a Go string
+            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+            return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === GO_STRING_LIST_LOCAL_TYPE);
         }
         case SyntaxKind.CallExpression:
             return this.goStringMethodCallIsProven(node);
