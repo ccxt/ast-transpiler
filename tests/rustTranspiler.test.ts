@@ -20965,7 +20965,7 @@ describe('ral-60i: an element of a declared Dict[] read at a string-typed variab
     test('a string-typed key keeps the Dict element typed and lent', () => {
         const out = transpiler.transpileRustByPath (write ('ral-60i-elem-pos', "        const key = this.safeString (message, 'w', 'wb');\n")).content;
         expect(out).toContain('let mut entry: crate::value::Dict = ');
-        expect(out).toContain('(&entry, Value::from(key.as_str()), &[])');
+        expect(out).toContain('(&entry, &key, &[])');
     });
     test('an untyped key keeps the element Value', () => {
         const out = transpiler.transpileRustByPath (write ('ral-60i-elem-neg', "        const key = this.safeValue (message, 'w');\n")).content;

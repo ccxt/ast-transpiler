@@ -5505,7 +5505,7 @@ export class RustTranspiler extends BaseTranspiler {
                 boxed++;
                 if (form === 'err' ? !this.rustErrMsgMoves(n, declaration) : !(isReturnStatement(n.parent) || this.rustLocalLastUse(n, declaration))) copied++;
             } else if (form !== undefined && !this.rustIdentifierIsPropertyName(n)) nativeUses++;
-            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || form === 'bkey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n)) || (form === 'key' && this.rustBalanceRowInsertKey(n))
+            if (form === 'test' || form === 'cond' || form === 'concat' || form === 'native' || form === 'targ' || form === 'lwrite' || form === 'okey' || form === 'fin' || form === 'frd' || form === 'fok' || form === 'kin' || form === 'nkey' || form === 'ukey' || form === 'parg' || form === 'dkey' || form === 'bkey' || form === 'skey' || (form === 'key' && this.rustOkeyLocal(n) && this.rustElemInsertKey(n)) || (form === 'key' && this.rustBalanceRowInsertKey(n))
                 // ral-63k: the last key of a nested write on a plain-Dict parameter is the native insert's typed key text
                 || (form === 'mkey' && this.rust63kDictParamNestedKey(n))) typedUses++;
             if (form === 'xbox' || form === 'native' || form === 'targ' || form === 'err') expressionUses = true;
@@ -8801,6 +8801,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarUseForm(n, kind: string): string | undefined {
         // r04b: the key of `this.safeDict (this.balance, k, d)` lends the string (`Value::from(k.as_deref())`), no copy
         if ((kind === 'str' || kind === 'ostr') && this.rustBalanceSafeDictKey(n)) return 'mkey';
+        // a string local as the variable key of base `safeString`: the runtime key is `impl ScalarArg`, lent as `&k`
+        if (kind === 'str' && this.rustSafeStringScalarKey(n)) return 'skey';
         const form = this.rustScalarUseFormOwn(n, kind);
         if (form === undefined && kind === 'ostr' && this.rust70fOperandBox(n)) return 'box';
         if (form === undefined && kind === 'ostr' && this.rust70fPushKey(n)) return 'native';
@@ -8816,6 +8818,21 @@ export class RustTranspiler extends BaseTranspiler {
      *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** `n` is the key of `this.safeString (o, n[, d])`: `safe_string` / `safe_string_opt` take the key as `impl ScalarArg`,
+     *  whose `&String` arm reads the same key the `Str` box gave (`scalar_key`). */
+    rustSafeStringScalarKey(n: Node): boolean {
+        const call: any = n?.parent;
+        if (!isIdentifier(n) || call === undefined || !isCallExpression(call) || call.arguments.length < 2 || call.arguments.length > 3 || call.arguments[1] !== n || this.rustTestTierSource(n)) return false;
+        const callee: any = call.expression;
+        if (!(isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeString')) return false;
+        // another argument naming the same local may move it while `&k` is lent (E0505): keep the box there
+        const name = (n as Identifier).text;
+        let named = false;
+        const visit = (m: Node): void => { if (isIdentifier(m) && m.text === name) named = true; else m.forEachChild(visit); };
+        call.arguments.forEach((a: Node, i: number) => { if (i !== 1) visit(a); });
+        return !named;
+    }
+
     /** r04b: `n` is the key argument of `this.safeDict (this.balance, n, d)`; the declared `Dict` field read takes the lent key
      *  (`None` keys as \"null\", the `stringify_param(&Null)` the boxed key gave). */
     rustBalanceSafeDictKey(n: Node): boolean {
@@ -11632,6 +11649,7 @@ export class RustTranspiler extends BaseTranspiler {
         // vg: a borrowed element lends at every box (`From<Option<&str>>`: `None` is Null, `Some(s)` the `Str` the box held)
         if (local?.kind === 'ostr' && this.rustBorrowedStrElems.has(local.declaration) && (form === 'key' || form === 'inbox' || form === 'box' || form === 'xbox' || (form === 'parg' && this.rustInArrayNeedle(node)))) return `Value::from(${super.printIdentifier(node)}.as_deref())`;
         if (form === 'key' && local.kind === 'ostr') return `${super.printIdentifier(node)}${this.rustLocalLastUse(node, local.declaration) ? '' : '.clone()'}.map(Value::from).unwrap_or(Value::Null)`;
+        if (form === 'skey') return `&${super.printIdentifier(node)}`;
         // ral-59p: a delete key the native `shift_remove` did not take boxes by reference into `remove` (no copy)
         if (form === 'mkey') return local.kind === 'ostr' ? `Value::from(${super.printIdentifier(node)}.as_deref())` : `Value::from(${super.printIdentifier(node)}.as_str())`;
         if (form === 'dkey') return local.kind === 'ostr' ? `Value::from(${super.printIdentifier(node)}.as_deref())` : `Value::from(${super.printIdentifier(node)}.as_str())`;
