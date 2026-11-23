@@ -20883,3 +20883,36 @@ describe ('go: a required number parameter every caller feeds a numeric literal'
         expect (go).not.toContain ('K(n float64)');
     });
 });
+
+describe('*string family stores follow CCXT_GO_STRING_PTR_METHOD_NAMES', () => {
+    const run = (body: string) => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes (x.goTranspiler);
+        return x.transpileGo ('class X {\n'
+            + '    commonCurrencyCode (code: string): string { return code; }\n'
+            + '    convertMarketIdExpireDate (d: string | undefined): string | undefined { return d; }\n'
+            + '    findBroadlyMatchedKey (b: object, s: string | undefined): string | undefined { return s; }\n'
+            + body + '}\n').content;
+    };
+    test('a listed method stored into an unannotated any local takes the pointee', () => {
+        const out = run ('    f (id: any) {\n        let code = id;\n        if (id !== undefined) {\n            code = this.commonCurrencyCode (id);\n        }\n        return code;\n    }\n');
+        expect (out).toContain ('if derefPtr := this.CommonCurrencyCode(');
+    });
+    test('an annotated local also written by a SafeString reader keeps the plain store', () => {
+        const out = run ('    f (p: any, o: any) {\n        let e: string | undefined = undefined;\n        if (p !== undefined) {\n            e = this.safeString (o, \'k\');\n        } else {\n            e = this.convertMarketIdExpireDate (p);\n        }\n        return e;\n    }\n');
+        expect (out).not.toContain ('derefPtr');
+    });
+    test('a local seeded from a *string local keeps the plain store', () => {
+        const out = run ('    f (p: any) {\n        const a = this.convertMarketIdExpireDate (p);\n        let r: Str = a;\n        if (p !== undefined) {\n            r = this.convertMarketIdExpireDate (p);\n        }\n        return r;\n    }\n');
+        expect (out).toContain ('var r *string = a');
+        expect (out).not.toContain ('derefPtr');
+    });
+    test('a nil-seeded Str local the printer joins to *string keeps the plain store', () => {
+        const out = run ('    f (p: any, o: any) {\n        let r: Str = undefined;\n        if (p !== undefined) {\n            r = this.convertMarketIdExpireDate (p);\n            if (r === undefined) {\n                r = this.safeString (o, \'k\');\n            }\n        }\n        return r;\n    }\n');
+        expect (out).not.toContain ('derefPtr');
+    });
+    test('findBroadlyMatchedKey is not in the family and keeps its any store', () => {
+        const out = run ('    f (b: object, s: string, k: any) {\n        let v = k;\n        if (s !== undefined) {\n            v = this.findBroadlyMatchedKey (b, s);\n        }\n        return v;\n    }\n');
+        expect (out).not.toContain ('derefPtr');
+    });
+});

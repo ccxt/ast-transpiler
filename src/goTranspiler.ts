@@ -40677,10 +40677,42 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     const text = (kind === 'addr') ? '&' + value : ((kind === 'wrap') ? 'SafeStringPtr(' + value + ')' : value);
     return this.printNodeCommentsIfAny(node, identation, this.getIden(identation) + 'return ' + text);
 };
-// `x = this.currencyToPrecision|networkCodeToId (..)` into a local that stays `any`: the box held the
-// plain string before these returned *string, so store the pointee (nil for a nil pointer)
-const STR_PTR_FAMILY_NEW = [ 'currencyToPrecision', 'networkCodeToId', 'handleTimeInForce', 'costToPrecision', 'feeToPrecision',
-    'parsePrecision', 'integerPrecisionToAmount', 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'createCcxtTradeId', 'formatVaultAddress' ];
+// `x = this.<*string family method> (..)` into a local that stays `any`: the box held the
+// plain string before the family returned *string, so store the pointee (nil for a nil pointer)
+function strPtrFamilyCallName(callee): boolean {
+    const name = String(callee?.name?.text ?? '');
+    return CCXT_GO_STRING_PTR_METHOD_NAMES.includes(name.charAt(0).toUpperCase() + name.slice(1));
+}
+function strPtrFamilyHasReaderWrite(declaration): boolean {
+    const name = declaration.name?.text;
+    let found = false;
+    const visit = (n) => {
+        if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken) && (n.left?.kind === SyntaxKind.Identifier)
+            && (n.left.text === name) && isSafeStringCall(n.right)) {
+            found = true;
+        }
+        if (!found) {
+            n.forEachChild(visit);
+        }
+    };
+    let scope = declaration.parent;
+    while ((scope !== undefined) && (scope.kind !== SyntaxKind.Block)) {
+        scope = scope.parent;
+    }
+    scope?.forEachChild(visit);
+    return found;
+}
+// a local seeded from a pointer prints that pointer type; a local whose type is still being worked out
+// (its writes print while it is inferred) keeps the plain store too
+function strPtrFamilyPointerSeed(goTranspiler: GoTranspiler, declaration): boolean {
+    const init = declaration?.initializer;
+    return (init?.kind === SyntaxKind.Identifier) && (goTranspiler.goPointerTypeOfExpression(init, init.text) === '*string');
+}
+// the callee is declared as a method (a field bound to a plain function, `omitZero = omitZero`, has no body to read)
+function strPtrFamilyMethodCallee(goTranspiler: GoTranspiler, callee): boolean {
+    const decl: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve();
+    return decl?.kind === SyntaxKind.MethodDeclaration;
+}
 const strPtrFamilyExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
 GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     const write = node?.expression;
@@ -40689,12 +40721,16 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken)
         || (write.left?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
         || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
-        || !STR_PTR_FAMILY_NEW.includes(String(callee.name?.text ?? ''))) {
+        || !strPtrFamilyCallName(callee) || !strPtrFamilyMethodCallee(this, callee)) {
         return strPtrFamilyExpressionStatement.call(this, node, identation);
     }
     const declaration = ccxtGoParamDeclarationOf(this, write.left);
-    const declared = this.goDeclaredTypeOfIdentifier(write.left);
-    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declared !== undefined) && (declared !== 'any'))) {
+    // the local's printed type: declared, else the nil-declared join (`let x: Str = undefined` prints *string)
+    const declared = ccxtGoWriteSiteLocalGoType(this, write.left);
+    // an annotated `Str` local also written by a SafeString reader prints *string: keep the plain store
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.type !== undefined) && strPtrFamilyHasReaderWrite(declaration))
+        || ((declared !== undefined) && (declared !== 'any')) || strPtrFamilyPointerSeed(this, declaration)
+        || this.goDeclaredTypeInProgress.has(declaration)) {
         return strPtrFamilyExpressionStatement.call(this, node, identation);
     }
     const iden = this.getIden(identation);
@@ -40713,7 +40749,7 @@ function strPtrFamilySeeded(goTranspiler: GoTranspiler, declaration, depth = 0):
     }
     const callee = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
     return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
-        && STR_PTR_FAMILY_NEW.includes(String(callee.name?.text ?? ''));
+        && strPtrFamilyCallName(callee);
 }
 function strPtrFamilyLiteralTemp(goTranspiler: GoTranspiler, node): string | undefined {
     const left = node?.left;
