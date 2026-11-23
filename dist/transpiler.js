@@ -117365,13 +117365,28 @@ ${this.getIden(identation)}}`;
       return false;
     const declaration = this.rustDeclarationOfIdentifier(arg);
     if (declaration?.kind === SyntaxKind7.Parameter)
-      return declaration.name !== arg && (this.rustVenueDictParam(declaration) && (this.rustVenueDictValueParam(declaration) || !this.rustArgSlotTakesDictHandle(arg)) || this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg));
+      return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg));
     return this.rustNeverNullDictLocalArg(arg);
   }
-  /** The value of an object-literal entry (`'info': x`): the slot takes the dict handle, so the entry shares it. */
+  /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
   rustVenueDictValueUse(id) {
     const up = id?.parent;
-    return up !== void 0 && isPropertyAssignment2(up) && up.initializer === id && isObjectLiteralExpression4(up.parent);
+    if (up === void 0 || !isPropertyAssignment2(up) || up.initializer !== id || !isObjectLiteralExpression4(up.parent))
+      return false;
+    let fn = up.parent;
+    while (fn !== void 0 && !isFunctionLike(fn))
+      fn = fn.parent;
+    let later = false;
+    const visit = (n) => {
+      if (later)
+        return;
+      if (isIdentifier4(n) && n.text === id.text && n.pos > id.pos)
+        later = true;
+      n.forEachChild(visit);
+    };
+    if (fn?.body !== void 0)
+      fn.body.forEachChild(visit);
+    return later;
   }
   /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
    *  the dict handle is shared into the box, no copy. */
@@ -117417,7 +117432,7 @@ ${this.getIden(identation)}}`;
     const declaration = this.rustDeclarationOfIdentifier(node);
     if (declaration?.kind !== SyntaxKind7.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration))
       return void 0;
-    return `Value::from(${text})`;
+    return `Value::Dict(${text}.clone())`;
   }
   /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
   rustVenueDictValueParam(param) {

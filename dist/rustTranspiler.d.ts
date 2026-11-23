@@ -5907,7 +5907,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueDictTextCallCount(method: any, name: string, own: number): number;
     /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
     rustVenueDictArgLends(arg: any): boolean;
-    /** The value of an object-literal entry (`'info': x`): the slot takes the dict handle, so the entry shares it. */
+    /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
     rustVenueDictValueUse(id: any): boolean;
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
      *  the dict handle is shared into the box, no copy. */
