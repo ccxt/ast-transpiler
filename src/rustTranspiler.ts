@@ -22687,6 +22687,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (read !== undefined) return read;
         // the runtime `extend` builds a fresh map on every input, so its typed twin answers the same map
         if (kind === 'dict' && this.rustRuntimeExtendCall(exp) && printed.startsWith('self.extend(') && printed.endsWith(')') && this.rustBalancedText(printed.slice('self.extend('.length, -1))) return 'self.extend_t(' + printed.slice('self.extend('.length);
+        // a local the source declares `Dict` that still prints as a `Value`: the method's one conversion replaces each caller's
+        const local: any = kind === 'dict' && isIdentifier(this.unwrapParens(exp)) ? this.rustDeclaredNode(this.unwrapParens(exp)) : undefined;
+        if (local !== undefined && isVariableDeclaration(local) && String(local.type?.getText?.() ?? '') === 'Dict' && /^[A-Za-z_]\w*$/.test(printed)) return `${printed}.into_dict()`;
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
