@@ -41,6 +41,15 @@ describe ('h27a06: safeDict reads of the typed Options map', () => {
         const out = print ("        const o = this.safeDict (other, 'networks');\n        return this.safeString (o, code);\n");
         expect (out).not.toContain ('].(map[string]any)');
     });
+    test ('a no-default read the helper printed as SafeDictMap prints the comma-ok read', () => {
+        const out = print ("        let m = this.safeDict (this.options, 'mm');\n        if (m === undefined) {\n            m = {};\n        }\n        return m;\n");
+        expect (out).toContain ('\tvar m, _ = this.Options["mm"].(map[string]any)\n');
+        expect (out).not.toContain ('SafeDictMap(this.Options');
+    });
+    test ('a SafeDictMap read on another receiver keeps the helper', () => {
+        const out = print ("        let m = this.safeDict (other, 'mm');\n        if (m === undefined) {\n            m = {};\n        }\n        return m;\n");
+        expect (out).not.toContain ('other["mm"].(map[string]any)');
+    });
     test ('a defaulted read with a write takes a fresh map where the read is nil', () => {
         const out = print ("        const o = this.safeDict (this.options, 'networks', {});\n        o['a'] = 1;\n        return o;\n");
         expect (out).toContain ('\tvar o map[string]any\n\to, _ = this.Options["networks"].(map[string]any)\n\tif o == nil {\n\t\to = map[string]any{}\n\t}\n');

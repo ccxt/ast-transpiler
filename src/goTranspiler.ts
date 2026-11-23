@@ -48090,7 +48090,8 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
         return undefined;
     }
     const name = declaration.name.text;
-    const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?)SafeMapTyped\(this\.Options, (.*)\)$/.exec (printed);
+    // SafeDictMap is MapTyped of the SafeDict read: with no default it answers what SafeMapTyped does
+    const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.Options, (.*)\)$/.exec (printed);
     if ((match === null) || (match[3] !== name) || (match[5] !== key)) {
         return undefined;
     }
