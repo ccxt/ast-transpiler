@@ -14045,6 +14045,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parsePosition': [ 0 ],
     // every tree caller passes a `{}`-defaulted safeDict local or an extend copy
     'parseAccount': [ 0 ],
+    'parseOption': [ 0 ],
+    'parseMarginMode': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -59296,6 +59298,12 @@ function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
         if (p === undefined) { return false; }
         if ((p.kind === SyntaxKind.ParenthesizedExpression) || (p.kind === SyntaxKind.VariableDeclarationList)) { continue; }
         if ((p.kind === SyntaxKind.VariableDeclaration) && (p.initializer === child)) { continue; }
+        // `t[k] = <read>` / `t = <read>` with a call-free target: the target evaluates nothing the read depends on
+        if ((p.kind === SyntaxKind.BinaryExpression) && (p.operatorToken.kind === SyntaxKind.EqualsToken) && (p.right === child)
+            && !go.hasNodeWhere(p.left, (n: any) => n.kind === SyntaxKind.CallExpression)) { continue; }
+        // `xs.push (<read>)` on a plain local: evaluating `xs` runs nothing
+        if ((p.kind === SyntaxKind.CallExpression) && (p.arguments.length === 1) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (p.expression.name?.text === 'push') && (p.expression.expression?.kind === SyntaxKind.Identifier)) { continue; }
         // only argument 0 of a `this.m (..)` call: nothing of the statement runs before the read
         if ((p.kind === SyntaxKind.CallExpression) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
             && (p.expression.expression?.kind === SyntaxKind.ThisKeyword)) { continue; }

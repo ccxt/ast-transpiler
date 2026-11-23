@@ -19904,6 +19904,47 @@ describe ('go dict param: parseBorrowInterest row', () => {
     });
 });
 
+describe ('go dict param: parseOption / parseAccount / parseMarginMode rows', () => {
+    const print = (name: string, method: string, arg: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    ' + method + ' (row: Dict, market: any = undefined) {\n' +
+            "        return row['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[]) {\n' +
+            '        return this.' + method + ' (' + arg + ', undefined);\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('parseGreeks has no row: a {}-defaulted safeDict row keeps the box', () => {
+        expect(print('tmp-g06-parseGreeks-sd', 'parseGreeks', 'this.safeDict (xs, 0, {})')).toContain('ParseGreeks(row any');
+    });
+    for (const [ method, goName ] of [ [ 'parseOption', 'ParseOption' ], [ 'parseAccount', 'ParseAccount' ], [ 'parseMarginMode', 'ParseMarginMode' ] ]) {
+        test(method + ': a {}-defaulted safeDict row types the parameter', () => {
+            expect(print('tmp-g06-' + method + '-sd', method, 'this.safeDict (xs, 0, {})')).toContain(goName + '(row map[string]any');
+        });
+        test(method + ': a safeDict row without a default keeps the box', () => {
+            expect(print('tmp-g06-' + method + '-nil', method, 'this.safeDict (xs, 0)')).toContain(goName + '(row any');
+        });
+        test(method + ': a raw list element keeps the box', () => {
+            expect(print('tmp-g06-' + method + '-elem', method, 'xs[0]')).toContain(goName + '(row any');
+        });
+    }
+});
+
 describe ('go dict param argument of a wrapped base dispatch', () => {
     const print = (name: string, arg: string): string => {
         const dir = path.join(__dirname, 'files', name, 'ts', 'src');
@@ -20676,6 +20717,20 @@ describe ('go dict param argument hoisted into a comma-ok local', () => {
     test('a call on the right of && keeps the wrap (evaluation order)', () => {
         const out = print('tmp-h37p01-and', '        const xs: Dict[] = this.toArray (data);\n        const ok = (c !== undefined) && this.parseLedgerEntry (this.safeDict (xs, 0, {}), c);\n        return ok;\n');
         expect(out).toContain('this.SafeDictMap(xs, 0, map[string]any{})');
+        expect(out).not.toMatch(/xsDict\d+/);
+    });
+    test('a keyed store of the call reads into a local before the statement', () => {
+        const out = print('tmp-h37p01-store', '        const xs: Dict[] = this.toArray (data);\n        const r: Dict = {};\n        for (let i = 0; i < xs.length; i++) {\n            r[c] = this.parseLedgerEntry (this.safeDict (xs, i, {}), c);\n        }\n        return r;\n');
+        expect(out).toMatch(/(xsDict\d+), _ := xs\[i\]\.\(map\[string\]any\)\n\s*if \1 == nil \{/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('a push of the call reads into a local before the statement', () => {
+        const out = print('tmp-h37p01-push', '        const xs: Dict[] = this.toArray (data);\n        const r = [];\n        for (let i = 0; i < xs.length; i++) {\n            r.push (this.parseLedgerEntry (this.safeDict (xs, i, {}), c));\n        }\n        return r;\n');
+        expect(out).toMatch(/(xsDict\d+), _ := xs\[i\]\.\(map\[string\]any\)\n\s*if \1 == nil \{/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('a store whose target calls keeps the wrap (evaluation order)', () => {
+        const out = print('tmp-h37p01-callkey', '        const xs: Dict[] = this.toArray (data);\n        const r: Dict = {};\n        r[this.parseLedgerEntry (data, c)] = this.parseLedgerEntry (this.safeDict (xs, 0, {}), c);\n        return r;\n');
         expect(out).not.toMatch(/xsDict\d+/);
     });
     test('a call inside a loop condition keeps the wrap', () => {
