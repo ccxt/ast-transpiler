@@ -47903,7 +47903,12 @@ GoTranspiler.prototype.h27a01JsonDictRead = function (declaration, printed: stri
     if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string')) {
         return undefined;
     }
-    const args: any = this.goSafeAccessorLocalArgs(declaration.initializer, 'safeDict');
+    let init: any = declaration.initializer;
+    // `safeDict (..) as Dict` prints the bare call: same read, same answer
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
     const container: any = args?.container;
     if ((container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral)
         || !this.goJsonOriginContainer(container) || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE)) {

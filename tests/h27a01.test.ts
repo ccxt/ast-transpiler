@@ -29,6 +29,8 @@ describe ('h27a01: JSON-origin map receiver, literal key, comma-ok map read', ()
         'export default class ex extends Exchange {\n' +
         method ('pos', [ 'const response = await this.publicGetD (params);', read, "return this.safeString (data, 'id');" ]) +
         method ('posDefault', [ 'const response = await this.publicGetD (params);', "const data = this.safeDict (response, 'data', {});", "return this.safeString (data, 'id');" ]) +
+        method ('posAs', [ 'const response = await this.publicGetD (params);', "const data = this.safeDict (response, 'data') as Dict;", "return this.safeString (data, 'id');" ]) +
+        method ('writtenAs', [ 'const response = await this.publicGetD (params);', "response['x'] = 1;", "const data = this.safeDict (response, 'data') as Dict;", "return this.safeString (data, 'id');" ]) +
         method ('posNil', [ 'const response = await this.publicGetD (params);', read, 'if (data === undefined) {', '    return undefined;', '}', "return this.safeString (data, 'id');" ]) +
         method ('written', [ 'const response = await this.publicGetD (params);', "response['x'] = 1;", read, "return this.safeString (data, 'id');" ]) +
         method ('escapes', [ 'const response = await this.publicGetD (params);', 'this.keep (response);', read, "return this.safeString (data, 'id');" ]) +
@@ -71,6 +73,13 @@ describe ('h27a01: JSON-origin map receiver, literal key, comma-ok map read', ()
     });
     test ('positive: the empty-object default reads the same way', () => {
         expect (fn ('posDefault')).toContain ('var data, _ = response["data"].(map[string]any)\n');
+    });
+    test ('positive: an `as Dict` no-default read prints the same comma-ok read (fails on the base printer)', () => {
+        expect (fn ('posAs')).toContain ('var data, _ = response["data"].(map[string]any)\n');
+        expect (fn ('posAs')).not.toContain ('SafeMapTyped(');
+    });
+    test ('negative: an `as Dict` read of a written response keeps the wrap', () => {
+        expect (fn ('writtenAs')).not.toContain ('.(map[string]any)');
     });
     test ('nil-tested result: the typed map keeps the nil answer', () => {
         expect (fn ('posNil')).toContain ('var data, _ = response["data"].(map[string]any)\n');
