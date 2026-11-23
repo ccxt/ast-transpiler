@@ -22596,11 +22596,44 @@ export class RustTranspiler extends BaseTranspiler {
         if (own !== undefined) return own;
         const fn: any = findAncestor(exp, isFunctionLike);
         if (kind === 'list' && fn !== undefined && this.rustOwnContainerDecisions.get(fn) !== undefined && this.rustBaseStringListReturn(fn) === 'list') return this.rustBaseListPayload(this.unwrapParens(exp));
+        // a list the method builds (`Vec<Value>` local or literal) of untyped / map elements hands on its own vector
+        if (kind === 'list' && this.rustBoxedElementList(exp) && !this.rustUntypedLocalCaller(fn)) { const built = this.rustBaseListPayload(this.unwrapParens(exp)); if (built !== undefined) return built; }
         const printed = this.printNode(exp, 0).trim();
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
         return box[1] === 'Map' ? `std::sync::Arc::new(${inner})` : inner;
+    }
+
+    /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
+    rustUntypedLocalCaller(fn: any): boolean {
+        if (fn === undefined || !isIdentifier(fn.name)) return true;
+        const name = String(fn.name.text);
+        let found = false;
+        const visit = (n: any) => {
+            if (found) return;
+            if (isVariableDeclaration(n) && n.type === undefined && n.initializer !== undefined) {
+                let init: any = this.unwrapParens(n.initializer);
+                if (init?.kind === SyntaxKind.AwaitExpression) init = this.unwrapParens(init.expression);
+                if (isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword && String(init.expression.name.text) === name) found = true;
+            }
+            n.forEachChild(visit);
+        };
+        fn.getSourceFile().forEachChild(visit);
+        return found;
+    }
+
+    /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
+    rustBoxedElementList(exp: any): boolean {
+        const v: any = this.unwrapParens(exp);
+        if (v === undefined || !(isArrayLiteralExpression(v) || isIdentifier(v))) return false;
+        const checker: any = this.getChecker();
+        const type: any = checker.getTypeAtLocation(v);
+        if (!checker.isArrayType?.(type)) return false;
+        const elem: any = (checker.getTypeArguments?.(type) ?? [])[0];
+        if (elem === undefined) return false;
+        if ((elem.flags & TypeFlags.Any) !== 0) return true;
+        return this.rustStaticContainerType(elem, 'dict');
     }
 
     /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */

@@ -18687,7 +18687,7 @@ describe('ral-53i: a list local reassigned whole from a venue call the typed-ret
         write (dir, 'Promise<Dict[]>');
         const out = transpiler.transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut rows: crate::value::List = ');
-        expect(out).toMatch(/rows = self\.fetchRows\([^;]*\)\.await\.into_list\(\);/);
+        expect(out).toMatch(/rows = self\.fetchRows\([^;]*\)\.await;/);
     });
     test('a callee declared `Promise<any>` proves nothing: the local stays Value', () => {
         const dir = path.join (rustFixtureRoot, 'ral-53i-list-any');
@@ -27197,9 +27197,9 @@ describe('a venue method declared Dict / Dict[] returns the native container', (
         expect(out).toMatch(/fn build\([^\n]*\) -> crate::value::Dict \{/);
         expect(out).not.toContain('self.build(x).into_dict()');
     });
-    test('negative: a list return that prints a conversion (`Value::from(vec)`) keeps Value', () => {
+    test('a built list local (`Value::from(vec)`) hands on its vector', () => {
         const out = run ('own-list-local', "    rows (x: any): Dict[] {\n        const out: Dict[] = [];\n        out.push (x);\n        return out;\n    }\n");
-        expect(out).toMatch(/fn rows\([^\n]*\) -> Value \{/);
+        expect(out).toMatch(/fn rows\([^\n]*\) -> crate::value::List \{/);
     });
     test('negative: an any return (nil or a wrong kind may come back) keeps Value', () => {
         const out = run ('own-dict-any', "    build (x: any): Dict {\n        return this.keep (x);\n    }\n");
