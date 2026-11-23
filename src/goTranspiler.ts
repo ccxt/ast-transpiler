@@ -14052,6 +14052,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseADLRank': [ 0 ],
     // every tree caller passes a `{}`-defaulted safeDict row or an extend copy
     'parsePredictionTrade': [ 0 ],
+    // every tree caller passes a `{}`-defaulted safeDict row, an extend copy or a typed map
+    'parsePredictionPosition': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
