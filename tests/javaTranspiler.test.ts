@@ -6416,7 +6416,7 @@ describe('java native return types of internal methods', () => {
         "import { Dict, Str, Bool } from './base/types';\n" +
         "interface Row { [key: string]: any }\n" +
         "class BaseFake {\n" +
-        "    parseAccount (order: Dict): any { return order; }\n" +
+        "    parseTrade (order: Dict): any { return order; }\n" +
         "    safeValue (x: any, k: any, d: any = undefined): any { return x; }\n" +
         "}\n" +
         "export default class venuefake extends BaseFake {\n" +
@@ -6425,7 +6425,7 @@ describe('java native return types of internal methods', () => {
         "    parseChoice (data: Dict, flag: boolean): Dict { return flag ? { 'x': data } : data; }\n" +
         "    parseName (s: Str): Str { return s; }\n" +
         "    parseFlag (a: any): Bool { return a === 1; }\n" +
-        "    parseAccount (order: Dict): Dict { return order; }\n" +
+        "    parseTrade (order: Dict): Dict { return order; }\n" +
         "    parseUnproven (data: Dict): Dict { return this.safeValue (data, 'k'); }\n" +
         "    async parseAsync (data: Dict): Promise<Dict> { return data; }\n" +
         "}\n";
@@ -6471,9 +6471,10 @@ describe('java native return types of internal methods', () => {
         expect(output).toContain('public Boolean parseFlag(');
     });
 
+    // fixture method is parseTrade: parseOrder (H40-J05) and parseAccount (H40-J11) left the excluded positions
     test('an override keeps the boxed signature (D8)', () => {
-        expect(output).toContain('public Object parseAccount(');
-        expect(output).not.toContain('public java.util.Map<String, Object> parseAccount(');
+        expect(output).toContain('public Object parseTrade(');
+        expect(output).not.toContain('public java.util.Map<String, Object> parseTrade(');
     });
 
     test('an unprovable return keeps the boxed signature', () => {

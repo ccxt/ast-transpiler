@@ -52,14 +52,15 @@ describe ('h29g06 subscription dict read through the owner', () => {
         '        const suba = this.safeDict (client.subscriptions, k);\n' +
         '        this.handleSub (client, message, suba);\n' +
         '    }\n';
+    // H40-G12 dropped the redundant ClientInterface assertion on the typed client parameter
     test ('a string-keyed dict read goes to the owner (fails on the base printer: SafeDictMap over the snapshot)', () => {
         const o = printPro (SRC);
-        expect (o).toMatch (/var sub map\[string\]any = client\.\((ccxt\.)?ClientInterface\)\.SubscriptionDict\(h\)\n/);
+        expect (o).toMatch (/var sub map\[string\]any = client(\.\((ccxt\.)?ClientInterface\))?\.SubscriptionDict\(h\)\n/);
         expect (o).not.toMatch (/SafeDictMap\([^\n]*SubscriptionsSnapshot\(\), h\)/);
     });
     test ('the {} default becomes a fresh map exactly where the owner answers nil', () => {
         const o = printPro (SRC);
-        expect (o).toMatch (/var subd map\[string\]any = client\.\((ccxt\.)?ClientInterface\)\.SubscriptionDict\("unsubscribe:"\+\*topic\)\n\tif subd == nil \{\n\t\tsubd = map\[string\]any\{\}\n\t\}/);
+        expect (o).toMatch (/var subd map\[string\]any = client(\.\((ccxt\.)?ClientInterface\))?\.SubscriptionDict\("unsubscribe:"\+\*topic\)\n\tif subd == nil \{\n\t\tsubd = map\[string\]any\{\}\n\t\}/);
     });
     test ('negatives: a key that may be a non-string box does not read the owner', () => {
         const o = printPro (SRC);

@@ -14309,7 +14309,8 @@ function goDictParamDerived (go: any, param: any): string | undefined {
     if (reason !== undefined) {
         const file = String (fn.getSourceFile ().fileName ?? '').split (/[\\/]/).slice (-3).join ('/');
         const message = `${file}: ${method}(${param.name?.text}) keeps the box: ${reason}`;
-        if (!goIsBaseExchangeFile (fn) || reason === 'not a parameter') {
+        // a root class outside the base tree overrides nothing: it keeps the box instead of failing
+        if ((!goIsBaseExchangeFile (fn) && (reason !== 'root class member')) || reason === 'not a parameter') {
             throw new Error ('go dict param types: ' + message + ' (the base prints map[string]any, an override must too)');
         }
         return undefined;
