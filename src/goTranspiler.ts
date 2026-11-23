@@ -60028,3 +60028,82 @@ GoTranspiler.prototype.goIsBaseCacheIndexMethod = function (fn) {
     };
 }
 // ===== H40-G30 (end) =====
+// ===== H40-G17 (start) =====
+// A `let x: Dict` local declared map[string]any keeps that type when every later write is a `{}`-defaulted
+// `this.safeDict (R, k, {})` read of decoded JSON R that prints the native comma-ok read (h41g13CommaOkWrite).
+function h40g17DictLocalSafeDictWrite (go, node): any {
+    if ((node?.kind !== SyntaxKind.BinaryExpression) || (node.operatorToken?.kind !== SyntaxKind.EqualsToken) || (node.left?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const found = go.goSafeDictCallArgs (node.right);
+    if ((found === undefined) || !go.goNeverNilDict (node.right, go.goSourceTreeKind (node.right) === 'ws')) {
+        return undefined;
+    }
+    return found;
+}
+function h40g17AnnotatedDictLocal (declaration): boolean {
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+        && (declaration.type?.kind === SyntaxKind.TypeReference) && (declaration.type.typeName?.text === 'Dict')
+        && (declaration.initializer !== undefined) && !isNilDeclaredInitializer (declaration.initializer);
+}
+{
+    const isSafeH40g17 = GoTranspiler.prototype.goLocalIsSafeToType;
+    GoTranspiler.prototype.goLocalIsSafeToType = function (scope, declaration, varName: string, goType: string, stringWriteProven = false) {
+        if (isSafeH40g17.call (this, scope, declaration, varName, goType, stringWriteProven)) {
+            return true;
+        }
+        if ((goType !== 'map[string]any') || (scope === undefined) || !h40g17AnnotatedDictLocal (declaration)) {
+            return false;
+        }
+        return ccxtGoUseScanIsSafe (this, scope, declaration, varName, goType, {
+            converts: (write) => (h40g17DictLocalSafeDictWrite (this, write) !== undefined)
+                && (ccxtGoParamDeclarationOf (this, write.left) === declaration)
+                && (h41g13CommaOkWrite (this, write, h40g17DictLocalSafeDictWrite (this, write), 0) !== undefined),
+        });
+    };
+    const printBinaryH40g17 = GoTranspiler.prototype.printBinaryExpression;
+    GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
+        const found = h40g17DictLocalSafeDictWrite (this, node);
+        if ((found !== undefined) && h40g17AnnotatedDictLocal (ccxtGoParamDeclarationOf (this, node.left))
+            && (this.goDeclaredTypeOfIdentifier (node.left) === 'map[string]any')) {
+            const native = h41g13CommaOkWrite (this, node, found, identation);
+            if (native !== undefined) {
+                return native;
+            }
+        }
+        return printBinaryH40g17.call (this, node, identation);
+    };
+}
+// A `{}`-defaulted safeDict statement write whose receiver is a typed map (literal key) or []any (literal index):
+// the comma-ok read plus the `{}` fallback; nil, a missing key, out of range and a non-map all answer `{}` as before.
+function h41g13JsonReceiver (go, container): boolean {
+    return go.goJsonOriginContainer (container) || go.goAwaitedListLocal (container) || go.goAwaitedMapLocal (go.goDeclarationOfIdentifier (container))
+        || go.h28a03JoinedEndpointLocal (container);
+}
+function h41g13CommaOkWrite (go, node, found, identation: number): string | undefined {
+    const fallback = go.goUnwrapParenthesizedNode (found.fallback);
+    if ((found.family !== 'SafeDict') || (node.parent?.kind !== SyntaxKind.ExpressionStatement) || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || (fallback.properties.length !== 0)) {
+        return undefined;
+    }
+    const [ container, key ] = found.call.arguments;
+    // the receiver holds decoded JSON: its members are JSON kinds, so `.(map[string]any)` reads what IsDictionary admitted
+    if ((container?.kind !== SyntaxKind.Identifier) || (container.text === node.left.text) || !h41g13JsonReceiver (go, container)) {
+        return undefined;
+    }
+    const receiver = go.goDeclaredTypeOfIdentifier (container) ?? go.h27a01ReceiverType (container)
+        ?? (go.goAwaitedListLocal (container) ? GO_SAFE_LIST_LOCAL_TYPE : undefined);
+    const x = go.printNode (node.left, 0);
+    const xs = go.printNode (container, 0);
+    const iden = go.getIden (identation);
+    const inner = go.getIden (identation + 1);
+    const fill = `\n${iden}if ${x} == nil {\n${inner}${x} = map[string]any{}\n${iden}}`;
+    if ((receiver === GO_SAFE_DICT_LOCAL_TYPE) && (key?.kind === SyntaxKind.StringLiteral)) {
+        return `${x}, _ = ${xs}[${go.printNode (key, 0)}].(map[string]any)${fill}`;
+    }
+    if ((receiver === GO_SAFE_LIST_LOCAL_TYPE) && (key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test (key.text)) {
+        return `${x} = nil\n${iden}if len(${xs}) > ${key.text} {\n${inner}${x}, _ = ${xs}[${key.text}].(map[string]any)\n${iden}}${fill}`;
+    }
+    return undefined;
+}
+// ===== H40-G17 (end) =====
