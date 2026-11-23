@@ -21070,3 +21070,37 @@ describe('an element of an awaited endpoint list read in a loop over its own len
         expect(out).not.toContain('= response[i]\n');
     });
 });
+
+describe('a `: Str` method whose nil path reaches only a deref-safe consumer argument returns *string', () => {
+    const tree = (name: string, use: string) => {
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), 'export class Exchange {\n    safeString (o: any, k: any): Str {\n        return o[k];\n    }\n    safeCurrencyCode (c: Str): Str {\n        return c;\n    }\n}\n');
+        fs.writeFileSync(path.join(src, 'ex.ts'), "import { Exchange } from './base/Exchange';\nexport class ex extends Exchange {\n"
+            + '    strip (d: Dict): Str {\n        const id = this.safeString (d, \'a\');\n        if (id === undefined) {\n            return undefined;\n        }\n        if (id.endsWith (\'-P\')) {\n            return id.slice (0, -2);\n        }\n        return id;\n    }\n'
+            + '    use (d: any) {\n        ' + use + '\n    }\n}\n');
+        return path.join(src, 'ex.ts');
+    };
+    const print = (name: string, use: string) => {
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(tree(name, use)).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a call handed straight to safeCurrencyCode types the return', () => {
+        const out = print('tmp-h40g14-pos', "return this.safeCurrencyCode (this.strip (d));");
+        expect(out).toContain('Strip(d any) *string {');
+        expect(out).toContain('return &retStrVal');
+    });
+    test('a call stored into a dict keeps the box (a nil *string would not be a nil any)', () => {
+        const out = print('tmp-h40g14-dict', "return { 'a': this.strip (d) };");
+        expect(out).toContain('Strip(d any) any {');
+    });
+    test('a call returned from an unannotated method keeps the box', () => {
+        const out = print('tmp-h40g14-ret', "return this.strip (d);");
+        expect(out).toContain('Strip(d any) any {');
+    });
+});

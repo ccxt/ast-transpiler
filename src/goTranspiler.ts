@@ -12540,6 +12540,11 @@ function goStrCallBindsNilSafeLocal (id, fileName, seen) {
     const h30g05 = h30g05LetBindsNilSafeLocal (id, fileName, seen); if (h30g05 !== undefined) return h30g05;
     const access = id.parent;
     const call = access?.parent;
+    // the call itself is an argument of a consumer that derefScalars that slot (as a const local may be)
+    if ((access?.kind === ts.SyntaxKind.PropertyAccessExpression) && (access.name === id) && (access.expression.kind === ts.SyntaxKind.ThisKeyword)
+        && (call?.kind === ts.SyntaxKind.CallExpression) && (call.expression === access) && h27g13LocalReadDerefs (call)) {
+        return true;
+    }
     const decl = call?.parent;
     if ((access?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (access.name !== id) || (access.expression.kind !== ts.SyntaxKind.ThisKeyword)
         || (call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression !== access) || (decl?.kind !== ts.SyntaxKind.VariableDeclaration)
