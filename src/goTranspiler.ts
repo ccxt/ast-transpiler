@@ -7647,7 +7647,7 @@ function installCcxtGoStringParamNilGuards (goTranspiler) {
 
 // A unified-table int param prints `int64` on the base and every override: the typed wrapper passes an
 // int64 and dynamic callers go through Int64Arg (panics ArgumentsRequired), so it is never nil.
-function ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param) {
+function ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param, goType = 'int64') {
     const fn = param?.parent;
     if ((param?.kind !== ts.SyntaxKind.Parameter) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
         || (param.name?.kind !== ts.SyntaxKind.Identifier) || (fn?.kind !== ts.SyntaxKind.MethodDeclaration)
@@ -7662,15 +7662,15 @@ function ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param) {
         && parts.every ((t) => (t.flags & (ts.TypeFlags.NumberLike | ts.TypeFlags.Undefined)) !== 0);
     // the table types the base and every override together: a body that breaks it fails the build
     if (!numeric) {
-        throw new Error (`unifiedInt64Params: ${fn.name.text} parameter ${param.name.text} is not a number`);
+        throw new Error (`unified ${goType} params: ${fn.name.text} parameter ${param.name.text} is not a number`);
     }
-    if (!goTranspiler.goLocalIsSafeToType (fn.body, param, param.name.text, 'int64')) {
-        throw new Error (`unifiedInt64Params: ${fn.name.text} parameter ${param.name.text} is written with another type`);
+    if (!goTranspiler.goLocalIsSafeToType (fn.body, param, param.name.text, goType)) {
+        throw new Error (`unified ${goType} params: ${fn.name.text} parameter ${param.name.text} is written with another type`);
     }
     return true;
 }
 
-function installCcxtGoUnifiedInt64Params (goTranspiler, table) {
+function installCcxtGoUnifiedInt64Params (goTranspiler, table, goType = 'int64') {
     if (table === undefined) {
         return;
     }
@@ -7678,13 +7678,13 @@ function installCcxtGoUnifiedInt64Params (goTranspiler, table) {
     const isTabled = (param) => {
         if (!verdicts.has (param)) {
             verdicts.set (param, false); // re-entry while proving answers the boxed form
-            verdicts.set (param, ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param));
+            verdicts.set (param, ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param, goType));
         }
         return verdicts.get (param);
     };
     const upstreamType = goTranspiler.goNativeParameterType;
     goTranspiler.goNativeParameterType = function (param) {
-        return isTabled (param) ? 'int64' : upstreamType.call (this, param);
+        return isTabled (param) ? goType : upstreamType.call (this, param);
     };
     const tabledRead = (node) => {
         if (node?.kind !== ts.SyntaxKind.Identifier) {
@@ -7755,7 +7755,7 @@ function ccxtGoEnclosingGuardedStringPointer (goTranspiler, node) {
     return (node?.kind === ts.SyntaxKind.Identifier) && (goTranspiler.goBoundIdentifierType?.(node) === '*string') && goTranspiler.goHasEnclosingNilGuard (node);
 }
 
-export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = undefined) {
+export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = undefined, unifiedFloat64Params = undefined) {
     if (goTranspiler === undefined || goTranspiler.__ccxtGoLocalTypesInstalled) {
         return;
     }
@@ -7771,6 +7771,8 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoStringParamNilGuards (goTranspiler);
     installCcxtGoUnifiedStringDerefArgs (goTranspiler);
     installCcxtGoUnifiedInt64Params (goTranspiler, unifiedInt64Params);
+    // required `number` params (withdraw / transfer amount): the typed wrapper passes a float64, dynamic callers Float64Arg
+    installCcxtGoUnifiedInt64Params (goTranspiler, unifiedFloat64Params ?? goTranspiler.unifiedFloat64Params, 'float64');
     installStringPtrParams (goTranspiler); // nullable string params fed proven Go strings
     installStringPtrParamProof (goTranspiler); // venue string params every caller hands a *string, a never-rebound string or nil
     const upstream = goTranspiler.goTypeOfInitializer;
@@ -16623,6 +16625,7 @@ export class GoTranspiler extends BaseTranspiler {
     unifiedBoolParams: { [method: string]: number[] } = {};
     // inherited methods whose nullable `Int` parameter prints `*int64` on the base and every override
     unifiedNullableInt64Params: { [method: string]: number[] } = {};
+    unifiedFloat64Params: { [method: string]: number[] } | undefined = undefined;
     // `<class>.<method>` -> indexes of required `string` params of an exchange-local method that
     // no file in ts/src calls (the call-site proof is vacuous, so the table names the methods whose Go
     // signature may print `string`)
@@ -16704,6 +16707,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.unifiedSliceParams = config['unifiedSliceParams'] ?? {};
         this.unifiedBoolParams = config['unifiedBoolParams'] ?? {};
         this.unifiedNullableInt64Params = config['unifiedNullableInt64Params'] ?? {};
+        this.unifiedFloat64Params = config['unifiedFloat64Params'];
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
         this.stringPointerTupleCalls = config['stringPointerTupleCalls'] ?? [];
         this.guardedStringTupleCalls = config['guardedStringTupleCalls'] ?? [];

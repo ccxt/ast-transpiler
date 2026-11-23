@@ -12167,6 +12167,24 @@ describe ('goPrinterHooks', () => {
             expect (print ({})).toContain ('value any');
         });
     });
+
+    describe('go unifiedFloat64Params', () => {
+        const SRC = 'class Exchange {\n    withdraw (code: string, amount: number, params = {}): any {\n        const a = amount * 2;\n        return a;\n    }\n    transfer (code: string, amount: any, params = {}): any {\n        return amount;\n    }\n    rewrite (amount: number): any {\n        amount = this.parse (amount);\n        return amount;\n    }\n    parse (x: number): any {\n        return x;\n    }\n}\n';
+        const print = (table: any): string => {
+            const t = new Transpiler ({ 'verbose': false, 'go': { 'unifiedFloat64Params': table, 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+            installCcxtGoLocalTypes (t.goTranspiler);
+            return t.transpileGo (SRC).content;
+        };
+        test('a tabled required number param prints float64', () => {
+            expect (print ({ 'withdraw': [ 1 ] })).toContain ('amount float64');
+        });
+        test('an absent table keeps the boxed any param', () => {
+            expect (print ({})).toContain ('amount any');
+        });
+        test('a param that is not a number fails the build', () => {
+            expect (() => print ({ 'transfer': [ 1 ] })).toThrow (/not a number/);
+        });
+    });
 });
 
 describe ('goGeneralParamRules', () => {
