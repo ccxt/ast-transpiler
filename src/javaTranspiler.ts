@@ -408,11 +408,26 @@ const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 // unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
 const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer', 'createMarketOrderWithCost', 'createMarketSellOrderWithCost',
     'borrowCrossMargin', 'repayCrossMargin', 'borrowIsolatedMargin', 'repayIsolatedMargin', 'borrowMargin', 'repayMargin', 'setMargin',
-    'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder']);
+    'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder',
+    'createOrder', 'createOrderWs',
+    'createTriggerOrder', 'createStopLossOrder', 'createTakeProfitOrder', 'createOrderWithTakeProfitAndStopLoss',
+    'createTriggerOrderWs', 'createStopLossOrderWs', 'createTakeProfitOrderWs', 'createOrderWithTakeProfitAndStopLossWs',
+    'createLimitOrder', 'createMarketOrder', 'createLimitBuyOrder', 'createLimitSellOrder', 'createMarketBuyOrder',
+    'createMarketSellOrder', 'createPostOnlyOrder', 'createReduceOnlyOrder', 'createStopOrder', 'createStopLimitOrder',
+    'createStopMarketOrder', 'createTrailingAmountOrder', 'createTrailingPercentOrder', 'createLimitOrderWs', 'createMarketOrderWs',
+    'createLimitBuyOrderWs', 'createLimitSellOrderWs', 'createMarketBuyOrderWs', 'createMarketSellOrderWs', 'createPostOnlyOrderWs',
+    'createReduceOnlyOrderWs', 'createStopOrderWs', 'createStopLimitOrderWs', 'createStopMarketOrderWs', 'createTrailingAmountOrderWs',
+    'createTrailingPercentOrderWs']);
 // unified convert methods whose defaulted `amount: Num = undefined` prints `Double` (null when omitted)
 const JAVA_UNIFIED_OPTIONAL_NUMBER_PARAMETER_METHODS = new Set<string>(['fetchConvertQuote', 'createConvertTrade']);
-// unified edit methods whose defaulted `amount` / `price: Num = undefined` print `Double` (null when omitted)
-const JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS = new Set<string>(['editOrder', 'editOrderWs', 'editOrderWithClientOrderId', 'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder']);
+// unified order methods whose defaulted `amount` / `price: Num = undefined` print `Double` (null when omitted)
+const JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS = new Set<string>(['editOrder', 'editOrderWs', 'editOrderWithClientOrderId', 'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder',
+    'createOrder', 'createOrderWs',
+    'createTriggerOrder', 'createStopLossOrder', 'createTakeProfitOrder', 'createOrderWithTakeProfitAndStopLoss',
+    'createTriggerOrderWs', 'createStopLossOrderWs', 'createTakeProfitOrderWs', 'createOrderWithTakeProfitAndStopLossWs',
+    'createMarketOrder', 'createPostOnlyOrder', 'createReduceOnlyOrder', 'createStopOrder', 'createTrailingAmountOrder',
+    'createTrailingPercentOrder', 'createMarketOrderWs', 'createPostOnlyOrderWs', 'createReduceOnlyOrderWs', 'createStopOrderWs',
+    'createTrailingAmountOrderWs', 'createTrailingPercentOrderWs']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
@@ -1358,6 +1373,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === 'Long' && isNumericLiteral(arg) && /^\d+$/.test(printed)) {
             return printed + 'L';
         }
+        // an integer literal into a Double slot prints as a double literal: `(Double) (1)` does not compile
+        if (type === 'Double' && isNumericLiteral(isPrefixUnaryExpression(arg) ? arg.operand : arg) && /^-?\d+$/.test(printed)) {
+            return printed + '.0';
+        }
         if (type === 'Long' && this.javaLocalDeclaredAs(isAsExpression(arg) ? arg.expression : arg, printed, type)) {
             return printed;
         }
@@ -1642,6 +1661,9 @@ export class JavaTranspiler extends BaseTranspiler {
                 return printed + 'L';
             }
             return /^-?\d+L$/.test(printed) ? printed : `Helpers.toLongOrNull(${printed})`;
+        }
+        if (type === 'Double' && /^-?\d+$/.test(printed) && isNumericLiteral(isPrefixUnaryExpression(node) ? node.operand : node)) {
+            return printed + '.0';
         }
         if (type === 'String') {
             return this.javaNativeArgumentAlreadyTyped(node, type) ? printed : `Helpers.toStringArg(${printed})`;
