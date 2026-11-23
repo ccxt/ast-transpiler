@@ -7013,6 +7013,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             return false;
         }
         let init: any = declaration?.initializer;
+        if ((declaration?.kind === SyntaxKind.VariableDeclaration) && this.csharpIsIntegerLiteral(init) && this.csharpInt64WritesNeverNull(symbol, declaration)) {
+            return true;
+        }
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init === undefined) || this.csharpIntegralBindingIsRewritten(symbol, true)) {
             return false;
         }
@@ -7030,6 +7033,51 @@ export class CSharpTranspiler extends BaseTranspiler {
             fallback = fallback.operand;
         }
         return isNumericLiteral(fallback) && /^\d{1,15}$/.test(fallback.text);
+    }
+
+    csharpIsIntegerLiteral(node): boolean {
+        while ((node !== undefined) && isParenthesizedExpression(node)) {
+            node = node.expression;
+        }
+        if ((node !== undefined) && isPrefixUnaryExpression(node) && (node.operator === SyntaxKind.MinusToken)) {
+            node = node.operand;
+        }
+        return (node !== undefined) && isNumericLiteral(node) && /^\d{1,15}$/.test(node.text);
+    }
+
+    // `let x = <int literal>` whose every later write is a plain `=` of an integer literal or of an
+    // identifier a dominating null test admits: no write can put null into x
+    csharpInt64WritesNeverNull(symbol, declaration): boolean {
+        const scope = this.csharpEnclosingFunction(declaration);
+        if (scope === undefined) {
+            return false;
+        }
+        let sound = true;
+        const visit = (n: any) => {
+            if (!sound) {
+                return;
+            }
+            if (isIdentifier(n) && (n !== declaration.name) && this.csharpSameBinding(n, symbol)) {
+                let target: any = n;
+                while ((target.parent !== undefined) && isParenthesizedExpression(target.parent)) {
+                    target = target.parent;
+                }
+                if (this.csharpIsWriteTarget(target)) {
+                    const write: any = target.parent;
+                    let value: any = isBinaryExpression(write) && (write.operatorToken.kind === SyntaxKind.EqualsToken) ? write.right : undefined;
+                    while ((value !== undefined) && isParenthesizedExpression(value)) {
+                        value = value.expression;
+                    }
+                    sound = (value !== undefined) && (this.csharpIsIntegerLiteral(value)
+                        || (isIdentifier(value) && (this.csharpIntegralOperand(value)?.kind === 'Int64?') && this.csharpNullGuardAdmitsRead(write, value)));
+                } else if ((target.parent !== undefined) && (isArrayLiteralExpression(target.parent) || isObjectLiteralExpression(target.parent))) {
+                    sound = !this.csharpIsWriteTarget(target.parent); // a destructuring write
+                }
+            }
+            n.forEachChild(visit);
+        };
+        scope.forEachChild(visit);
+        return sound;
     }
 
     // an Int64? identifier read whose binding csharpInt64BindingNeverNull proves (a safeInteger literal default, never rewritten)
