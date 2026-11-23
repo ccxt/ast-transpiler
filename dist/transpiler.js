@@ -117179,7 +117179,7 @@ ${this.getIden(identation)}}`;
         if (isIdentifier4(root)) {
           const decl = this.rustDeclarationOfIdentifier(root);
           const init = decl !== void 0 && isVariableDeclaration3(decl) ? decl.initializer : void 0;
-          const fresh = init !== void 0 && (isObjectLiteralExpression4(init) || isArrayLiteralExpression4(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init) || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text))) || this.rustLocalHoldsFreshBook(decl, init);
+          const fresh = init !== void 0 && (isObjectLiteralExpression4(init) || isArrayLiteralExpression4(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init) || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)));
           if (!fresh || root !== n.left.expression)
             aliasWrite = true;
         }
@@ -117204,40 +117204,6 @@ ${this.getIden(identation)}}`;
     };
     method.body?.forEachChild(visit);
     return !named;
-  }
-  /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
-   *  every `return` is an object literal (`parseOrderBook`): a top-level key write cannot reach the message. */
-  rustLocalHoldsFreshBook(decl, init) {
-    if (decl === void 0 || !isVariableDeclaration3(decl) || init === void 0)
-      return false;
-    if (this.rustWsOrderBookClassType(this.getChecker().getTypeAtLocation(decl.name)) || this.rustReadsOrderbooksStore(decl.name))
-      return true;
-    const store = isElementAccessExpression5(init) ? init.expression : void 0;
-    if (store !== void 0 && isPropertyAccessExpression4(store) && store.expression.kind === SyntaxKind7.ThisKeyword && store.name.text === "orderbooks")
-      return true;
-    if (!isCallExpression7(init) || !isPropertyAccessExpression4(init.expression) || init.expression.expression.kind !== SyntaxKind7.ThisKeyword)
-      return false;
-    const callee = this.rustCalleeDeclaration(init);
-    if (callee === void 0 || !isMethodDeclaration5(callee) || callee.body === void 0)
-      return false;
-    const rets = [];
-    let nested = false;
-    const visit = (n) => {
-      if (isFunctionLike(n)) {
-        nested = true;
-        return;
-      }
-      if (isReturnStatement4(n))
-        rets.push(n.expression);
-      n.forEachChild(visit);
-    };
-    callee.body.forEachChild(visit);
-    return !nested && rets.length > 0 && rets.every((r) => {
-      let e = r;
-      while (e !== void 0 && (isParenthesizedExpression3(e) || isAsExpression3(e)))
-        e = e.expression;
-      return e !== void 0 && isObjectLiteralExpression4(e);
-    });
   }
   /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
   rustReadOffThisMember(init) {

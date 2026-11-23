@@ -5889,9 +5889,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
     /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
     rustParamNeverNamed(method: any, param: any): boolean;
-    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
-     *  every `return` is an object literal (`parseOrderBook`): a top-level key write cannot reach the message. */
-    rustLocalHoldsFreshBook(decl: any, init: any): boolean;
     /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
     rustReadOffThisMember(init: any): boolean;
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
