@@ -153,6 +153,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
+    javaOverriddenSyncStringListSlot(name: any, method: any, type: any, checker: any): boolean;
     javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
@@ -295,7 +296,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaDescribeTree(node: any): any;
     javaDescribedDictChainRead(node: any): string | undefined;
     javaOhlcvsElementRead(node: any): string | undefined;
-    javaOhlcvsElementWrite(left: any, rhs: string): string | undefined;
+    javaOhlcvsElementWrite(left: any, rhs: string, value?: any): string | undefined;
     javaIsOhlcvsField(node: any): boolean;
     javaOhlcvsEntryIsFresh(site: any, symbolNode: any): boolean;
     javaOhlcvsFreshAnchor(statement: any, symbol: any): boolean;

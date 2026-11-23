@@ -193,7 +193,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         text: string;
         tight: boolean;
     } | undefined;
-    csharpTypedDictionaryArgument(argument: any): string | undefined;
+    csharpTypedDictionaryArgument(argument: any, wanted?: string): string | undefined;
     csharpCallSiteOperand(argument: any): any;
     csharpCallSiteIdentityOperand(argument: any, wanted: string, text: string): string;
     csharpCallSiteDeclaredType(argument: any, printedName: string): string | undefined;
@@ -215,8 +215,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpVenueDictParamsKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpDictParamsRebound(method: any): boolean;
     csharpDictArgumentIsTyped(argument: any): boolean;
-    csharpProFileCallKinds(method: any, index: number): string[] | undefined;
+    csharpProFileCallKinds(method: any, index: number, dict?: boolean): string[] | undefined;
     csharpProConstIntCallLocal(method: any, caller: any, argument: any): string | undefined;
+    csharpProDictArgumentKind(method: any, call: any, index: number): string | undefined;
     csharpProCallArgumentKind(method: any, call: any, index: number): string | undefined;
     csharpCoreTypedNumberArgument(argument: any): string | undefined;
     csharpTypedParameterArgument(argument: any): string | undefined;
@@ -472,6 +473,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
     csharpInt64BindingNeverNull(symbol: any): boolean;
+    csharpIsIntegerLiteral(node: any): boolean;
+    csharpInt64WritesNeverNull(symbol: any, declaration: any): boolean;
     csharpNeverNullInt64Read(node: any): boolean;
     csharpNeverNullArithmeticComparison(node: any): string | undefined;
     csharpNeverNullIntegralArithmetic(node: any, op: any): string | undefined;

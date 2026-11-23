@@ -834,6 +834,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
     goConstDefaultedSafeIntegerLocal(ident: any): boolean;
+    goClockDefaultedSafeIntegerCall(node: any): boolean;
     goCheckerTypeIsNumberUnion(node: any): boolean;
     goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
@@ -2791,4 +2792,8 @@ export interface GoTranspiler {
 }
 export interface GoTranspiler {
     h41g25WrapperTask(node: any): boolean;
+}
+export interface GoTranspiler {
+    h42g22EndpointArmsContainer(node: any): boolean;
+    h42g22ReaderArgument(node: any): boolean;
 }
