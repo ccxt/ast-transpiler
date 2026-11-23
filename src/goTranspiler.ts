@@ -58967,7 +58967,12 @@ GoTranspiler.prototype.h33p02Converter = function (node): string | undefined {
     GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
         const printed = printVariableDeclarationListH36p04.call(this, node, identation);
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
-        const args: any = this.goSafeAccessorLocalArgs(declaration?.initializer, 'safeList');
+        // `this.safeList (R, 'k', []) as List` prints as the call itself
+        let init: any = declaration?.initializer;
+        while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+            init = init.expression;
+        }
+        const args: any = this.goSafeAccessorLocalArgs(init, 'safeList');
         if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (args === undefined)
             || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier)
             || !/^[A-Za-z0-9_]+$/.test(args.key.text) || !this.h28a03JoinedEndpointLocal(args.container)
