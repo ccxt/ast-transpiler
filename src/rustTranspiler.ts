@@ -22583,12 +22583,17 @@ export class RustTranspiler extends BaseTranspiler {
         return d ?? undefined;
     }
 
+    // unified records (a map at runtime) a venue-private method may declare as its own map return
+    private static readonly RUST_OWN_RECORD_RETURNS: Set<string> = new Set([
+        'MarginModification',
+    ]);
+
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined {
         if (this.checkerOrUndefined() === undefined) return undefined;
         const baseList = this.rustBaseStringListReturn(node); if (baseList !== undefined) return baseList;
         const kind = this.rustVenueContainerDecisionOf(node);
         const declared = String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
-        if (kind === undefined || kind.nullable || !/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared)) return undefined;
+        if (kind === undefined || kind.nullable || !(/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared) || RustTranspiler.RUST_OWN_RECORD_RETURNS.has(declared))) return undefined;
         const checker = this.getChecker();
         let returns = 0;
         let ok = true;
