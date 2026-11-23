@@ -59348,3 +59348,21 @@ function h38h01DefaultedListLocalUncached (goTranspiler: GoTranspiler, declarati
     };
 }
 // ===== H38-H01 (end) =====
+
+// ===== H39-G14: order-book side parameter slot (begin) =====
+// a slice-table slot naming the book side interface (`handleDelta (bookside, ..)`): every caller hands a side read
+// (`book['asks']`) or the forwarded side parameter, and the Go compiler checks each one against the interface
+const goUnifiedSliceParameterTypeH39g14 = GoTranspiler.prototype.goUnifiedSliceParameterType;
+GoTranspiler.prototype.goUnifiedSliceParameterType = function (fn, param): string | undefined {
+    const entry = Object.prototype.hasOwnProperty.call(this.unifiedSliceParams, fn.name.text) ? this.unifiedSliceParams[fn.name.text] : undefined;
+    const sideType = this.goOrderBook?.sideType;
+    if ((sideType === undefined) || (entry?.[fn.parameters.indexOf(param)] !== sideType)) {
+        return goUnifiedSliceParameterTypeH39g14.call(this, fn, param);
+    }
+    if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
+        || this.goTypeNameIsShadowed(fn, sideType) || !this.goLocalIsSafeToType(fn.body, param, param.name.text, sideType)) {
+        throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name?.text} is written as something other than ${sideType}`);
+    }
+    return sideType;
+};
+// ===== H39-G14 (end) =====
