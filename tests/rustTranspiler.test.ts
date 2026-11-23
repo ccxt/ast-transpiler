@@ -18624,7 +18624,8 @@ describe('ral-53e: an int / Option<i64> local keying a plain element read boxes 
         const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
         const a = out.slice(out.indexOf('fn labelA'), out.indexOf('fn labelB'));
         expect(a).toContain('let mut index: Option<i64> = ');
-        expect(a).toContain('Value::from(index)');
+        expect(a).toContain('thresholds.as_array().zip(index.map(|__k| __k - 1))');
+        expect(a).toContain('thresholds.as_array().zip(index).and_then(');
         const b = out.slice(out.indexOf('fn labelB'), out.indexOf('fn labelC'));
         expect(b).toContain('let mut index: Value = ');
         const c = out.slice(out.indexOf('fn labelC'));

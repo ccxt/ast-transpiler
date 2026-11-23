@@ -19408,6 +19408,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!place || place.startsWith('&')) return undefined;
             return `${receiverText}.get(${this.rustI64IndexText(keyNode, place)}).cloned().unwrap_or(Value::Null)`;
         }
+        const typedKey = this.printTypedIntKeyListIndex(receiverText, keyNode); if (typedKey !== undefined) return typedKey;
         if (!this.isRustValueIndexKey(keyNode)) return undefined;
         // The ccxt `writeBackIndexedMutations` pass matches the `let x = get_value(&C, &K)` text to
         // write a mutated `x` back into `C[K]`; native text is invisible to it, so a bind the next
@@ -19420,6 +19421,28 @@ export class RustTranspiler extends BaseTranspiler {
             return `${receiverText}.as_array().map(Vec::as_slice).unwrap_or_default().get(${keyText} as usize).cloned().unwrap_or(Value::Null)`;
         }
         return `${receiverText}.as_array().and_then(|__arr| match &${keyText} { Value::Int(__n) => __arr.get(*__n as usize), Value::Str(__s) => __s.parse::<usize>().ok().and_then(|__n| __arr.get(__n)), _ => None }).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** A typed `i64` / `Option<i64>` local as the index of a proven list: the array arm of `get_value` (a negative or
+     *  out-of-range index and an absent key read `Null`). */
+    printTypedIntKeyListIndex(receiverText: string, keyNode: Node): string | undefined {
+        let key: any = this.rustSkipWrappers(keyNode);
+        // `k + 1` / `k - 1` with a literal step: the same element `get_value` read at the shifted index
+        let step = '';
+        if (isBinaryExpression(key) && (key.operatorToken.kind === SyntaxKind.MinusToken || key.operatorToken.kind === SyntaxKind.PlusToken)
+            && isNumericLiteral(key.right) && /^\d+$/.test(key.right.text)) {
+            step = ` ${key.operatorToken.kind === SyntaxKind.MinusToken ? '-' : '+'} ${key.right.text}`;
+            key = this.rustSkipWrappers(key.left);
+        }
+        if (!isIdentifier(key) || this.rustI64CounterOf(key) !== undefined || this.isWriteBackBindRead(keyNode.parent)) return undefined;
+        const kind = this.rustScalarIdentifierKind(key);
+        if (kind !== 'int' && kind !== 'oint') return undefined;
+        // a stepped plain `int` key is already read by listArithIndex
+        if (kind === 'int' && step !== '') return undefined;
+        const name = super.printIdentifier(key);
+        if (!/^\w+$/.test(name)) return undefined;
+        const at = kind === 'int' ? `Some(${name})` : (step === '' ? name : `${name}.map(|__k| __k${step})`);
+        return `${receiverText}.as_array().zip(${at}).and_then(|(__arr, __n)| if __n < 0 { None } else { __arr.get(__n as usize) }).cloned().unwrap_or(Value::Null)`;
     }
 
     /** True when this read initialises a local that the very next statement in
