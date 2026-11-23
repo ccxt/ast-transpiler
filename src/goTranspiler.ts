@@ -36332,6 +36332,56 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
     return lines.join('\n');
 };
 
+// a joined url local rebound from more describe()-proven string leaves keeps `*string`: each such write
+// reads the same UrlsApiSectionStrings view (nil when absent, as the boxed read answered)
+function goUrlsLeafWriteTarget(goTranspiler: GoTranspiler, node): boolean {
+    const parent: any = goUrlsLeafWriteOf(node);
+    return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (parent.left?.kind === SyntaxKind.Identifier) && goUrlsLiteralLeaf(goTranspiler, node) && urlsDescribeStringProducer(node);
+}
+// the assignment `node` is the whole right side of, or one arm of a ternary that is
+function goUrlsLeafWriteOf(node): any {
+    let current: any = node;
+    while (current?.parent?.kind === SyntaxKind.ParenthesizedExpression) { current = current.parent; }
+    const ternary: any = current?.parent;
+    if ((ternary?.kind === SyntaxKind.ConditionalExpression) && (ternary.condition !== current)) {
+        current = ternary;
+        while (current?.parent?.kind === SyntaxKind.ParenthesizedExpression) { current = current.parent; }
+    }
+    return (current?.parent?.kind === SyntaxKind.BinaryExpression) && (current.parent.right === current) ? current.parent : undefined;
+}
+// a ternary write whose two arms are proven url leaves
+function goUrlsLeafTernaryWrite(goTranspiler: GoTranspiler, node): boolean {
+    const ternary: any = goTranspiler.goUnwrapParenthesizedNode(node);
+    return (ternary?.kind === SyntaxKind.ConditionalExpression)
+        && [ ternary.whenTrue, ternary.whenFalse ].every((arm) => goUrlsLeafWriteTarget(goTranspiler, goTranspiler.goUnwrapParenthesizedNode(arm)));
+}
+// `this.urls['api']['<s>']['<k>']` with literal keys, checked on the AST (printing would re-enter the view read)
+function goUrlsLiteralLeaf(goTranspiler: GoTranspiler, node): boolean {
+    const keys = [];
+    let current: any = node;
+    while (current?.kind === SyntaxKind.ElementAccessExpression) {
+        if (current.argumentExpression?.kind !== SyntaxKind.StringLiteral) {
+            return false;
+        }
+        keys.unshift(current.argumentExpression.text);
+        current = current.expression;
+    }
+    return (keys.length === 3) && (keys[0] === 'api') && goTranspiler.goIsUrlsField(current);
+}
+const goUrlsLeafWriteUpstreamTypeOfInitializer = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = goUrlsLeafWriteUpstreamTypeOfInitializer.call(this, initializer, printedValue);
+    return ((known === undefined) && (goUrlsLeafWriteTarget(this, initializer) || goUrlsLeafTernaryWrite(this, initializer))) ? '*string' : known;
+};
+const goUrlsLeafWriteUpstreamViewRead = GoTranspiler.prototype.goUrlsViewRead;
+GoTranspiler.prototype.goUrlsViewRead = function (node, baseExpr, keys, keyStrs: string[]) {
+    const printed = goUrlsLeafWriteUpstreamViewRead.call(this, node, baseExpr, keys, keyStrs);
+    const leaf = (printed === undefined) ? null : GO_TERNARY_URLS_SECTION_ARM.exec(printed);
+    return ((leaf !== null) && goUrlsLeafWriteTarget(this, node) && (this.goDeclaredTypeOfIdentifier(goUrlsLeafWriteOf(node).left) === '*string'))
+        ? 'this.UrlsApiSectionStrings' + leaf[1] : printed;
+};
+
 // ===== ral-84g2: reader-result locals =====
 // A. `(x as List).length` / `(x as List)[i]` and the parenthesized forms print as the bare local's read, so
 // the list-sink verdict of a wrapped list local is the verdict of the outermost type-only wrapper.
