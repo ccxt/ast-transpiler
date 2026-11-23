@@ -45336,7 +45336,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     }
     const arm = h23x04ListArm(this, ternary);
     const armText = this.printNode(arm, 0).trim();
-    const listValue = (this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) ? armText : `ArrayTyped(${armText})`;
+    const listValue = ((this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) || ((arm?.kind === SyntaxKind.Identifier) && h28a19ListTyped(this, arm))) ? armText : `ArrayTyped(${armText})`;
     const name = this.printNode(declaration.name, 0).trim();
     const printed = this.goTernaryStatementIfElse(name, ternary, identation);
     const safeList = this.goPrintTernaryBranch(ternary.whenFalse, 1).trim();
@@ -46256,7 +46256,7 @@ GoTranspiler.prototype.printVariableDeclarationList = function (node, identation
     }
     const arm = h23x04ListArm(this, ternary);
     const armText = this.printNode(arm, 0).trim();
-    const listValue = (this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) ? armText : `ArrayTyped(${armText})`;
+    const listValue = ((this.goPrintedTypeOfExpression(arm, armText) === GO_SAFE_LIST_LOCAL_TYPE) || ((arm?.kind === SyntaxKind.Identifier) && h28a19ListTyped(this, arm))) ? armText : `ArrayTyped(${armText})`;
     const name = this.printNode(declaration.name, 0).trim();
     const printed = this.goTernaryStatementIfElse(name, ternary, identation);
     if (printed === undefined) {
@@ -51606,7 +51606,9 @@ function h28a19ListTyped (go, ident) {
     const printed = go.printNode (list, 0);
     // an awaited endpoint prints its receive first, then `var x []any = xRecv.Value` at the same depth
     const heads = (typeof printed === 'string') ? printed.trimStart ().split ('\n').filter ((l) => !/^\s/.test (l)).map ((l) => l.trimEnd ()) : [];
-    return heads.some ((head) => (head === 'var ' + declaration.name.text + ' []any') || head.startsWith ('var ' + declaration.name.text + ' []any = '));
+    // a comma-ok list read `var x, _ = m[k].([]any)` leaves x a []any (nil when absent)
+    const commaOk = new RegExp ('^var ' + declaration.name.text + ', _ = [\\w.]+\\[\\w*"?\\w+"?\\]\\.\\(\\[\\]any\\)$');
+    return heads.some ((head) => (head === 'var ' + declaration.name.text + ' []any') || head.startsWith ('var ' + declaration.name.text + ' []any = ') || commaOk.test (head));
 }
 function h28a19ArrayIdentityWrite (go, node) {
     if ((node?.operatorToken?.kind !== ts.SyntaxKind.EqualsToken) || !ts.isIdentifier (node.left) || !ts.isIdentifier (node.right)

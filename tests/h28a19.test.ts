@@ -29,6 +29,9 @@ describe ('h28a19: list write of a []any operand into a []-seeded list local pri
         '    boxed (v: any) {\n        let out = [];\n        if (Array.isArray (v)) {\n            out = v;\n        }\n        return out.length;\n    }\n' +
         '    async endpoint (params = {}) {\n        const rows = await this.publicGetL (params);\n        let out: Dict[] = [];\n        if (Array.isArray (rows)) {\n            out = rows;\n        }\n        return out.length;\n    }\n' +
         '    async endpointDict (params = {}) {\n        const rows = await this.publicGetD (params);\n        let out: Dict[] = [];\n        if (Array.isArray (rows)) {\n            out = rows;\n        }\n        return out.length;\n    }\n' +
+        '    async ternaryEmpty (params = {}) {\n        const rows = await this.publicGetL (params);\n        const out = Array.isArray (rows) ? rows : [];\n        return out.length;\n    }\n' +
+        '    async ternaryRows (params = {}) {\n        const rows = await this.publicGetL (params);\n        const out: Dict[] = Array.isArray (rows) ? rows : this.safeList (rows, "data", []);\n        return out.length;\n    }\n' +
+        '    async ternaryDict (params = {}) {\n        const rows = await this.publicGetD (params);\n        const out = Array.isArray (rows) ? rows : [];\n        return out.length;\n    }\n' +
         '    accessor (v: Dict) {\n        let out = [];\n        out = this.safeList (v, "a", []);\n        return out.length;\n    }\n' +
         '}\n';
     const API = 'package ccxt\n\n' +
@@ -83,5 +86,14 @@ describe ('h28a19: list write of a []any operand into a []-seeded list local pri
     });
     test ('negative: an awaited dict endpoint local keeps the conversion', () => {
         expect (body ('endpointDictBody')).not.toMatch (/out = rows\n/);
+    });
+    test ('positive: a []any local in a list ternary arm is written as is (fails on the base printer)', () => {
+        expect (body ('ternaryEmptyBody')).toContain ('out = rows\n');
+        expect (body ('ternaryEmptyBody')).not.toContain ('ArrayTyped(rows)');
+        expect (body ('ternaryRowsBody')).toContain ('out = rows\n');
+        expect (body ('ternaryRowsBody')).not.toContain ('ArrayTyped(rows)');
+    });
+    test ('negative: a dict endpoint local in a ternary arm keeps the conversion', () => {
+        expect (body ('ternaryDictBody')).not.toMatch (/out = rows\n/);
     });
 });
