@@ -14043,6 +14043,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseFundingRate': [ 0 ], 'parseLeverage': [ 0 ], 'parseIncome': [ 0 ],
     // every tree caller passes a `{}`-defaulted safeDict row or a map local
     'parsePosition': [ 0 ],
+    // every tree caller passes a `{}`-defaulted safeDict local or an extend copy
+    'parseAccount': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
