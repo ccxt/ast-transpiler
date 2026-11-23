@@ -93293,7 +93293,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
     const lines = [];
     for (const shadow of table.values()) {
       const empty = `__${shadow.name}_empty`;
-      if (this.rustVenueStrListParam(shadow.declaration) || this.rustR14RowsParam(shadow.declaration)) {
+      if (this.rustVenueStrListParam(shadow.declaration)) {
         this.rustParamShadowEmittedSet().add(fn);
         continue;
       }
@@ -118569,134 +118569,6 @@ RustTranspiler.prototype.rustP28OrderRowsBind = function(node, name, indent) {
   return `${indent}let ${name}: Vec<crate::value::Dict> = crate::value::dict_rows(std::sync::Arc::new(__it.next().unwrap_or_default().as_array().cloned().unwrap_or_default()));
 `;
 };
-var rustR14VenueCallText = /* @__PURE__ */ new Map();
-RustTranspiler.prototype.rustR14RowsParam = function(param) {
-  if (param?.kind !== SyntaxKind7.Parameter)
-    return false;
-  this.rustR14Decisions ??= /* @__PURE__ */ new WeakMap();
-  let hit = this.rustR14Decisions.get(param);
-  if (hit === void 0) {
-    this.rustR14Decisions.set(param, false);
-    try {
-      hit = this.rustR14RowsParamUncached(param);
-    } catch (e) {
-      hit = false;
-    }
-    this.rustR14Decisions.set(param, hit);
-  }
-  return hit;
-};
-RustTranspiler.prototype.rustR14RowsParamUncached = function(param) {
-  const method = param.parent;
-  if (!isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier4(method.name) || !isClassDeclaration4(method.parent))
-    return false;
-  if (!isIdentifier4(param.name) || param.dotDotDotToken !== void 0 || param.initializer !== void 0 || param.questionToken !== void 0)
-    return false;
-  if (param.type?.kind !== SyntaxKind7.ArrayType || param.type.elementType?.kind !== SyntaxKind7.AnyKeyword)
-    return false;
-  const mods = Array.from(method.modifiers ?? []);
-  if (mods.some((m) => m.kind === SyntaxKind7.StaticKeyword || m.kind === SyntaxKind7.AsyncKeyword) || !mods.some((m) => m.kind === SyntaxKind7.OverrideKeyword))
-    return false;
-  const params = Array.from(method.parameters);
-  if (params.slice(0, params.indexOf(param)).some((p) => p.initializer !== void 0 || p.questionToken !== void 0))
-    return false;
-  const name = String(method.name.text);
-  if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== void 0 || this.rustMethodReferencedAsValue(method))
-    return false;
-  const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
-  const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
-  if (at < 0)
-    return false;
-  const base = this.getMethodOverride(method);
-  if (base === void 0 || base === method || !RustTranspiler["RUST_BASE_TIER_FILE"].test(String(base.getSourceFile().fileName)))
-    return false;
-  if (this.rustR14VenueCalled(file.slice(0, at) + "/ts/src", name))
-    return false;
-  if (this.rustLocalIsReassigned(param, String(param.name.text)))
-    return false;
-  let rows = 0;
-  for (const n of this.rustScopeNameNodes(method, String(param.name.text))) {
-    if (n === param.name || n === param)
-      continue;
-    if (!isIdentifier4(n) || this.rustDeclarationOfIdentifier(n) !== param) {
-      if (isIdentifier4(n) && this.rustIdentifierIsPropertyName(n))
-        continue;
-      return false;
-    }
-    const up = n.parent;
-    if (isPropertyAccessExpression4(up) && up.expression === n && String(up.name.text) === "length")
-      continue;
-    if (this.rustR14RowKey(up, n) === void 0)
-      return false;
-    rows++;
-  }
-  return rows > 0;
-};
-RustTranspiler.prototype.rustR14VenueCalled = function(srcRoot, name) {
-  let text = rustR14VenueCallText.get(srcRoot);
-  if (text === void 0) {
-    const parts = [];
-    for (const dir of ["", "/pro", "/prediction"]) {
-      let entries = [];
-      try {
-        entries = fs3.readdirSync(srcRoot + dir).filter(isRustTsIndexSource);
-      } catch (e) {
-        continue;
-      }
-      for (const f of entries)
-        parts.push(readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? "");
-    }
-    text = parts.join("\n");
-    rustR14VenueCallText.set(srcRoot, text);
-  }
-  return new RegExp(`\\.${name}\\s*\\(`).test(text);
-};
-RustTranspiler.prototype.rustR14RowKey = function(call, recv) {
-  if (!isCallExpression7(call) || call.arguments.length < 2 || call.arguments.length > 3 || call.arguments[0] !== recv)
-    return void 0;
-  const callee = call.expression;
-  if (!isPropertyAccessExpression4(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword || String(callee.name.text) !== "safeDict")
-    return void 0;
-  const dflt = call.arguments.length === 3 ? this.rustSkipWrappers(call.arguments[2]) : void 0;
-  if (dflt !== void 0 && (!isObjectLiteralExpression4(dflt) || dflt.properties.length !== 0))
-    return void 0;
-  const key = this.rustSkipWrappers(call.arguments[1]);
-  if (isNumericLiteral5(key))
-    return Number.isInteger(Number(key.text)) && Number(key.text) >= 0 ? key : void 0;
-  if (!isIdentifier4(key))
-    return void 0;
-  const kd = this.rustDeclarationOfIdentifier(key);
-  return kd !== void 0 && isVariableDeclaration3(kd) && kd.parent?.parent !== void 0 && isForStatement2(kd.parent.parent) ? key : void 0;
-};
-RustTranspiler.prototype.rustR14RowText = function(node) {
-  const call = this.rustSkipWrappers(node);
-  if (call === void 0 || !isCallExpression7(call) || call.arguments === void 0 || call.arguments.length < 2 || !isIdentifier4(call.arguments[0]))
-    return void 0;
-  const param = this.rustDeclarationOfIdentifier(call.arguments[0]);
-  if (param === void 0 || !this.rustR14RowsParam(param) || this.rustR14RowKey(call, call.arguments[0]) === void 0)
-    return void 0;
-  const key = this.rustSkipWrappers(call.arguments[1]);
-  const index = isNumericLiteral5(key) ? String(Number(key.text)) : this.rustI64CounterUse(key) ? `${String(key.text)} as usize` : void 0;
-  if (index === void 0)
-    return void 0;
-  return `(if let Some(Value::Dict(__m)) = ${this.printNode(param.name, 0)}.get(${index}) { std::sync::Arc::clone(__m) } else { Default::default() })`;
-};
-{
-  const proto = RustTranspiler.prototype;
-  const paramType = proto.rustParamType;
-  proto.rustParamType = function(param) {
-    return this.rustR14RowsParam(param) ? "&[crate::Value]" : paramType.call(this, param);
-  };
-  const rowDecl = proto.rustP21RowReadText;
-  proto.rustP21RowReadText = function(declaration) {
-    return this.rustR14RowText(declaration.initializer) ?? rowDecl.call(this, declaration);
-  };
-  const rowCall = proto.printRustP21RowCall;
-  proto.printRustP21RowCall = function(call) {
-    const text = this.rustR14RowText(call);
-    return text !== void 0 ? `Value::Dict(${text})` : rowCall.call(this, call);
-  };
-}
 
 // src/rustUnusedMut.ts
 init_esm_shims();
