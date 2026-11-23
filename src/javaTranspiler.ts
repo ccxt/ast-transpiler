@@ -406,7 +406,7 @@ const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 
 // unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
-const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer']);
+const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer', 'createMarketOrderWithCost', 'createMarketSellOrderWithCost']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
@@ -2345,7 +2345,7 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName) ? JAVA_STRING_LIST_TYPE : undefined;
     }
 
-    // a fixed `int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
+    // a fixed `int` / `Int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
     // a plain `number` amount / cost of the unified money methods `Double`; every override shares the annotation
     javaUnifiedIntParameterType(name, symbol, method, type): string | undefined {
         const methodName = String((method.name as any)?.text);
@@ -2353,18 +2353,19 @@ export class JavaTranspiler extends BaseTranspiler {
         const numberSlot = name === undefined && (type.flags & TypeFlags.Number) !== 0
             && (JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(methodName) || venueNumberSlot);
         // the `int` slot holds for sync methods too (handleErrors `code`): the root declaration decides
-        if ((name !== 'int' && !numberSlot) || !isIdentifier(method.name) || (numberSlot && !this.isAsyncFunction(method))) {
+        if ((name !== 'int' && name !== 'Int' && !numberSlot) || !isIdentifier(method.name) || ((numberSlot || name === 'Int') && !this.isAsyncFunction(method))) {
             return undefined;
+        }
+        // the named money methods share one typed surface even where a prediction venue declares one alone
+        if (numberSlot) {
+            return 'Double';
         }
         let root = method;
         for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
             root = m;
         }
-        if (!(numberSlot && venueNumberSlot) && !JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
+        if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
             return undefined;
-        }
-        if (numberSlot) {
-            return 'Double';
         }
         const fileName = symbol?.declarations?.[0]?.resolve()?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? 'Long' : undefined;

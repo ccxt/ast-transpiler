@@ -15,15 +15,19 @@ describe('java unified int parameter', () => {
             'export type Int = number | undefined;\nexport type int = number;\nexport type Str = string | undefined;\n' +
             'export interface Dictionary<T> { [key: string]: T; }\nexport type Dict = Dictionary<any>;\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts'),
-            "import type { int, Str, Dict } from './types';\n" +
+            "import type { int, Int, Str, Dict } from './types';\n" +
             'export default class Exchange {\n' +
             '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
             '    async setLeverage (leverage: int, symbol: Str = undefined, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '    handleErrors (code: int, reason: string): any { return undefined; }\n' +
+            '    async cancelAllOrdersAfter (timeout: Int, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '}\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
-            "import type { int, Str, Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
+            "import type { int, Int, Str, Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
             'class Venue extends Exchange {\n' +
+            "    async cancelAllOrdersAfter (timeout: Int, params: Dict = {}): Promise<{}> {\n        const t = (timeout > 0) ? this.parseToInt (timeout / 1000) : 0;\n        return { 'timeout': t, 'raw': timeout };\n    }\n" +
+            "    async otherOpt (count: Int): Promise<{}> {\n        return { 'count': count };\n    }\n" +
+            "    parseToInt (x: any): any {\n        return x;\n    }\n" +
             "    async setLeverage (leverage: int, symbol: Str = undefined, params: Dict = {}): Promise<{}> {\n        return { 'leverage': leverage };\n    }\n" +
             "    async other (count: int): Promise<{}> {\n        return { 'count': count };\n    }\n" +
             "    plain (count: int): any {\n        return count;\n    }\n" +
@@ -54,6 +58,13 @@ describe('java unified int parameter', () => {
     test('a sync method keeps the Object slot', () => {
         expect(out).toContain('plain(Object count)');
     });
+    test('a fixed Int parameter of a unified method prints Long, null kept by the compare', () => {
+        expect(out).toMatch(/cancelAllOrdersAfter\w*\(Long timeout, /);
+        expect(base).toMatch(/cancelAllOrdersAfter\w*\(Long timeout, /);
+    });
+    test('a venue-only async Int parameter keeps the Object slot', () => {
+        expect(out).toContain('otherOpt(Object count)');
+    });
 });
 
 describe('java unified money amount parameter', () => {
@@ -69,18 +80,23 @@ describe('java unified money amount parameter', () => {
             '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
             '    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '    async setMargin (symbol: string, amount: number, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '    async createMarketSellOrderWithCost (symbol: string, cost: number, params: Dict = {}): Promise<{}> { return {}; }\n' +
             '}\n');
         fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
             "import type { Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
             'class Venue extends Exchange {\n' +
             "    async withdraw (code: string, amount: number, address: string, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
             "    async setMargin (symbol: string, amount: number, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
+            "    async createMarketSellOrderWithCost (symbol: string, cost: number, params: Dict = {}): Promise<{}> {\n        return { 'cost': cost };\n    }\n" +
             '}\n');
         out = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } })
             .transpileJavaByPath(path.join(TMP, 'ts', 'src', 'probe.ts')).content;
     });
     afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
+    test('createMarketSellOrderWithCost cost prints Double', () => {
+        expect(out).toMatch(/createMarketSellOrderWithCost\w*\(\w+ symbol, Double cost, /);
+    });
     test('withdraw amount prints Double', () => {
         expect(out).toMatch(/withdraw\(\w+ code, Double amount, /);
     });
