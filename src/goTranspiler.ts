@@ -14050,6 +14050,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseMarginMode': [ 0 ],
     // every tree caller passes an extend copy, a `{}`-defaulted safeDict row or a map response
     'parseADLRank': [ 0 ],
+    // every tree caller passes a `{}`-defaulted safeDict row or an extend copy
+    'parsePredictionTrade': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
