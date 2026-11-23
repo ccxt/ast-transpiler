@@ -27,14 +27,23 @@ describe ('h28a19: list write of a []any operand into a []-seeded list local pri
         '    pos (response: Dict) {\n        const xs = this.safeList (response, "data");\n        let out: Dict[] = [];\n        if (xs !== undefined) {\n            out = xs;\n        }\n        return out.length;\n    }\n' +
         '    posGuard (xs: any[]) {\n        let out = [];\n        if (Array.isArray (xs)) {\n            out = xs;\n        }\n        return out.length;\n    }\n' +
         '    boxed (v: any) {\n        let out = [];\n        if (Array.isArray (v)) {\n            out = v;\n        }\n        return out.length;\n    }\n' +
+        '    async endpoint (params = {}) {\n        const rows = await this.publicGetL (params);\n        let out: Dict[] = [];\n        if (Array.isArray (rows)) {\n            out = rows;\n        }\n        return out.length;\n    }\n' +
+        '    async endpointDict (params = {}) {\n        const rows = await this.publicGetD (params);\n        let out: Dict[] = [];\n        if (Array.isArray (rows)) {\n            out = rows;\n        }\n        return out.length;\n    }\n' +
         '    accessor (v: Dict) {\n        let out = [];\n        out = this.safeList (v, "a", []);\n        return out.length;\n    }\n' +
         '}\n';
-    const API = 'package ccxt\n';
+    const API = 'package ccxt\n\n' +
+        'func (this *Ex) PublicGetL(args ...any) <-chan EndpointResult[[]any] {\n\treturn nil\n}\n' +
+        'func (this *Ex) PublicGetD(args ...any) <-chan EndpointResult[map[string]any] {\n\treturn nil\n}\n';
     let out = '';
     const fn = (name: string) => {
         const start = out.search (new RegExp ('func \\(this \\*ex\\) ' + name + '(Body)?\\('));
         const next = out.indexOf ('\nfunc ', start + 1);
         return out.slice (start, (next < 0) ? out.length : next);
+    };
+    const body = (name: string) => {
+        const start = out.indexOf ('func (this *ex) ' + name + '(');
+        const next = out.indexOf ('\nfunc ', start + 1);
+        return (start < 0) ? '' : out.slice (start, (next < 0) ? out.length : next);
     };
     beforeAll (() => {
         const tmp = fs.mkdtempSync (path.join (process.env.TMPDIR || os.tmpdir (), 'h28a19-'));
@@ -66,5 +75,13 @@ describe ('h28a19: list write of a []any operand into a []-seeded list local pri
     });
     test ('negative: an accessor call is not printed bare into the list local', () => {
         expect (fn ('Accessor')).not.toMatch (/out = this\.SafeList\(v, "a", \[\]any\{\}\)\n/);
+    });
+    test ('positive: an awaited list endpoint local is written as is (fails on the base printer)', () => {
+        expect (body ('endpointBody')).toContain ('var rows []any = rowsRecv.Value');
+        expect (body ('endpointBody')).toContain ('out = rows\n');
+        expect (body ('endpointBody')).not.toContain ('ArrayTyped(');
+    });
+    test ('negative: an awaited dict endpoint local keeps the conversion', () => {
+        expect (body ('endpointDictBody')).not.toMatch (/out = rows\n/);
     });
 });

@@ -51450,8 +51450,9 @@ function h28a19ListTyped (go, ident) {
         return false;
     }
     const printed = go.printNode (list, 0);
-    const head = (typeof printed === 'string') ? printed.trimStart ().split ('\n')[0].trimEnd () : '';
-    return (head === 'var ' + declaration.name.text + ' []any') || head.startsWith ('var ' + declaration.name.text + ' []any = ');
+    // an awaited endpoint prints its receive first, then `var x []any = xRecv.Value` at the same depth
+    const heads = (typeof printed === 'string') ? printed.trimStart ().split ('\n').filter ((l) => !/^\s/.test (l)).map ((l) => l.trimEnd ()) : [];
+    return heads.some ((head) => (head === 'var ' + declaration.name.text + ' []any') || head.startsWith ('var ' + declaration.name.text + ' []any = '));
 }
 function h28a19ArrayIdentityWrite (go, node) {
     if ((node?.operatorToken?.kind !== ts.SyntaxKind.EqualsToken) || !ts.isIdentifier (node.left) || !ts.isIdentifier (node.right)
