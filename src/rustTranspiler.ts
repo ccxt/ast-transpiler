@@ -22676,7 +22676,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner = printed.slice(form[0].length, -1);
         const at = inner.indexOf(form[1]);
         // the receiver is a plain local or a `self` field, borrowed by the typed reader
-        const recv = /^[\u0004&]/.test(inner) ? inner.slice(1, at) : inner.slice(0, at);
+        const recv = ((inner.charCodeAt(0) === 4) || inner.startsWith('&')) ? inner.slice(1, at) : inner.slice(0, at);
         if (at <= 0 || !/^(?:self\.)?[A-Za-z_]\w*$/.test(recv)) return undefined;
         return `self.${kind === 'dict' ? 'safe_dict_k_t' : 'safe_list_k_t'}(&${recv}, ${key})`;
     }
