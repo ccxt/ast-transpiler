@@ -24221,13 +24221,26 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // the call-site proof prints argument expressions, which can land back here
         this.goNativeParameterTypeCache.set(param, undefined);
         const cycleHits = CCXT_GO_TUPLE_STRING_CYCLE.hits;
-        const result = this.goNativeParameterTypeOf(param) ?? this.goUncalledStringParameterType(param);
+        const result = this.goNativeParameterTypeOf(param) ?? this.goUncalledStringParameterType(param) ?? this.goTestFunctionStringParameterType(param);
         if ((result === undefined) && (CCXT_GO_TUPLE_STRING_CYCLE.hits !== cycleHits)) {
             this.goNativeParameterTypeCache.delete(param); // an argument's proof was still running: decide again later
         } else {
             this.goNativeParameterTypeCache.set(param, result);
         }
         return result;
+    }
+
+    // a top-level exchange test function (ts/src[/pro]/test/Exchange) takes its declared `string`
+    // parameter as a Go string: the runner hands it over by reflection and the Go build checks direct callers
+    goTestFunctionStringParameterType(param): string | undefined {
+        const fn: any = param?.parent;
+        if ((fn?.kind !== SyntaxKind.FunctionDeclaration) || (fn.parent?.kind !== SyntaxKind.SourceFile) || (fn.body === undefined)
+            || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.questionToken !== undefined)
+            || (param.name?.kind !== SyntaxKind.Identifier) || (param.type?.kind !== SyntaxKind.StringKeyword)
+            || !(/(^|[\\/])ts[\\/]src[\\/](pro[\\/])?test[\\/]Exchange[\\/][^\\/]+\.ts$/).test(String(fn.getSourceFile?.()?.fileName ?? ''))) {
+            return undefined;
+        }
+        return this.goParameterBodyTakes(fn, param, 'string') ? 'string' : undefined;
     }
 
     goNativeParameterTypeOf(param): string | undefined {
@@ -24638,7 +24651,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const callRx = new RegExp('\\.\\s*' + methodName + '\\s*\\(', 'g');
         let passes = true;
         tree.fileText.forEach((text: string, file: string) => {
-            if ((file === myFile) || !passes || !this.goTsSrcFileDerivesFrom(tree, file, myClass)) {
+            if ((file === myFile) || h29g22SameSourceCopy(file, myFile) || !passes || !this.goTsSrcFileDerivesFrom(tree, file, myClass)) {
                 return;
             }
             callRx.lastIndex = 0;
@@ -25285,6 +25298,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     continue; // a same-named method of another exchange
                 }
                 if (this.h27g01ForeignNamesake(tree, site.file, myFile)) { continue; }
+                if (h29g22SameSourceCopy(site.file, myFile)) { continue; } // the base copy's own sites, proven above
                 let arg = site.args[index];
                 // the tree's splitter ignores brackets, so a nested array literal
                 // reads as several arguments; re-split the call for a slice slot

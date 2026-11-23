@@ -21137,3 +21137,66 @@ describe('a venue-private sync int method whose returns print int64 returns int6
         expect(run("    f (): number {\n        return this.parseToInt (this.options['y']);\n    }\n")).not.toContain('F() int64 {');
     });
 });
+
+describe('go: exchange test functions and the base copy of a slice-table method', () => {
+    const transpileTree = (files: { [rel: string]: string }, target: string, goConfig: any = {}): string => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'go-test-fn-param-'));
+        try {
+            for (const rel of Object.keys(files)) {
+                const full = path.join(dir, rel);
+                fs.mkdirSync(path.dirname(full), { recursive: true });
+                fs.writeFileSync(full, files[rel]);
+            }
+            return new Transpiler({ verbose: false, go: goConfig }).transpileGoByPath(path.join(dir, target)).content;
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const testFile = (param: string, body: string) =>
+        'async function testWatchX (exchange: any, skippedProperties: object, ' + param + ') {\n' + body + '    return true;\n}\n' +
+        'export default testWatchX;\n';
+    const useBody = '    const r = await exchange.watchX (symbol);\n    console.log (symbol + r);\n';
+
+    test('a declared string parameter of an exchange test function prints as a Go string', () => {
+        const out = transpileTree({ 'ts/src/pro/test/Exchange/test.watchX.ts': testFile('symbol: string', useBody) }, 'ts/src/pro/test/Exchange/test.watchX.ts');
+        expect(out).toContain('skippedProperties any, symbol string)');
+        expect(out).not.toContain('symbol any');
+    });
+
+    test('negative: a nullable Str parameter stays any', () => {
+        const out = transpileTree({ 'ts/src/pro/test/Exchange/test.watchX.ts': 'type Str = string | undefined;\n' + testFile('symbol: Str', useBody) }, 'ts/src/pro/test/Exchange/test.watchX.ts');
+        expect(out).toContain('symbol any)');
+    });
+
+    test('negative: a parameter the body writes as another kind stays any', () => {
+        const out = transpileTree({ 'ts/src/pro/test/Exchange/test.watchX.ts': testFile('symbol: string', '    // @ts-ignore\n    symbol = undefined;\n' + useBody) }, 'ts/src/pro/test/Exchange/test.watchX.ts');
+        expect(out).toContain('symbol any)');
+    });
+
+    test('negative: the same function outside the exchange test folders stays any', () => {
+        const out = transpileTree({ 'ts/src/test/base/test.watchX.ts': testFile('symbol: string', useBody) }, 'ts/src/test/base/test.watchX.ts');
+        expect(out).toContain('symbol any)');
+    });
+
+    const base = 'export class Exchange {\n    has: any = {};\n' +
+        '    async watchLiq (symbol: string, since: number = undefined, params = {}): Promise<number> {\n' +
+        "        if (this.has['watchLiquidationsForSymbols'] !== undefined) {\n" +
+        '            return await this.watchLiquidationsForSymbols ([ symbol ], since, params);\n        }\n        return 0;\n    }\n' +
+        '    async watchLiquidationsForSymbols (symbols: string[], since: number = undefined, params = {}): Promise<number> {\n        return symbols.length;\n    }\n}\n';
+    const table = { 'unifiedSliceParams': { 'watchLiquidationsForSymbols': { 0: '[]string' } }, 'unifiedStringParams': { 'watchLiq': [ 0 ] } };
+
+    test('the base copy does not read the original base file as a sibling caller', () => {
+        const copy = 'ts/src/base/Exchange.nooverloads.' + String(process.pid) + '.ts';
+        const out = transpileTree({ 'ts/src/base/Exchange.ts': base, [copy]: base }, copy, table);
+        expect(out).toContain('symbols []string');
+        expect(out).toContain('[]string{symbol}');
+    });
+
+    test('negative: a sibling venue that passes a boxed list keeps the base slot any', () => {
+        const copy = 'ts/src/base/Exchange.nooverloads.' + String(process.pid) + '.ts';
+        const venue = "import { Exchange } from './base/Exchange.js';\nexport default class v extends Exchange {\n" +
+            '    async f (xs: any) {\n        return await this.watchLiquidationsForSymbols (xs);\n    }\n}\n';
+        const out = transpileTree({ 'ts/src/base/Exchange.ts': base, [copy]: base, 'ts/src/v.ts': venue }, copy, table);
+        expect(out).not.toContain('symbols []string');
+    });
+});
