@@ -5254,7 +5254,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     private static readonly RUST_SCALAR_TYPES: { [kind: string]: string } = {
         ostr: 'Option<String>', oint: 'Option<i64>', onum: 'Option<f64>', obool: 'Option<bool>', str: 'String', int: 'i64', num: 'f64', bool: 'bool',
-        odict: 'Option<crate::value::Dict>',
+        odict: 'Option<crate::value::Dict>', dict: 'crate::value::Dict',
     };
 
     private rustScalarDecisions = new Map<any, string | null>();
@@ -6514,6 +6514,8 @@ export class RustTranspiler extends BaseTranspiler {
         findSubscription: [ 'NullableDict', 'odict' ],
         // prediction slug shortener: every return is a `toUpperCase ()` of a joined string
         shortenSlug: [ 'string', 'str' ],
+        // describe: base literal or `deepExtend (super.describe (), {..})` of maps on every path (`-> Dict`)
+        describe: [ 'Dict', 'dict' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -6542,7 +6544,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
     rustBaseTypedReturnKind(expr): string | undefined {
         const kind = this.rustBaseTypedReturnKindAll(expr);
-        return kind === 'odict' ? undefined : kind;
+        return kind === 'odict' || kind === 'dict' ? undefined : kind;
     }
 
     /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
@@ -6705,6 +6707,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === undefined) return undefined;
         const text = this.rustBaseTypedBareText(node);
         if (kind === 'odict') return `${text}.map_or(Value::Null, Value::Dict)`;
+        if (kind === 'dict') return `Value::Dict(${text})`;
         return kind === 'ostr' ? `Value::from(${text})` : this.rustScalarBoxText(kind, text, node);
     }
 
@@ -6725,6 +6728,15 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustOdictCallText(exp) ?? `if let Value::Dict(__m) = ${this.printNode(exp, 0).trim()} { Some(__m) } else { None }`;
     }
 
+    /** `return x` of an `-> Dict` method: a map literal or `deep_extend` as its typed twin, else the held map (empty otherwise). */
+    rustDictReturnText(exp): string {
+        const text = this.printNode(exp, 0).trim();
+        if (text.startsWith('Value::Map(') && text.endsWith(')') && this.rustBalancedText(text.slice('Value::Map('.length, -1))) return `std::sync::Arc::new(${text.slice('Value::Map('.length, -1)})`;
+        const head = /^self\.(?:deep_extend|deepExtend)\(/.exec(text)?.[0];
+        if (head !== undefined && text.endsWith(')') && this.rustBalancedText(text.slice(head.length, -1))) return `self.deep_extend_t(${text.slice(head.length)}`;
+        return `if let Value::Dict(__m) = ${text} { __m } else { crate::value::Dict::default() }`;
+    }
+
     /** `return x` in a typed method: the native value, converting a `Value` once. */
     printRustBaseTypedReturn(fn, exp): string | undefined {
         const kind = this.rustMethodTypedReturnKind(fn);
@@ -6732,6 +6744,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(exp);
         if (this.literalKindOfNode(inner) === 'null') return kind.startsWith('o') ? 'None' : undefined;
         if (kind === 'odict') return this.rustOdictReturnText(exp);
+        if (kind === 'dict') return this.rustDictReturnText(exp);
         const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         if (local === kind) return super.printIdentifier(inner);
         if (local !== undefined && `o${local}` === kind) return `Some(${super.printIdentifier(inner)})`;
