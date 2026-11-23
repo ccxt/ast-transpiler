@@ -59469,3 +59469,49 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
     };
 }
 // ===== numeric literal arguments (end) =====
+// ===== H39-G23
+// `const x = this.safeDict (C, K)` where C prints `map[string]any` and K is a literal or a Go string: the comma-ok read
+// answers nil for a missing key, nil, "" or a non-map value exactly as SafeMapTyped / SafeDictMap did
+{
+    const printH39g23 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printH39g23.call (this, node, identation);
+        const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        let call: any = decl?.initializer;
+        while ((call?.kind === SyntaxKind.AsExpression) || (call?.kind === SyntaxKind.ParenthesizedExpression)) {
+            call = call.expression;
+        }
+        if ((typeof printed !== 'string') || (decl?.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+            || (call.expression.name?.text !== 'safeDict') || (call.arguments.length < 2) || (call.arguments.length > 3)) {
+            return printed;
+        }
+        const [ container, key, fallback ] = call.arguments;
+        // a `{}` default only where the printer already dropped it (it printed the nil-answering SafeMapTyped)
+        const dropped = (fallback === undefined) || ((fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0));
+        if (!dropped) {
+            return printed;
+        }
+        const goTypeOf = (n: any): string | undefined => {
+            if (n?.kind !== SyntaxKind.Identifier) {
+                return undefined;
+            }
+            const d: any = this.goAnyBoxLocalDeclaration (n);
+            return (d?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType (d) : this.goResolvedLocalGoType (n);
+        };
+        const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
+        if ((goTypeOf (container) !== 'map[string]any') || (!literalKey && (goTypeOf (key) !== 'string'))) {
+            return printed;
+        }
+        const name: string = decl.name.text;
+        const c: string = container.text;
+        const k: string = literalKey ? `"${key.text}"` : key.text;
+        const reader = (fallback === undefined) ? '(?:(?:ccxt\\.)?SafeMapTyped|this\\.SafeDictMap)' : '(?:ccxt\\.)?SafeMapTyped';
+        const m = new RegExp ('^(\\n*)(\\t*)var (\\w+) map\\[string\\]any = ' + reader + '\\((\\w+), ("[^"]*"|\\w+)\\)$').exec (printed);
+        if ((m === null) || (m[3] !== name) || (m[4] !== c) || (m[5] !== k)) {
+            return printed;
+        }
+        return `${m[1]}${m[2]}var ${name}, _ = ${c}[${k}].(map[string]any)`;
+    };
+}
+// ===== H39-G23 (end) =====
