@@ -27614,3 +27614,21 @@ describe('a venue Dict method returning the runtime extend returns the native ma
         expect (out).toMatch (/fn build\([^\n]*\) -> Value \{/);
     });
 });
+
+describe('rust typed cancelAllOrdersAfter: Option<i64> timeout, Option<Dict> return', () => {
+    const src = "import Exchange from './base/Exchange.js';\nimport type { Dict, Int } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelAllOrdersAfter (timeout: Int, params: Dict = {}): Promise<Dict> {\n        return { 'info': timeout };\n    }\n    async other (timeout: Int, params: Dict = {}): Promise<Dict> {\n        return { 'info': timeout };\n    }\n}\n";
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-r16-'));
+    const file = path.join (root, 'ts/src/venue.ts');
+    fs.mkdirSync (path.dirname (file), { recursive: true });
+    fs.writeFileSync (file, src);
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    const emit = (names: string[]) => new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': names, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (file).content;
+    test('a listed cancelAllOrdersAfter prints the typed signature', () => {
+        expect (emit ([ 'cancelAllOrdersAfter' ])).toContain ('pub fn cancelAllOrdersAfter(&self, timeout: Option<i64>, params: impl Into<crate::Params> + Send) -> crate::Result<Option<crate::value::Dict>>');
+    });
+    test('negative: unlisted, it keeps the Value signature', () => {
+        const out = emit ([]);
+        expect (out).not.toContain ('Option<crate::value::Dict>>');
+        expect (out).not.toMatch (/fn other\([^)]*Option<i64>/);
+    });
+});

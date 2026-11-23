@@ -15684,6 +15684,8 @@ export class RustTranspiler extends BaseTranspiler {
         const strDefault = ts === '' && p.initializer?.kind === SyntaxKind.StringLiteral;
         if (((ts === 'Str' || ts === 'string' || strDefault) && optional) || ts === 'Str') return { rustType: 'Option<&str>', toValue: `${name}.map(Value::from).unwrap_or_default()` };
         if (ts === 'Int' && optional) return { rustType: 'Option<i64>', toValue: `Value::from(${name})` };
+        // a required `Int` is still nullable in TypeScript (`cancelAllOrdersAfter (timeout: Int)`)
+        if (ts === 'Int' && !optional) return { rustType: 'Option<i64>', toValue: `Value::from(${name})` };
         if (ts === 'int' && !optional) return { rustType: 'i64', toValue: `Value::from(${name})` };
         if (ts === 'Strings' && optional) return { rustType: 'Option<Vec<String>>', toValue: `Value::from(${name})` };
         if ((ts === 'OrderType' || ts === 'OrderSide') && !optional) return { rustType: '&str', toValue: `Value::from(${name})` };
@@ -15782,6 +15784,8 @@ export class RustTranspiler extends BaseTranspiler {
         fetchLeverages: 'crate::types::Leverages',
         setLeverage: 'Value',
         setMarginMode: 'Value',
+        // every body answers the endpoint's dict (`None` when the endpoint answered no dict)
+        cancelAllOrdersAfter: 'Option<crate::value::Dict>',
         fetchMarginMode: 'crate::types::MarginMode',
         fetchMarginModes: 'crate::types::MarginModes',
         addMargin: 'crate::types::MarginModification',
