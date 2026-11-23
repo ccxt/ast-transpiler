@@ -60559,3 +60559,23 @@ GoTranspiler.prototype.h42g22EndpointArmsContainer = function (node): boolean {
     };
 }
 // ===== H42-G22 (end) =====
+// ===== H42-G29 =====
+// a local bound once to `await this.w (..)` of an H41-G25 JSON wrapper task holds the decoded document, the empty
+// literal default or nil, like an awaited endpoint call: lists cut from it hold no scalar pointer
+{
+    const jsonOriginH42g29 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        if (jsonOriginH42g29.call(this, node, depth)) {
+            return true;
+        }
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & NodeFlags.Const) === 0)) {
+            return false;
+        }
+        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+        return (init?.kind === SyntaxKind.AwaitExpression) && this.h41g25WrapperTask(init.expression)
+            && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+    };
+}
+// ===== H42-G29 (end) =====
