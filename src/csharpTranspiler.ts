@@ -8980,12 +8980,13 @@ export class CSharpTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
         const h30t01 = this.h30t01IsArrayBinding(node, parsedArg); if (h30t01 !== undefined) return h30t01;
         const h30c05 = this.h30c05BoundListTest(node); if (h30c05 !== undefined) { return h30c05; }
-        // a non-name argument (guarded element read, cast) is evaluated once and bound, not printed three times
+        // a non-name argument (guarded element read, cast) is evaluated once and bound, not printed three times;
+        // a null value is not a list (no GetType on null)
         if (!/^[\w.]+$/.test(String(parsedArg).trim())) {
             const v = 'hxArr' + node.pos;
-            return `((${parsedArg}) is var ${v} && ((${v} is IList<object>) || (${v}.GetType().IsGenericType && ${v}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))`;
+            return `((${parsedArg}) is var ${v} && ((${v} is IList<object>) || (${v} is not null && ${v}.GetType().IsGenericType && ${v}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))`;
         }
-        return `((${parsedArg} is IList<object>) || (${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
+        return `((${parsedArg} is IList<object>) || (${parsedArg} is not null && ${parsedArg}.GetType().IsGenericType && ${parsedArg}.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>))))`;
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
