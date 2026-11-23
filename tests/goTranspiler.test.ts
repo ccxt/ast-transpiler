@@ -19842,6 +19842,43 @@ describe ('go dict param from a never-nil safeDict argument', () => {
     });
 });
 
+describe ('go dict param: parseBorrowInterest row', () => {
+    const print = (name: string, arg: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parseBorrowInterest (info: Dict, market: any = undefined) {\n' +
+            "        return info['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[]) {\n' +
+            '        return this.parseBorrowInterest (' + arg + ', undefined);\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict row types the parameter', () => {
+        const out = print('tmp-g11-bi-sd', 'this.safeDict (xs, 0, {})');
+        expect(out).toContain('ParseBorrowInterest(info map[string]any');
+    });
+    test('a safeDict row without a default (may be nil) keeps the box', () => {
+        expect(print('tmp-g11-bi-nil', 'this.safeDict (xs, 0)')).toContain('ParseBorrowInterest(info any');
+    });
+    test('a raw list element (wrong kind possible) keeps the box', () => {
+        expect(print('tmp-g11-bi-elem', 'xs[0]')).toContain('ParseBorrowInterest(info any');
+    });
+});
+
 describe ('go dict param argument of a wrapped base dispatch', () => {
     const print = (name: string, arg: string): string => {
         const dir = path.join(__dirname, 'files', name, 'ts', 'src');
