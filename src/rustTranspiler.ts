@@ -41046,7 +41046,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && this.rustVenueDictParam(declaration);
+        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration));
         return this.rustNeverNullDictLocalArg(arg);
     }
 
@@ -41104,6 +41104,16 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
 
+    /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
+     *  it lends its map view, an empty map for a non-dict (as the callee's shadow reads answer for Null). */
+    rustBoxedDictParamLends(param: any): boolean {
+        const type: any = param?.type;
+        if (!isIdentifier(param?.name) || param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
+        if (!isMethodDeclaration(param.parent) || this.rustLocalIsReassigned(param, String(param.name.text)) || this.rustParamShadowTable(param.parent).has(String(param.name.text))) return false;
+        return this.rustParamType(param) === 'Value';
+    }
+
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined {
         const call: any = node?.parent;
@@ -41114,6 +41124,7 @@ export class RustTranspiler extends BaseTranspiler {
         const param: any = callee?.parameters?.[at];
         if (param === undefined || !this.rustVenueDictParam(param)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration)) return `${text}.as_map().unwrap_or(&Default::default())`;
         return declaration?.kind === SyntaxKind.Parameter ? text : `&${text}`;
     }
 
