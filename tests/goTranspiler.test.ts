@@ -20802,3 +20802,45 @@ describe ('a Dict method whose paths are a ternary of fresh maps or an omit of o
         expect (out).not.toContain (') map[string]any {');
     });
 });
+
+describe('a venue Str parameter fed by a handleMarketTypeAndParams slot in two sibling calls', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'str-ptr-tuple-cycle-'));
+    afterAll(() => {
+        fs.rmSync(tmp, { 'recursive': true, 'force': true });
+    });
+    let runs = 0;
+    const run = (body: string, fixture: string = '', comment: string = ''): string => {
+        runs += 1;
+        const root = path.join(tmp, 'r' + runs);
+        const dir = path.join(root, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { 'recursive': true });
+        fs.mkdirSync(path.join(dir, 'test', 'static'), { 'recursive': true });
+        fs.writeFileSync(path.join(dir, 'test', 'static', 'markets.json'), fixture);
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'), "export type Str = string | undefined;\nexport type Dict = any;\nexport class Exchange {\n    handleMarketTypeAndParams (m: string, market: any = undefined, params: any = {}, d: any = undefined): [Str, Dict] { return [ d, params ]; }\n}\n");
+        fs.writeFileSync(path.join(dir, 'other.ts'), "import { Exchange } from './base/Exchange';\nexport class other extends Exchange {\n    f () {\n" + comment + "        return 1;\n    }\n}\n");
+        const file = path.join(dir, 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, Str, Dict } from './base/Exchange';\nexport class ex extends Exchange {\n" + body + "}\n");
+        const inst = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, stringPointerTupleCalls: [ 'handleMarketTypeAndParams' ] } });
+        installCcxtGoLocalTypes(inst.goTranspiler);
+        const cwd = process.cwd();
+        process.chdir(root);
+        try {
+            return inst.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+        }
+    };
+    const caller = "    one (params = {}) {\n        let type: Str = undefined;\n        let rest = undefined;\n        [ type, rest ] = this.handleMarketTypeAndParams ('x', undefined, params);\n        const sub: Str = undefined;\n        if (this.isInverse (type, sub)) {\n            return 1;\n        }\n        return this.isLinear (type, sub);\n    }\n";
+    const methods = "    isInverse (type: string, subType: Str = undefined): boolean {\n        return subType === 'inverse';\n    }\n"
+        + "    isLinear (type: string, subType: Str = undefined): boolean {\n        if (subType === undefined) {\n            return (type === 'future');\n        }\n        return subType === 'linear';\n    }\n";
+    test('both callees take *string, whichever is decided first (fails on the base printer)', () => {
+        const out = run(caller + methods);
+        expect(out).toContain('IsInverse(typeVar *string, optionalArgs ...any) bool {');
+        expect(out).toContain('IsLinear(typeVar *string, optionalArgs ...any) bool {');
+        expect(out).toContain('(typeVar != nil && *typeVar == "future")');
+    });
+    test('negative: an untyped caller argument keeps any (nil passes as nil)', () => {
+        const out = run("    one (o: any) {\n        return this.isInverse (o['type'], undefined);\n    }\n" + methods);
+        expect(out).toContain('IsInverse(typeVar any, optionalArgs ...any) bool {');
+    });
+});

@@ -8242,6 +8242,8 @@ const CCXT_GO_TUPLE_STRING_SAFE_ARGS = {
 
 const CCXT_GO_TUPLE_STRING_CACHE = new WeakMap ();
 const CCXT_GO_TUPLE_STRING_IN_PROGRESS = new Set ();
+// bumped whenever a join answers undefined only because its own proof is still running
+const CCXT_GO_TUPLE_STRING_CYCLE = { hits: 0 };
 
 // the `[ .., n, .. ] = rhs` assignment whose pattern holds n at `index`, or undefined
 function ccxtGoArrayAssignmentOf (n, index) {
@@ -8541,6 +8543,7 @@ function ccxtGoTupleStringJoinType (goTranspiler, declaration) {
         return CCXT_GO_TUPLE_STRING_CACHE.get (declaration);
     }
     if (CCXT_GO_TUPLE_STRING_IN_PROGRESS.has (declaration)) {
+        CCXT_GO_TUPLE_STRING_CYCLE.hits += 1;
         return undefined;
     }
     CCXT_GO_TUPLE_STRING_IN_PROGRESS.add (declaration);
@@ -12988,6 +12991,9 @@ function goQuotedNameNeverDispatched (file: string, text: string, name: string):
         }
         const before = text.substring (Math.max (0, m.index - 200), m.index);
         const after = text.substring (m.index + m[0].length, m.index + m[0].length + 8);
+        if (/^\s*\/\//.test (before.substring (before.lastIndexOf ('\n') + 1))) {
+            continue; // a response sample in a line comment
+        }
         const key = /[{,]\s*$/.test (before) && /^\s*:/.test (after);
         const compared = /^\s*(?:===|!==|==|!=)/.test (after) || /(?:===|!==|==|!=)\s*$/.test (before);
         if (key || compared) {
@@ -13042,7 +13048,8 @@ function goNameInTestFixtures (tree, name: string): boolean {
         text = chunks.join ('\n');
         GO_FIXTURE_TEXT_CACHE.set (tree, text);
     }
-    return text.includes ('"' + name + '"');
+    // a key holding a scalar (`"isInverse": false` in a markets fixture) is data, never a dispatched method
+    return new RegExp ('"' + name + '"(?!\\s*:\\s*(?:true|false|null|-?\\d))').test (text);
 }
 
 function goStringPtrParamProven (go, param) {
@@ -24160,8 +24167,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         // the call-site proof prints argument expressions, which can land back here
         this.goNativeParameterTypeCache.set(param, undefined);
+        const cycleHits = CCXT_GO_TUPLE_STRING_CYCLE.hits;
         const result = this.goNativeParameterTypeOf(param) ?? this.goUncalledStringParameterType(param);
-        this.goNativeParameterTypeCache.set(param, result);
+        if ((result === undefined) && (CCXT_GO_TUPLE_STRING_CYCLE.hits !== cycleHits)) {
+            this.goNativeParameterTypeCache.delete(param); // an argument's proof was still running: decide again later
+        } else {
+            this.goNativeParameterTypeCache.set(param, result);
+        }
         return result;
     }
 
