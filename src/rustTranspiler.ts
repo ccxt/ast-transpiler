@@ -15952,7 +15952,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a `Promise<..>` pass-through without the `async` keyword (`watchTicker () { return this.watchPublic (..); }`) awaits
         const isAsync = this.rustTypedIsAsync(node);
         // the required parameters rebind by position (each is a `Value`, as the untyped signature declared it)
-        const binds = required.map(p => `${i2}let mut ${p.name} = __it.next().unwrap_or_default();\n`).join('');
+        const binds = required.map(p => (this as any).rustP28OrderRowsBind(node, p.name, i2) ?? `${i2}let mut ${p.name} = __it.next().unwrap_or_default();\n`).join('');
         return ` {\n${i2}let __args: Vec<Value> = vec![${lowered}];\n`
             + `${i2}let mut __it = __args.into_iter();\n`
             + binds
@@ -19589,6 +19589,8 @@ export class RustTranspiler extends BaseTranspiler {
             // a lent string-list parameter is the slice itself: its reads need no binding
             if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustVenueDictParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
+            // a typed request-row list parameter is already bound as `Vec<Dict>`: no slice shadow
+            if ((this as any).rustP28OrderRowsParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustFunctionDeclaresName(fn, empty)) continue;
             const map = shadow.kind === RUST_PARAM_SHADOWS.MAP;
             const accessor = map ? 'as_map' : 'as_array';
@@ -42090,6 +42092,7 @@ export class RustTranspiler extends BaseTranspiler {
 // Converted once at the read (`crate::value::dict_rows`: a non-map element is the empty map in its slot, the answer
 // `safe_dict_t` gives today); its row reads `const row = this.safeDict (rows, k)` are bounds-tested slice reads.
 (RustTranspiler.prototype as any).rustP21DictRowsLocal = function (this: any, declaration: any): boolean {
+    if (declaration !== undefined && isParameterDeclaration(declaration)) return this.rustP28OrderRowsParam(declaration);
     if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
     this.rustP21Decisions ??= new WeakMap<any, boolean>();
     let hit = this.rustP21Decisions.get(declaration);
@@ -42249,3 +42252,44 @@ export class RustTranspiler extends BaseTranspiler {
     return `(if let Some(Value::Dict(__m)) = ${(BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text)}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
 };
 // ===== end h34-H34-P22
+
+// ===== h38-H38-P28: a typed `orders: OrderRequest[]` parameter is a list of request maps
+// Its lowering (`IntoRaw` of `Vec<OrderRequest>`) is a list whose every element is a map, so a body that only reads
+// its length and its rows `this.safeDict (orders, i)` / `orders[i]` binds it once as `Vec<Dict>` (P21 row reads).
+(RustTranspiler.prototype as any).rustP28OrderRowsParam = function (this: any, param: any): boolean {
+    this.rustP28Decisions ??= new WeakMap<any, boolean>();
+    let hit = this.rustP28Decisions.get(param);
+    if (hit !== undefined) return hit;
+    this.rustP28Decisions.set(param, false);
+    try { hit = this.rustP28OrderRowsParamUncached(param); } catch (e) { hit = false; }
+    this.rustP28Decisions.set(param, hit);
+    return hit;
+};
+(RustTranspiler.prototype as any).rustP28OrderRowsParamUncached = function (this: any, param: any): boolean {
+    if (!isIdentifier(param.name) || param.initializer !== undefined || param.questionToken !== undefined) return false;
+    const ts = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
+    if (ts !== 'OrderRequest[]' && ts !== 'PredictionOrderRequest[]') return false;
+    const method: any = param.parent;
+    if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || this.rustTestTierSource(param)) return false;
+    if (this.rustTypedSignature(method) === undefined) return false;
+    const name = String(param.name.text);
+    let rows = 0;
+    for (const n of this.rustScopeNameNodes(method, name) as any[]) {
+        if (n === param.name || n === param) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== param) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const parent: any = n.parent;
+        if (isPropertyAccessExpression(parent) && parent.expression === n && String(parent.name.text) === 'length') continue;
+        if (this.rustP21RowRead(parent, n) === undefined && this.rustP21ElementRowRead(parent, n) === undefined) return false;
+        rows++;
+    }
+    return rows > 0;
+};
+(RustTranspiler.prototype as any).rustP28OrderRowsBind = function (this: any, node: any, name: string, indent: string): string | undefined {
+    const param: any = (Array.from(node.parameters) as any[]).find((p) => isIdentifier(p.name) && this.printNode(p.name, 0).replace(/^mut\s+/, '') === name);
+    if (param === undefined || !this.rustP28OrderRowsParam(param)) return undefined;
+    return `${indent}let ${name}: Vec<crate::value::Dict> = crate::value::dict_rows(std::sync::Arc::new(__it.next().unwrap_or_default().as_array().cloned().unwrap_or_default()));\n`;
+};
+// ===== end h38-H38-P28
