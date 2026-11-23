@@ -153,6 +153,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
+    javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
     javaPrintsListArgument(arg: any, producerDeclared?: (name: string) => boolean): boolean;
@@ -365,6 +366,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     isNullishLiteral(node: any): boolean;
     javaEqualityLiteralKind(node: any): "double" | "int" | "long";
     javaCrc32Local(node: any): boolean;
+    javaWsClientInstance(node: any): boolean;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;

@@ -1888,6 +1888,9 @@ export interface GoTranspiler {
     goAnnotateMethodTypes(methodsTypes: any[], file: any): void;
 }
 export interface GoTranspiler {
+    goNegatedFloat64ArgType(arg: any): string | undefined;
+}
+export interface GoTranspiler {
     goNumericParameterCandidates(param: any): string[];
 }
 export interface GoTranspiler {
@@ -2785,4 +2788,7 @@ export interface GoTranspiler {
     goCacheIndexReturnType(node: any): string | undefined;
     goCacheIndexReturnKind(expression: any): string | undefined;
     goIsBaseCacheIndexMethod(fn: any): boolean;
+}
+export interface GoTranspiler {
+    h41g25WrapperTask(node: any): boolean;
 }

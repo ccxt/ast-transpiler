@@ -212,9 +212,13 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpVenueNumberParamCensus(): Map<Node, string>;
     csharpVenueNumberParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpVenueDictParamsKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpDictParamsRebound(method: any): boolean;
+    csharpDictArgumentIsTyped(argument: any): boolean;
     csharpProFileCallKinds(method: any, index: number): string[] | undefined;
     csharpProConstIntCallLocal(method: any, caller: any, argument: any): string | undefined;
     csharpProCallArgumentKind(method: any, call: any, index: number): string | undefined;
+    csharpCoreTypedNumberArgument(argument: any): string | undefined;
     csharpTypedParameterArgument(argument: any): string | undefined;
     csharpVenueStringParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpDeclaredStringFieldArgument(argument: any): boolean;

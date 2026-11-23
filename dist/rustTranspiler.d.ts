@@ -69,7 +69,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -99,6 +99,7 @@ export declare const rustDispatch: {
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number) => boolean;
     isSlotInt: (arg: string, i: number) => boolean;
+    isSlotOptStr: (arg: string, i: number) => boolean;
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string) => boolean;
     slotName: (slot: string) => string;
@@ -2825,6 +2826,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Int` index by value (a negative or out-of-range index misses), a
      *  numeric string by parse, anything else a miss. */
     printNativeDynamicListIndex(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    /** A typed `i64` / `Option<i64>` local as the index of a proven list: the array arm of `get_value` (a negative or
+     *  out-of-range index and an absent key read `Null`). */
+    printTypedIntKeyListIndex(receiverText: string, keyNode: Node): string | undefined;
     /** True when this read initialises a local that the very next statement in
      *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
      *  `x.push(v)` -> `append_to_array(&mut x…)`). */
@@ -3323,6 +3327,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** `[await] this.m (..)` of an own-container method: its kind. */
     rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined;
+    private rustFilterTwinTexts;
+    private rustFilterTwinRaw;
+    rustFilterTwinKind(call: any): 'dict' | 'list' | undefined;
+    rustFilterTwinText(call: any, kind: 'dict' | 'list'): string | undefined;
+    /** Top-level comma-separated parts of printed argument text (brackets and string literals respected). */
+    rustTopLevelArgs(text: string): string[];
+    /** The bare twin call where the own-container rule asks for the native result. */
+    printRustFilterTwinBare(node: any): string | undefined;
     rustOwnContainerBareText(node: any): string;
     /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
     printOwnContainerCallBox(node: any): string | undefined;
@@ -3336,6 +3348,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUntypedLocalCaller(fn: any): boolean;
     /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
     rustBoxedElementList(exp: any): boolean;
+    /** `this.extend (..)` of the runtime base (never a venue override). */
+    rustRuntimeExtendCall(exp: any): boolean;
     /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
     printOwnContainerReturn(fn: any, exp: any): string | undefined;
     /** `this.safeDict (x, 'k', {})` / `this.safeList (x, 'k', [])`: the member when it is that container, else the empty one,
@@ -4220,6 +4234,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
      *  the empty set's `Value::Null` takes the `{}` default). A list body only reaches untyped `sign` / `request`. */
     rustTypedParamsParam(d: any): boolean;
+    /** The optional `params` of a typed unified method bound as `Dict` (`get_arg_dict`: the map, else the empty map, which is
+     *  all `Into<Params>` can hand over): every use takes a map by reference (a base literal-key / any-key reader, a base
+     *  two-argument omit) or is the plain arm of a `Dict` ternary whose other arm is a base omit of it. */
+    rustParamsDictSlot(d: any): boolean;
+    private rustParamsDictDecisions;
+    rustParamsDictSlotOmit(call: any): boolean;
+    rustParamsDictSlotUncached(d: any): boolean;
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
      *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
      *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
@@ -5594,6 +5615,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
     private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS;
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
@@ -5825,7 +5847,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
-    /** Another ts/src/pro file declares a method of this name and calls it as `.name (`. */
+    /** Another ts/src/pro file calls `.name (` and declares no method of that name (an inherited copy answers it). */
     rustWsHandlerCalledElsewhere(method: any, name: string): boolean;
     /** `.name (` calls in the method's own file and ws sibling (`own` when every other file calling it declares its own
      *  `name`, -1 when one does not); -1 for a quoted use anywhere in ts/src. */
@@ -5943,6 +5965,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`)
      *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
     h27r07KeepBoxedKey(node: any, plan: any): boolean;
+    private rustWsHandleParamCache;
+    rustWsHandleParam(param: any): boolean;
+    rustWsHandleParamUncached(param: any): boolean;
     private static readonly RUST_H27R08_WS_FNS;
     private static readonly RUST_H27R08_RECORD_RETURN;
     /** `x = this.parseWsTrade|Order|Ticker (..)` resolved to a venue override whose every `return` answers a record parser
