@@ -6388,6 +6388,20 @@ export class JavaTranspiler extends BaseTranspiler {
             && !this.javaLocalIsReassigned(node);
     }
 
+    // an identifier the checker types as exactly the ws Client class (no union)
+    javaWsClientInstance(node): boolean {
+        if (node === undefined || !isIdentifier(node)) {
+            return false;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const type: any = this.javaTry(() => checker?.getTypeAtLocation(node), null);
+        if (type === null || type === undefined || (type.flags & (TypeFlags.Union | TypeFlags.Any))) {
+            return false;
+        }
+        const fileName = this.javaTry(() => type.getSymbol()?.valueDeclaration?.resolve()?.getSourceFile?.()?.fileName, null);
+        return typeof fileName === 'string' && JAVA_WS_CLIENT_FILE.test(fileName);
+    }
+
     printNativeEqualityIfProvable(node, leftText: string, rightText: string): string | undefined {
         const op = node.operatorToken.kind;
         const negated = op === SyntaxKind.ExclamationEqualsToken || op === SyntaxKind.ExclamationEqualsEqualsToken;
@@ -6395,6 +6409,10 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const equalCall = `${negated ? '!' : ''}java.util.Objects.equals(${leftText}, ${rightText})`;
+        // a ws Client operand: TypeScript compares object identity, so does the Java reference compare
+        if (this.javaWsClientInstance(node.left) || this.javaWsClientInstance(node.right)) {
+            return `(${leftText} ${negated ? '!=' : '=='} ${rightText})`;
+        }
         const leftBox = this.javaDeclaredNumericFamily(node.left);
         const rightBox = this.javaDeclaredNumericFamily(node.right);
         if (((this.javaCrc32Local(node.left) && rightBox === 'Long') || (this.javaCrc32Local(node.right) && leftBox === 'Long'))
