@@ -7,7 +7,7 @@ import * as path from 'path';
 jest.mock('module', () => ({ __esModule: true, default: jest.fn() }));
 
 const files: Record<string, string> = {
-    'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n    useUrl (u: any): any { return u; }\n}\n',
+    'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeValue (o: any, k: any, d: any = undefined): any { return o[k]; }\n    hold (x: any): any { return x; }\n    useUrl (u: any): any { return u; }\n    handleMessage (client: any, message: Dict) {}\n    handleTextMessage (client: any, message: any) {}\n    routeMessage (client: any, message: any) { this.handleMessage (client, message); this.handleTextMessage (client, message); }\n}\n',
     'ts/src/base/ws/Client.ts': 'export default class Client {\n    subscriptions: any = {};\n    url: string = "";\n    resolve (v: any, h: string | undefined = undefined): void {}\n}\n',
     'ts/src/pro/venue.ts': [
         "import Exchange from '../base/Exchange';",
@@ -39,7 +39,10 @@ const files: Record<string, string> = {
         '    async handleAsync (client: Client, message: Dict) {',
         '        client.resolve (message);',
         '    }',
-        '    handleMessage (client: Client, message: Dict) {',
+        '    override handleTextMessage (client: Client, message: any) {',
+        '        client.resolve (message);',
+        '    }',
+        '    override handleMessage (client: Client, message: Dict) {',
         "        const methods: Dict = { 'a': this.handleTick, 'b': this.handleHanded, 'u': this.handleUrl, 's': this.handleSpot, 'c': this.handleWrites, 'd': this.handleAsync };",
         "        const method = this.safeValue (methods, 'x');",
         '        method.call (this, client, message);',
@@ -92,6 +95,13 @@ describe('rust ws handler client handle param', () => {
     });
     test('an async handler keeps the boxed client', () => {
         expect(header('handleAsync')).not.toContain('ClientHandle');
+    });
+    test('an override reached only from the base routeMessage takes the handle and hands it on boxed', () => {
+        expect(header('handleMessage')).toContain('client: &crate::pro::ws_client::ClientHandle');
+        expect(out.slice(out.indexOf('fn handleMessage('))).toContain('client.as_value()');
+    });
+    test('a routed frame-shape handler keeps the boxed client', () => {
+        expect(header('handleTextMessage')).not.toContain('ClientHandle');
     });
     test('the dispatch arm builds the handle from the boxed client (Null when missing)', () => {
         expect(rustDispatch.wsArg('client', 0)).toBe('&crate::pro::ws_client::ClientHandle::from_value(args.get(0).unwrap_or(&crate::Value::Null))');

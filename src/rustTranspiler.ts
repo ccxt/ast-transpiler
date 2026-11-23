@@ -41812,13 +41812,19 @@ export class RustTranspiler extends BaseTranspiler {
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword || m.kind === SyntaxKind.StaticKeyword)) return false;
         if (Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client').length !== 1) return false;
         if (!this.rustClientHandleClassType(this.getCheckedTypeOf(param.name))) return false;
-        if (this.rustCallSitesForName(String(method.name.text)).length > 0) return false;
+        const routed = this.rustWsRoutedHandler(method);
+        if (!routed && this.rustCallSitesForName(String(method.name.text)).length > 0) return false;
         const nodes: any[] = this.rustScopeNameNodes(method, 'client');
         return nodes.every((n: any) => {
             if (n === param.name || n === param) return true;
             if (n.kind !== SyntaxKind.Identifier) return false;
             const p: any = n.parent;
             if (p === undefined) return false;
+            // a routed handler hands the whole client on boxed (`client.as_value()`), never into spawn / delay
+            if (routed && isCallExpression(p) && p.expression !== n && p.arguments.some((a: any) => a === n)) {
+                const callee: any = p.expression;
+                return !(isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword && (callee.name.text === 'spawn' || callee.name.text === 'delay'));
+            }
             if (isPropertyAccessExpression(p) && p.name === n) return true;
             if (p.kind === SyntaxKind.PropertyAssignment && p.name === n) return true;
             if (!isPropertyAccessExpression(p) || p.expression !== n) return false;
@@ -41833,6 +41839,20 @@ export class RustTranspiler extends BaseTranspiler {
                 up = up.parent;
             }
             return true;
+        });
+    }
+    /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
+     *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */
+    rustWsRoutedHandler(method: any): boolean {
+        const name = String(method.name.text);
+        if (name !== 'handleMessage') return false;
+        if (!(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+        const calls: any[] = this.rustCallSitesForName(name);
+        if (calls.length === 0) return false;
+        return calls.every((c: any) => {
+            const file = String(c.getSourceFile().fileName).replace(/\\/g, '/');
+            if (!/(?:^|\/)ts\/src\/(?:pro\/)?(?:base|test)\//.test(file)) return false;
+            return /(?:^|\/)ts\/src\/pro\/test\//.test(file) || (isPropertyAccessExpression(c.expression) && c.expression.expression.kind === SyntaxKind.ThisKeyword);
         });
     }
     // ===== h27-H27-R08
