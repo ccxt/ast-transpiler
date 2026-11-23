@@ -6661,6 +6661,18 @@ describe ('csharp tuple element locals', () => {
     test('a non-tuple element keeps object', () => {
         expect(printed('            const c = rows[i];\n            out.push (c[0]);', 'const rows: any[] = this.build ();')).not.toContain('IList<object> c');
     });
+    test('a slot of a tuple element is read natively off the guarded element', () => {
+        const out = printed('            const k = 2;\n            out.push (rows[i][k]);\n            out.push (rows[i][0]);');
+        expect(out).toMatch(/\(rows != null && i < rows.Count && rows\[i\] is IList<object> rowsSlot\d+ && k < rowsSlot\d+\.Count \? rowsSlot\d+\[k\] : null\)/);
+        expect(out).toMatch(/rowsSlot\d+ && 0 < rowsSlot\d+\.Count \? rowsSlot\d+\[0\] : null/);
+        expect(out).not.toContain('getValue(');
+    });
+    test('a slot read keeps the helper on a parameter, a non-tuple element, a let key or a write', () => {
+        expect(printed('            out.push (p[i][0]);')).not.toContain('Slot');
+        expect(printed('            out.push (rows[i][0]);', 'const rows: any[] = this.build ();')).not.toContain('Slot');
+        expect(printed('            let k = 2;\n            out.push (rows[i][k]);')).not.toContain('Slot');
+        expect(printed('            rows[i][0] = 1;')).not.toContain('Slot');
+    });
 });
 
 describe ('csharp nullable state fields', () => {

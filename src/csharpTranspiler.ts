@@ -8511,6 +8511,56 @@ export class CSharpTranspiler extends BaseTranspiler {
         return (bad || bindings !== 1 || reads === 0) ? undefined : type;
     }
 
+    // `rows[i][k]` read where `rows` is a local of the same function whose TS element type is a tuple (the printer built every element as a list) and `k` is a
+    // non-negative int literal or a const bound to one: the slot is read natively off the guarded element; a null element, a box of another kind or `k` past the end read null like getValue.
+    csharpTupleElementSlotRead(node): string | undefined {
+        const inner: any = node.expression;
+        const key: any = node.argumentExpression;
+        if (inner?.kind !== SyntaxKind.ElementAccessExpression || !isIdentifier(inner.expression) || !isIdentifier(inner.argumentExpression) || !this.csharpIsPlainRead(node)) {
+            return undefined;
+        }
+        let slot: string | undefined = undefined;
+        if (isNumericLiteral(key)) {
+            slot = key.text as string;
+        } else if (isIdentifier(key)) {
+            const keyDeclaration: any = this.getChecker().getSymbolAtLocation(key)?.valueDeclaration?.resolve();
+            if (keyDeclaration?.kind === SyntaxKind.VariableDeclaration && ((keyDeclaration.parent?.flags & NodeFlags.Const) !== 0) && isNumericLiteral(keyDeclaration.initializer)) {
+                slot = this.printNode(key, 0);
+                if (!/^\d{1,9}$/.test(keyDeclaration.initializer.text as string)) {
+                    return undefined;
+                }
+            }
+        }
+        if (slot === undefined || (isNumericLiteral(key) && !/^\d{1,9}$/.test(slot))) {
+            return undefined;
+        }
+        const checker = this.getChecker();
+        const listDeclaration = checker.getSymbolAtLocation(inner.expression)?.valueDeclaration?.resolve();
+        if (listDeclaration?.kind !== SyntaxKind.VariableDeclaration || this.csharpEnclosingFunction(listDeclaration) !== this.csharpEnclosingFunction(node)) {
+            return undefined;
+        }
+        let element = checker.getTypeAtLocation(inner);
+        if (element?.isUnionType?.()) {
+            const arms = element.getTypes().filter((arm) => (arm.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
+            element = (arms.length === 1) ? arms[0] : undefined;
+        }
+        if (element === undefined || (element.flags & TypeFlags.Object) === 0 || !checker.isTupleType(element)) {
+            return undefined;
+        }
+        const receiver = inner.expression.text as string;
+        const index = inner.argumentExpression.text as string;
+        const printedInner = this.printNode(inner, 0);
+        if (printedInner !== `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`) {
+            return undefined; // only the printer's own guarded read of a declared list
+        }
+        const scope = this.csharpEnclosingFunction(node);
+        if (scope === undefined || this.csharpTypeNameIsShadowed(scope, 'IList<object>')) {
+            return undefined;
+        }
+        const name = `${receiver}Slot${node.pos}`;
+        return `(${receiver} != null && ${index} < ${receiver}.Count && ${receiver}[${index}] is IList<object> ${name} && ${slot} < ${name}.Count ? ${name}[${slot}] : null)`;
+    }
+
     csharpElementRowKeyIsString(node): boolean {
         return node !== undefined && (node.kind === SyntaxKind.StringLiteral || node.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
     }
@@ -8825,6 +8875,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return int64Read;
         }
         const h30c05 = this.h30c05BoundListLoopRead(expression, argumentExpression); if (h30c05 !== undefined) { return h30c05; }
+        const tupleSlot = this.csharpTupleElementSlotRead(node); if (tupleSlot !== undefined) { return tupleSlot; }
         const isStringKey = isStringLiteralLikeNode(argumentExpression);
         const isNumberKey = isNumericLiteral(argumentExpression);
         if (!isStringKey && !isNumberKey) {
