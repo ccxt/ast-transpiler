@@ -1373,7 +1373,8 @@ ${body}
 
     test('startsWith/endsWith on a string print a primitive boolean condition', () => {
         const output = outputOf("const s: string = this.safeString(params, 'k') as string;\n        if (s.startsWith('a') || s.endsWith('b')) { return; }");
-        expect(output).toContain("((String)s).startsWith(((String)\"a\"))");
+        expect(output).toContain("((String)s).startsWith(\"a\")");
+        expect(output).toContain("((String)s).endsWith(\"b\")");
         expect(output).not.toContain('Helpers.isTrue(((String)s)');
     });
 
@@ -4271,7 +4272,7 @@ describe('java replaceAll on a lowered/trimmed receiver', () => {
 
     test('a toLowerCase receiver with literal arguments prints String.replace', () => {
         const output = transpiler.transpileJavaByPath(write('ts/src/venue0.ts', body("s.toLowerCase ().replaceAll ('-', '_')"))).content;
-        expect(output).toContain('((String)s).toLowerCase().replace("-", "_")');
+        expect(output).toContain('s.toLowerCase().replace("-", "_")');
         expect(output).not.toContain('Helpers.replaceAll');
     });
 
@@ -6946,7 +6947,7 @@ describe('java native arithmetic on printer-proven numeric operands', () => {
     });
 
     test('indexOf, counters and length print native operators', () => {
-        expect(out).toContain('if (((String)s).indexOf("x") > -1)');
+        expect(out).toContain('if (s.indexOf("x") > -1)');
         expect(out).toContain('if (i > 0)');
         expect(out).toContain('k = ((((long) ((java.util.List<?>)xs).size()) - ((long) i)) - 1L);');
     });
@@ -9246,7 +9247,7 @@ describe ('java plain base cache maps', () => {
             const w1 = methodText(out, 'w1');
             expect(w1).toContain('Helpers.addElementToObject(this.bag, ((String)sym), v)');
             expect(w1).toContain('Helpers.addElementToObject(this.other, ((String)sym), v)');
-            expect(w1).toContain('Helpers.addElementToObject(this.tickers, this.hash((String) (k)), v)');
+            expect(w1).toContain('Helpers.addElementToObject(this.tickers, this.hash(k), v)');
         });
 
         test('a String-declared key reads through the guarded get', () => {
@@ -9851,7 +9852,7 @@ describe ('java owner-store maps', () => {
 
         test('a computed key and a non-ws-client receiver keep the helper', () => {
             const c1 = methodText(out, 'c1');
-            expect(c1).toContain('Helpers.GetValue(client.subscriptions, this.hash((String) (messageHash)))');
+            expect(c1).toContain('Helpers.GetValue(client.subscriptions, this.hash(messageHash))');
             expect(c1).toContain('Helpers.GetValue(client.other, messageHash)');
             const o1 = methodText(outOther, 'c1');
             expect(o1).toContain('Helpers.GetValue(client.subscriptions, messageHash)');

@@ -1788,6 +1788,10 @@ export class JavaTranspiler extends BaseTranspiler {
             && this.printNode(arg, 0).trim() === this.javaTry(() => this.printNode(this.javaDeclarationOfIdentifier(arg)?.name, 0).trim())) {
             return true;
         }
+        // a parameter of the enclosing method printed String, read under its own name
+        if (type === 'String' && isIdentifier(arg) && this.javaStringParameterRead(arg, this.printNode(arg, 0).trim())) {
+            return true;
+        }
         // a parameter the printer itself declares as this very class needs no checkcast; a local
         // keeps it: its declaration text is rewritten after printing, so what prints here as
         // `Object` would not accept the argument
@@ -8654,7 +8658,13 @@ export class JavaTranspiler extends BaseTranspiler {
     // there) already has the static type the method needs, so the checkcast every Object local
     // takes is not printed; anything else keeps `((String)x)`.
     javaStringReceiverText(receiver, name): string {
-        return this.javaDeclaredStringElementLocal(receiver, name) ? name : `((String)${name})`;
+        return this.javaDeclaredStringElementLocal(receiver, name) || this.javaStringParameterRead(receiver, name) ? name : `((String)${name})`;
+    }
+
+    // a parameter of the enclosing method printed `String`, read under its own name (no async Object copy)
+    javaStringParameterRead(node, printed: string): boolean {
+        return node !== undefined && isIdentifier(node) && printed === node.text && this.javaArgumentHasType(node, 'String')
+            && printed === this.javaTry(() => this.printNode(this.javaDeclarationOfIdentifier(node)?.name, 0).trim());
     }
 
     // ral-84j1: `k` printed bare, bound to a `const k = xs[..]` element read (the element-read lane's
@@ -8866,11 +8876,16 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     printStartsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
-        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.startsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.startsWith(${this.javaAffixArgumentText(node?.arguments?.[0], parsedArg)})`;
     }
 
     printEndsWithCall(node, _identation, name = undefined, parsedArg = undefined) {
-        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.endsWith(${this.javaStringReceiverText(node?.arguments?.[0], parsedArg)})`;
+        return `${this.javaStringReceiverText(node?.expression?.expression, name)}.endsWith(${this.javaAffixArgumentText(node?.arguments?.[0], parsedArg)})`;
+    }
+
+    // a string literal argument of startsWith / endsWith is already a Java String: no checkcast
+    javaAffixArgumentText(arg, parsedArg): string {
+        return arg !== undefined && isStringLiteral(arg) ? parsedArg : this.javaStringReceiverText(arg, parsedArg);
     }
 
     printTrimCall(node, _identation, name = undefined) {
@@ -9966,7 +9981,7 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // `s.startsWith(x)` / `s.endsWith(x)` on a checker-proven string receiver prints
-    // `((String)s).startsWith(..)`, a primitive boolean (String.startsWith/endsWith)
+    // `((String)s).startsWith(..)` or, on a String-printed identifier, `s.startsWith(..)`: a primitive boolean
     javaStringAffixCall(node): boolean {
         if (node?.kind !== SyntaxKind.CallExpression || (node.arguments?.length ?? 0) !== 1) {
             return false;
@@ -9983,7 +9998,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === undefined || !this.isStringType(type.flags)) {
             return false;
         }
-        return /^\(\(String\)[\s\S]*\.(startsWith|endsWith)\([\s\S]*\)$/.test(this.printNode(node, 0));
+        return /^(\(\(String\)[\s\S]*|[A-Za-z_]\w*)\.(startsWith|endsWith)\([\s\S]*\)$/.test(this.printNode(node, 0));
     }
 
     isArrayIsArrayCall(node): boolean {
