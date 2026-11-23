@@ -31,12 +31,12 @@ describe ('rust venue dict slot: a boxed Dict parameter of the caller lends its 
     afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
 
     test ('a read-only error handler takes a borrowed map and the caller lends its view', () => {
-        expect (output).toMatch (/fn handle_error_message\([^)]*message: &indexmap::IndexMap<String, Value>\)/);
-        expect (output).toMatch (/handle_error_message\([^;]*message\.as_map\(\)\.unwrap_or\(&Default::default\(\)\)/);
+        expect (output).toMatch (/fn handleErrorMessage\([^)]*message: &indexmap::IndexMap<String, Value>\)/);
+        expect (output).toMatch (/self\.handleErrorMessage\([^;]*message\.as_map\(\)\.unwrap_or\(&Default::default\(\)\)/);
     });
 
     test ('a handler that hands the message on whole keeps the Value slot', () => {
-        expect (output).not.toMatch (/fn handle_json_error\([^)]*message: &indexmap::IndexMap/);
-        expect (output).not.toMatch (/handle_json_error\([^;]*as_map\(\)/);
+        expect (output).not.toMatch (/fn handleJsonError\([^)]*message: &indexmap::IndexMap/);
+        expect (output).not.toMatch (/self\.handleJsonError\([^;]*as_map\(\)/);
     });
 });

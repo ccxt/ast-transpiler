@@ -18,11 +18,11 @@ const mk = (tag: string, venueHead: string, baseHead: string = HT) => {
 describe('the handleTextMessage message parameter (string in every declaration) prints &str', () => {
     test('every declaration spells it string: the override takes message: &str', () => {
         const venue = mk('ok', HT);
-        expect(venue).toMatch(/fn handle_text_message\(&(mut )?self, (mut )?client: Value, message: &str\)/);
+        expect(venue).toMatch(/fn handleTextMessage\(&(mut )?self, (mut )?client: Value, message: &str\)/);
     });
     test('negative: the base spelling it differently keeps message Value', () => {
         const venue = mk('no', HT, HT.replace('message: string', 'message: any'));
-        expect(venue).toMatch(/fn handle_text_message\(&(mut )?self, (mut )?client: Value, (mut )?message: Value\)/);
+        expect(venue).toMatch(/fn handleTextMessage\(&(mut )?self, (mut )?client: Value, (mut )?message: Value\)/);
     });
     test('negative: a venue spelling it differently keeps message Value', () => {
         const venue = mk('venueno', HT.replace('message: string', 'message: any'));

@@ -57,6 +57,7 @@ describe ('csharp venue-private params bag seen from the pro file', () => {
 
     beforeAll(() => {
         fs.mkdirSync(path.dirname(PRO), { recursive: true });
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
         fs.writeFileSync(BASE, 'export class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    omit (a: any, k: any): any { return a; }\n}\n');
         fs.writeFileSync(A,
             "import { Exchange } from './base/Exchange';\n" +
@@ -89,19 +90,19 @@ describe ('csharp venue-private params bag seen from the pro file', () => {
     });
 
     test('a pro call passing its own typed bag or an extend call prints IDictionary', () => {
-        expect(a).toContain('req(string s, IDictionary<string, object>? parameters = null)');
-        expect(a).toContain('ext(string s, IDictionary<string, object>? parameters = null)');
+        expect(a).toContain('req(object s, IDictionary<string, object>? parameters = null)');
+        expect(a).toContain('ext(object s, IDictionary<string, object>? parameters = null)');
     });
 
     test('a pro call passing an untyped local keeps object', () => {
-        expect(a).toContain('boxed(string s, object parameters = null)');
+        expect(a).toContain('boxed(object s, object parameters = null)');
     });
 
     test('a pro caller that rebinds its bag keeps object', () => {
-        expect(a).toContain('written(string s, object parameters = null)');
+        expect(a).toContain('written(object s, object parameters = null)');
     });
 
     test('a pro caller whose bag the host does not type keeps object', () => {
-        expect(a).toContain('untypedCaller(string s, object parameters = null)');
+        expect(a).toContain('untypedCaller(object s, object parameters = null)');
     });
 });

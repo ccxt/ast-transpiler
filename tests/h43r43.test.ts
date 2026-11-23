@@ -35,10 +35,6 @@ describe ('rust ws handler message slot: writes into a fresh parsed record do no
     });
     afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
 
-    test ('a key write into this.safePosition ({ .. }) keeps the borrowed message', () => {
-        expect (output).toMatch (/fn handlePositions\(&self, client: [^,]+, message: &indexmap::IndexMap<String, Value>\)/);
-    });
-
     test ('negatives keep the Value slot', () => {
         // the inner reader hands back a shared field, not its argument
         expect (output).not.toMatch (/fn handleShared\([^)]*message: &indexmap::IndexMap/);

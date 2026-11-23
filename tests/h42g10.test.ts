@@ -53,6 +53,7 @@ describe ('h42g10: an int local whose every write prints int64 is declared int64
     });
     test ('negative: a Math.min ternary arm on a nilable limit is not given an int64 operand type', () => {
         const out = print ('    g (limit: Int = undefined): int {\n        const n: Int = (limit === undefined) ? 100 : Math.min (limit, 11000);\n        return n;\n    }\n');
-        expect (out).not.toContain ('n = mathMin(limit, 11000)');
+        expect (out).toContain ('var n any');
+        expect (out).not.toContain ('var n int64');
     });
 });
