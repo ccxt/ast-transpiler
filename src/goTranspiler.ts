@@ -59827,3 +59827,47 @@ function h40g24FrameListRead (goTranspiler: GoTranspiler, node, printed: string)
     };
 }
 // ===== H40-G24 (end) =====
+// ===== H40-G25: dict element of a bounded `[]any` list (begin) =====
+// `const x = this.safeDict (xs, i)` / `this.safeList (xs, i)` where xs is a Go `[]any` and i counts a loop over xs's own
+// length (goBoundedLoopListRead): in range, so SafeMapTyped / SafeListTyped answer the element when it is a map / []any
+// and nil otherwise, exactly what the comma-ok assertion answers.
+function h40g25BoundedDictRead (goTranspiler: GoTranspiler, declaration, printed: string): string | undefined {
+    const call: any = declaration?.initializer;
+    if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (typeof printed !== 'string') || (call?.kind !== SyntaxKind.CallExpression)) {
+        return undefined;
+    }
+    const dictArgs: any = goTranspiler.goSafeAccessorLocalArgs (call, 'safeDict');
+    const args: any = dictArgs ?? goTranspiler.goSafeAccessorLocalArgs (call, 'safeList');
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.Identifier)
+        || ((dictArgs === undefined) && (call.arguments.length !== 2))) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const xs: string = args.container.text;
+    const i: string = args.key.text;
+    const [ wrap, goType ] = (dictArgs !== undefined) ? [ 'SafeMapTyped', 'map\\[string\\]any' ] : [ 'SafeListTyped', '\\[\\]any' ];
+    const match = new RegExp ('^(\\n*)(\\t*)var (\\w+) ' + goType + ' = (?:ccxt\\.)?' + wrap + '\\((\\w+), (\\w+)\\)$').exec (printed);
+    if ((match === null) || (match[3] !== name) || (match[4] !== xs) || (match[5] !== i)) {
+        return undefined;
+    }
+    // the bounded-read proof takes the element read `xs[i]` this call stands for
+    const read: any = { kind: SyntaxKind.ElementAccessExpression, expression: args.container, argumentExpression: args.key, parent: call,
+        getSourceFile: () => call.getSourceFile () };
+    // a list the printer declares `[]any` with pointer-free elements, or an awaited endpoint receive printed `[]any`
+    // (goBoundedAwaitedListRead); a list element must come from decoded JSON, which holds no other slice kind
+    const declared = (goTranspiler.goDeclaredTypeOfIdentifier (args.container) === GO_SAFE_LIST_LOCAL_TYPE) && goTranspiler.goBoundedLoopListRead (read);
+    const typed = declared && ((dictArgs !== undefined) ? goTranspiler.goListElementsArePointerFree (args.container) : goTranspiler.goJsonOriginList (args.container));
+    if (!typed && !goTranspiler.goBoundedAwaitedListRead (read)) {
+        return undefined;
+    }
+    return `${match[1]}${match[2]}var ${name}, _ = ${xs}[${i}].(${(dictArgs !== undefined) ? 'map[string]any' : '[]any'})`;
+}
+{
+    const printListH40g25 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printListH40g25.call (this, node, identation);
+        const h = (node?.declarations?.length === 1) ? h40g25BoundedDictRead (this, node.declarations[0], printed) : undefined;
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H40-G25 (end) =====

@@ -21200,3 +21200,48 @@ describe('go: exchange test functions and the base copy of a slice-table method'
         expect(out).not.toContain('symbols []string');
     });
 });
+describe('a safeDict of a bounded []any list element prints the comma-ok map assertion', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-h40g25boundeddict');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    options: any = {};\n    safeString (o: any, k: any, d: any = undefined): string | undefined { return o[k]; }\n    safeDict (o: any, k: any, d: any = undefined): any { return o[k]; }\n    safeList (o: any, k: any, d: any = undefined): any[] | undefined { return o[k]; }\n    async publicGetMarkets (p: any = {}): Promise<any[]> { return []; }\n}\nexport interface Exchange {\n    commonGetBook (p?: {}): Promise<any>;\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            // ccxt's receive table declares this endpoint's receive []any
+            const g: any = t.goTranspiler;
+            const inner = g.goAwaitReceiveUnbox.bind(g);
+            g.goAwaitReceiveUnbox = (n: any, p: string) => (p.includes('PublicGetMarkets') ? { goType: '[]any', wrap: (r: string) => r + '.([]any)' } : inner(n, p));
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    const body = (loopHead: string, extra = '') => "    async fetchIds (): Promise<string[]> {\n        const result: string[] = [];\n        const rows = await this.publicGetMarkets ();\n" + extra + "        for (" + loopHead + ") {\n            const entry = this.safeDict (rows, i);\n            result.push (this.safeString (entry, 'id', ''));\n        }\n        return result;\n    }\n";
+    test('a loop over the list length (fails on the base printer)', () => {
+        const out = run(body('let i = 0; i < rows.length; i++'));
+        expect(out).toContain('var entry, _ = rows[i].(map[string]any)');
+        expect(out).not.toContain('SafeMapTyped(rows, i)');
+    });
+    test('negative: a loop not bounded by the list keeps the helper', () => {
+        expect(run(body('let i = 0; i < 5; i++'))).not.toContain('rows[i].(map[string]any)');
+    });
+    test('a safeList of a bounded element of a decoded JSON list prints the comma-ok slice assertion (fails on the base printer)', () => {
+        const out = run("    async fetchIds (): Promise<string[]> {\n        const result: string[] = [];\n        const response = await this.commonGetBook ();\n        const levels = this.safeList (response, 'bids', []);\n        for (let i = 0; i < levels.length; i++) {\n            const level = this.safeList (levels, i);\n            result.push (this.safeString (level, 0, ''));\n        }\n        return result;\n    }\n");
+        expect(out).toContain('var level, _ = levels[i].([]any)');
+    });
+    test('negative: a safeList element of a parameter list keeps the helper', () => {
+        const out = run("    parseLevels (levels: any[]): string[] {\n        const result: string[] = [];\n        for (let i = 0; i < levels.length; i++) {\n            const level = this.safeList (levels, i);\n            result.push (this.safeString (level, 0, ''));\n        }\n        return result;\n    }\n");
+        expect(out).not.toContain('levels[i].([]any)');
+    });
+    test('negative: a list rebound in the loop keeps the helper', () => {
+        const out = run(body('let i = 0; i < rows.length; i++').replace('const rows', 'let rows').replace('const entry', 'rows = [];\n            const entry'));
+        expect(out).not.toContain('rows[i].(map[string]any)');
+    });
+});
