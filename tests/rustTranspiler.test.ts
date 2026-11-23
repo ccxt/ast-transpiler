@@ -19024,7 +19024,7 @@ describe('ral-54h: a safeValue read of client.futures keyed by a string paramete
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('the parameter key is lent by reference', () => {
-        expect(out).toMatch(/fn loadSnapshot[\s\S]*let mut future: crate::pro::ws_client::Flight = __ch\.get_future\(&messageHash\);/);
+        expect(out).toMatch(/fn loadSnapshot[\s\S]*let mut future: crate::pro::ws_client::Flight = __ch\.get_future\(messageHash\);/);
         expect(out).toContain('if ((future != crate::pro::ws_client::Flight::default())) {');
     });
     test('negative: a reassigned parameter key keeps the local a Value', () => {
@@ -27694,5 +27694,43 @@ describe('a typed `List` local read only by map rows holds converted rows', () =
     test('negative: infoList of an awaited local (ccxt moves the local into the reader line) keeps the boxed list', () => {
         const out = run ("    async m (params: Dict = {}) {\n        const response = await this.fetchRows (params);\n        const rows = this.infoList (response);\n        const out = [];\n        for (let i = 0; i < rows.length; i++) {\n            const row = this.safeDict (rows, i);\n            out.push (this.safeString (row, 'id'));\n        }\n        return out;\n    }\n    infoList (r: any): any[] {\n        return Array.isArray (r) ? r : [];\n    }\n    async fetchRows (params: Dict = {}): Promise<any> {\n        return params;\n    }\n");
         expect (out).not.toContain ('dict_rows');
+    });
+});
+
+describe('a spawned pro snapshot loader types its futures-key `string` parameter as `&str`', () => {
+    const files: Record<string, string> = {
+        'ts/src/base/ws/Client.ts': 'export default class Client {\n    url: string;\n    subscriptions: any;\n    futures: any;\n    future (messageHash: string): any { return undefined; }\n    resolve (result: any, messageHash: string): any { return result; }\n}\n',
+        'ts/src/base/Exchange.ts': "import Client from './ws/Client.js';\nexport default class Exchange {\n    safeValue (obj: any, key: any, d: any = undefined): any { return obj[key] ?? d; }\n    spawn (method: any, ...args: any[]): any { return undefined; }\n    hold (x: any): any { return x; }\n}\n",
+        'ts/src/pro/venue.ts': "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nexport default class venue extends Exchange {\n" +
+            "    handleIt (client: Client) {\n        const messageHash = 'fetchPositionsSnapshot';\n        if (!(messageHash in client.futures)) {\n            client.future (messageHash);\n            this.spawn (this.loadSnapshot, client, messageHash);\n            this.spawn (this.loadSafe, client, messageHash);\n            this.spawn (this.loadOther, client, messageHash);\n            this.spawn (this.loadWritten, client, messageHash);\n        }\n    }\n" +
+            "    async loadSnapshot (client: Client, messageHash: string) {\n        if (messageHash in client.futures) {\n            const future = client.futures[messageHash];\n            future.resolve (true);\n        }\n    }\n" +
+            "    async loadSafe (client: Client, messageHash: string) {\n        const future = this.safeValue (client.futures, messageHash);\n        if (future !== undefined) {\n            future.resolve (true);\n        }\n    }\n" +
+            "    async loadOther (client: Client, otherHash: string) {\n        if (otherHash in client.futures) {\n            client.resolve (this.hold (otherHash), otherHash);\n        }\n    }\n" +
+            "    async loadWritten (client: Client, writtenHash: string) {\n        writtenHash = writtenHash + 'x';\n        if (writtenHash in client.futures) {\n            const future = client.futures[writtenHash];\n            future.resolve (true);\n        }\n    }\n}\n",
+    };
+    let out: string;
+    beforeAll(() => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-spawnkey-'));
+        for (const [rel, text] of Object.entries (files)) {
+            fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+            fs.writeFileSync (path.join (root, rel), text);
+        }
+        out = transpiler.transpileRustByPath(path.join (root, 'ts/src/pro/venue.ts')).content;
+        fs.rmSync (root, { recursive: true, force: true });
+    });
+    test('an in-test and keyed-read key: `&str`, lent as is, no Value binding', () => {
+        expect(out).toMatch(/fn loadSnapshot\(&mut self, client: &Value, messageHash: &str\)/);
+        expect(out).toMatch(/fn loadSnapshot[\s\S]*has_future\(messageHash\)/);
+        expect(out).toMatch(/fn loadSnapshot[\s\S]*get_future\(messageHash\)/);
+        expect(out).not.toContain('let mut messageHash: Value = messageHash.into();');
+    });
+    test('a base safeValue key: `&str`', () => {
+        expect(out).toMatch(/fn loadSafe\(&mut self, client: &Value, messageHash: &str\)/);
+    });
+    test('negative: a key also read elsewhere stays a Value', () => {
+        expect(out).toMatch(/fn loadOther\(&mut self, client: &Value, mut otherHash: Value\)/);
+    });
+    test('negative: a reassigned key stays a Value', () => {
+        expect(out).toMatch(/fn loadWritten\(&mut self, client: &Value, mut writtenHash: Value\)/);
     });
 });

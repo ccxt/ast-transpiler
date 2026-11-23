@@ -9711,13 +9711,21 @@ export class RustTranspiler extends BaseTranspiler {
     rustWsStrKey(node): boolean {
         const inner: any = this.unwrapParens(node);
         if (isIdentifier(inner) && this.rustWsUrlLocalOf(inner)) return true;
+        if (isIdentifier(inner) && this.rustSpawnKeyParamRead(inner)) return true;
         const kind = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         return kind === 'str' || kind === 'ostr';
+    }
+
+    rustSpawnKeyParamRead(node: any): boolean {
+        const param: any = this.rustDeclaredNode(node);
+        return param?.kind === SyntaxKind.Parameter && param.name !== node && this.rustSpawnKeyParam(param.parent, param) && this.rustVenueStrParamType(param) === '&str';
     }
 
     /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
     rustWsKeyText(node): string {
         const inner: any = this.unwrapParens(node);
+        // an unbound `&str` spawn key parameter is lent as the borrow it is
+        if (isIdentifier(inner) && this.rustSpawnKeyParamRead(inner)) return RustTranspiler.rustLentMark(super.printIdentifier(inner));
         if (this.rustWsStrKey(inner)) {
             const name = super.printIdentifier(inner);
             const str = this.rustScalarLocalOf(inner)?.kind === 'str';
@@ -39291,7 +39299,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!group && /(?:^|\/)ts\/src\/pro\//.test(file) && !this.isAsyncFunction(method) && !urlOnly && !noArmStr && !dictBuilder) return undefined;
         const hidden: any = this.getMethodOverride(method);
         if (!group && hidden !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(hidden.getSourceFile().fileName))) return undefined;
-        if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return undefined;
+        if (this.rustTypedSignature(method) !== undefined || (this.rustMethodReferencedAsValue(method) && !this.rustSpawnKeyParam(method, param))) return undefined;
         if (this.rustParamPrintsBool(param) || this.rustParamIsLentDict(param) || this.rustParamIsLentList(param) || this.rustParamPrintsMap(param)
             || this.rustParamPrintsStrVec(param) || this.rustParamReadsByReference(param)) return undefined;
         const type: any = this.typeOfNodeIfAny(param.name);
@@ -39651,6 +39659,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustVenueStrParamUnboundUncached(param: any): boolean {
         if (this.rustVenueStrParamType(param) !== '&str') return false;
+        if (this.rustSpawnKeyParam(param.parent, param)) return true;
         // ral-64x: also a whole argument of a venue call whose parameter there prints `&str` (lent as it came in)
         return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str');
     }
@@ -39682,6 +39691,49 @@ export class RustTranspiler extends BaseTranspiler {
     rustGroupIntParamUnboundRead(node: any): boolean {
         const param: any = this.rustDeclaredNode(node);
         return param?.kind === SyntaxKind.Parameter && param.name !== node && this.rustGroupIntParamUnbound(param);
+    }
+
+    /** A required `string` parameter of an async pro method that is only named as the first argument of statement
+     *  `this.spawn (this.m, ..)` calls (by-name dispatch, the arm decodes the text once), never written, whose every read
+     *  is a ws client futures key slot (`k in client.futures`, `client.futures[k]`, `safeValue (client.futures, k)`). */
+    rustSpawnKeyParam(method: any, param: any): boolean {
+        if (!isMethodDeclaration(method) || !isIdentifier(method.name) || !this.isAsyncFunction(method) || method.body === undefined) return false;
+        if (param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.StringKeyword || !isIdentifier(param.name)) return false;
+        const file: any = method.getSourceFile();
+        if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(file.fileName).replace(/\\/g, '/'))) return false;
+        const name = String(method.name.text);
+        let refs = 0;
+        for (const n of this.rustScopeIndex(file).nodes as any[]) {
+            if (!isPropertyAccessExpression(n) || n.expression.kind !== SyntaxKind.ThisKeyword || String(n.name.text) !== name) continue;
+            const call: any = n.parent;
+            if (isCallExpression(call) && call.expression === n) continue;
+            if (!isCallExpression(call) || call.arguments[0] !== n || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword
+                || String(call.expression.name.text) !== 'spawn' || call.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
+            refs++;
+        }
+        if (refs === 0 || this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+            if (n === param.name || n === param || n.parent === param) continue;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
+            if (!this.rustSpawnKeySlot(n)) return false;
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    /** `n` is the key of a futures read on the ws client handle (in-test, keyed read or base `safeValue`). */
+    rustSpawnKeySlot(n: any): boolean {
+        const parent: any = n.parent;
+        const futures = (obj: any) => {
+            const access = this.rustClientHandleAccess(this.unwrapParens(obj) ?? obj, true);
+            return access !== undefined && !access.write && access.key === 'futures';
+        };
+        if (isBinaryExpression(parent)) return parent.left === n && parent.operatorToken.kind === SyntaxKind.InKeyword && futures(parent.right);
+        if (isElementAccessExpression(parent)) return parent.argumentExpression === n && !this.isNativeWriteTargetBase(parent) && futures(parent.expression);
+        if (isCallExpression(parent) && parent.arguments.length === 2 && parent.arguments[1] === n && isPropertyAccessExpression(parent.expression)
+            && parent.expression.expression.kind === SyntaxKind.ThisKeyword && String(parent.expression.name.text) === 'safeValue' && this.rustCalleeIsRuntimeBase(parent)) return futures(parent.arguments[0]);
+        return false;
     }
 
     rustVenueStrParamUnboundRead(node: any): boolean {
