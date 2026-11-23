@@ -7902,7 +7902,7 @@ describe ('csharp inferred collection return box', () => {
             const out = printed(true);
             expect(out).toContain('public virtual object mixed(object a)');
             expect(out).toContain('object z = this.mixed(1);');
-            expect(out).toContain('public virtual object dictLiteral(object a)');
+            expect(out).toContain('public virtual Dictionary<string, object> dictLiteral(object a)');
             expect(out).toMatch(/public (async )?virtual Task<object> asyncPair/);
             expect(out).toContain('public override object overridden(object a)');
             expect(out).toMatch(/public virtual object twoDecls\(object a\)/);

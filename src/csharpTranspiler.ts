@@ -10465,6 +10465,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         switch (node.kind) {
         case SyntaxKind.ArrayLiteralExpression:
             return box === 'List<object>';
+        case SyntaxKind.ObjectLiteralExpression:
+            // an object literal prints `new Dictionary<string, object>() {..}`
+            return (box === 'IDictionary<string, object>') || (box === 'Dictionary<string, object>');
         case SyntaxKind.Identifier: {
             // a Dictionary local is already an IDictionary (implicit reference conversion)
             const type = this.csharpResolvedReadType(node) ?? this.csharpDeclaredLocalValueType(node);
