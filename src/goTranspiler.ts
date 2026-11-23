@@ -60356,3 +60356,107 @@ GoTranspiler.prototype.h41g25WrapperTask = function (node) {
     };
 }
 // ===== H41-G25 (end) =====
+// ===== H41-G17: safeDict on a typed map with a kept `{}` default or a `*string` key (begin) =====
+// `const x = this.safeDict (C, K[, {}])` where C prints `map[string]any`: the comma-ok read answers nil for a missing key,
+// nil, "" or a non-map value as SafeMapTyped / SafeDictMap do; a nil `*string` key reads nil (the helper skips it),
+// and a kept `{}` default is put back when the read is nil.
+// the receiver is a const local not seeded from another map read and never handed to a callee other than a
+// `this.safe*` reader or Object.keys: a parameter, an alias of a row or a map given away can hold values Go has not typed
+function h42g05OwnedReceiver (goTranspiler: GoTranspiler, container): boolean {
+    const d: any = goTranspiler.goAnyBoxLocalDeclaration (container);
+    if ((d?.kind !== SyntaxKind.VariableDeclaration) || ((d.parent?.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    let init: any = d.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    const callee = (c: any) => ((c?.kind === SyntaxKind.CallExpression) && (c.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (c.expression.expression?.kind === SyntaxKind.ThisKeyword)) ? c.expression.name.text : undefined;
+    if ((init === undefined) || /^safe/.test (callee (init) ?? '') || (init.kind === SyntaxKind.ElementAccessExpression)) {
+        return false;
+    }
+    const scope: any = goTranspiler.goEnclosingFunction (d);
+    return (scope !== undefined) && !goTranspiler.hasNodeWhere (scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === container.text)
+        && (n.parent?.kind === SyntaxKind.CallExpression) && n.parent.arguments.includes (n) && !/^safe/.test (callee (n.parent) ?? '')
+        && (n.parent.expression?.getText?.() !== 'Object.keys'));
+}
+function h41g17DictRead (goTranspiler: GoTranspiler, node, printed: string): string | undefined {
+    const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    let call: any = decl?.initializer;
+    while ((call?.kind === SyntaxKind.AsExpression) || (call?.kind === SyntaxKind.ParenthesizedExpression)) {
+        call = call.expression;
+    }
+    if ((typeof printed !== 'string') || (decl?.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (call.expression.name?.text !== 'safeDict') || (call.arguments.length < 2) || (call.arguments.length > 3)) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    const kept = (fallback !== undefined) && (fallback.kind === SyntaxKind.ObjectLiteralExpression) && (fallback.properties.length === 0);
+    if ((fallback !== undefined) && !kept) {
+        return undefined;
+    }
+    const goTypeOf = (n: any): string | undefined => {
+        if (n?.kind !== SyntaxKind.Identifier) {
+            return undefined;
+        }
+        const d: any = goTranspiler.goAnyBoxLocalDeclaration (n);
+        return (d?.kind === SyntaxKind.Parameter) ? goTranspiler.goNativeParameterType (d) : goTranspiler.goResolvedLocalGoType (n);
+    };
+    const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
+    const keyType = literalKey ? 'string' : goTypeOf (key);
+    if ((goTypeOf (container) !== 'map[string]any') || ((keyType !== 'string') && (keyType !== '*string'))
+        || !h42g05OwnedReceiver (goTranspiler, container)) {
+        return undefined;
+    }
+    const name: string = decl.name.text;
+    // other rules print writes into the local, stores of it and its Object.keys natively only from the helper declaration
+    const scope: any = goTranspiler.goEnclosingFunction (decl);
+    const assigned = (n: any) => (n?.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.EqualsToken);
+    if ((scope === undefined) || goTranspiler.hasNodeWhere (scope, (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === decl.name)) {
+            return false;
+        }
+        let o: any = n;
+        while ((o.parent?.kind === SyntaxKind.AsExpression) || (o.parent?.kind === SyntaxKind.ParenthesizedExpression)) {
+            o = o.parent;
+        }
+        const access: any = o.parent;
+        return ((access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === o) && assigned (access) && (access.parent.left === access))
+            || (assigned (o) && (o.parent.right === o) && (o.parent.left?.kind === SyntaxKind.ElementAccessExpression))
+            || ((n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression?.getText?.() === 'Object.keys'));
+    })) {
+        return undefined;
+    }
+    const c: string = container.text;
+    const k: string = literalKey ? `"${key.text}"` : key.text;
+    // a `{}` default the printer dropped (SafeMapTyped) stays dropped; one it kept is put back on nil
+    const m = new RegExp ('^(\\n*)(\\t*)var (\\w+) map\\[string\\]any = (?:(?:ccxt\\.)?SafeMapTyped\\(|this\\.SafeDictMap\\(|MapTyped\\(this\\.SafeDict\\()(\\w+), ("[^"]*"|\\w+)(, map\\[string\\]any\\{\\})?\\)\\)?$').exec (printed);
+    const wrapped = (m !== null) && printed.includes ('MapTyped(this.SafeDict(');
+    if ((m === null) || (m[3] !== name) || (m[4] !== c) || (m[5] !== k) || ((m[6] !== undefined) && !kept) || (wrapped && (m[6] === undefined))
+        || (!wrapped && printed.endsWith ('))'))) {
+        return undefined;
+    }
+    const [ , lead, iden ] = m;
+    const restore = (m[6] !== undefined);
+    if ((keyType === 'string') && !restore) {
+        return undefined; // the H39-G23 read
+    }
+    let out = (keyType === 'string')
+        ? `${lead}${iden}var ${name}, _ = ${c}[${k}].(map[string]any)`
+        : `${lead}${iden}var ${name} map[string]any\n${iden}if ${k} != nil {\n${iden}\t${name}, _ = ${c}[*${k}].(map[string]any)\n${iden}}`;
+    if (restore) {
+        out += `\n${iden}if ${name} == nil {\n${iden}\t${name} = map[string]any{}\n${iden}}`;
+    }
+    return out;
+}
+{
+    const printH41g17 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printH41g17.call (this, node, identation);
+        const h = h41g17DictRead (this, node, printed);
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H41-G17 (end) =====
