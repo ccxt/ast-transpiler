@@ -4806,7 +4806,7 @@ function ccxtGoNilJoinIsPush (node) {
 }
 
 // TS callees whose Go body derefScalars that argument slot at entry (SafeValueN, getValue, ExtendMap)
-const CCXT_GO_NIL_JOIN_ABSENT_ARG0 = /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|extend|deepExtend|isDictionary|isArray)$/;
+const CCXT_GO_NIL_JOIN_ABSENT_ARG0 = /^(?:safe(?:Value|String|StringLower|StringUpper|Integer|Float|Number|Bool|Timestamp|Dict|List)(?:2|N)?|extend|deepExtend|omit|isDictionary|isArray)$/;
 
 // a read that answers the same for a typed-nil map/slice as for the untyped nil it replaces:
 // nil tests, truthiness, element reads, derefScalar-ing helpers, optional (GetArg) argument
