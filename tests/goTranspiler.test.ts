@@ -21104,3 +21104,36 @@ describe('a `: Str` method whose nil path reaches only a deref-safe consumer arg
         expect(out).toContain('Strip(d any) any {');
     });
 });
+describe('a venue-private sync int method whose returns print int64 returns int64', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-h40g15intreturn');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export type int = number;\nexport class Exchange {\n    options: any = {};\n    parseToInt (n: any): number { return n; }\n    safeNumber (o: any, k: any, d: any = undefined): number | undefined { return o[k]; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange, int } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('parseToInt and integer literal returns (fails on the base printer)', () => {
+        const out = run("    regainDelay (): int {\n        const s = this.safeNumber (this.options, 'k', 0);\n        if ((s === undefined) || (s <= 0)) {\n            return 0;\n        }\n        return this.parseToInt (s * 1000);\n    }\n");
+        expect(out).toContain('RegainDelay() int64 {');
+    });
+    test('negative: a fractional literal return keeps any', () => {
+        expect(run("    f (): int {\n        if (this.options['x']) {\n            return 0.5;\n        }\n        return this.parseToInt (this.options['y']);\n    }\n")).toContain('F() any {');
+    });
+    test('negative: an untyped (missing key) read keeps any', () => {
+        expect(run("    f (): int {\n        return this.options['y'];\n    }\n")).toContain('F() any {');
+    });
+    test('negative: a number annotation is not owned by this rule', () => {
+        expect(run("    f (): number {\n        return this.parseToInt (this.options['y']);\n    }\n")).not.toContain('F() int64 {');
+    });
+});

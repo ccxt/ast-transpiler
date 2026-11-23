@@ -4194,7 +4194,8 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     if ((reserved !== undefined) && (reserved.has (name) || reserved.has (name.charAt (0).toUpperCase () + name.slice (1)))) {
         return undefined; // the interface files list the emitted (capitalised) Go name
     }
-    const allowed = ccxtGoAnnotatedReturnTypes (goTranspiler, node) ?? goArrayAnnotatedReturnTypes (goTranspiler, node, name) ?? goStringArrayAnnotatedReturnTypes (goTranspiler, node, name);
+    const allowed = ccxtGoAnnotatedReturnTypes (goTranspiler, node) ?? goArrayAnnotatedReturnTypes (goTranspiler, node, name) ?? goStringArrayAnnotatedReturnTypes (goTranspiler, node, name)
+        ?? h40g15IntAllowed (node, name);
     if (allowed === undefined) {
         return undefined;
     }
@@ -4217,6 +4218,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
         result = result ?? h22g05IntPtrReturn (goTranspiler, node, allowed);
         result = result ?? h26g09MixedStrReturn (goTranspiler, node, allowed);
         result = result ?? h30g05PtrConcatStrReturn (goTranspiler, node, allowed);
+        result = result ?? h40g15IntReturnPaths (goTranspiler, node, allowed);
     } finally {
         CCXT_GO_RETURN_TYPE_IN_PROGRESS.delete (node);
     }
@@ -59620,3 +59622,37 @@ function h39g24ListRead (goTranspiler: GoTranspiler, declaration, printed: strin
     };
 }
 // ===== H39-G24 (end) =====
+
+// ===== h40-g15: a venue-private sync `int` method prints int64 =====
+// `int` is a plain number alias (never undefined): int64 when every return is an int64 value or an integer literal
+function h40g15IntAllowed (node, name): string[] | undefined {
+    return (!CCXT_GO_PARSE_METHOD.test (name) && (node.type?.getText () === 'int')) ? [ 'int64' ] : undefined;
+}
+function h40g15IntReturnPaths (goTranspiler, node, allowed): string | undefined {
+    if ((allowed.length !== 1) || (allowed[0] !== 'int64') || (node.type?.getText () !== 'int')) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    if (returns.length === 0) {
+        return undefined;
+    }
+    for (const r of returns) {
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined; // a try prints a closure returning any
+            }
+        }
+        const e = ccxtGoUnwrapParens (r.expression);
+        if (e === undefined) {
+            return undefined;
+        }
+        if (ts.isNumericLiteral (e) && /^\d+$/.test (e.text)) {
+            continue; // an untyped Go integer constant
+        }
+        if (ccxtGoReturnExpressionType (goTranspiler, e) !== 'int64') {
+            return undefined;
+        }
+    }
+    return 'int64';
+}
+// ===== h40-g15 (end) =====
