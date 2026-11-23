@@ -2677,6 +2677,40 @@ describe('OrderType/OrderSide parameters print String', () => {
     });
 });
 
+describe('java parseAccount row parameter', () => {
+    // parseAccount (account: Dict) is no longer an excluded position: the slot prints Map
+    const TMP = path.join(__dirname, 'files', 'tmp-parse-account-param');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'probe.ts');
+    let out: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, DICT_STR_TYPES);
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import type { Dict } from './base/types';\n" +
+            "class Venue {\n" +
+            "    parseAccount (account: Dict): any {\n" +
+            "        return { 'id': account['id'], 'info': account };\n" +
+            "    }\n" +
+            "    caller (rows: any): any {\n" +
+            "        return this.parseAccount (rows[0]);\n" +
+            "    }\n" +
+            "}\n");
+        out = newJavaTranspiler().transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('the Dict row prints Map, an Object argument is checkcast', () => {
+        expect(out).toContain('parseAccount(java.util.Map<String, Object> account)');
+        expect(out).not.toContain('parseAccount(Object account)');
+        expect(out).toMatch(/this\.parseAccount\(\(java\.util\.Map<String, Object>\)/);
+    });
+});
+
 describe('declared-map element reads: a retyped Dict parameter consumes the read', () => {
     // the receiver is a typed parameter the printer declares as a Java Map,
     // so the read binds natively exactly as it does for a typed local.

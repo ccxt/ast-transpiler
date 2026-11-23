@@ -428,7 +428,6 @@ const JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'handleOptionAndParams': [ 1 ],
     'market': [ 0 ],
     'marketSymbols': [ 1 ],
-    'parseAccount': [ 0 ],
     'parseMarket': [ 0 ],
     'parseOrderBook': [ 1 ],
     'priceToPrecision': [ 0 ],
