@@ -6593,6 +6593,11 @@ export class CSharpTranspiler extends BaseTranspiler {
             return { kind: 'literal', node: inner, literal: true, zero: !negative && (Number(inner.text) === 0),
                 small: !negative && /^[1-9]\d{0,8}$/.test(inner.text), literalKind: this.csharpIntegerLiteralKind(negative ? signed : inner) };
         }
+        // `this.parseToInt (<typed number>)` binds the non-null Int64 twin (operand position only)
+        if (!negative && isCallExpression(inner) && ((inner.expression as any)?.expression?.kind === SyntaxKind.ThisKeyword)
+            && ((inner.expression as any)?.name?.text === 'parseToInt') && this.csharpCalleeResolves(inner) && this.csharpParseToIntBindsTypedTwin(inner)) {
+            return { kind: 'Int64', node: inner, literal: false, zero: false, small: false };
+        }
         if (negative || !isIdentifier(inner)) {
             return undefined;
         }
@@ -10056,6 +10061,23 @@ export class CSharpTranspiler extends BaseTranspiler {
             return CSHARP_STATIC_RETURN_TYPES[(target.text as string) + '.' + methodName] ?? CSHARP_METHOD_RETURN_TYPES[methodName];
         }
         return CSHARP_METHOD_RETURN_TYPES[methodName];
+    }
+
+    // `this.parseToInt (x)` with x printed as a non-null int / Int64 / double binds the typed twin
+    // `Int64 parseToInt(Int64|double)` (Exchange.Number.cs), which never answers null
+    csharpParseToIntBindsTypedTwin(call): boolean {
+        let arg: any = call.arguments?.length === 1 ? call.arguments[0] : undefined;
+        while ((arg !== undefined) && isParenthesizedExpression(arg)) {
+            arg = arg.expression;
+        }
+        if ((arg === undefined) || !this.csharpOperandIsPlainNumber(arg)) {
+            return false;
+        }
+        if (isNumericLiteral(arg)) {
+            return /^\d{1,15}(\.\d+)?$/.test(arg.text);
+        }
+        const kind = this.csharpExpressionTypeOf(arg) ?? this.csharpDeclaredLocalValueType(arg);
+        return [ 'int', 'Int64', 'long', 'double' ].indexOf(kind as string) >= 0;
     }
 
     // the concrete C# type the initializer already produces, or undefined when the
