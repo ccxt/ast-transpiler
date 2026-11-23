@@ -59384,3 +59384,51 @@ GoTranspiler.prototype.goUnifiedSliceParameterType = function (fn, param): strin
     return sideType;
 };
 // ===== H39-G14 (end) =====
+// ===== numeric literal arguments (begin) =====
+// a numeric literal argument is an untyped Go constant: it converts to the int64 / float64 slot exactly
+// (int64 only for an integer literal); every other argument keeps the shipped proof
+function goNumericLiteralArgText (text: string, goType: string): boolean {
+    const t = (text ?? '').trim ();
+    return (goType === 'int64') ? /^-?(?:0|[1-9]\d*)$/.test (t) : /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test (t);
+}
+function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
+    if ((arg?.kind === SyntaxKind.NumericLiteral)
+        || ((arg?.kind === SyntaxKind.PrefixUnaryExpression) && (arg.operator === SyntaxKind.MinusToken) && (arg.operand?.kind === SyntaxKind.NumericLiteral))) {
+        return goNumericLiteralArgText (arg.getText (), goType);
+    }
+    return (arg !== undefined) && (arg.kind !== SyntaxKind.SpreadElement) && (go.goPrintedArgType (arg) === goType);
+}
+{
+    const sitesPassTypeNumLit = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string): boolean {
+        if (sitesPassTypeNumLit.call (this, fn, index, goType)) {
+            return true;
+        }
+        if (((goType !== 'int64') && (goType !== 'float64')) || (fn?.name?.kind !== SyntaxKind.Identifier)
+            || goIsBaseExchangeFile (fn) || this.goMethodKeepsBaseSignature (fn) || goHasDynamicCall (fn, fn.name.text)) {
+            return false;
+        }
+        const name: string = fn.name.text;
+        const calls: any[] = this.goSameFileCallsOf (fn, name);
+        if ((calls.length === 0) || calls.some ((call: any) => (call.runner !== undefined) || !goNumericSlotArgPasses (this, call.arguments?.[index], goType))) {
+            return false;
+        }
+        const tree = this.goTsSrcTree (fn.getSourceFile ());
+        if (tree === undefined) {
+            return true;
+        }
+        const myClass = this.goEnclosingClassName (fn);
+        const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+        for (const site of (tree.callIndex.get (name) ?? [])) {
+            if ((site.file === myFile) || !this.goTsSrcFileDerivesFrom (tree, site.file, myClass) || this.h27g01ForeignNamesake (tree, site.file, myFile)) {
+                continue;
+            }
+            const text = site.args[index];
+            if ((text === undefined) || !(goNumericLiteralArgText (text, goType) || this.goTextArgMatchesType (text, goType, site.file, tree, site.at))) {
+                return false;
+            }
+        }
+        return true;
+    };
+}
+// ===== numeric literal arguments (end) =====

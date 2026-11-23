@@ -1947,7 +1947,7 @@ describe('go inline equality', () => {
         expect(output).toContain("func (this *Ex) Run(enable any) any");
         expect(output).toContain("if enable == nil {");
     });
-    test('a number parameter whose only caller passes a literal keeps the box', () => {
+    test('a number parameter whose only caller passes an integer literal prints int64', () => {
         const input =
         "class Base {\n" +
         "    f (x: any): any { return x; }\n" +
@@ -1961,8 +1961,8 @@ describe('go inline equality', () => {
         "    }\n" +
         "}\n"
         const output = transpiler.transpileGo(input).content;
-        expect(output).toContain("func (this *Ex) Run(n any) any");
-        expect(output).toContain("Add(n, 1)");
+        expect(output).toContain("func (this *Ex) Run(n int64) any");
+        expect(output).toContain("return n + 1");
     });
     test('the params slot of sign keeps the GetArg box', () => {
         const input =
@@ -20842,5 +20842,44 @@ describe('a venue Str parameter fed by a handleMarketTypeAndParams slot in two s
     test('negative: an untyped caller argument keeps any (nil passes as nil)', () => {
         const out = run("    one (o: any) {\n        return this.isInverse (o['type'], undefined);\n    }\n" + methods);
         expect(out).toContain('IsInverse(typeVar any, optionalArgs ...any) bool {');
+    });
+});
+
+describe ('go: a required number parameter every caller feeds a numeric literal', () => {
+    const run = (src: string): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'num-lit-param-'));
+        const cwd = process.cwd ();
+        fs.mkdirSync (path.join (dir, 'ts', 'src'), { recursive: true });
+        const file = path.join (dir, 'ts', 'src', 'ex.ts');
+        try {
+            process.chdir (dir);
+            fs.writeFileSync (file, src);
+            const t = new Transpiler ({ verbose: false, go: {} });
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            process.chdir (cwd);
+            fs.rmSync (dir, { recursive: true, force: true });
+        }
+    };
+    const head = 'import Exchange from \'./base/Exchange.js\';\nexport default class Ex extends Exchange {\n';
+    test ('integer literals at every site print int64, decimal literals print float64 (fails on the base printer)', () => {
+        const go = run (head
+            + '    top (): number {\n        return this.half (7) + this.half (-3) + this.f (1.5) + this.f (2);\n    }\n'
+            + '    half (n: number): number {\n        return n / 2;\n    }\n'
+            + '    f (x: number): number {\n        return x * 3;\n    }\n}\n');
+        expect (go).toContain ('Half(n int64) float64 {');
+        expect (go).toContain ('F(x float64)');
+    });
+    test ('a decimal literal never makes an int64 slot, an untyped argument keeps the box, a nil test keeps the box', () => {
+        const go = run (head
+            + '    top (): any {\n        const p = this.safeInteger ({}, \'x\');\n        return [ this.g (p), this.g (1), this.h (1), this.h (2.5), this.k (3) ];\n    }\n'
+            + '    g (n: number): number {\n        return n * 2;\n    }\n'
+            + '    h (n: number): number {\n        return n * 2;\n    }\n'
+            + '    k (n: Num): number {\n        if (n === undefined) {\n            return 0;\n        }\n        return n * 2;\n    }\n}\n');
+        expect (go).toContain ('G(n any)');
+        expect (go).toContain ('H(n float64)');
+        expect (go).not.toContain ('K(n int64)');
+        expect (go).not.toContain ('K(n float64)');
     });
 });
