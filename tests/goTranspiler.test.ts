@@ -20722,3 +20722,30 @@ describe('a declared string method whose paths are literal-defaulted safeString 
         expect(run("    wsUrl (p: boolean): string {\n        if (p) {\n            return undefined;\n        }\n        return this.safeString (this.urls, 'ws', '');\n    }\n")).toContain('WsUrl(p any) any {');
     });
 });
+
+describe('go unified float64 order-amount params', () => {
+    const src = (body: string) => [
+        'class Ex {',
+        '    async createOrder (symbol: string, type: string, side: string, amount: number, price: number = undefined, params = {}) {',
+        body,
+        '    }',
+        '}',
+        '',
+    ].join('\n');
+    const run = (code: string, table: any): string => {
+        const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        installCcxtGoLocalTypes(x.goTranspiler, undefined, table);
+        return x.transpileGo(code).content;
+    };
+    test('a tabled amount prints float64 on the Async and body signatures', () => {
+        const out = run(src('        return amount * 2;'), { 'createOrder': [ 3 ] });
+        expect(out).toMatch(/CreateOrder\([^)]*amount float64/);
+        expect(out).not.toMatch(/amount any/);
+    });
+    test('negative: without the table the amount stays any', () => {
+        expect(run(src('        return amount * 2;'), undefined)).toMatch(/amount any/);
+    });
+    test('negative: a body that writes a string into the amount fails the build', () => {
+        expect(() => run(src('        amount = "1" as any;\n        return amount;'), { 'createOrder': [ 3 ] })).toThrow(/written with another type/);
+    });
+});
