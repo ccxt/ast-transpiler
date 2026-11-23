@@ -39507,7 +39507,9 @@ export class RustTranspiler extends BaseTranspiler {
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS: Record<string, string> = { 'safeCurrencyCode': 'currencyId' };
     // the same for `string` parameters dispatched by name (no trait slot): method -> parameter names by index, printed `&str`
-    private static readonly RUST_INHERENT_GROUP_STR_PARAMS: Record<string, string[]> = { 'handleTextMessage': [ '', 'message' ] };
+    private static readonly RUST_INHERENT_GROUP_STR_PARAMS: Record<string, string[]> = { 'handleTextMessage': [ '', 'message' ],
+        'calculateRateLimiterCost': [ '', 'method', 'path' ],
+    };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
 
