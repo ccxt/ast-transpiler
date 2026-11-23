@@ -245,6 +245,8 @@ const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptin
 const RUST_SLOT_STR_ARGS: Record<number, string> = { 1: 'reason', 2: 'url', 3: 'method', 5: 'body' };
 // the `code: int` parameter of the `handle_errors` slot (every declaration spells it `int`): an `i64` slot
 const RUST_SLOT_INT_ARGS: Record<number, string> = { 0: 'code' };
+// the `requestBody: Str` parameter of the `handle_errors` slot: an `Option<&str>` slot
+const RUST_SLOT_OSTR_ARGS: Record<number, string> = { 8: 'request_body' };
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -328,21 +330,22 @@ export const rustDispatch = {
         }
     },
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : rustDispatch.isSlotInt(a, i) ? 'i64' : 'crate::Value'}`).join(', '),
+    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : rustDispatch.isSlotInt(a, i) ? 'i64' : rustDispatch.isSlotOptStr(a, i) ? 'Option<&str>' : 'crate::Value'}`).join(', '),
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number): boolean => (arg === 'path' && i === 0) || RUST_SLOT_STR_ARGS[i] === arg,
     isSlotInt: (arg: string, i: number): boolean => RUST_SLOT_INT_ARGS[i] === arg,
+    isSlotOptStr: (arg: string, i: number): boolean => RUST_SLOT_OSTR_ARGS[i] === arg,
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string): boolean => slot.includes(': '),
     slotName: (slot: string): string => slot.split(': ')[0],
     /** A `&[..]` slot takes the method's optional-argument slice as is. */
     isSlotSlice: (slot: string): boolean => /^\w+: &\[/.test(slot),
     /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
-    slotArg: (kind: string, arg: string, i: number): string => ((kind === 'str' && rustDispatch.isSlotStr(arg, i)) || (kind === 'i64' && rustDispatch.isSlotInt(arg, i)) ? arg : rustDispatch.fromValue(kind, arg)),
+    slotArg: (kind: string, arg: string, i: number): string => ((kind === 'str' && rustDispatch.isSlotStr(arg, i)) || (kind === 'i64' && rustDispatch.isSlotInt(arg, i)) || (kind === 'optstr' && rustDispatch.isSlotOptStr(arg, i)) ? arg : rustDispatch.fromValue(kind, arg)),
     isSlotMarket: (arg: string, i: number): boolean => arg === 'market' && i > 0,
     isSlotCurrency: (arg: string, i: number): boolean => i > 0 && /^(?:currency|from_currency|to_currency)$/.test(arg),
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
-    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) || rustDispatch.isSlotInt(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
+    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) || rustDispatch.isSlotInt(arg, i) || rustDispatch.isSlotOptStr(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
     /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
@@ -15642,6 +15645,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (p !== undefined && (/^Value\b/.test(p.type) || p.type === 'impl Into<crate::Value>')) return `${p.name}.clone()`;
             if (p !== undefined && p.type === '&str') return rustDispatch.isSlotStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'i64') return rustDispatch.isSlotInt(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
+            if (p !== undefined && p.type === 'Option<&str>') return rustDispatch.isSlotOptStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'Option<&crate::types::Market>') return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Currency>') return p.name;
             if (p !== undefined && p.type === '&[Value]' && rustDispatch.isSlotSlice(_slot)) return p.name;
@@ -39283,6 +39287,8 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string[]> = { 'sign': [ 'path' ], 'handleErrors': [ '', 'reason', 'url', 'method', '', 'body' ] };
     // the same for `int` parameters (printed `i64`, slot rustDispatch.isSlotInt); any name, the declared type decides
     private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS: Record<string, number[]> = { 'handleErrors': [ 0 ] };
+    // the same for `Str` parameters (printed `Option<&str>`, slot rustDispatch.isSlotOptStr); any name
+    private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS: Record<string, number[]> = { 'handleErrors': [ 8 ] };
 
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
@@ -39296,12 +39302,13 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         const inherent = RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS[name];
         const index = Array.from(method.parameters).indexOf(param);
-        const int = inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index);
+        const ostr = inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS[name] ?? []).includes(index);
+        const int = ostr || (inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index));
         const pname = int ? String(param.name.text) : inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
         if ((inherent !== undefined ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
-        const spelled = `${int ? '' : pname}:${inherent !== undefined ? 'Str' : int ? 'int' : 'string'}`;
+        const spelled = `${int ? '' : pname}:${inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string'}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
