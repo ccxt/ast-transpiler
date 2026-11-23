@@ -210,11 +210,13 @@ describe ('csharp venue-private nullable number parameters seen from the pro fil
     beforeAll(() => {
         fs.mkdirSync(path.dirname(BASE), { recursive: true });
         fs.mkdirSync(path.dirname(PRO), { recursive: true });
-        fs.writeFileSync(BASE, 'export type Num = number | undefined;\nexport type int = number;\nexport class Exchange {\n    safeNumber (o: any, k: any, d: any = undefined): Num { return d; }\n    seconds (): int { return 1; }\n    any (): any { return 1; }\n}\n');
+        fs.writeFileSync(BASE, 'export type Num = number | undefined;\nexport type int = number;\nexport class Exchange {\n    safeNumber (o: any, k: any, d: any = undefined): Num { return d; }\n    seconds (): int { return 1; }\n    any (): any { return 1; }\n    milliseconds = milliseconds;\n}\nconst milliseconds = () => 1;\n');
         fs.writeFileSync(A,
             "import { Exchange } from './base/Exchange';\n" +
             "import type { Num } from './base/Exchange';\n" +
             'export class A extends Exchange {\n' +
+            '    token (seconds: number): string { return (seconds < 1) ? \'m\' : \'l\'; }\n' +
+            '    t () { const s = this.milliseconds (); return this.token (s); }\n' +
             "    f (x: any) { const p = this.safeNumber (x, 'p'); const q = this.safeNumber (x, 'q'); return [ this.req (q, p), this.boxedPro (q), this.override (q), this.written (q) ]; }\n" +
             '    req (amount: Num, price: Num = undefined): string { return (price === undefined) ? \'m\' : \'l\'; }\n' +
             '    boxedPro (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
@@ -236,6 +238,7 @@ describe ('csharp venue-private nullable number parameters seen from the pro fil
             '    createOrder (symbol: string, type: string, side: string, amount: number, price: Num = undefined) { amount = 1; return this.written (amount); }\n' +
             '    withdrawWs (code: string, amount: number) { return this.required (amount); }\n' +
             '    authWs () { const s = this.seconds (); return this.stamp (s); }\n' +
+            '    authToken () { const s = this.milliseconds (); return this.token (s); }\n' +
             '    authLoose () { const s = this.any (); return this.loose (s); }\n' +
             '}\n');
         const config = { 'parser': WRAPPED_PARSER, 'coreArgTypes': { 'createOrderWs': { 3: 'double', 4: 'double?' }, 'editOrderWs': { 4: 'double?', 5: 'double?' }, 'createOrder': { 3: 'double', 4: 'double?' } } };
@@ -267,6 +270,10 @@ describe ('csharp venue-private nullable number parameters seen from the pro fil
 
     test('a pro call passing a const local of an int-declared method keeps Int64', () => {
         expect(a).toContain('stamp(Int64 seconds)');
+    });
+
+    test('a pro call passing a const local of a base field bound to the int time function keeps Int64', () => {
+        expect(a).toContain('token(Int64 seconds)');
     });
 
     test('a pro call passing a const local of an any-declared method keeps object', () => {

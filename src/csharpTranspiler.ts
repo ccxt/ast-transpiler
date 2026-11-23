@@ -3406,6 +3406,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const owner: any = findAncestor(method, (n) => isClassDeclaration(n));
         const member: any = (owner === undefined) ? undefined : this.getChecker().getTypeAtLocation(owner)?.getProperty?.(init.expression.name.text);
         const target: any = member?.valueDeclaration?.resolve?.();
+        if ((target !== undefined) && isPropertyDeclaration(target) && (CSHARP_THIS_RETURN_TYPES[init.expression.name.text] === 'Int64')
+            && String(target.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/').endsWith('/base/Exchange.ts')) {
+            return 'Int64'; // a base field bound to a time function the hand-written C# base declares Int64
+        }
         return ((target !== undefined) && isMethodDeclaration(target) && (target.type?.getText?.()?.trim() === 'int')) ? 'Int64' : undefined;
     }
 
