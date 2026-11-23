@@ -7951,6 +7951,50 @@ describe ('csharp inferred dict return from a Dictionary local', () => {
     });
 });
 
+describe ('csharp inferred dict return from a Dictionary call', () => {
+    const config: any = { 'verbose': false, 'csharp': { 'uniqueMethodNames': [ 'merged', 'mixedCall', 'listCall' ], 'parser': WRAPPED_PARSER } };
+    const source =
+        "type Dict = { [key: string]: any };\n" +
+        "class Base {\n" +
+        "    extend (a: any, b: any): Dict { return a; }\n" +
+        "    safeList (d: any, k: string): any[] { return d[k]; }\n" +
+        "}\n" +
+        "class Venue extends Base {\n" +
+        "    merged (a: Dict, b: Dict): Dict {\n" +
+        "        if (b === undefined) {\n" +
+        "            return this.extend (a, {});\n" +
+        "        }\n" +
+        "        return this.extend (a, { 'b': b });\n" +
+        "    }\n" +
+        "    mixedCall (a: Dict): Dict {\n" +
+        "        if (a === undefined) {\n" +
+        "            return a;\n" +
+        "        }\n" +
+        "        return this.extend (a, {});\n" +
+        "    }\n" +
+        "    listCall (a: Dict): Dict {\n" +
+        "        return this.safeList (a, 'x') as any;\n" +
+        "    }\n" +
+        "    user (a: Dict) {\n" +
+        "        const p = this.merged (a, a);\n" +
+        "        return p;\n" +
+        "    }\n" +
+        "}";
+    const out = (): string => new Transpiler(config).transpileCSharp(source).content;
+
+    test('a Dict method whose every return is an extend call prints Dictionary, its caller types the local', () => {
+        const printed = out();
+        expect(printed).toContain('public virtual Dictionary<string, object> merged(');
+        expect(printed).toContain('Dictionary<string, object> p = this.merged(a, a);');
+    });
+
+    test('an untyped parameter return path or a list call keeps object', () => {
+        const printed = out();
+        expect(printed).toContain('public virtual object mixedCall(');
+        expect(printed).toContain('public virtual object listCall(');
+    });
+});
+
 describe ('csharp native mod / Math.Min / Math.Max', () => {
 
     const config: any = { 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } };
