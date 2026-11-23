@@ -1255,6 +1255,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSameFileCallCache: Map<any, Map<string, any[]>>;
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
+    goTestFunctionStringParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
     goSliceParameterType(fn: any, param: any, index: number): string | undefined;
     goSliceParamsKeepingGetValue: Set<any>;
@@ -2779,4 +2780,9 @@ export interface GoTranspiler {
     h38p04ParseRowReadOnly(fn: any, param: any): boolean;
     h38p04Cache: Map<any, boolean>;
     h38p04Active: Set<any>;
+}
+export interface GoTranspiler {
+    goCacheIndexReturnType(node: any): string | undefined;
+    goCacheIndexReturnKind(expression: any): string | undefined;
+    goIsBaseCacheIndexMethod(fn: any): boolean;
 }

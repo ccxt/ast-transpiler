@@ -48,6 +48,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
         declared: number;
         mentions: number;
         handWritten: boolean;
+        asyncVoid?: boolean;
         calls: Node[][];
     } | undefined) | undefined;
     private javaThisCallIndex;
@@ -151,6 +152,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
         type: any;
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
+    javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
     javaPrintsListArgument(arg: any, producerDeclared?: (name: string) => boolean): boolean;
@@ -172,12 +174,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaStashAsyncCore(node: any, identation: any, supplier: string, executorArg: string, coreBody: string, blockClose: string): void;
     javaAsyncCoreSplit(node: any, identation: any, signature: string, funcBody: string): string;
     printMethodDefinition(node: any, identation: any, paramsPrinter?: any): string;
+    javaAsyncVoidName(node: any): boolean;
     javaBooleanParameterBox(node: any): string | undefined;
     callAlwaysReturnsPlainHashMap(node: any, depth: number): boolean;
     returnTypePrintsAsHashMap(declaration: any): boolean;
     javaVenueCalleeReturnType(call: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaBaseNumericTupleListReturn(node: any): string | undefined;
     javaTupleOverrideListReturn(node: any): string | undefined;
     javaIntReturnIsLong(node: any): boolean;
     javaBaseMapReturnIsSole(node: any, target: string): boolean;
@@ -332,6 +336,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaElementWriteMapSource(value: any): boolean;
     javaPrintsNonNullValue(node: any): boolean;
     javaFreshExtendMap(initializer: any): boolean;
+    javaBaseMapOverloadCall(arg: any): boolean;
     javaDestructuringHandsBackLocal(assignment: any, symbol: any): boolean;
     javaPatternBindsSymbol(pattern: any, symbol: any): boolean;
     javaMapWriteFieldReceiver(expression: any): boolean;

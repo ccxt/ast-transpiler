@@ -1,6 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
 import { type Program, type Symbol as TsSymbol } from 'typescript/unstable/sync';
+import * as csharpTsSync from 'typescript/unstable/sync';
 export interface CsharpDeclaredMember {
     type: string;
     initializer?: string;
@@ -82,8 +83,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         [name: string]: string;
     };
     csharpBaseFieldKeyNames: WeakMap<object, number>;
-    csharpBooleanParamProofs: WeakMap<Program<import("typescript/unstable/sync").ProjectId>, Map<Node, Set<number>>>;
-    csharpVenueNumberParamProofs: WeakMap<Program<import("typescript/unstable/sync").ProjectId>, Map<Node, string>>;
+    csharpBooleanParamProofs: WeakMap<Program<csharpTsSync.ProjectId>, Map<Node, Set<number>>>;
+    csharpVenueNumberParamProofs: WeakMap<Program<csharpTsSync.ProjectId>, Map<Node, string>>;
+    csharpVenueOverriddenMethods: Set<any>;
+    static csharpProParseApi: any;
     constructor(config?: {});
     initConfig(): void;
     getBlockOpen(identation: any): string;
@@ -185,6 +188,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpCallSiteReceiverTier(node: any): 'source' | 'restTest' | 'wsTest' | undefined;
     csharpCallSiteRow(node: any): Record<number, string> | undefined;
     csharpCallSiteArgs(node: any, printed: string[]): string;
+    csharpCastOperand(argument: any, text: string): string;
     csharpCallSiteArg(argument: any, text: string, wanted: string, test: boolean): {
         text: string;
         tight: boolean;
@@ -208,7 +212,12 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpVenueNumberParamCensus(): Map<Node, string>;
     csharpVenueNumberParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpProFileCallKinds(method: any, index: number): string[] | undefined;
+    csharpProConstIntCallLocal(method: any, caller: any, argument: any): string | undefined;
+    csharpProCallArgumentKind(method: any, call: any, index: number): string | undefined;
+    csharpTypedParameterArgument(argument: any): string | undefined;
     csharpVenueStringParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpDeclaredStringFieldArgument(argument: any): boolean;
     csharpResolvedStringArgument(argument: any): boolean;
     csharpParamIsBooleanTyped(parameter: any): boolean;
     csharpBooleanArgumentProven(call: any, index: any, accepted: any): boolean;

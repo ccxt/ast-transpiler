@@ -69,7 +69,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -98,6 +98,7 @@ export declare const rustDispatch: {
     slotParams: (args: string[]) => string;
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number) => boolean;
+    isSlotInt: (arg: string, i: number) => boolean;
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string) => boolean;
     slotName: (slot: string) => string;
@@ -3331,8 +3332,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBalancedText(text: string): boolean;
     /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
     rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
+    rustUntypedLocalCaller(fn: any): boolean;
+    /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
+    rustBoxedElementList(exp: any): boolean;
     /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
     printOwnContainerReturn(fn: any, exp: any): string | undefined;
+    /** `this.safeDict (x, 'k', {})` / `this.safeList (x, 'k', [])`: the member when it is that container, else the empty one,
+     *  which is exactly the typed `safe_dict_k_t` / `safe_list_k_t` answer (missing key, Null, wrong kind -> empty). */
+    rustEmptyDefaultReaderPayload(exp: any, printed: string, kind: 'dict' | 'list'): string | undefined;
     /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
     printRustUntilPairBox(node: any): string | undefined;
     /** `this.handleUntilOption (..)[i]` with a literal 0 / 1: that map, boxed where the read took a `Value`. */
@@ -5585,6 +5593,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS;
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
@@ -5618,6 +5627,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrUnbound;
     rustVenueStrParamUnbound(param: any): boolean;
     rustVenueStrParamUnboundUncached(param: any): boolean;
+    /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
+     *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
+    rustGroupIntParamUnbound(param: any): boolean;
+    /** `code === 429` / `code >= 400` over an unbound `int` group slot and an integer literal: the `i64` compare
+     *  (is_equal / the ordered helpers compare an `Int` and an integer literal exactly so). */
+    printGroupIntParamCompare(leftNode: any, rightNode: any, op: any): string | undefined;
+    rustGroupIntParamUnboundRead(node: any): boolean;
     rustVenueStrParamUnboundRead(node: any): boolean;
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
     rustVenueStrParamKind(param: any): string | undefined;
@@ -5806,6 +5822,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
     rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     rustVenueDictParamUncached(param: any): boolean;
+    /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
+     *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
+    rustWsHandlerMessageSlot(method: any, param: any): boolean;
+    /** Another ts/src/pro file declares a method of this name and calls it as `.name (`. */
+    rustWsHandlerCalledElsewhere(method: any, name: string): boolean;
     /** `.name (` calls in the method's own file and ws sibling (`own` when every other file calling it declares its own
      *  `name`, -1 when one does not); -1 for a quoted use anywhere in ts/src. */
     rustVenueDictTextCallCount(method: any, name: string, own: number): number;
