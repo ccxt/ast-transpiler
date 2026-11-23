@@ -20884,6 +20884,43 @@ describe ('go: a required number parameter every caller feeds a numeric literal'
     });
 });
 
+describe ('go: an async venue number parameter every caller feeds a float64', () => {
+    const run = (src: string): string => {
+        const dir = fs.mkdtempSync (path.join (os.tmpdir (), 'async-f64-param-'));
+        const cwd = process.cwd ();
+        fs.mkdirSync (path.join (dir, 'ts', 'src'), { recursive: true });
+        const file = path.join (dir, 'ts', 'src', 'ex.ts');
+        try {
+            process.chdir (dir);
+            fs.writeFileSync (file, src);
+            const t = new Transpiler ({ verbose: false, go: { 'unifiedFloat64Params': { 'addMargin': [ 1 ], 'reduceMargin': [ 1 ] } } });
+            installCcxtGoHooks (t.goTranspiler);
+            return t.transpileGoByPath (file).content;
+        } finally {
+            process.chdir (cwd);
+            fs.rmSync (dir, { recursive: true, force: true });
+        }
+    };
+    const head = 'import Exchange from \'./base/Exchange.js\';\nexport default class Ex extends Exchange {\n';
+    const callers = '    async addMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, amount, \'add\', params);\n    }\n'
+        + '    async reduceMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, ARG, \'reduce\', params);\n    }\n';
+    test ('a float64 argument at every site prints float64 (fails on the base printer)', () => {
+        const go = run (head + callers.replace ('ARG', 'amount')
+            + '    async helper (symbol: string, amount: number, type: string, params = {}): Promise<any> {\n        return this.numberToString (amount);\n    }\n}\n');
+        expect (go).toContain ('helperBody(ch chan any, symbol any, amount float64, typeVar string');
+    });
+    test ('an untyped argument at one site keeps the box', () => {
+        const go = run (head + callers.replace ('ARG', 'this.safeValue (params, \'x\')')
+            + '    async helper (symbol: string, amount: any, type: string, params = {}): Promise<any> {\n        return this.numberToString (amount);\n    }\n}\n');
+        expect (go).toContain ('helperBody(ch chan any, symbol any, amount any, typeVar string');
+    });
+    test ('a nil test in the body keeps the box', () => {
+        const go = run (head + callers.replace ('ARG', 'amount')
+            + '    async helper (symbol: string, amount: any, type: string, params = {}): Promise<any> {\n        if (amount === undefined) {\n            return undefined;\n        }\n        return this.numberToString (amount);\n    }\n}\n');
+        expect (go).not.toContain ('amount float64, typeVar');
+    });
+});
+
 describe('*string family stores follow CCXT_GO_STRING_PTR_METHOD_NAMES', () => {
     const run = (body: string) => {
         const x = new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });

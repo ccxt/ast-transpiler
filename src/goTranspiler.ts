@@ -35207,8 +35207,8 @@ GoTranspiler.prototype.goAnnotateMethodTypes = function (methodsTypes, file) {
     }
 };
 // the value types an async parameter takes: a map is passed as a map everywhere; a string is passed
-// as a string unless the body feeds it into a nullable (`*string`) parameter slot
-const GO_ASYNC_PARAMETER_TYPES = [ 'map[string]any', 'string' ];
+// as a string unless the body feeds it into a nullable (`*string`) parameter slot; a float64 is a plain number
+const GO_ASYNC_PARAMETER_TYPES = [ 'map[string]any', 'string', 'float64' ];
 // the aliases that print a `*T` Go type for a required parameter
 const GO_NULLABLE_PARAM_ALIASES = /^(?:Str|Int|Num|Bool)$/;
 // The Go type the printed argument of every same-file call site carries when they agree on one the
