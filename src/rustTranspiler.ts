@@ -28085,6 +28085,9 @@ export class RustTranspiler extends BaseTranspiler {
         // a map row `xs[i]` of a typed list: the base `safe_dict_o` reader (the element's map, `None` out of range / non-map)
         const listRow = /^crate::value::KeyRead::read\(&&(\w+), &Value::Int\((\w+)\)\)$/.exec(printed);
         if (listRow !== null && isElementAccessExpression(init) && this.rustDictElementSource(init)) return `self.safe_dict_o(&${listRow[1]}, Value::Int(${listRow[2]}))`;
+        // a slice element `xs.get(i as usize)`: its map (an Arc handle), `None` out of range or for a non-map (as `into_opt_dict`)
+        const sliceRow = /^(.+)\.get\((\w+) as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)$/.exec(printed);
+        if (sliceRow !== null && this.rustBalancedText(sliceRow[1])) return `(match ${sliceRow[1]}.get(${sliceRow[2]} as usize) { Some(Value::Dict(__m)) => Some(std::sync::Arc::clone(__m)), _ => None })`;
         const row = /^\(match (\w+\.get\([\w ]+\)) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => Value::Null \}\)$/.exec(printed);
         if (row !== null && isCallExpression(init)) return `(match ${row[1]} { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None })`;
         return undefined;
