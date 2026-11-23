@@ -2596,12 +2596,10 @@ export class RustTranspiler extends BaseTranspiler {
             const untilDecl = this.printRustUntilPairDestructure(declaration, parsedElements, indent); if (untilDecl !== undefined) return untilDecl;
             const syntheticName = parsedElements.join('') + 'Variable';
             const nativeList = this.rustNativeListSource(declaration.initializer);
-            // a watch whose every matching resolve passes an array literal settles a list (or Null): read it as one
-            const wsTuple = !nativeList && this.rustWsTupleListProof(declaration);
-            const head = nativeList || wsTuple
+            const head = nativeList
                 ? `${indent}let ${syntheticName}: Vec<Value> = ${this.printNode(declaration.initializer, 0)}.as_array().cloned().unwrap_or_default();\n`
                 : `${indent}let mut ${syntheticName} = ${this.printNode(declaration.initializer, 0)};\n`;
-            const untypedRead = (idx: number) => (nativeList || wsTuple ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`);
+            const untypedRead = (idx: number) => (nativeList ? this.printTypedVecElementRead(syntheticName, idx) : `get_value(&${syntheticName}, &Value::Int(${idx}))`);
             const lines = parsedElements.map((e, idx) => e === '' ? undefined : this.printWsTupleCacheSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
                 ?? this.printWsTupleStrSlot(declaration.name.elements[idx], e, untypedRead(idx), nativeList, indent)
                 ?? this.printRustTupleSlotLocal(declaration.name.elements[idx], e, syntheticName, idx, nativeList, indent)
@@ -30652,13 +30650,7 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustWsTupleSlotProof(element, 'str');
     }
 
-    /** A watch tuple destructure where every matching resolve is an array literal with no spread. */
-    rustWsTupleListProof(declaration: VariableDeclaration): boolean {
-        const first: any = (declaration.name as any).elements.find((e: any) => e.kind === SyntaxKind.BindingElement);
-        return first !== undefined && this.rustWsTupleSlotProof(first, 'tuple');
-    }
-
-    rustWsTupleSlotProof(element: BindingElement, want: 'cache' | 'str' | 'tuple'): boolean {
+    rustWsTupleSlotProof(element: BindingElement, want: 'cache' | 'str'): boolean {
         const pattern: any = element.parent;
         const declaration: any = pattern?.parent;
         if (pattern?.kind !== SyntaxKind.ArrayBindingPattern || declaration === undefined || !isVariableDeclaration(declaration) || declaration.name !== pattern) return false;
@@ -30697,11 +30689,10 @@ export class RustTranspiler extends BaseTranspiler {
             // ral-55w: a Null settle or a plain map (a balance, never a cache / book marker) has no element at the slot:
             // the slot read is Null either way, which the Option conversion maps to None (TS throws destructuring it)
             // ral-80a: so has a boolean settle (`cleanUnsubscription`'s `client.resolve (true, h)`, `x.resolve (false)`)
-            if (r.kind === 'none' || r.scalar === true || (want !== 'tuple' && r.kind === 'dict' && r.plainMap === true)) continue;
+            if (r.kind === 'none' || r.scalar === true || (r.kind === 'dict' && r.plainMap === true)) continue;
             const t = r.kind === 'list' && r.value !== undefined ? tuple(r.value) : undefined;
             const e: any = t?.elements[index];
             if (e === undefined || e.kind === SyntaxKind.SpreadElement || t.elements.some((x: any) => x.kind === SyntaxKind.SpreadElement)) return false;
-            if (want === 'tuple') { matched++; continue; }
             if (want === 'cache' ? this.rustWsResolvedKind(e) !== 'cache' : !this.rustWsResolvedStr(e)) return false;
             matched++;
         }
