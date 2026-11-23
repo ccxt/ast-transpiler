@@ -59749,7 +59749,10 @@ function h40g15IntAllowed (node, name): string[] | undefined {
     return (!CCXT_GO_PARSE_METHOD.test (name) && (node.type?.getText () === 'int')) ? [ 'int64' ] : undefined;
 }
 function h40g15IntReturnPaths (goTranspiler, node, allowed): string | undefined {
-    if ((allowed.length !== 1) || (allowed[0] !== 'int64') || (node.type?.getText () !== 'int')) {
+    // a `number` method (never undefined) also prints int64 when every return is an int64 value or an integer literal
+    const declared = node.type?.getText ();
+    if (!((declared === 'int') && (allowed.length === 1) && (allowed[0] === 'int64'))
+        && !((declared === 'number') && (allowed.length === 1) && (allowed[0] === 'float64') && !CCXT_GO_PARSE_METHOD.test (node.name?.text ?? 'parse'))) {
         return undefined;
     }
     const returns = collectReturnStatements (node.body);

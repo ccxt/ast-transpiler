@@ -21180,8 +21180,41 @@ describe('a venue-private sync int method whose returns print int64 returns int6
     test('negative: an untyped (missing key) read keeps any', () => {
         expect(run("    f (): int {\n        return this.options['y'];\n    }\n")).toContain('F() any {');
     });
-    test('negative: a number annotation is not owned by this rule', () => {
-        expect(run("    f (): number {\n        return this.parseToInt (this.options['y']);\n    }\n")).not.toContain('F() int64 {');
+    test('a number annotation whose returns print int64 also returns int64', () => {
+        expect(run("    f (): number {\n        return this.parseToInt (this.options['y']);\n    }\n")).toContain('F() int64 {');
+    });
+});
+describe('a venue-private sync number method whose returns print int64 returns int64', () => {
+    const run = (method: string) => {
+        const dir = path.join(__dirname, 'files', 'tmp-h41g12numreturn');
+        const cwd = process.cwd();
+        fs.mkdirSync(path.join(dir, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'ts', 'src', 'base', 'Exchange.ts'), 'export class Exchange {\n    options: any = {};\n    parseToInt (n: any): number { return n; }\n}\n');
+        const file = path.join(dir, 'ts', 'src', 'ex.ts');
+        fs.writeFileSync(file, "import { Exchange } from './base/Exchange';\nexport default class Ex extends Exchange {\n" + method + "}\n");
+        try {
+            process.chdir(dir);
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoHooks(t.goTranspiler);
+            installCcxtGoLocalTypes(t.goTranspiler);
+            return t.transpileGoByPath(file).content;
+        } finally {
+            process.chdir(cwd);
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    };
+    test('a parseToInt local and an integer literal (fails on the base printer)', () => {
+        const out = run("    accountId (): number {\n        if (this.options['x']) {\n            return 0;\n        }\n        const id = this.parseToInt (this.options['a']);\n        return id;\n    }\n");
+        expect(out).toContain('AccountId() int64 {');
+    });
+    test('negative: a fractional literal return keeps the number type', () => {
+        expect(run("    f (): number {\n        if (this.options['x']) {\n            return 0.5;\n        }\n        return this.parseToInt (this.options['y']);\n    }\n")).not.toContain('F() int64 {');
+    });
+    test('negative: an untyped (missing key) read keeps the number type', () => {
+        expect(run("    f (): number {\n        return this.options['y'];\n    }\n")).not.toContain('F() int64 {');
+    });
+    test('negative: a nullable Int return is not owned by this rule', () => {
+        expect(run("    f (): number | undefined {\n        return this.parseToInt (this.options['y']);\n    }\n")).not.toContain('F() int64 {');
     });
 });
 
