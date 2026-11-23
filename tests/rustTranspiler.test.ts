@@ -27633,3 +27633,29 @@ describe('rust typed cancelAllOrdersAfter: Option<i64> timeout, Option<Dict> ret
         expect (out).not.toMatch (/fn other\([^)]*Option<i64>/);
     });
 });
+
+describe ('rust borrowed venue dict parameter stored whole', () => {
+    const fx: Record<string, string> = {
+        'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (x: any, k: any, d: any = undefined): any { return x; }\n    safeDict (x: any, k: any, d: any = undefined): any { return x; }\n}\n',
+        'ts/src/acme.ts': "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class acme extends Exchange {\n    fetchFeeRow (response: Dict): Dict {\n        const first = this.safeDict (response, 'data', {});\n        return this.parseFeeRow (first);\n    }\n    parseFeeRow (fee: Dict): Dict {\n        return {\n            'info': fee,\n            'maker': this.safeString (fee, 'maker'),\n        };\n    }\n    parseLastRow (row: Dict): Dict {\n        const id = this.safeString (row, 'id');\n        return { 'id': id, 'info': row };\n    }\n    fetchLastRow (response: Dict): Dict {\n        const first = this.safeDict (response, 'data', {});\n        return this.parseLastRow (first);\n    }\n}\n",
+    };
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-rs-venuedictvalue-'));
+    for (const [rel, text] of Object.entries (fx)) {
+        fs.mkdirSync (path.dirname (path.join (root, rel)), { recursive: true });
+        fs.writeFileSync (path.join (root, rel), text);
+    }
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    let printed = '';
+    beforeAll (() => {
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        printed = t.transpileRustByPath (path.join (root, 'ts/src/acme.ts')).content;
+    });
+    test ('an info entry read before the last key read takes &Dict and shares the handle', () => {
+        expect (printed).toMatch (/fn parseFeeRow\(&self, fee: &crate::value::Dict\)/);
+        expect (printed).toMatch (/"info"[^\n]*Value::Dict\(fee\.clone\(\)\)/);
+        expect (printed).toMatch (/self\.parseFeeRow\(&first\)/);
+    });
+    test ('an info entry on the last use keeps the boxed slot (it moved with no copy)', () => {
+        expect (printed).not.toMatch (/fn parseLastRow\(&self, row: &/);
+    });
+});

@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -234,7 +234,7 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 // keys a map read routes through the shared order-book store (value.rs `get_map_value_k`)
 const RUST_BOOK_META_KEYS = new Set<string>([ 'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache' ]);
-const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref' ]);
+const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref', 'dictref' ]);
 // a native return a by-name arm boxes back to `Value`
 const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
 
@@ -281,6 +281,8 @@ export const rustDispatch = {
         case 'optcurrency': return `<Option<crate::types::Currency> as crate::types::FromRaw>::from_raw(${arg}).as_ref()`;
         // a borrowed read-only map slot: the arm lends the boxed map, an empty one for a missing / non-map argument
         case 'mapref': return `args.get(${i}).and_then(crate::Value::as_map).unwrap_or(&Default::default())`;
+        // a borrowed dict slot: the arm lends the boxed map's handle, an empty map for a missing / non-map argument
+        case 'dictref': return `&match args.get(${i}) { Some(crate::Value::Dict(__d)) => std::sync::Arc::clone(__d), _ => Default::default() }`;
         // ral-ve: an order-book side slot wraps the boxed side marker once
         case 'side': return `crate::pro::order_book::Side::of(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
         // a lent string-list slot: a non-list argument reads as the empty list, as the shadow did
@@ -310,6 +312,7 @@ export const rustDispatch = {
         case 'dictrows': return rustDispatch.arg(kind, i);
         case 'mapref': return rustDispatch.arg(kind, i);
         case 'client': return rustDispatch.arg(kind, i);
+        case 'dictref': return rustDispatch.arg(kind, i);
         default: return undefined;
         }
     },
@@ -326,6 +329,7 @@ export const rustDispatch = {
         // a currency slot of `DerivedExchange` is itself typed
         case 'optcurrency': return v;
         case 'mapref': return `${v}.as_map().unwrap_or(&Default::default())`;
+        case 'dictref': return `&match &${v} { crate::Value::Dict(__d) => std::sync::Arc::clone(__d), _ => Default::default() }`;
         default: return v;
         }
     },
@@ -4368,7 +4372,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustParamPrintsMap(param)) return '&mut indexmap::IndexMap<String, Value>';
         if (this.rustParamPrintsStrVec(param)) return 'Vec<String>';
         if (this.rustParamReadsByReference(param)) return 'impl KeyRead';
-        if (this.rustVenueDictParam(param)) return '&indexmap::IndexMap<String, Value>';
+        if (this.rustVenueDictParam(param)) return this.rustVenueDictValueParam(param) ? '&crate::value::Dict' : '&indexmap::IndexMap<String, Value>';
         if (this.rustParamIsLentResponse(param) || this.rustParamIsLentVenue(param) || this.rustSafeDictKeyParam(param) || this.rustLentSlotParam(param) || this.rustPriceSlotParam(param)) return 'impl Into<crate::Value>';
         if (this.rustBookSideParam(param)) return this.rustWsBookPath(param, 'pro::order_book::Side');
         if (this.rustVenueStrListParam(param)) return '&[crate::Value]';
@@ -15615,6 +15619,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
         'Vec<crate::value::Dict>': 'dictrows',
         '&indexmap::IndexMap<String, Value>': 'mapref', '&crate::pro::ws_client::ClientHandle': 'client',
+        '&crate::value::Dict': 'dictref',
     };
 
     private static readonly RUST_DISPATCH_RETURN_KINDS: Record<string, RustDispatchReturnKind> = {
@@ -19787,7 +19792,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  one must exist; anything else (a write, a `Value` pass-through, a Null
      *  comparison, a marker key) answers undefined and the parameter keeps its
      *  box. */
-    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false, strList = false): { reads: number } | undefined {
+    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false, strList = false, infoValue = false): { reads: number } | undefined {
         const name = String((param.name as Identifier).text);
         const paramSymbol = this.rustSymbolOf(param.name as Identifier);
         if (paramSymbol === undefined) return undefined;
@@ -19796,7 +19801,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -23304,7 +23309,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text) ?? this.printNilMapBox(node, text); if (optList !== undefined) return optList;
         const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
-        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printVenueDictValue(node, text) ?? this.printVenueDictReaderArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -40891,7 +40896,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamIsLentDict(param) || this.rustParamPrintsMap(param) || this.rustParamReadsByReference(param)) return false;
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
-        if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP) === undefined) return false;
+        if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
@@ -41001,6 +41006,60 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && this.rustVenueDictParam(declaration);
         return this.rustNeverNullDictLocalArg(arg);
     }
+
+    /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
+    rustVenueDictValueUse(id: any): boolean {
+        const up: any = id?.parent;
+        if (up === undefined || !isPropertyAssignment(up) || up.initializer !== id || !isObjectLiteralExpression(up.parent)) return false;
+        // the boxed slot moved into a last-use entry with no copy: a borrowed slot would add one there
+        let fn: any = up.parent;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        let later = false;
+        const visit = (n: any) => {
+            if (later) return;
+            if (isIdentifier(n) && n.text === id.text && n.pos > id.pos) later = true;
+            n.forEachChild(visit);
+        };
+        if (fn?.body !== undefined) fn.body.forEachChild(visit);
+        return later;
+    }
+
+    /** The container of a base by-reference reader (`this.safeString2 (x, ..)`): it reads the borrowed map as is. */
+    rustVenueDictReaderUse(id: any): boolean {
+        const up: any = id?.parent;
+        return up !== undefined && isCallExpression(up) && up.arguments[0] === id && this.rustBorrowedAnyKeyReader(up);
+    }
+
+    /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
+    printVenueDictReaderArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustVenueDictReaderUse(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
+        return `&${text}`;
+    }
+
+    /** `Value::Map(x.clone())` for a rustVenueDictParam read as an object-literal entry value. */
+    printVenueDictValue(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustVenueDictValueUse(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
+        return `Value::Dict(${text}.clone())`;
+    }
+
+    /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
+    rustVenueDictValueParam(param: any): boolean {
+        if (!isIdentifier(param?.name) || param.parent?.body === undefined) return false;
+        const name = String(param.name.text);
+        let found = false;
+        const visit = (n: any) => {
+            if (found) return;
+            if (isIdentifier(n) && n.text === name && this.rustVenueDictValueUse(n) && this.rustDeclarationOfIdentifier(n) === param) found = true;
+            n.forEachChild(visit);
+        };
+        param.parent.body.forEachChild(visit);
+        return found;
+    }
+
 
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined {
