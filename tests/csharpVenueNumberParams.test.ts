@@ -154,3 +154,126 @@ describe ('csharp venue-private string parameters fed by a build-layer string lo
         expect(a).toContain('other(object v)');
     });
 });
+
+describe ('csharp venue-private nullable number parameters', () => {
+    // a sync venue-private `Num` / `= undefined` number parameter prints the nullable kind every
+    // caller passes (typed locals, numeric literals, parameters the host types); a boxed argument keeps object
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-nullable-number-parameters');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export type Num = number | undefined;\nexport class Exchange {\n    safeNumber (o: any, k: any, d: any = undefined): Num { return d; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            "import type { Num } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { const p = this.safeNumber (x, 'p'); const q = this.safeNumber (x, 'q'); return [ this.req (q, p), this.req (q), this.mixed (0), this.mixed (q), this.boxed (x), this.boxed (q) ]; }\n" +
+            '    req (amount: Num, price: Num = undefined): string { return (price === undefined) ? \'m\' : \'l\'; }\n' +
+            '    boxed (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
+            '    mixed (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('typed nullable arguments and an omitted default print double?', () => {
+        expect(a).toContain('req(double? amount, double? price = null)');
+    });
+
+    test('one object argument (nil / wrong kind unknown) keeps object', () => {
+        expect(a).toContain('boxed(object amount)');
+    });
+
+    test('an integer literal next to a double argument (two kinds) keeps object', () => {
+        expect(a).toContain('mixed(object amount)');
+    });
+});
+
+describe ('csharp venue-private nullable number parameters seen from the pro file', () => {
+    // the venue's pro file is printed in another batch: its calls join the census (an unwritten
+    // parameter the core table prints double), a boxed argument or an override keeps object
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-pro-number-parameters');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    const PRO = path.join(TMP, 'ts', 'src', 'pro', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.mkdirSync(path.dirname(PRO), { recursive: true });
+        fs.writeFileSync(BASE, 'export type Num = number | undefined;\nexport type int = number;\nexport class Exchange {\n    safeNumber (o: any, k: any, d: any = undefined): Num { return d; }\n    seconds (): int { return 1; }\n    any (): any { return 1; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            "import type { Num } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { const p = this.safeNumber (x, 'p'); const q = this.safeNumber (x, 'q'); return [ this.req (q, p), this.boxedPro (q), this.override (q), this.written (q) ]; }\n" +
+            '    req (amount: Num, price: Num = undefined): string { return (price === undefined) ? \'m\' : \'l\'; }\n' +
+            '    boxedPro (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
+            '    override (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
+            '    written (amount: Num): string { return (amount === undefined) ? \'m\' : \'l\'; }\n' +
+            '    required (amount: number): string { return (amount < 1) ? \'m\' : \'l\'; }\n' +
+            '    g () { return this.required (2.5); }\n' +
+            '    stamp (seconds: number): string { return (seconds < 1) ? \'m\' : \'l\'; }\n' +
+            '    h () { const s = this.seconds (); return this.stamp (s); }\n' +
+            '    loose (seconds: number): string { return (seconds < 1) ? \'m\' : \'l\'; }\n' +
+            '    k () { const s = this.seconds (); return this.loose (s); }\n' +
+            '}\n');
+        fs.writeFileSync(PRO,
+            "import { A } from '../a';\n" +
+            'export class B extends A {\n' +
+            '    createOrderWs (symbol: string, type: string, side: string, amount: number, price: Num = undefined, params = {}) { return this.req (amount, price); }\n' +
+            '    editOrderWs (id: string, symbol: string, type: string, side: string, amount: Num = undefined, price: Num = undefined, params = {}) { return this.boxedPro (params); }\n' +
+            '    override (amount: Num): string { return \'o\'; }\n' +
+            '    createOrder (symbol: string, type: string, side: string, amount: number, price: Num = undefined) { amount = 1; return this.written (amount); }\n' +
+            '    withdrawWs (code: string, amount: number) { return this.required (amount); }\n' +
+            '    authWs () { const s = this.seconds (); return this.stamp (s); }\n' +
+            '    authLoose () { const s = this.any (); return this.loose (s); }\n' +
+            '}\n');
+        const config = { 'parser': WRAPPED_PARSER, 'coreArgTypes': { 'createOrderWs': { 3: 'double', 4: 'double?' }, 'editOrderWs': { 4: 'double?', 5: 'double?' }, 'createOrder': { 3: 'double', 4: 'double?' } } };
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': config });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a pro call passing the core-typed double / double? parameters keeps the nullable kind', () => {
+        expect(a).toContain('req(double? amount, double? price = null)');
+    });
+
+    test('a pro call passing a boxed value keeps object', () => {
+        expect(a).toContain('boxedPro(object amount)');
+    });
+
+    test('a pro override keeps object', () => {
+        expect(a).toContain('override(object amount)');
+    });
+
+    test('a pro call passing a written parameter keeps object', () => {
+        expect(a).toContain('written(object amount)');
+    });
+
+    test('a pro call passing a const local of an int-declared method keeps Int64', () => {
+        expect(a).toContain('stamp(Int64 seconds)');
+    });
+
+    test('a pro call passing a const local of an any-declared method keeps object', () => {
+        expect(a).toContain('loose(object seconds)');
+    });
+
+    test('a required number parameter a pro call feeds an untyped parameter keeps object', () => {
+        expect(a).toContain('required(object amount)');
+    });
+});

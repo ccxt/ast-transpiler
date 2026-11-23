@@ -9,6 +9,7 @@ import {
     isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement
 } from 'typescript/unstable/ast/is';
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
+import * as csharpTsSync from 'typescript/unstable/sync';
 import fs from 'fs';
 import path from 'path';
 
@@ -943,6 +944,8 @@ export class CSharpTranspiler extends BaseTranspiler {
     // each other
     csharpBooleanParamProofs = new WeakMap<Program, Map<Node, Set<number>>>();
     csharpVenueNumberParamProofs = new WeakMap<Program, Map<Node, string>>();
+    csharpVenueOverriddenMethods = new Set<any>();
+    static csharpProParseApi: any;
 
     // ==== configuration, class/method-override lookup and identifiers ====
 
@@ -3131,6 +3134,17 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
         };
         this.csharpParamCensus({ walks: [ collect ], settle: () => {
+            // methods a subclass overrides: their signature is bound by the override's own print
+            const overridden = new Set<any>();
+            for (const methods of declarations.values()) {
+                for (const m of methods) {
+                    const parent = this.getMethodOverride(m);
+                    if (parent !== undefined) {
+                        overridden.add(parent);
+                    }
+                }
+            }
+            this.csharpVenueOverriddenMethods = overridden;
             for (const [ key, methods ] of declarations) {
                 const at = key.indexOf('@');
                 const name = (at < 0) ? key : key.substring(0, at);
@@ -3174,23 +3188,50 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // the one numeric kind every call passes at `index` (int widens to Int64), or undefined
     csharpVenueNumberParamKind(method, parameter, index: number, calls: any[]): string | undefined {
-        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || (parameter.initializer !== undefined)
+        // a sync method only: async venue methods also pass through the host's signature tables
+        const sync = !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword);
+        const initializer = parameter.initializer;
+        const undefinedDefault = sync && (initializer !== undefined) && isIdentifier(initializer) && (initializer.text === 'undefined');
+        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || ((initializer !== undefined) && !undefinedDefault)
             || (parameter.type === undefined) || !isIdentifier(parameter.name)) {
             return undefined;
         }
         const declared = this.getChecker().getTypeFromTypeNode(parameter.type);
-        if ((declared === undefined) || (declared.flags !== TypeFlags.Number) || this.csharpNameIsRebound(parameter, method)) {
+        // `Num` (number | undefined) and an `= undefined` default print the nullable kind
+        const members = (declared === undefined) ? [] : (declared.isUnionType() ? declared.getTypes() : [ declared ]);
+        const numbers = members.filter((m) => m.flags === TypeFlags.Number).length;
+        if ((numbers !== 1) || (!sync && (members.length > 1)) || members.some((m) => (m.flags !== TypeFlags.Number) && ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0))
+            || this.csharpNameIsRebound(parameter, method)) {
             return undefined;
         }
-        const kinds = new Set<string>();
+        const nullable = undefinedDefault || (members.length > 1);
+        if (nullable && this.csharpVenueOverriddenMethods.has(method)) {
+            return undefined;
+        }
+        const proKinds = this.csharpProFileCallKinds(method, index);
+        if (proKinds === undefined) {
+            return undefined;
+        }
+        const kinds = new Set<string>(nullable ? [ 'nullable?', ...proKinds ] : proKinds);
         for (const call of calls) {
             const argument = call.arguments?.[index];
-            const type = (argument === undefined) ? undefined : this.csharpArithmeticOperandType(argument);
+            if ((argument === undefined) && undefinedDefault && (call.arguments.length <= method.parameters.length)
+                && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
+                continue; // omitted: the default null
+            }
+            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? (sync ? this.csharpTypedParameterArgument(argument) : undefined));
             const kind = this.csharpArithmeticOperandKind(type);
             if ((kind === undefined) || (call.arguments.length > method.parameters.length)) {
                 return undefined;
             }
             kinds.add(((kind === 'double') ? 'double' : 'Int64') + (type.endsWith('?') ? '?' : ''));
+        }
+        if (nullable) {
+            kinds.delete('nullable?');
+            if (kinds.size === 0) {
+                return undefined;
+            }
+            kinds.add([ ...kinds ][0].replace('?', '') + '?');
         }
         const all = [ ...kinds ];
         if (all.every((k) => k.startsWith('Int64'))) {
@@ -3200,6 +3241,131 @@ export class CSharpTranspiler extends BaseTranspiler {
             return all.some((k) => k.endsWith('?')) ? 'double?' : 'double';
         }
         return undefined;
+    }
+
+    // the venue's pro subclass (ts/src/pro/<file>) is transpiled in another batch, so its file is parsed here:
+    // a same-named declaration keeps `object` (C# overrides are invariant); each `this.` call must pass at `index`
+    // nothing (the null default) or an unwritten parameter the core table prints numeric (createOrderWs `double amount`)
+    csharpProFileCallKinds(method, index: number): string[] | undefined {
+        const fileName = String(method.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const at = fileName.lastIndexOf('ts/src/');
+        if ((at < 0) || fileName.substring(at + 7).includes('/')) {
+            return [];
+        }
+        const pro = fileName.substring(0, at + 7) + 'pro/' + fileName.substring(at + 7);
+        if (!fs.existsSync(pro)) {
+            return [];
+        }
+        const name = method.name.text;
+        const text = fs.readFileSync(pro, 'utf8');
+        if (!new RegExp('\\b' + name + '\\b').test(text)) {
+            return [];
+        }
+        let file: any;
+        try {
+            file = (CSharpTranspiler.csharpProParseApi ??= new (csharpTsSync as any).API({ cwd: process.cwd() })).createSourceFile(pro, text);
+        } catch (e) {
+            return undefined;
+        }
+        let agree = true;
+        const kinds: string[] = [];
+        let mentions = 0;
+        let calls = 0;
+        const visit = (n) => {
+            if (!agree || (n === undefined)) {
+                return;
+            }
+            if (isIdentifier(n) && (n.text === name)) {
+                mentions++;
+            }
+            if (isMethodDeclaration(n) && isIdentifier(n.name) && (n.name.text === name)) {
+                agree = false; // an override in the pro class
+                return;
+            }
+            if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && isIdentifier(n.expression.name) && (n.expression.name.text === name)) {
+                calls++;
+                const kind = (n.expression.expression.kind === SyntaxKind.ThisKeyword) ? this.csharpProCallArgumentKind(method, n, index) : undefined;
+                if (kind === undefined) {
+                    agree = false;
+                } else if (kind !== '') {
+                    kinds.push(kind);
+                }
+            }
+            n.forEachChild(visit);
+        };
+        visit(file);
+        return (agree && (mentions === calls)) ? kinds : undefined;
+    }
+
+    // `const x = this.<m> ()` once in the pro caller, where <m> resolves on the venue class to a method declared `: int`
+    csharpProConstIntCallLocal(method, caller, argument): string | undefined {
+        const found: any[] = [];
+        const visit = (n) => {
+            if (isVariableDeclaration(n) && isIdentifier(n.name) && (n.name.text === argument.text)) {
+                found.push(n);
+            }
+            n.forEachChild(visit);
+        };
+        visit(caller.body);
+        const declaration = found[0];
+        const init = declaration?.initializer;
+        if ((found.length !== 1) || ((declaration.parent?.flags & NodeFlags.Const) === 0) || (init === undefined) || !isCallExpression(init)
+            || (init.arguments.length !== 0) || !isPropertyAccessExpression(init.expression) || (init.expression.expression.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        const owner: any = findAncestor(method, (n) => isClassDeclaration(n));
+        const member: any = (owner === undefined) ? undefined : this.getChecker().getTypeAtLocation(owner)?.getProperty?.(init.expression.name.text);
+        const target: any = member?.valueDeclaration?.resolve?.();
+        return ((target !== undefined) && isMethodDeclaration(target) && (target.type?.getText?.()?.trim() === 'int')) ? 'Int64' : undefined;
+    }
+
+    csharpProCallArgumentKind(method, call, index: number): string | undefined {
+        // '' for an omitted argument (the null default), else the C# type the argument prints
+        const args: any[] = Array.from(call.arguments ?? []);
+        if ((args.length > method.parameters.length) || args.some((a) => isSpreadElement(a))) {
+            return undefined;
+        }
+        const argument = args[index];
+        if (argument === undefined) {
+            return (method.parameters[index]?.initializer !== undefined) ? '' : undefined;
+        }
+        const caller: any = findAncestor(call, (n) => isMethodDeclaration(n));
+        if (!isIdentifier(argument) || (caller === undefined) || !isIdentifier(caller.name) || (caller.body === undefined)) {
+            return undefined;
+        }
+        const position = Array.from(caller.parameters as any).findIndex((p: any) => isIdentifier(p.name) && (p.name.text === argument.text));
+        const printed = (position < 0) ? this.csharpProConstIntCallLocal(method, caller, argument) : this.csharpCoreArgTypes[caller.name.text]?.[position];
+        if ((printed !== 'double') && (printed !== 'double?') && (printed !== 'Int64')) {
+            return undefined;
+        }
+        // a written parameter prints an `object <name>Var` shadow that the call would read
+        let written = false;
+        const scan = (n) => {
+            if (written || (n === undefined)) {
+                return;
+            }
+            const parent = n.parent;
+            if (isIdentifier(n) && (n.text === argument.text) && parent !== undefined
+                && ((isBinaryExpression(parent) && (parent.left === n) && this.csharpIsAssignmentOperator(parent.operatorToken.kind))
+                    || isPostfixUnaryExpression(parent) || isPrefixUnaryExpression(parent))) {
+                written = true;
+                return;
+            }
+            n.forEachChild(scan);
+        };
+        scan(caller.body);
+        return written ? undefined : printed;
+    }
+
+    // a bare parameter of the calling method whose printed signature the host layer types numeric
+    // (the narrowed core arguments, e.g. createOrder's `double amount` / `double? price`)
+    csharpTypedParameterArgument(argument): string | undefined {
+        const value = this.csharpUnparenthesized(argument);
+        if (!isIdentifier(value) || (this.csharpReceiverBinding(value)?.kind !== SyntaxKind.Parameter)) {
+            return undefined;
+        }
+        const type = this.csharpParameterOperandType(value);
+        return (this.csharpArithmeticOperandKind(type) === undefined) ? undefined : type;
     }
 
     // a required `string` / `Str` parameter prints `string` when every call passes a proven non-null C# string; a
