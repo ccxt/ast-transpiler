@@ -14037,6 +14037,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseBorrowInterest': [ 0 ],
     // row parsers: every tree caller passes a `{}`-defaulted safeDict row, an extend copy or a typed map
     'parseFundingRate': [ 0 ], 'parseLeverage': [ 0 ], 'parseIncome': [ 0 ],
+    // every tree caller passes a `{}`-defaulted safeDict row or a map local
+    'parsePosition': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -53636,7 +53638,8 @@ GoTranspiler.prototype.h29a05VarKeyDefaultRead = function (node, printed) {
     }
     // a key local the printer declares `var k string` (e.g. `const k = keys[i]` over a string list) is a Go string too
     const keyText = this.h27a05KeyText(key) ?? ((this.goResolvedLocalGoType(key) === 'string') ? k0 : undefined);
-    if ((keyText === undefined) || !this.h29a05JsonOrigin(container) || !this.h29a05MapReceiver(container)) {
+    // a decoded ws frame map (h29a13FrameMap) holds JSON values only, like an endpoint document
+    if ((keyText === undefined) || !(this.h29a05JsonOrigin(container) || this.h29a13FrameMap(container)) || !this.h29a05MapReceiver(container)) {
         return undefined;
     }
     const name: string = decl.name.text;
@@ -59280,7 +59283,7 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
     const found: any[] = [];
     const visit = (n: any): boolean => {
         if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression.expression?.kind === SyntaxKind.ThisKeyword)
-            && (n.arguments.length > 0) && goDictParamSafeDictArg(go, n.arguments[0]) && goDictParamCallTakesMap(go, n, 0)) {
+            && (n.arguments.length > 0) && ((goDictParamSafeDictArg(go, n.arguments[0]) && goDictParamCallTakesMap(go, n, 0)) || goDictParamTabledSafeDictArg(go, n, n.arguments[0]))) {
             found.push(n.arguments[0]);
         }
         return false;
@@ -59292,12 +59295,17 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
     const call: any = go.goSafeDictCallArgs(arg)?.call;
     const list: any = call?.arguments?.[0];
     const key: any = call?.arguments?.[1];
-    if ((call?.arguments?.length !== 3) || (list?.kind !== SyntaxKind.Identifier) || !h37p01FirstArgPath(go, call, statement)
-        || ((go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list))) { return printed; }
+    if ((call?.arguments?.length !== 3) || (list?.kind !== SyntaxKind.Identifier) || !h37p01FirstArgPath(go, call, statement)) { return printed; }
     const xs = list.text;
+    // a string key on a decoded ws frame map (JSON values only): the comma-ok read, `{}` when missing or not a map
+    const frameKey = ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && go.h29a13FrameMap(list))
+        ? (go.h27a05KeyText(key) ?? ((go.goResolvedLocalGoType(key) === 'string') ? key.text : undefined)) : undefined;
+    if ((frameKey === undefined) && (go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list)) { return printed; }
     let k: string;
     let guard: string | undefined;
-    if ((key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(key.text)) {
+    if (frameKey !== undefined) {
+        k = frameKey;
+    } else if ((key?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(key.text)) {
         k = key.text;
         guard = `len(${xs}) > ${k}`;
     } else if ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && (go.goLoopBoundedIndexRead(call, list, key, xs, key.text) === `${xs}[${key.text}]`)) {

@@ -21444,3 +21444,123 @@ describe('omit rebinds keep the map type', () => {
         expect(output).toContain("var q any = ");
     });
 });
+describe ('go parsePosition row parameter prints a map', () => {
+    const print = (name: string, body: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    toArray (d: any): any[] {\n' +
+            '        return d;\n' +
+            '    }\n' +
+            '    parsePosition (position: Dict, market: any = undefined) {\n' +
+            "        return position['a'];\n" +
+            '    }\n' +
+            '    run (data: any, c: any) {\n' + body + '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict row prints a map parameter read natively', () => {
+        const out = print('tmp-h38p03-row', '        const xs: Dict[] = this.toArray (data);\n        const r = [];\n        for (let i = 0; i < xs.length; i++) {\n            r.push (this.parsePosition (this.safeDict (xs, i, {}), c));\n        }\n        return r;\n');
+        expect(out).toMatch(/ParsePosition\(position map\[string\]any/);
+        expect(out).not.toMatch(/GetValue\(position, "a"\)/);
+    });
+    test('a raw list element (nil or another kind) keeps the box', () => {
+        const out = print('tmp-h38p03-raw', '        const xs = this.toArray (data);\n        return this.parsePosition (xs[0], c);\n');
+        expect(out).toMatch(/ParsePosition\(position any/);
+    });
+    test('a safeDict row with no default (may be nil) keeps the box', () => {
+        const out = print('tmp-h38p03-nil', '        return this.parsePosition (this.safeDict (data, 0), c);\n');
+        expect(out).toMatch(/ParsePosition\(position any/);
+    });
+});
+describe ('go parsePosition row read inline off a decoded ws frame map', () => {
+    const print = (name: string, body: string): string => {
+        const src = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(src, 'base', 'ws'), { recursive: true });
+        fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
+        fs.writeFileSync(path.join(src, 'base', 'types.ts'), 'export type Dict = {[key: string]: any};\nexport type Dictionary<T> = {[key: string]: T};\n');
+        fs.writeFileSync(path.join(src, 'base', 'ws', 'Client.ts'), 'export class Client { receive () { return undefined; } }\n');
+        fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'),
+            "import type { Dict } from './types';\n" +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parsePosition (position: Dict, market: any = undefined) {\n' +
+            "        return position['a'];\n" +
+            '    }\n' +
+            '    handleMessage (client, message) {}\n' +
+            '}\n');
+        fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
+            "import { Exchange } from '../base/Exchange';\n" +
+            "import { Client } from '../base/ws/Client';\n" +
+            "import type { Dict, Dictionary } from '../base/types';\n" +
+            'export class ex extends Exchange {\n' +
+            '    handlePositions (client: Client, message: Dict) {\n' + body + '    }\n' +
+            '    override handleMessage (client: Client, message: Dict) {\n' +
+            '        this.handlePositions (client, message);\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(src, 'pro', 'ex.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    const loop = (read: string) => "        const data = this.safeDict (message, 'data', {});\n" +
+        "        const raw = this.safeDict (data, 'positions', {});\n" +
+        '        const ids = Object.keys (raw);\n' +
+        '        const r = [];\n' +
+        '        for (let i = 0; i < ids.length; i++) {\n' +
+        '            const id = ids[i];\n' +
+        '            const p = this.parsePosition (' + read + ', id);\n' +
+        '            r.push (p);\n' +
+        '        }\n' +
+        '        return r;\n';
+    test('a string-keyed {}-defaulted safeDict of the frame map prints the comma-ok read with the {} fallback', () => {
+        const out = print('tmp-h40g08-frame', loop('this.safeDict (raw, id, {})'));
+        expect(out).not.toContain('SafeDictMap(raw');
+        expect(out).toMatch(/rawDict\w*, _ := raw\[id\]\.\(map\[string\]any\)/);
+        expect(out).toMatch(/if rawDict\w* == nil \{\n\t*rawDict\w* = map\[string\]any\{\}/);
+    });
+    test('a {}-defaulted safeDict local off the frame map with a string key reads comma-ok', () => {
+        const body = "        const data = this.safeDict (message, 'data', {});\n" +
+            "        const raw: Dictionary<Dict> = this.safeDict (data, 'positions', {});\n" +
+            '        const ids = Object.keys (raw);\n' +
+            '        const r = [];\n' +
+            '        for (let i = 0; i < ids.length; i++) {\n' +
+            '            const id = ids[i];\n' +
+            '            const row = this.safeDict (raw, id, {});\n' +
+            '            const p = this.parsePosition (row, id);\n' +
+            '            r.push (p);\n' +
+            '        }\n' +
+            '        return r;\n';
+        const out = print('tmp-h40g08-local', body);
+        expect(out).not.toContain('SafeDictMap(raw');
+        expect(out).toMatch(/row, _ = raw\[id\]\.\(map\[string\]any\)/);
+        expect(out).toMatch(/if row == nil \{\n\t*row = map\[string\]any\{\}/);
+    });
+    test('negative: no default (may be nil) keeps the boxed read', () => {
+        const out = print('tmp-h40g08-nil', loop('this.safeDict (raw, id)'));
+        expect(out).not.toMatch(/rawDict\w*, _ := raw\[id\]/);
+    });
+    test('negative: a key that is not a string keeps the wrap', () => {
+        const out = print('tmp-h40g08-key', loop('this.safeDict (raw, i, {})'));
+        expect(out).not.toMatch(/rawDict\w*, _ := raw\[i\]/);
+    });
+});
