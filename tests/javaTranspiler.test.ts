@@ -6382,7 +6382,7 @@ describe('java native return types of internal methods', () => {
         "import { Dict, Str, Bool } from './base/types';\n" +
         "interface Row { [key: string]: any }\n" +
         "class BaseFake {\n" +
-        "    parseOrder (order: Dict): any { return order; }\n" +
+        "    parseAccount (order: Dict): any { return order; }\n" +
         "    safeValue (x: any, k: any, d: any = undefined): any { return x; }\n" +
         "}\n" +
         "export default class venuefake extends BaseFake {\n" +
@@ -6391,7 +6391,7 @@ describe('java native return types of internal methods', () => {
         "    parseChoice (data: Dict, flag: boolean): Dict { return flag ? { 'x': data } : data; }\n" +
         "    parseName (s: Str): Str { return s; }\n" +
         "    parseFlag (a: any): Bool { return a === 1; }\n" +
-        "    parseOrder (order: Dict): Dict { return order; }\n" +
+        "    parseAccount (order: Dict): Dict { return order; }\n" +
         "    parseUnproven (data: Dict): Dict { return this.safeValue (data, 'k'); }\n" +
         "    async parseAsync (data: Dict): Promise<Dict> { return data; }\n" +
         "}\n";
@@ -6438,8 +6438,8 @@ describe('java native return types of internal methods', () => {
     });
 
     test('an override keeps the boxed signature (D8)', () => {
-        expect(output).toContain('public Object parseOrder(');
-        expect(output).not.toContain('public java.util.Map<String, Object> parseOrder(');
+        expect(output).toContain('public Object parseAccount(');
+        expect(output).not.toContain('public java.util.Map<String, Object> parseAccount(');
     });
 
     test('an unprovable return keeps the boxed signature', () => {
@@ -11093,5 +11093,36 @@ describe('java int venue returns print Long', () => {
         expect(print('ts/src/venued.ts', delay, () => ({ ...CLEAN, declared: 2 }))).toMatch(/public Object delayMs\(\)/);
         expect(print('ts/src/venuee.ts', delay, () => ({ ...CLEAN, handWritten: true }))).toMatch(/public Object delayMs\(\)/);
         expect(print('ts/src/venuef.ts', delay, () => undefined)).toMatch(/public Object delayMs\(\)/);
+    });
+});
+
+// parseOrder's row parameter follows its `Dict` annotation through every override (Java overrides are invariant)
+describe('java parseOrder row parameter', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-parse-order-row');
+    const TYPES_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'types.ts');
+    const VENUE_FIXTURE = path.join(TMP, 'ts', 'src', 'rowfake.ts');
+    let output: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(TYPES_FIXTURE), { recursive: true });
+        fs.writeFileSync(TYPES_FIXTURE, "export type Dict = Record<string, any>;\n");
+        fs.writeFileSync(VENUE_FIXTURE,
+            "import { Dict } from './base/types';\n" +
+            "class BaseFake {\n" +
+            "    parseOrder (order: Dict, market: Dict = undefined): any { return order; }\n" +
+            "}\n" +
+            "export default class rowfake extends BaseFake {\n" +
+            "    parseOrder (order: Dict, market: Dict = undefined): any { return ('k' in order); }\n" +
+            "}\n");
+        output = newJavaTranspiler().transpileJavaByPath(VENUE_FIXTURE).content;
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('the row parameter prints a Map and is read natively', () => {
+        expect(output).toContain('parseOrder(java.util.Map<String, Object> order');
+        expect(output).not.toContain('parseOrder(Object order');
     });
 });

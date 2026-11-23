@@ -419,7 +419,6 @@ const JAVA_NATIVE_PARAMETER_EXCLUDED_POSITIONS: { [name: string]: number[] } = {
     'request': [ 3 ],
     'sign': [ 3 ],
     'handleErrors': [ 4 ],
-    'parseOrder': [ 0 ],
     'parseTrade': [ 0 ],
     'amountToPrecision': [ 0 ],
     'client': [ 0 ],
