@@ -14508,6 +14508,31 @@ describe ('goUrlsViews', () => {
             expect(out).toContain('this.Urls = u\n\tthis.RefreshUrlsViews()');
             expect(out.split('RefreshUrlsViews').length - 1).toBe(2);
         });
+        describe('a ternary of two urls string leaves', () => {
+            const DESCRIBE = "describe () { return { 'urls': { 'api': { 'ws': { 'spot': 'wss://a', 'swap': 'wss://b', 'list': [ 'x' ] } } } }; }\n";
+            const venue = (stmts: string): string => go(BASE + 'class Test extends Base {\n    ' + DESCRIBE
+                + '    client (url: string): any { return url; }\n'
+                + '    f (isSpot: boolean): any { ' + stmts + ' }\n}\n');
+            test('prints a *string local read from UrlsApiSectionStrings', () => {
+                const out = venue("const url = isSpot ? this.urls['api']['ws']['spot'] : this.urls['api']['ws']['swap']; return this.client (url);");
+                expect(out).toContain('var url *string\n');
+                expect(out).toContain('url = this.UrlsApiSectionStrings["ws"]["spot"]');
+                expect(out).toContain('url = this.UrlsApiSectionStrings["ws"]["swap"]');
+                expect(out).not.toContain('var url any');
+            });
+            test('a leaf the literal does not hold as a string keeps the box', () => {
+                const out = venue("const url = isSpot ? this.urls['api']['ws']['spot'] : this.urls['api']['ws']['list']; return this.client (url);");
+                expect(out).not.toContain('UrlsApiSectionStrings');
+            });
+            test('a missing leaf keeps the box', () => {
+                const out = venue("const url = isSpot ? this.urls['api']['ws']['spot'] : this.urls['api']['ws']['none']; return this.client (url);");
+                expect(out).not.toContain('UrlsApiSectionStrings');
+            });
+            test('a dynamic key keeps the box', () => {
+                const out = venue("const k = 'swap'; const url = isSpot ? this.urls['api']['ws']['spot'] : this.urls['api']['ws'][k]; return this.client (url);");
+                expect(out).not.toContain('var url *string\n');
+            });
+        });
         test('a comparison and a write of another field are not urls writes', () => {
             const out = run("if (this.urls['api'] === u) { this.options['x'] = 1; } return 1;", 'u: any');
             expect(out).not.toContain('RefreshUrlsViews');

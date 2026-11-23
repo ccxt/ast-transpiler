@@ -36261,6 +36261,37 @@ GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declarati
     return lines.join('\n');
 };
 
+// an arm `this.urls['api'][s][k]` the describe() literal proves a string leaf reads the typed
+// UrlsApiSectionStrings view (*string, nil when absent), as a lone such declaration already does
+const GO_TERNARY_URLS_SECTION_ARM = /^this\.UrlsApiSections(\[[^[\]\n]+\]\[[^[\]\n]+\])$/;
+function goTernaryJoinUrlsArm(goTranspiler: GoTranspiler, node): boolean {
+    const arm: any = goTranspiler.goUnwrapParenthesizedNode(node);
+    return (arm?.kind === SyntaxKind.ElementAccessExpression) && GO_TERNARY_URLS_SECTION_ARM.test(goTranspiler.printNode(arm, 0).trim())
+        && urlsDescribeStringProducer(arm);
+}
+const goTernaryJoinUrlsUpstreamArmType = GoTranspiler.prototype.goTernaryJoinArmType;
+GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
+    return goTernaryJoinUrlsUpstreamArmType.call(this, node) ?? (goTernaryJoinUrlsArm(this, node) ? '*string' : undefined);
+};
+const goTernaryJoinUrlsUpstreamDeclaration = GoTranspiler.prototype.goTernaryJoinDeclaration;
+GoTranspiler.prototype.goTernaryJoinDeclaration = function (statement, declaration, identation: number) {
+    const printed = goTernaryJoinUrlsUpstreamDeclaration.call(this, statement, declaration, identation);
+    const ternary: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+    if ((printed === undefined) || (ternary?.kind !== SyntaxKind.ConditionalExpression) || !printed.includes(' *string\n')) {
+        return printed;
+    }
+    const lines = printed.split('\n');
+    const store = '\t' + this.printNode(declaration.name, 0) + ' = ';
+    [ [ ternary.whenTrue, 2 ], [ ternary.whenFalse, 4 ] ].forEach(([ arm, at ]: [ any, number ]) => {
+        const value = lines[at]?.trim().slice(store.length - 1);
+        const leaf = (value === undefined) ? null : GO_TERNARY_URLS_SECTION_ARM.exec(value);
+        if ((leaf !== null) && lines[at].includes(store) && goTernaryJoinUrlsArm(this, arm)) {
+            lines[at] = lines[at].replace(store + value, store + 'this.UrlsApiSectionStrings' + leaf[1]);
+        }
+    });
+    return lines.join('\n');
+};
+
 // ===== ral-84g2: reader-result locals =====
 // A. `(x as List).length` / `(x as List)[i]` and the parenthesized forms print as the bare local's read, so
 // the list-sink verdict of a wrapped list local is the verdict of the outermost type-only wrapper.
