@@ -2647,6 +2647,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         return out;
     }
 
+    // a cast binds tighter than `?:`: a conditional argument is parenthesized before it is cast
+    csharpCastOperand(argument, text: string): string {
+        return ((argument !== undefined) && (argument.kind === SyntaxKind.ConditionalExpression)) ? '(' + text + ')' : text;
+    }
+
     csharpCallSiteArg(argument, text: string, wanted: string, test: boolean): { text: string, tight: boolean } | undefined {
         if (wanted === 'string') {
             if (text.startsWith('(string)') || text.startsWith('((string)') || text.startsWith('"')) {
@@ -2655,7 +2660,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (!test && this.csharpCallSiteTypedIdentifiers.has(text) && (this.csharpCallSiteDeclaredType(this.csharpCallSiteOperand(argument), text) === 'string')) {
                 return undefined;
             }
-            return { text: '((string)' + text + ')', tight: true };
+            return { text: '((string)' + this.csharpCastOperand(argument, text) + ')', tight: true };
         }
         if (wanted === 'IList<object>') {
             return undefined; // every admitted caller already passes a list, null or nothing
@@ -2668,7 +2673,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (text.startsWith('((' + wanted + ')') || text.startsWith('(' + wanted + ')') || text.startsWith('new Dictionary<string, object>') || (text === 'null')) {
                 return undefined;
             }
-            return { text: '((' + wanted + ')' + text + ')', tight: true };
+            return { text: '((' + wanted + ')' + this.csharpCastOperand(argument, text) + ')', tight: true };
         }
         const helper = (wanted === 'Int64?') ? 'ToInt64Arg' : (wanted === 'Int64') ? 'ToInt64ArgRequired' : (wanted === 'double?') ? 'ToDoubleArg' : 'ToDoubleArgRequired';
         if (text.startsWith(helper + '(') || text.startsWith('ccxt.BaseExchange.' + helper + '(')) {

@@ -5107,6 +5107,21 @@ describe('ws cache class parameters', () => {
         const plain = new Transpiler({ 'verbose': false, 'csharp': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any).transpileCSharpByPath(file).content;
         expect(plain).toContain('this.fetchThing(s, x, n);');
     });
+    test('a conditional argument is parenthesized before its call-site cast', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'csq-'));
+        const file = path.join(dir, 'ts', 'src', 'thing.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, 'class Test {\n    pick (id, row = undefined) {\n        return id;\n    }\n    caller (m, id, r) {\n        this.pick ((m === undefined) ? id : undefined, r);\n        return this.pick (id, (m === undefined) ? r : undefined);\n    }\n}\n');
+        const config = { 'verbose': false, 'csharp': { 'callSiteArgTypes': { 'pick': { 0: 'string', 1: 'IDictionary<string, object>' } }, 'parser': { 'NUM_LINES_END_FILE': 0 } } };
+        const output = new Transpiler(config as any).transpileCSharpByPath(file).content;
+        expect(output).toContain('this.pick(((string)(((m == null)) ? id : null)),((IDictionary<string, object>)r));');
+        expect(output).toContain('return this.pick(((string)id),((IDictionary<string, object>)(((m == null)) ? r : null)));');
+        // a plain identifier keeps the single cast
+        expect(output).not.toContain('((string)(id))');
+    });
     test('configured typed cores print PascalCase on declarations and this./base. calls, per tier and venue', () => {
         const fs = require('fs');
         const os = require('os');
