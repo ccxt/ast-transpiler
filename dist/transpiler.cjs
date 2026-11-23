@@ -90861,10 +90861,12 @@ ${classMethods}
         return `crate::runtime::get_arg(${sig.params[sliceAt].name}, ${i - sliceAt}, crate::Value::Null)`;
       return "crate::Value::Null";
     });
+    const probe = sig.ret === "keptint" ? `        if let Some(__v) = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(", ")}) { return __v; }
+` : `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(", ")}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === "typed" ? "Ok(crate::types::FromRaw::from_raw(__v))" : "__v"}; } }
+`;
     const preamble = `
         // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))
-        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(", ")}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === "typed" ? "Ok(crate::types::FromRaw::from_raw(__v))" : sig.ret === "keptint" ? "__v.as_i64().unwrap_or_default()" : "__v"}; } }
-`;
+` + probe;
     let open = body.indexOf("{") + 1;
     for (const p of sig.params.filter((q) => q.type === "impl Into<crate::Value>")) {
       const binding = `let mut ${p.name}: Value = ${p.name}.into();
