@@ -28758,10 +28758,12 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustParamsDictSlotUncached(d: any): boolean {
         if (!this.rustTypedParamsParam(d)) return false;
-        let uses = 0;
+        let uses = 0; let extendUses = 0; let clonedArm = false;
         const safe = this.rustLocalUsesAll(d, 'params', false, (n: any) => {
             if (this.rustDeclaredNode(n) !== d) return false;
             const up: any = n.parent;
+            // the sole extra operand of a base `extend` (not deepExtend): lent as `&[&params]`, a non-map merged nothing before too
+            if (this.rustOptExtendOperandUse(n)) { uses++; extendUses++; return true; }
             if (isCallExpression(up) && up.arguments[0] === n) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
@@ -28783,9 +28785,11 @@ export class RustTranspiler extends BaseTranspiler {
             if (head === undefined || !isIdentifier(head) || this.rustDeclaredNode(head) !== d) return false;
             if (!isVariableDeclaration(decl) || decl.initializer !== cond || !isIdentifier(decl.name) || decl.type === undefined || String(decl.type.getText()) !== 'Dict') return false;
             uses++;
+            if (!this.rustLocalLastUse(n, d)) clonedArm = true;
             return this.rustHandedDictLocal(decl);
         });
-        return safe && uses > 0;
+        // an extend operand must not turn a moved ternary arm into a clone
+        return safe && uses > 0 && !(extendUses > 0 && clonedArm);
     }
 
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
@@ -35250,7 +35254,8 @@ export class RustTranspiler extends BaseTranspiler {
             const d: any = this.rustDeclarationOfIdentifier(n);
             return d !== undefined && d.name !== n && this.rustOptExtendOperandUse(n) && this.rustBorrowedLocalKind(d) === 'dict' && this.rustOptContainerLocals.has(d) && this.rustPrintedOptional.has(d);
         };
-        if (operand === undefined || !(lentDict(operand) || optOperand(operand))) return undefined;
+        const paramsOperand = (n: any) => this.rustOptExtendOperandUse(n) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(n));
+        if (operand === undefined || !(lentDict(operand) || optOperand(operand) || paramsOperand(operand))) return undefined;
         const head = this.printNode(first, identation).trim();
         const method = this.toSnakeCaseName(String((node.expression as any).name.text));
         return `self.${method}(${isIdentifier(first) && this.printExtendHeadArg(first, head) !== undefined ? head : RustTranspiler.cloneIfBareLocal(head)}, &[${lent(operand)}])`;
