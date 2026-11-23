@@ -41075,7 +41075,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isIdentifier(root)) {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
-                    const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init))
+                    const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
+                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)))
                         || this.rustLocalHoldsFreshBook(decl, init);
                     if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
@@ -41122,6 +41123,17 @@ export class RustTranspiler extends BaseTranspiler {
             while (e !== undefined && (isParenthesizedExpression(e) || isAsExpression(e))) e = e.expression;
             return e !== undefined && isObjectLiteralExpression(e);
         });
+    }
+
+    /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
+    rustReadOffThisMember(init: any): boolean {
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(init.expression.name.text) !== 'safeDict' || init.arguments.length < 2) return false;
+        const recv: any = this.unwrapParens(init.arguments[0]);
+        if (!isPropertyAccessExpression(recv) || recv.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        // the default, when given, is a fresh map
+        const dflt: any = init.arguments[2] === undefined ? undefined : this.unwrapParens(init.arguments[2]);
+        return dflt === undefined || (isObjectLiteralExpression(dflt) && dflt.properties.length === 0) || this.rustCallReturnsFreshLiteral(dflt);
     }
 
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
