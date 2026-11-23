@@ -1356,6 +1356,13 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === 'Long' && this.javaLocalDeclaredAs(isAsExpression(arg) ? arg.expression : arg, printed, type)) {
             return printed;
         }
+        if (type === JAVA_STRING_LIST_TYPE && JAVA_TEST_TIER_FILES.test(arg.getSourceFile().fileName.replace(/\\/g, '/'))) {
+            return printed; // test-tier receivers print a dynamic call, whose argument slot is Object
+        }
+        if (type === JAVA_STRING_LIST_TYPE && !this.javaNativeArgumentAlreadyTyped(arg, type)) {
+            // a List<Object> box cannot be checkcast to List<String>: convert like a defaulted slot
+            return this.javaConvertToCoreType(type, printed, arg);
+        }
         return type === undefined || this.javaNativeArgumentAlreadyTyped(arg, type) ? printed : `(${type}) (${printed})`;
     }
 
@@ -2306,6 +2313,10 @@ export class JavaTranspiler extends BaseTranspiler {
             // and Java generics are invariant, so a typed slot rejects them
             return undefined;
         }
+        const unifiedList = testTier ? undefined : this.javaUnifiedStringListParameterType(name, method, type, checker);
+        if (unifiedList !== undefined) {
+            return unifiedList;
+        }
         const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type);
         if (unifiedInt !== undefined) {
             return unifiedInt;
@@ -2320,6 +2331,19 @@ export class JavaTranspiler extends BaseTranspiler {
         const declaration = symbol?.declarations?.[0]?.resolve();
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
+    }
+
+    // a fixed `string[]` / `Strings` parameter of an async method first declared in the Exchange tier prints
+    // `java.util.List<String>`; every override shares the annotation (Java overrides are invariant)
+    javaUnifiedStringListParameterType(name, method, type, checker): string | undefined {
+        if ((name !== 'Strings' && !this.javaIsStringArrayType(checker, type)) || !isIdentifier(method.name) || !this.isAsyncFunction(method)) {
+            return undefined;
+        }
+        let root = method;
+        for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
+            root = m;
+        }
+        return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName) ? JAVA_STRING_LIST_TYPE : undefined;
     }
 
     // a fixed `int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
