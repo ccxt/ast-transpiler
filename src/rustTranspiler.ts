@@ -40786,7 +40786,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (sibling === undefined) return false;
         const calls: any[] = [ ...this.rustVenueStrCallSites(method), ...sibling ];
         if ((calls.length === 0 && !handler) || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length) return false;
-        // another pro file declares and calls this handler directly (its slot stays `Value`): one type for the family
+        // another pro file calls this name directly without declaring its own copy: the call may reach this one
         if (handler && this.rustWsHandlerCalledElsewhere(method, name)) return false;
         // syntactic test first: a typed-local decision is asked only when every argument could lend
         if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
@@ -40819,7 +40819,7 @@ export class RustTranspiler extends BaseTranspiler {
         return !aliasWrite;
     }
 
-    /** Another ts/src/pro file declares a method of this name and calls it as `.name (`. */
+    /** Another ts/src/pro file calls `.name (` and declares no method of that name (an inherited copy answers it). */
     rustWsHandlerCalledElsewhere(method: any, name: string): boolean {
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         const dir = file.slice(0, file.lastIndexOf('/'));
@@ -40834,7 +40834,7 @@ export class RustTranspiler extends BaseTranspiler {
         return entries.some((f: string) => {
             if (`${dir}/${f}` === file) return false;
             const text = readRustTsIndexSource(`${dir}/${f}`) ?? '';
-            return declares.test(text) && call.test(text);
+            return call.test(text) && !declares.test(text);
         });
     }
 

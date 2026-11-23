@@ -52,13 +52,19 @@ const proVenue = "import Exchange from '../base/Exchange.js';\nimport Client fro
     "    handleThree (client: Client, message: Dict, extra: Dict) {\n        const s = this.safeString (message, 'symbol');\n        this.hold ([ s, extra ]);\n    }\n" +
     "    handleRow (client: Client, message: Dict) {\n        const row = this.safeDict (message, 'data');\n        row['ts'] = 1;\n        this.hold (row);\n    }\n" +
     "    handlePost (client: Client, message: Dict) {\n        const s = this.safeString (message, 'id');\n        this.hold (s);\n    }\n" +
-    "    handleMessage (client: Client, message: Dict) {\n        const methods: Dict = {\n            'ticker': this.handleTicker,\n            'post': this.handlePost,\n            'row': this.handleRow,\n            'keep': this.handleKeep,\n            'three': this.handleThree,\n        };\n        this.hold (methods);\n    }\n}\n";
+    "    handleKept (client: Client, message: Dict) {\n        const s = this.safeString (message, 'id');\n        this.hold (s);\n    }\n" +
+    "    handleMessage (client: Client, message: Dict) {\n        const methods: Dict = {\n            'ticker': this.handleTicker,\n            'post': this.handlePost,\n            'kept': this.handleKept,\n            'row': this.handleRow,\n            'keep': this.handleKeep,\n            'three': this.handleThree,\n        };\n        this.hold (methods);\n    }\n}\n";
 
 // another pro file declares handlePost (an override family with one slot type)
 const otherVenue = "import Exchange from '../base/Exchange.js';\nimport Client from '../base/ws/Client.js';\nimport type { Dict } from '../base/Exchange.js';\n" +
     'export default class other extends Exchange {\n' +
     "    handlePost (client: Client, message: Dict) {\n        this.hold (message);\n    }\n" +
     "    handleMessage (client: Client, message: Dict) {\n        this.handlePost (client, message);\n    }\n}\n";
+
+// a subclass file calls handleKept without its own copy: the call reaches the parent's definition
+const childVenue = "import venue from './venue.js';\nimport Client from '../base/ws/Client.js';\nimport type { Dict } from '../base/Exchange.js';\n" +
+    'export default class child extends venue {\n' +
+    "    handleMessage (client: Client, message: Dict) {\n        this.handleKept (client, message);\n    }\n}\n";
 
 describe ('rust pro ws handler message: Dict is a borrowed map (rustWsHandlerMessageSlot)', () => {
     let output = '';
@@ -71,6 +77,7 @@ describe ('rust pro ws handler message: Dict is a borrowed map (rustWsHandlerMes
         fs.writeFileSync (path.join (root, 'ts', 'src', 'base', 'ws', 'Client.ts'), wsClient);
         fs.writeFileSync (path.join (root, 'ts', 'src', 'pro', 'venue.ts'), proVenue);
         fs.writeFileSync (path.join (root, 'ts', 'src', 'pro', 'other.ts'), otherVenue);
+        fs.writeFileSync (path.join (root, 'ts', 'src', 'pro', 'child.ts'), childVenue);
         const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } } as any);
         output = t.transpileRustByPath (path.join (root, 'ts', 'src', 'pro', 'venue.ts')).content;
     });
@@ -87,7 +94,11 @@ describe ('rust pro ws handler message: Dict is a borrowed map (rustWsHandlerMes
         expect (output).not.toMatch (/fn handleThree\([^)]*message: &indexmap::IndexMap/);
         // writes into a row read off the message (it may alias the message): keeps the box
         expect (output).not.toMatch (/fn handleRow\([^)]*message: &indexmap::IndexMap/);
-        // another pro file declares it and calls it directly (that slot stays boxed): keep one type for the family
-        expect (output).not.toMatch (/fn handlePost\([^)]*message: &indexmap::IndexMap/);
+        // another pro file calls it directly with no copy of its own (pacifica / hyperliquid handleWsPost shape inverted)
+        expect (output).not.toMatch (/fn handleKept\([^)]*message: &indexmap::IndexMap/);
+    });
+
+    test ('a name another pro file declares and calls on its own copy is still borrowed here', () => {
+        expect (output).toMatch (/fn handlePost\(&self, client: [^,]+, message: &indexmap::IndexMap<String, Value>\)/);
     });
 });
