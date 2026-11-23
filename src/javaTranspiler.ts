@@ -859,7 +859,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // whole-repo facts about a method name one program cannot show, answered by the build layer: ts/src
     // declaration count, non-call mentions, hand-written Java mentions, and the arguments of every
     // `this.name (..)` call outside `ownFile`. With no consumer installed nothing changes.
-    javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, calls: Node[][] } | undefined) | undefined;
+    javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, asyncVoid?: boolean, calls: Node[][] } | undefined) | undefined;
     // every `this.<name> (..)` call expression of a source file, collected once per file
     private javaThisCallIndex = new WeakMap<object, Map<string, any[]>>();
     // The declared Java type of a local is known to the pass that rewrites the declaration
@@ -2785,6 +2785,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (returnType === 'java.util.concurrent.CompletableFuture') {
             returnType = 'java.util.concurrent.CompletableFuture<Object>';
         }
+        if (returnType === 'java.util.concurrent.CompletableFuture<Object>' && this.javaAsyncVoidName(node)) {
+            returnType = 'java.util.concurrent.CompletableFuture<Void>';
+        }
 
         // an internal (non-override) generated method whose every return already
         // prints the native type carries it in its signature (see javaNativeReturnType).
@@ -2805,6 +2808,17 @@ export class JavaTranspiler extends BaseTranspiler {
         const signature = this.getIden(identation) + modifiers + returnType + methodToken + name + "(" + parsedArgs + ")";
 
         return this.printNodeCommentsIfAny(node, identation, signature);
+    }
+
+    // every ts/src declaration of the name is async with no valued return and no hand-written Java declares
+    // or calls it, so each override and caller agrees on CompletableFuture<Void>
+    javaAsyncVoidName(node): boolean {
+        if (!isIdentifier(node.name) || typeof this.javaRepoMethodUses !== 'function'
+            || !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'))) {
+            return false;
+        }
+        const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
+        return uses !== undefined && uses.asyncVoid === true && !uses.handWritten && uses.declared > 0;
     }
 
     // an unwritten `boolean` / `Bool` METHOD parameter holds a Boolean or null, so `Helpers.isTrue (p)`
