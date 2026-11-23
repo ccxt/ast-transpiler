@@ -1348,6 +1348,13 @@ export class JavaTranspiler extends BaseTranspiler {
     // an argument into a slot printed with the native `type`; the checkcast carries its own
     // parentheses: a bare `(T) cond ? a : b` binds the condition, not the whole argument
     javaCheckcastArgument(arg, printed: string, type: string | undefined): string {
+        // an integer literal into a Long slot takes the long suffix: `(Long) (0)` does not compile
+        if (type === 'Long' && isNumericLiteral(arg) && /^\d+$/.test(printed)) {
+            return printed + 'L';
+        }
+        if (type === 'Long' && this.javaLocalDeclaredAs(isAsExpression(arg) ? arg.expression : arg, printed, type)) {
+            return printed;
+        }
         return type === undefined || this.javaNativeArgumentAlreadyTyped(arg, type) ? printed : `(${type}) (${printed})`;
     }
 
@@ -2306,12 +2313,13 @@ export class JavaTranspiler extends BaseTranspiler {
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
     }
 
-    // a fixed `int` (base/types.ts) parameter of an async method first declared in the Exchange tier prints `Long`,
+    // a fixed `int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
     // a plain `number` amount / cost of the unified money methods `Double`; every override shares the annotation
     javaUnifiedIntParameterType(name, symbol, method, type): string | undefined {
         const numberSlot = name === undefined && (type.flags & TypeFlags.Number) !== 0
             && JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(String((method.name as any)?.text));
-        if ((name !== 'int' && !numberSlot) || !isIdentifier(method.name) || !this.isAsyncFunction(method)) {
+        // the `int` slot holds for sync methods too (handleErrors `code`): the root declaration decides
+        if ((name !== 'int' && !numberSlot) || !isIdentifier(method.name) || (numberSlot && !this.isAsyncFunction(method))) {
             return undefined;
         }
         let root = method;
