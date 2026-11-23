@@ -407,9 +407,12 @@ const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 
 // unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
 const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer', 'createMarketOrderWithCost', 'createMarketSellOrderWithCost',
-    'borrowCrossMargin', 'repayCrossMargin', 'borrowIsolatedMargin', 'repayIsolatedMargin', 'borrowMargin', 'repayMargin', 'setMargin']);
+    'borrowCrossMargin', 'repayCrossMargin', 'borrowIsolatedMargin', 'repayIsolatedMargin', 'borrowMargin', 'repayMargin', 'setMargin',
+    'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder']);
 // unified convert methods whose defaulted `amount: Num = undefined` prints `Double` (null when omitted)
 const JAVA_UNIFIED_OPTIONAL_NUMBER_PARAMETER_METHODS = new Set<string>(['fetchConvertQuote', 'createConvertTrade']);
+// unified edit methods whose defaulted `amount` / `price: Num = undefined` print `Double` (null when omitted)
+const JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS = new Set<string>(['editOrder', 'editOrderWs', 'editOrderWithClientOrderId', 'editLimitOrder', 'editLimitBuyOrder', 'editLimitSellOrder']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
@@ -2107,6 +2110,10 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (name === 'Num' && (node.name as any)?.text === 'amount' && this.isAsyncFunction(method)
             && JAVA_UNIFIED_OPTIONAL_NUMBER_PARAMETER_METHODS.has(String((method.name as any)?.text))) {
+            return 'Double';
+        }
+        if (name === 'Num' && ['amount', 'price'].includes((node.name as any)?.text) && this.isAsyncFunction(method)
+            && JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS.has(String((method.name as any)?.text))) {
             return 'Double';
         }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
