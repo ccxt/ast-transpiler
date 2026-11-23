@@ -222,7 +222,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
+export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -236,10 +236,10 @@ export interface RustMethodSignature {
 const RUST_BOOK_META_KEYS = new Set<string>([ 'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache' ]);
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref', 'dictref' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
 
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
-const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct' ]);
+const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct' ]);
 
 // the `string` parameters of the `handle_errors` slot (every declaration spells them `string`): lent `&str` slots
 const RUST_SLOT_STR_ARGS: Record<number, string> = { 1: 'reason', 2: 'url', 3: 'method', 5: 'body' };
@@ -362,6 +362,7 @@ export const rustDispatch = {
         switch (ret) {
         case 'typed': case 'ostr': case 'struct': case 'keptstruct': return `crate::types::IntoRaw::into_raw(${call})`;
         case 'oint': case 'keptostr': case 'keptint': case 'keptstr': case 'keptbool': case 'int': case 'string': case 'bool': return `crate::Value::from(${call})`;
+        case 'keptobool': return `${call}.map_or(crate::Value::Null, crate::Value::Bool)`;
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
         case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
@@ -6523,6 +6524,8 @@ export class RustTranspiler extends BaseTranspiler {
         shortenSlug: [ 'string', 'str' ],
         // describe: base literal or `deepExtend (super.describe (), {..})` of maps on every path (`-> Dict`)
         describe: [ 'Dict', 'dict' ],
+        // the error hook: `undefined` (go on to the status table) or `true` (handled) on every path (`-> Option<bool>`)
+        handleErrors: [ 'Bool', 'obool' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -15646,7 +15649,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
         let ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
         // a base method of the typed-return table keeps its by-name arm: `Option<i64>` / `Option<String>` box once inside it
-        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr', 'bool': 'keptbool' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
+        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr', 'bool': 'keptbool', 'Option<bool>': 'keptobool' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
         // ral-fb: a base method printing `Option<String>` (safeCurrencyCode and its overrides) keeps its `-> Value` arms the same way
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
@@ -15669,7 +15672,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustVirtualDispatchMethod(node: any, methodDef: string, body: string): string {
         const sig = this.rustSignatureTable.get(node);
         const slots = sig === undefined ? undefined : this.rustVirtualDispatch[sig.name];
-        if (sig === undefined || slots === undefined || (sig.ret !== 'value' && sig.ret !== 'typed' && sig.ret !== 'keptint')) return methodDef + body;
+        if (sig === undefined || slots === undefined || (sig.ret !== 'value' && sig.ret !== 'typed' && sig.ret !== 'keptint' && sig.ret !== 'keptobool')) return methodDef + body;
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(node.getSourceFile?.()?.fileName ?? ''))) return methodDef + body;
         const sliceAt = sig.params.findIndex(p => p.type === '&[Value]');
         const callArgs = slots.map((_slot, i) => {
@@ -15687,6 +15690,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a kept-int slot is `Option<i64>` on the trait: None means not overridden
         const probe = sig.ret === 'keptint'
             ? `        if let Some(__v) = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}) { return __v; }\n`
+            // a nullable-bool slot: `None` means not overridden or not handled, as `Value::Null` did
+            : sig.ret === 'keptobool' ? `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if __v.is_some() { return __v; } }\n`
             : `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
         const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n` + probe;
         let open = body.indexOf('{') + 1;
