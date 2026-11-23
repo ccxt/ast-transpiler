@@ -45,3 +45,63 @@ describe ('csharp venue-private params bag', () => {
         expect(a).toContain('written(string s, object parameters = null)');
     });
 });
+
+describe ('csharp venue-private params bag seen from the pro file', () => {
+    // the pro subclass is printed in another batch: its `this.` calls join the census when they pass
+    // nothing, a literal, an extend call or the caller's own typed and unwritten bag
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-pro-dict-params');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    const PRO = path.join(TMP, 'ts', 'src', 'pro', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(PRO), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    omit (a: any, k: any): any { return a; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (s: string) { return [ this.req (s, {}), this.ext (s), this.boxed (s), this.written (s), this.untypedCaller (s) ]; }\n" +
+            "    req (s: string, params = {}) { return this.omit (params, 'k'); }\n" +
+            "    ext (s: string, params = {}) { return this.omit (params, 'k'); }\n" +
+            "    boxed (s: string, params = {}) { return this.omit (params, 'k'); }\n" +
+            "    written (s: string, params = {}) { return this.omit (params, 'k'); }\n" +
+            "    untypedCaller (s: string, params = {}) { return this.omit (params, 'k'); }\n" +
+            '}\n');
+        fs.writeFileSync(PRO,
+            "import { A } from '../a';\n" +
+            'export class B extends A {\n' +
+            "    createOrderWs (symbol: string, params = {}) { return this.req (symbol, params); }\n" +
+            "    watchTicker (symbol: string, params = {}) { return this.ext (symbol, this.extend (params, { 'a': 1 })); }\n" +
+            "    watchTrades (symbol: string, params = {}) { const q = this.omit (params, 'x'); return this.boxed (symbol, q); }\n" +
+            "    watchOrders (symbol: string, params = {}) { params = this.omit (params, 'x'); return this.written (symbol, params); }\n" +
+            "    helper (symbol: string, params = {}) { return this.untypedCaller (symbol, params); }\n" +
+            '}\n');
+        const config = { 'parser': WRAPPED_PARSER, 'dictParamsMethods': [ 'CreateOrderWs', 'WatchTicker', 'WatchTrades', 'WatchOrders' ] };
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': config });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a pro call passing its own typed bag or an extend call prints IDictionary', () => {
+        expect(a).toContain('req(string s, IDictionary<string, object>? parameters = null)');
+        expect(a).toContain('ext(string s, IDictionary<string, object>? parameters = null)');
+    });
+
+    test('a pro call passing an untyped local keeps object', () => {
+        expect(a).toContain('boxed(string s, object parameters = null)');
+    });
+
+    test('a pro caller that rebinds its bag keeps object', () => {
+        expect(a).toContain('written(string s, object parameters = null)');
+    });
+
+    test('a pro caller whose bag the host does not type keeps object', () => {
+        expect(a).toContain('untypedCaller(string s, object parameters = null)');
+    });
+});

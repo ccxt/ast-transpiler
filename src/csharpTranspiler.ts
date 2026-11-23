@@ -3275,7 +3275,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             || ((parameter.type !== undefined) && (parameter.type.getText().trim() !== 'Dict')) || this.csharpDictParamsRebound(method)) {
             return undefined;
         }
-        const proKinds = this.csharpProFileCallKinds(method, index);
+        const proKinds = this.csharpProFileCallKinds(method, index, true);
         if ((proKinds === undefined) || (proKinds.length !== 0)) {
             return undefined;
         }
@@ -3342,7 +3342,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the venue's pro subclass (ts/src/pro/<file>) is transpiled in another batch, so its file is parsed here:
     // a same-named declaration keeps `object` (C# overrides are invariant); each `this.` call must pass at `index`
     // nothing (the null default) or an unwritten parameter the core table prints numeric (createOrderWs `double amount`)
-    csharpProFileCallKinds(method, index: number): string[] | undefined {
+    csharpProFileCallKinds(method, index: number, dict = false): string[] | undefined {
         const fileName = String(method.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
         const at = fileName.lastIndexOf('ts/src/');
         if ((at < 0) || fileName.substring(at + 7).includes('/')) {
@@ -3380,7 +3380,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             }
             if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && isIdentifier(n.expression.name) && (n.expression.name.text === name)) {
                 calls++;
-                const kind = (n.expression.expression.kind === SyntaxKind.ThisKeyword) ? this.csharpProCallArgumentKind(method, n, index) : undefined;
+                const kind = (n.expression.expression.kind !== SyntaxKind.ThisKeyword) ? undefined
+                    : (dict ? this.csharpProDictArgumentKind(method, n, index) : this.csharpProCallArgumentKind(method, n, index));
                 if (kind === undefined) {
                     agree = false;
                 } else if (kind !== '') {
@@ -3417,6 +3418,29 @@ export class CSharpTranspiler extends BaseTranspiler {
             return 'Int64'; // a base field bound to a time function the hand-written C# base declares Int64
         }
         return ((target !== undefined) && isMethodDeclaration(target) && (target.type?.getText?.()?.trim() === 'int')) ? 'Int64' : undefined;
+    }
+
+    // a pro `this.` call of a venue dict bag (no checker on the pro parse): '' when it passes nothing, an object
+    // literal, a `this.extend` / `this.deepExtend` call, or the caller's own unwritten bag the host table prints typed
+    csharpProDictArgumentKind(method, call, index: number): string | undefined {
+        const args: any[] = Array.from(call.arguments ?? []);
+        if ((args.length > method.parameters.length) || args.some((a) => isSpreadElement(a))) {
+            return undefined;
+        }
+        const argument = (args[index] === undefined) ? undefined : this.csharpUnparenthesized(args[index]);
+        if ((argument === undefined) || isObjectLiteralExpression(argument)) {
+            return '';
+        }
+        if (isCallExpression(argument) && isPropertyAccessExpression(argument.expression) && (argument.expression.expression.kind === SyntaxKind.ThisKeyword)
+            && isIdentifier(argument.expression.name) && [ 'extend', 'deepExtend' ].includes(argument.expression.name.text)) {
+            return '';
+        }
+        const caller: any = findAncestor(call, (n) => isMethodDeclaration(n));
+        if (!isIdentifier(argument) || (argument.text !== 'params') || (caller === undefined) || (caller.body === undefined)) {
+            return undefined;
+        }
+        const bag: any = caller.parameters[caller.parameters.length - 1];
+        return ((bag !== undefined) && this.csharpIsDictParamsBag(bag) && !this.csharpDictParamsRebound(caller)) ? '' : undefined;
     }
 
     csharpProCallArgumentKind(method, call, index: number): string | undefined {
