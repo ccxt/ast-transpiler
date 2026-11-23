@@ -16066,6 +16066,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (p.rustType === 'f64') return `${recv}.as_f64().unwrap_or_default()`;
             if (p.rustType === 'Option<f64>') return `${recv}.as_f64()`;
             if (p.rustType === 'bool') return `${recv}.as_bool().unwrap_or_default()`;
+            // a list literal in a `Vec<String>` slot builds the vector from its elements' text
+            if (p.rustType === 'Vec<String>' && isArrayLiteralExpression(this.rustSkipWrappers(args[i]))) return this.rustStrVecArgumentText(args[i], 0);
             if (p.rustType === 'Vec<String>') return `${recv}.to_str_vec()`;
             if (p.rustType === 'Vec<Vec<String>>') return `${recv}.to_str_vec_vec()`;
             if (p.rustType === 'Option<Vec<String>>') return `${recv}.to_opt_str_vec()`;
