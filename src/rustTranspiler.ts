@@ -42171,8 +42171,10 @@ export class RustTranspiler extends BaseTranspiler {
         const kd: any = this.rustDeclarationOfIdentifier(key);
         if (kd === undefined || !isVariableDeclaration(kd) || kd.parent?.parent === undefined || !isForStatement(kd.parent.parent)) return undefined;
     }
-    const row: any = call.parent;
-    if (row === undefined || !isVariableDeclaration(row) || row.initializer !== call || !this.rustBorrowedDictLocal(row)) return undefined;
+    // `this.safeDict (rows, i, {}) as Dict` reads the same row
+    let row: any = call.parent;
+    while (row !== undefined && (isParenthesizedExpression(row) || isAsExpression(row))) row = row.parent;
+    if (row === undefined || !isVariableDeclaration(row) || this.rustSkipWrappers(row.initializer) !== call || !this.rustBorrowedDictLocal(row)) return undefined;
     // an `Option<Dict>` row keeps Null apart from a map: it stays with the optional reader
     if (this.rustOptContainerLocals.has(row)) return undefined;
     return key;
@@ -42212,7 +42214,8 @@ export class RustTranspiler extends BaseTranspiler {
 (RustTranspiler.prototype as any).printRustP21RowCall = function (this: any, call: any): string | undefined {
     const recv: any = call.arguments?.[0];
     if (recv === undefined || !isIdentifier(recv) || this.rustP21RowRead(call, recv) === undefined || !this.rustP21DictRowsLocal(this.rustDeclarationOfIdentifier(recv))) return undefined;
-    const row: any = call.parent;
+    let row: any = call.parent;
+    while (row !== undefined && (isParenthesizedExpression(row) || isAsExpression(row))) row = row.parent;
     const text = this.rustP21RowReadText(row);
     return text === undefined ? undefined : `Value::Dict(${text})`;
 };

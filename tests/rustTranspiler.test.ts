@@ -27469,3 +27469,30 @@ describe('rust: a Dict local rewritten from a no-default safeDict under its unde
         expect (body).not.toContain ('safe_dict_o(');
     });
 });
+
+describe('h39-R10: a row read cast `as Dict` of a converted `Dict[]` list is the same slice read', () => {
+    const run = (body: string) => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'r10-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    safeList (o: any, k: any, d: any[] = undefined): any[] | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        fs.writeFileSync (path.join (root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict } from './base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, 'ts/src/venue.ts')).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const first = (decl: string, extra = '') => "    m (response: Dict) {\n        " + decl + "\n        const first = this.safeDict (data, 0, {}) as Dict;\n" + extra + "        return this.safeString (first, 'ts');\n    }\n";
+    test('`this.safeDict (data, 0, {}) as Dict` reads the converted row', () => {
+        const out = run (first ("const data = this.safeList (response, 'data', []);"));
+        expect (out).toMatch (/let data: Vec<crate::value::Dict> = crate::value::dict_rows\(/);
+        expect (out).toContain ('data.get(0).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&data');
+    });
+    test('negative: no default (missing list) keeps the boxed reader', () => {
+        expect (run (first ("const data = this.safeList (response, 'data');"))).not.toContain ('dict_rows');
+    });
+    test('negative: the list handed on whole keeps the boxed reader', () => {
+        expect (run (first ("const data = this.safeList (response, 'data', []);", "        this.hold (data);\n"))).not.toContain ('dict_rows');
+    });
+    test('negative: a non-empty default (wrong kind of default) keeps the boxed reader', () => {
+        expect (run ("    m (response: Dict) {\n        const data = this.safeList (response, 'data', []);\n        const first = this.safeDict (data, 0, { 'a': 1 }) as Dict;\n        return this.safeString (first, 'ts');\n    }\n")).not.toContain ('dict_rows');
+    });
+});
