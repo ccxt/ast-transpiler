@@ -15697,7 +15697,7 @@ export class RustTranspiler extends BaseTranspiler {
             ? `        if let Some(__v) = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}) { return __v; }\n`
             // a nullable-bool slot: `None` means not overridden or not handled, as `Value::Null` did
             : sig.ret === 'keptobool' ? `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if __v.is_some() { return __v; } }\n`
-            : `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
+                : `        { let __v = crate::exchange::DerivedExchange::${sig.name}(self, ${callArgs.join(', ')}); if !matches!(__v, crate::Value::Null) { return ${sig.ret === 'typed' ? 'Ok(crate::types::FromRaw::from_raw(__v))' : '__v'}; } }\n`;
         const preamble = `\n        // virtual-dispatch (static: DerivedExchange::${sig.name}(self, ...))\n` + probe;
         let open = body.indexOf('{') + 1;
         // a lent parameter is bound to its `Value` first
