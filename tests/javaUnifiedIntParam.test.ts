@@ -88,3 +88,70 @@ describe('java unified money amount parameter', () => {
         expect(out).toMatch(/setMargin\(\w+ symbol, Object amount/);
     });
 });
+
+// transfer and the venue transferIn / transferOut shortcuts print a Double amount
+describe('java transfer amount parameter', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-transfer-amount-param');
+    let out: string;
+    beforeAll(() => {
+        fs.mkdirSync(path.join(TMP, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'types.ts'),
+            'export interface Dictionary<T> { [key: string]: T; }\nexport type Dict = Dictionary<any>;\n');
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts'),
+            "import type { Dict } from './types';\n" +
+            'export default class Exchange {\n' +
+            '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
+            '    async transfer (code: string, amount: number, fromAccount: string, toAccount: string, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '}\n');
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
+            "import type { Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
+            'class Venue extends Exchange {\n' +
+            "    async transfer (code: string, amount: number, fromAccount: string, toAccount: string, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
+            "    async transferOut (code: string, amount: number, params: Dict = {}): Promise<{}> {\n        return await this.transfer (code, amount, 'a', 'b', params);\n    }\n" +
+            "    async moveOut (code: string, amount: number, params: Dict = {}): Promise<{}> {\n        return { 'amount': amount };\n    }\n" +
+            "    transferIn (code: string, amount: number): any {\n        return amount;\n    }\n" +
+            '}\n');
+        out = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } })
+            .transpileJavaByPath(path.join(TMP, 'ts', 'src', 'probe.ts')).content;
+    });
+    afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
+
+    test('transfer and transferOut print Double, the call passes the typed slot uncast', () => {
+        expect(out).toMatch(/transfer\(\w+ code, Double amount, /);
+        expect(out).toMatch(/transferOut\(\w+ code, Double amount, /);
+        expect(out).not.toContain('(Double) (amount)');
+    });
+    test('another venue method and a sync shortcut keep the Object slot', () => {
+        expect(out).toMatch(/moveOut\(\w+ code, Object amount/);
+        expect(out).toMatch(/transferIn\(\w+ code, Object amount/);
+    });
+});
+
+// a written amount parameter keeps the checkcast at the call
+describe('java transfer amount written before the call', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-transfer-amount-written');
+    let out: string;
+    beforeAll(() => {
+        fs.mkdirSync(path.join(TMP, 'ts', 'src', 'base'), { recursive: true });
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'types.ts'),
+            'export interface Dictionary<T> { [key: string]: T; }\nexport type Dict = Dictionary<any>;\n');
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts'),
+            "import type { Dict } from './types';\n" +
+            'export default class Exchange {\n' +
+            '    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n' +
+            '    async transfer (code: string, amount: number, fromAccount: string, toAccount: string, params: Dict = {}): Promise<{}> { return {}; }\n' +
+            '}\n');
+        fs.writeFileSync(path.join(TMP, 'ts', 'src', 'probe.ts'),
+            "import type { Dict } from './base/types';\nimport Exchange from './base/Exchange';\n" +
+            'class Venue extends Exchange {\n' +
+            "    async transferOut (code: string, amount: number, params: Dict = {}): Promise<{}> {\n        amount = amount * 2;\n        return await this.transfer (code, amount, 'a', 'b', params);\n    }\n" +
+            '}\n');
+        out = new Transpiler({ verbose: false, java: { parser: { NUM_LINES_END_FILE: 0 } } })
+            .transpileJavaByPath(path.join(TMP, 'ts', 'src', 'probe.ts')).content;
+    });
+    afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
+
+    test('the written copy keeps the checkcast', () => {
+        expect(out).toContain('(Double) (amount)');
+    });
+});

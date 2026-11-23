@@ -406,7 +406,9 @@ const JAVA_NATIVE_PARAMETER_SOURCE_FILES = /(^|\/)ts\/src\/base\/types\.ts$/;
 const JAVA_NATIVE_DICT_PARAMETER_TYPE = 'java.util.Map<String, Object>';
 
 // unified money methods whose fixed `number` amount / cost (a float in the unified API) prints `Double`
-const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost']);
+const JAVA_UNIFIED_NUMBER_PARAMETER_METHODS = new Set<string>(['withdraw', 'addMargin', 'reduceMargin', 'createMarketBuyOrderWithCost', 'transfer']);
+// public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
+const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
 // Parameter positions whose Java signature cannot move to the annotated type even though
 // the base declaration carries it. Java overrides are invariant, so one excluded position
@@ -1756,6 +1758,14 @@ export class JavaTranspiler extends BaseTranspiler {
                 return true;
             }
         }
+        // a never-written Double / Long parameter the printer declares with the slot's own type
+        if ((type === 'Double' || type === 'Long') && isIdentifier(arg)) {
+            const declaration = this.javaDeclarationOfIdentifier(arg);
+            if (declaration !== undefined && isParameterDeclaration(declaration) && declaration.initializer === undefined
+                && this.javaNativeParameterType(declaration) === type && !this.javaParameterIsWritten(declaration)) {
+                return true;
+            }
+        }
         if (type === JAVA_NATIVE_RETURN_LIST_TYPE && this.javaPrintsListArgument(arg)) {
             return true;
         }
@@ -2315,8 +2325,10 @@ export class JavaTranspiler extends BaseTranspiler {
     // a fixed `int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
     // a plain `number` amount / cost of the unified money methods `Double`; every override shares the annotation
     javaUnifiedIntParameterType(name, symbol, method, type): string | undefined {
+        const methodName = String((method.name as any)?.text);
+        const venueNumberSlot = JAVA_VENUE_NUMBER_PARAMETER_METHODS.has(methodName);
         const numberSlot = name === undefined && (type.flags & TypeFlags.Number) !== 0
-            && JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(String((method.name as any)?.text));
+            && (JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(methodName) || venueNumberSlot);
         // the `int` slot holds for sync methods too (handleErrors `code`): the root declaration decides
         if ((name !== 'int' && !numberSlot) || !isIdentifier(method.name) || (numberSlot && !this.isAsyncFunction(method))) {
             return undefined;
@@ -2325,7 +2337,7 @@ export class JavaTranspiler extends BaseTranspiler {
         for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
             root = m;
         }
-        if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
+        if (!(numberSlot && venueNumberSlot) && !JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
             return undefined;
         }
         if (numberSlot) {
