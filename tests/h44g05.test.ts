@@ -31,7 +31,6 @@ describe ('h44g05: string[] miss list in loadOutcomes', () => {
         + '            if (missing.length > 0) {\n                await this.fetchOutcomes (missing);\n            }\n        }\n        return undefined;\n    }\n';
     test ('positive: pushes of a defaulted string[] parameter element keep the miss list []string (fails on the base printer)', () => {
         const out = print (fn ());
-        fs.writeFileSync ('/root/workspace/campaigns/hx12/work/h44/tmp-H44-G05/probe.go', out);
         expect (out).toContain ('var missing []string = []string{}');
         expect (out).toContain ('missing = append(missing, outcomes[i])');
     });
