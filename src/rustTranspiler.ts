@@ -41178,8 +41178,7 @@ export class RustTranspiler extends BaseTranspiler {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
-                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)))
-                        || this.rustLocalHoldsFreshBook(decl, init);
+                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)));
                     if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
             }
@@ -41200,31 +41199,6 @@ export class RustTranspiler extends BaseTranspiler {
         };
         method.body?.forEachChild(visit);
         return !named;
-    }
-
-    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
-     *  every `return` is an object literal (`parseOrderBook`): a top-level key write cannot reach the message. */
-    rustLocalHoldsFreshBook(decl: any, init: any): boolean {
-        if (decl === undefined || !isVariableDeclaration(decl) || init === undefined) return false;
-        if (this.rustWsOrderBookClassType(this.getChecker().getTypeAtLocation(decl.name)) || this.rustReadsOrderbooksStore(decl.name)) return true;
-        const store: any = isElementAccessExpression(init) ? init.expression : undefined;
-        if (store !== undefined && isPropertyAccessExpression(store) && store.expression.kind === SyntaxKind.ThisKeyword && store.name.text === 'orderbooks') return true;
-        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
-        const callee: any = this.rustCalleeDeclaration(init);
-        if (callee === undefined || !isMethodDeclaration(callee) || callee.body === undefined) return false;
-        const rets: any[] = [];
-        let nested = false;
-        const visit = (n: any): void => {
-            if (isFunctionLike(n)) { nested = true; return; }
-            if (isReturnStatement(n)) rets.push(n.expression);
-            n.forEachChild(visit);
-        };
-        callee.body.forEachChild(visit);
-        return !nested && rets.length > 0 && rets.every((r: any) => {
-            let e: any = r;
-            while (e !== undefined && (isParenthesizedExpression(e) || isAsExpression(e))) e = e.expression;
-            return e !== undefined && isObjectLiteralExpression(e);
-        });
     }
 
     /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
