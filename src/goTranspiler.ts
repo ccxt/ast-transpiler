@@ -25428,6 +25428,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             && (arg.name?.text === 'privateKey')) {
             return 'string'; // go/v4/exchange.go declares PrivateKey `string`
         }
+        // `x as Dict` prints the bare `x`: it carries the Go type `x` is declared with
+        if ((arg?.kind === SyntaxKind.AsExpression) && (arg.expression?.kind === SyntaxKind.Identifier)
+            && (this.printNode(arg, 0) === this.printNode(arg.expression, 0))) {
+            return this.goPrintedArgType(arg.expression);
+        }
         return this.goTypeOfInitializer(arg, this.printNode(arg, 0));
     }
 

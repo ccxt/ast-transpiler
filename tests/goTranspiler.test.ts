@@ -21333,3 +21333,31 @@ describe ('goCacheIndexInt64', () => {
         expect(out).toContain('func (this *Other) GetCacheIndex(a any, b any) any {');
     });
 });
+
+describe('a venue-private sync parse parameter fed `x as Dict` takes the map type of x', () => {
+    const source = (arg: string, local: string) => 'type Dict = { [key: string]: unknown };\n'
+        + 'class base {\n'
+        + '    safeString (d: unknown, k: unknown, x: unknown = undefined): string { return \'\'; }\n'
+        + '}\n'
+        + 'export class ex extends base {\n'
+        + '    fetchFee (response: Dict) {\n'
+        + '        ' + local + '\n'
+        + '        return this.parseFee (' + arg + ');\n'
+        + '    }\n'
+        + '    parseFee (fee: Dict) {\n'
+        + '        return this.safeString (fee, \'maker\');\n'
+        + '    }\n'
+        + '}\n';
+    test('a typed map local behind `as Dict` types the parameter', () => {
+        const out = goTranspileMapRows(source('data as Dict', 'const data: Dict = {};'));
+        expect(out).toContain('ParseFee(fee map[string]any)');
+    });
+    test('an untyped value behind `as Dict` keeps the box', () => {
+        const out = goTranspileMapRows(source('data as Dict', 'const data: any = response[\'x\'];'));
+        expect(out).toContain('ParseFee(fee any)');
+    });
+    test('a non-identifier behind `as Dict` keeps the box', () => {
+        const out = goTranspileMapRows(source('(response[\'x\']) as Dict', ''));
+        expect(out).toContain('ParseFee(fee any)');
+    });
+});
