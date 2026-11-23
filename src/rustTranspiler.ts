@@ -10145,7 +10145,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (p === undefined || (isPropertyAccessExpression(p) && (p.expression === node || p.name === node))
             || ((isVariableDeclaration(p) || isParameterDeclaration(p)) && p.name === node) || (p.kind === SyntaxKind.PropertyAssignment && p.name === node)) return undefined;
         const plan = this.rustClientHandlePlan(node);
-        return plan !== undefined && plan.typed && node.pos >= plan.bindPos ? 'client.as_value()' : undefined;
+        if (plan === undefined || !plan.typed || node.pos < plan.bindPos) return undefined;
+        // a hand-off to another handler's typed handle slot lends the handle itself
+        if (plan.kind === 'param' && this.rustWsHandleParam(this.rustWsHandleSlotOf(node))) return RustTranspiler.rustLentMark('client');
+        return 'client.as_value()';
     }
 
     /** The planned `client` local: declared as the handle, or printed as usual with a mark where the
@@ -40994,6 +40997,7 @@ export class RustTranspiler extends BaseTranspiler {
         const calls = this.rustVenueStrCallSites(method);
         if (calls.length === 0) return false;
         const at = Array.from(method.parameters).indexOf(param);
+        if (this.rustWsRoutedHandler(method)) return links;
         for (const call of calls) {
             const arg: Node | undefined = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
             if (arg === undefined) return false;
@@ -41949,11 +41953,64 @@ export class RustTranspiler extends BaseTranspiler {
     rustWsHandleParam(param: any): boolean {
         if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.name.text !== 'client') return false;
         const cached = this.rustWsHandleParamCache.get(param); if (cached !== undefined) return cached;
-        const result = this.rustWsHandleParamUncached(param);
-        this.rustWsHandleParamCache.set(param, result);
-        return result;
+        // handlers that hand `client` to each other are typed together or not at all
+        const seen = new Set<any>([ param ]);
+        const queue: any[] = [ param ];
+        let ok = true;
+        while (ok && queue.length > 0) {
+            const next = this.rustWsHandleParamLinks(queue.shift());
+            if (next === undefined) { ok = false; break; }
+            for (const q of next) if (!seen.has(q)) { seen.add(q); queue.push(q); }
+        }
+        for (const p of seen) this.rustWsHandleParamCache.set(p, ok);
+        return ok;
     }
-    rustWsHandleParamUncached(param: any): boolean {
+    /** The `client` params linked to `param` by a direct `this.h (.., client, ..)` hand-off (either way), or undefined when it
+     *  cannot take the handle. */
+    rustWsHandleParamLinks(param: any): any[] | undefined {
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.name.text !== 'client') return undefined;
+        const method: any = param.parent;
+        const links: any[] = [];
+        if (!this.rustWsHandleParamUncached(param, links)) return undefined;
+        const at = Array.from(method.parameters).indexOf(param);
+        if (this.rustWsRoutedHandler(method)) return links;
+        for (const call of this.rustCallSitesForName(String(method.name.text))) {
+            if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+            let declaration: any;
+            try { declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call)); } catch (e) { return undefined; }
+            if (declaration === undefined) return undefined;
+            // a base-tier caller (`routeMessage` -> `handleListMessage`) reaches the override through a boxed by-name arm
+            if (declaration !== method && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName))) return undefined;
+            if (declaration !== method) continue;
+            const from = this.rustWsHandleArgParam(call, at);
+            if (from === undefined) return undefined;
+            // a routed handleMessage hands client on boxed, so its callees keep the box
+            if (this.rustWsRoutedHandler(from.parent)) return undefined;
+            links.push(from);
+        }
+        return links;
+    }
+    /** The caller's own `client` param when `call` passes it bare at `at`. */
+    rustWsHandleArgParam(call: any, at: number): any {
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
+        const arg: any = call.arguments[at];
+        if (arg === undefined || !isIdentifier(arg) || arg.text !== 'client') return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        return declaration !== undefined && isParameterDeclaration(declaration) && isMethodDeclaration(declaration.parent)
+            && this.rustEnclosingFunction(arg) === declaration.parent ? declaration : undefined;
+    }
+    /** The callee's `client` param when bare `client` is argument `n` of a `this.h (..)` call to a method with a body. */
+    rustWsHandleSlotOf(n: any): any {
+        const call: any = n?.parent;
+        if (!isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
+        let declaration: any;
+        try { declaration = signatureDeclaration((this.getChecker() as any).getResolvedSignature(call)); } catch (e) { return undefined; }
+        if (declaration === undefined || !isMethodDeclaration(declaration) || declaration.body === undefined) return undefined;
+        const slot: any = declaration.parameters[call.arguments.indexOf(n)];
+        return slot !== undefined && isIdentifier(slot.name) && slot.name.text === 'client' ? slot : undefined;
+    }
+    rustWsHandleParamUncached(param: any, links: any[]): boolean {
         const method: any = param.parent;
         if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || param.initializer !== undefined || param.questionToken !== undefined) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
@@ -41962,13 +42019,17 @@ export class RustTranspiler extends BaseTranspiler {
         if (Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client').length !== 1) return false;
         if (!this.rustClientHandleClassType(this.getCheckedTypeOf(param.name))) return false;
         const routed = this.rustWsRoutedHandler(method);
-        if (!routed && this.rustCallSitesForName(String(method.name.text)).length > 0) return false;
         const nodes: any[] = this.rustScopeNameNodes(method, 'client');
         return nodes.every((n: any) => {
             if (n === param.name || n === param) return true;
             if (n.kind !== SyntaxKind.Identifier) return false;
             const p: any = n.parent;
             if (p === undefined) return false;
+            if (!routed && isCallExpression(p) && p.expression !== n && this.rustDeclarationOfIdentifier(n) === param) {
+                const slot = this.rustWsHandleSlotOf(n);
+                if (slot !== undefined) links.push(slot);
+                return slot !== undefined;
+            }
             // a routed handler hands the whole client on boxed (`client.as_value()`), never into spawn / delay
             if (routed && isCallExpression(p) && p.expression !== n && p.arguments.some((a: any) => a === n)) {
                 const callee: any = p.expression;
