@@ -241,6 +241,9 @@ const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'kept
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
 const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptstruct' ]);
 
+// the `string` parameters of the `handle_errors` slot (every declaration spells them `string`): lent `&str` slots
+const RUST_SLOT_STR_ARGS: Record<number, string> = { 1: 'reason', 2: 'url', 3: 'method', 5: 'body' };
+
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
     /** Tail of a dynamic-dispatch `args` list as a slice: the whole list, or the tail past index `i`. */
@@ -319,7 +322,7 @@ export const rustDispatch = {
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
     slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : 'crate::Value'}`).join(', '),
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
-    isSlotStr: (arg: string, i: number): boolean => arg === 'path' && i === 0,
+    isSlotStr: (arg: string, i: number): boolean => (arg === 'path' && i === 0) || RUST_SLOT_STR_ARGS[i] === arg,
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string): boolean => slot.includes(': '),
     slotName: (slot: string): string => slot.split(': ')[0],
@@ -36016,10 +36019,15 @@ export class RustTranspiler extends BaseTranspiler {
         return `&${text}`;
     }
 
+    /** A parameter named anywhere in the body (an unread typed slot needs no `Value` binding). */
+    rustParamIsRead(node: any, param: any): boolean {
+        return node.body === undefined || !isIdentifier(param.name) || this.rustScopeNameNodes(node.body, String(param.name.text)).length > 0;
+    }
+
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
         const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustLentSlotParam(p) || this.rustPriceSlotParam(p)
-            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p)));
+            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p) && this.rustParamIsRead(node, p)));
         return lent.filter((p: any) => !this.rustVenueDictParam(p)).map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
@@ -38908,7 +38916,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (dictBuilder && (rustType !== '&str' || !this.rust93raStrArgsTyped(method, param))) return undefined;
         // every caller in the method's own file passes a value the checker types (never `any`), no spread
         const at = Array.from(method.parameters).indexOf(param);
-        for (const call of this.rustVenueStrCallSites(method)) {
+        // a group slot is typed by its declarations; a caller converts its argument (the base fetch caller is hand-written)
+        for (const call of group ? [] : this.rustVenueStrCallSites(method)) {
             const args: any[] = Array.from(call.arguments);
             if (args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return undefined;
             if (optional && args[at] === undefined) continue;
@@ -39044,7 +39053,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every
     // override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and every forwarder.
-    private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string> = { 'sign': 'path' };
+    private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string[]> = { 'sign': [ 'path' ], 'handleErrors': [ '', 'reason', 'url', 'method', '', 'body' ] };
 
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
@@ -39052,24 +39061,25 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
 
-    /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
+    /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean {
         const name = String(method.name.text);
         const inherent = RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS[name];
-        const pname = inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name];
-        if (pname === undefined || Array.from(method.parameters).indexOf(param) !== 0 || String(param.name.text) !== pname) return false;
+        const index = Array.from(method.parameters).indexOf(param);
+        const pname = inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
+        if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
         if ((inherent !== undefined ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
         const spelled = `${pname}:${inherent !== undefined ? 'Str' : 'string'}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
-        let agree = this.rustOverrideGroupAgreeByRoot.get(root + '#' + name);
+        let agree = this.rustOverrideGroupAgreeByRoot.get(root + '#' + name + '#' + index);
         if (agree === undefined) {
             agree = true;
             let seen = 0;
-            const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^,)]*)`, 'gm');
+            const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^)]*)`, 'gm');
             for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
                 let entries: string[] = [];
                 try {
@@ -39080,12 +39090,12 @@ export class RustTranspiler extends BaseTranspiler {
                 for (const f of entries) {
                     for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
                         seen++;
-                        if (m[1].replace(/\s+/g, '') !== spelled) agree = false;
+                        if ((m[1].split(',')[index] ?? '').replace(/\s+/g, '') !== spelled) agree = false;
                     }
                 }
             }
             agree = agree && seen > 0;
-            this.rustOverrideGroupAgreeByRoot.set(root + '#' + name, agree);
+            this.rustOverrideGroupAgreeByRoot.set(root + '#' + name + '#' + index, agree);
         }
         return agree;
     }
