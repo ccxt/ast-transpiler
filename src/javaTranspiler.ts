@@ -333,7 +333,7 @@ const THIS_WS_ORDERBOOK_TYPE = /^(?:io\.github\.ccxt\.ws\.)?WsOrderBook$/;
 // ws-tier cache calls (`x.append (v)`, `book.reset (s)`, ...): the hand-written ws classes declare these
 // methods, so a receiver declared one of them binds natively; any other receiver dispatches reflectively
 // Exchange.ts cache fields BaseExchange.java declares `Map<String, Object>`: Map calls bind with no receiver cast
-const JAVA_BASE_DECLARED_MAP_CACHE_FIELDS: Set<string> = new Set(['tickers', 'bidsasks', 'fundingRates']);
+const JAVA_BASE_DECLARED_MAP_CACHE_FIELDS: Set<string> = new Set(['tickers', 'bidsasks', 'fundingRates', 'exceptions', 'urls']);
 const JAVA_WS_RECEIVER_TIER_FILE = /(^|\/)ts\/src\/(pro|prediction)\/[a-z0-9_]+\.ts$/;
 const JAVA_WS_DYNAMIC_METHODS: Set<string> = new Set(['append', 'reset', 'storeArray', 'store']);
 const JAVA_WS_DYNAMIC_FIELDS: Set<string> = new Set(['myTrades', 'positions', 'orders', 'trades', 'ohlcvs', 'tickers', 'orderbooks']);
@@ -1754,7 +1754,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return true;
         }
         // an object literal prints a `HashMap<String, Object>` instance, already a Map
-        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && (isObjectLiteralExpression(arg) || this.javaBaseMapOverloadCall(arg))) {
+        if (type === JAVA_NATIVE_RETURN_MAP_TYPE && (isObjectLiteralExpression(arg) || this.javaBaseMapOverloadCall(arg)
+            || this.javaBaseDeclaredMapCacheField(this.unwrapPrintTransparentExpression(arg)))) {
             return true;
         }
         // a parameter of the enclosing method printed with this very Map type, read under its own name
