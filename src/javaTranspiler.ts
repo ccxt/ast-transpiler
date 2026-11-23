@@ -473,6 +473,7 @@ const JAVA_TEST_TIER_FILES = /(?:^|[\\/])ts[\\/]src[\\/](?:pro[\\/])?test[\\/].*
 
 // the base tier is generated too (spliced into BaseExchange.java);
 // the base tiers print only the methods below this line of ts/src/base/(Prediction)Exchange.ts
+const JAVA_PRIMITIVE_TYPES = new Set(['boolean', 'byte', 'char', 'short', 'int', 'long', 'float', 'double']);
 const JAVA_TRANSPILE_DELIMITER = 'METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT';
 // hand-written base methods whose Java runtime declares exactly the TS parameters (no varargs)
 const JAVA_HANDWRITTEN_FULL_ARITY = new Set(['loadMarkets', 'fetchMarkets', 'fetchCurrencies', 'exceptionMessage']);
@@ -880,6 +881,8 @@ export class JavaTranspiler extends BaseTranspiler {
     // whole-repo facts about a method name one program cannot show, answered by the build layer: ts/src
     // declaration count, non-call mentions, hand-written Java mentions, and the arguments of every
     // `this.name (..)` call outside `ownFile`. With no consumer installed nothing changes.
+    // every Java declaration of a method name as its parameter types, or undefined when unknown (build layer)
+    javaDeclarationsOf: ((name: string) => string[][] | undefined) | undefined;
     javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, asyncVoid?: boolean, calls: Node[][] } | undefined) | undefined;
     // every `this.<name> (..)` call expression of a source file, collected once per file
     private javaThisCallIndex = new WeakMap<object, Map<string, any[]>>();
@@ -1316,7 +1319,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // ===== call expressions, call arguments and core-type conversions =====
 
     printArgsForCallExpression(node, identation) {
-        const fullArity = this.javaFullArityArguments(this.javaFullArityCallee(node), node.arguments ?? [], identation);
+        const fullArity = this.javaFullArityArguments(this.javaFullArityCallee(node), node.arguments ?? [], identation, node);
         if (fullArity !== undefined) {
             return fullArity;
         }
@@ -1363,7 +1366,7 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const spawnTypes = this.javaSpawnCallParameterTypes(node);
         const parameterTypes = spawnTypes !== undefined ? spawnTypes : this.javaNativeCallParameterTypes(node);
-        return args.map((a, i) => this.javaCheckcastArgument(a, this.printNode(a, identation).trim(), parameterTypes[i])).join(", ");
+        return this.javaBareNullArguments(node, args, args.map((a, i) => this.javaCheckcastArgument(a, this.printNode(a, identation).trim(), parameterTypes[i]))).join(", ");
     }
 
     // an argument into a slot printed with the native `type`; the checkcast carries its own
@@ -1417,13 +1420,13 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // a call into a printed method with optional parameters passes every parameter: omitted or
     // `undefined` slots take the TS default, fixed slots keep the native checkcast
-    javaFullArityArguments(method, args, identation): string | undefined {
+    javaFullArityArguments(method, args, identation, call: any = undefined): string | undefined {
         if (!this.javaFullArityFits(method, args)) {
             return undefined;
         }
         const params = method.parameters;
         const types = this.javaCoreParameterTypes(method);
-        return params.map((p, i) => {
+        const printedArgs = params.map((p, i) => {
             const arg = args[i];
             if (arg === undefined || (p.initializer !== undefined && this.javaIsUndefinedLiteral(arg))) {
                 return this.javaCoreDefaultArgument(p, types[i]);
@@ -1435,7 +1438,27 @@ export class JavaTranspiler extends BaseTranspiler {
                     : this.javaConvertToCoreType(types[i], printed, arg);
             }
             return this.javaCheckcastArgument(arg, printed, this.javaNativeParameterType(p));
-        }).join(', ');
+        });
+        return (call === undefined ? printedArgs : this.javaBareNullArguments(call, args, printedArgs)).join(', ');
+    }
+
+    // a null argument into the only Java declaration of that name and arity binds without a cast:
+    // the build layer lists every declaration of the name (undefined when one is varargs, generic or unread)
+    javaBareNullArguments(call, args, printed: string[]): string[] {
+        const callee = call.expression;
+        if (typeof this.javaDeclarationsOf !== 'function' || callee?.kind !== SyntaxKind.PropertyAccessExpression
+            || callee.expression?.kind !== SyntaxKind.ThisKeyword || !isIdentifier(callee.name)) {
+            return printed;
+        }
+        const same = this.javaDeclarationsOf(this.transformMethodNameIfNeeded(callee.name.text))?.filter((d) => d.length === printed.length);
+        if (same?.length !== 1) {
+            return printed;
+        }
+        return printed.map((p, i) => {
+            const arg = args[i];
+            const nullish = arg === undefined || arg.kind === SyntaxKind.NullKeyword || this.javaIsUndefinedLiteral(arg);
+            return nullish && /^\([\w.<>, ?]+\) \(?null\)?$/.test(p) && !JAVA_PRIMITIVE_TYPES.has(same[0][i]) ? 'null' : p;
+        });
     }
 
     javaIsUndefinedLiteral(node): boolean {
