@@ -41021,7 +41021,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isIdentifier(root)) {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
-                    const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init));
+                    const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init));
                     if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
             }
@@ -41039,6 +41039,39 @@ export class RustTranspiler extends BaseTranspiler {
         const stmts: any[] = decl !== undefined && isMethodDeclaration(decl) && decl.body !== undefined ? Array.from(decl.body.statements) : [];
         const ret: any = stmts.length === 1 && isReturnStatement(stmts[0]) ? stmts[0].expression : undefined;
         return ret !== undefined && isObjectLiteralExpression(ret) && ret.properties.every((p: any) => isPropertyAssignment(p) && (isIdentifier(p.initializer) && p.initializer.text === 'undefined' || isStringLiteral(p.initializer) || isNumericLiteral(p.initializer)));
+    }
+
+    /** `this.m (..)` whose every `return` is `this.r ({ .. })`, where `r` hands back its own first parameter (`safePosition`):
+     *  each call builds a fresh top-level map, so a key write into it cannot reach the message. */
+    rustCallReturnsFreshRecord(init: any): boolean {
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const returnsOf = (decl: any): any[] | undefined => {
+            if (decl === undefined || !isMethodDeclaration(decl) || decl.body === undefined) return undefined;
+            const out: any[] = [];
+            let nested = false;
+            const visit = (n: any): void => {
+                if (isFunctionLike(n)) { nested = true; return; }
+                if (isReturnStatement(n)) out.push(n.expression);
+                n.forEachChild(visit);
+            };
+            decl.body.forEachChild(visit);
+            return nested || out.length === 0 ? undefined : out;
+        };
+        const rets = returnsOf(this.rustCalleeDeclaration(init));
+        return rets !== undefined && rets.every((r: any) => {
+            const call: any = r === undefined ? undefined : this.unwrapParens(r);
+            if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isObjectLiteralExpression(this.unwrapParens(call.arguments[0]))) return false;
+            if (!isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            const inner: any = this.rustCalleeDeclaration(call);
+            const first: any = inner?.parameters?.[0];
+            const innerRets = returnsOf(inner);
+            if (first === undefined || !isIdentifier(first.name) || innerRets === undefined || this.rustLocalIsReassigned(first, String(first.name.text))) return false;
+            return innerRets.every((x: any) => {
+                let e: any = x;
+                while (e !== undefined && (isParenthesizedExpression(e) || isAsExpression(e))) e = e.expression;
+                return e !== undefined && isIdentifier(e) && this.rustDeclarationOfIdentifier(e) === first;
+            });
+        });
     }
 
     /** Another ts/src/pro file calls `.name (` and declares no method of that name (an inherited copy answers it). */
