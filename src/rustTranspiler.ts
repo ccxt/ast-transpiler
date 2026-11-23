@@ -41146,9 +41146,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamIsLentDict(param) || this.rustParamPrintsMap(param) || this.rustParamReadsByReference(param)) return false;
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
-        // (a handler referenced by name that never names its message borrows it too: nothing reads the slot)
-        if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined
-            && !(handler && this.rustMethodReferencedAsValue(method) && this.rustParamNeverNamed(method, param))) return false;
+        // (a by-name handler that never names its message borrows it too: nothing reads the slot)
+        if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
@@ -41237,6 +41236,19 @@ export class RustTranspiler extends BaseTranspiler {
         // the default, when given, is a fresh map
         const dflt: any = init.arguments[2] === undefined ? undefined : this.unwrapParens(init.arguments[2]);
         return dflt === undefined || (isObjectLiteralExpression(dflt) && dflt.properties.length === 0) || this.rustCallReturnsFreshLiteral(dflt);
+    }
+
+    /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
+    rustParamNeverNamed(method: any, param: any): boolean {
+        const name = String(param.name.text);
+        let named = false;
+        const visit = (n: any): void => {
+            if (named) return;
+            if (isIdentifier(n) && n.text === name) { named = true; return; }
+            n.forEachChild(visit);
+        };
+        method.body?.forEachChild(visit);
+        return !named;
     }
 
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
