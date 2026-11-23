@@ -36,15 +36,15 @@ describe('java bare null argument', () => {
 
     test('one declaration of that arity: bare null', () => {
         const out = print((n) => (n === 'pick' ? [['String', 'Object', 'String']] : (n === 'fixed' ? [['String', 'String']] : undefined)));
-        expect(out).toMatch(/this\.pick\(\(String\) \(x\), null, null\)/);
-        expect(out).toMatch(/this\.fixed\(\(String\) \(x\), null\)/);
+        expect(out).toMatch(/this\.pick\(x, null, null\)/);
+        expect(out).toMatch(/this\.fixed\(x, null\)/);
     });
     test('two declarations of that arity: the cast picks the overload', () => {
         const out = print((n) => (n === 'fixed' ? [['String', 'String'], ['String', 'Long']] : undefined));
-        expect(out).toMatch(/this\.fixed\(\(String\) \(x\), \(String\) \(?null\)?\)/);
+        expect(out).toMatch(/this\.fixed\(x, \(String\) \(?null\)?\)/);
     });
     test('declarations unknown (varargs or no Java tree): the cast stays', () => {
-        expect(print(undefined)).toMatch(/this\.fixed\(\(String\) \(x\), \(String\) \(?null\)?\)/);
-        expect(print(() => undefined)).toMatch(/this\.fixed\(\(String\) \(x\), \(String\) \(?null\)?\)/);
+        expect(print(undefined)).toMatch(/this\.fixed\(x, \(String\) \(?null\)?\)/);
+        expect(print(() => undefined)).toMatch(/this\.fixed\(x, \(String\) \(?null\)?\)/);
     });
 });
