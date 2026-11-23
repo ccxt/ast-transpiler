@@ -16731,6 +16731,25 @@ export class RustTranspiler extends BaseTranspiler {
         return /(?:^|\/)ts\/src\/(?:pro\/[^/]+|base\/(?:Exchange|\.__ExchangeNoOverloads))\.ts$/.test(file);
     }
 
+    /** A required list parameter (`deltas: any[]`) of a side-group method (handleDeltas, base and every pro override):
+     *  a lent `&[crate::Value]` like the other list slots; callers lend their list, the by-name arm reads Null as empty. */
+    rustBookDeltasParam(param: any): boolean {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || !isIdentifier(param.name)) return false;
+        if (param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.ArrayType) return false;
+        const first: any = method.parameters?.[0];
+        return first !== undefined && first !== param && this.rustBookSideGroupParam(first);
+    }
+
+    /** `this.safeValue / safeList (deltas, i)` on a lent deltas list: the reader takes the slice (`impl KeyRead`). */
+    rustBookDeltasSafeReadUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== id || call.arguments.length !== 2 || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (![ 'safeValue', 'safeList' ].includes(String(call.expression.name.text))) return false;
+        const decl: any = this.rustDeclarationOfIdentifier(id);
+        return decl !== undefined && this.rustBookDeltasParam(decl) && this.isRustValueIndexKey(call.arguments[1]);
+    }
+
     /** Every use of the parameter is a side operation statement, a `length` read, a level read or a side-slot hand-on. */
     rustBookSideUsesOnly(param: any, allowNone: boolean): boolean {
         const method: any = param.parent;
@@ -19813,7 +19832,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -29397,6 +29416,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined {
         const testLent = this.printTestReaderArg(node, text); if (testLent !== undefined) return testLent;
+        // a lent deltas slice is already a reference (`&[Value]: KeyRead`): handed on as it is
+        if (this.rustBookDeltasSafeReadUse(node) && this.rustVenueStrListParam(this.rustDeclarationOfIdentifier(node))) return RustTranspiler.rustLentMark(text);
         const call: any = node.parent;
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
@@ -40775,6 +40796,13 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueStrListParam(param: any): boolean {
         if (param?.kind !== SyntaxKind.Parameter) return false;
         let decision = this.rustVenueStrListDecisions.get(param);
+        if (decision === undefined && this.rustBookDeltasParam(param)) {
+            this.rustVenueStrListDecisions.set(param, false); // re-entrancy guard
+            // a group member must type with the base and every override: a use outside the list reads fails loudly
+            if (this.rustParamShadowUseCensus(param.parent, param, RUST_PARAM_SHADOWS.LIST, false, true) === undefined) { this.rustVenueStrListDecisions.delete(param); throw new Error(`deltas group ${String(param.parent.name.text)}: ${String(param.name.text)} used outside the list reads`); }
+            decision = true;
+            this.rustVenueStrListDecisions.set(param, decision);
+        }
         if (decision === undefined) {
             this.rustVenueStrListDecisions.set(param, false); // re-entrancy guard
             try {

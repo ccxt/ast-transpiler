@@ -14286,6 +14286,21 @@ describe('we: the handleDelta / handleDeltas group types the side parameter as S
     test('negative: an override using the side as anything else fails loudly', () => {
         expect(() => mk("    override handleDelta (bookside: any, delta: any) {\n        bookside['x'] = delta;\n    }\n")).toThrow(/side group handleDelta/);
     });
+    test('the deltas list types as a lent slice across base, override and caller', () => {
+        const out = mk("    override handleDeltas (bookside: any, deltas: any[]) {\n        for (let i = 0; i < deltas.length; i++) {\n            this.handleDelta (bookside, deltas[i]);\n        }\n    }\n");
+        expect(out.venue).toMatch(/fn handleDeltas\(&self, mut bookside: crate::pro::order_book::Side, deltas: &\[crate::Value\]\)/);
+        expect(out.base).toMatch(/fn handleDeltas\(&self, mut bookside: crate::pro::order_book::Side, deltas: &\[crate::Value\]\)/);
+        expect(out.venue).not.toContain('deltas.as_array()');
+    });
+    test('a safeList read of the deltas list lends the slice with no clone', () => {
+        const out = mk("    override handleDeltas (bookside: any, deltas: any[]) {\n        for (let i = 0; i < deltas.length; i++) {\n            this.handleDelta (bookside, this.safeList (deltas, i));\n        }\n    }\n");
+        expect(out.venue).toMatch(/self\.safeList\(deltas, Value::Int\(i\)/);
+        expect(out.venue).not.toContain('deltas.clone()');
+        expect(out.base).toMatch(/self\.safeValue\(deltas, Value::Int\(i\)/);
+    });
+    test('negative: an override writing into the deltas list fails loudly', () => {
+        expect(() => mk("    override handleDeltas (bookside: any, deltas: any[]) {\n        deltas.push (1);\n    }\n")).toThrow(/deltas group handleDeltas/);
+    });
 });
 
 describe('we: a side read off a proven book local and used only as a side holds Side', () => {
