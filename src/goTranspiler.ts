@@ -13991,6 +13991,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseLedgerEntry': [ 0 ], 'parseTransaction': [ 0 ],
     // response and request headers: the fetch path passes header maps, ws callers pass `{}` or a defaulted safeDict
     'handleErrors': [ 4, 7 ],
+    // transfer and deposit-address rows: every caller passes a map row (lists are built inline by the venue)
+    'parseTransfer': [ 0 ], 'parseDepositAddress': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)

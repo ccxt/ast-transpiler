@@ -20623,6 +20623,49 @@ describe ('go dict param argument hoisted into a comma-ok local', () => {
     });
 });
 
+describe ('go row parameters of parseTransfer / parseDepositAddress', () => {
+    const print = (name: string, method: string, call: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    ' + method + ' (row: Dict, c: any = undefined) {\n' +
+            "        return row['a'];\n" +
+            '    }\n' +
+            '    run (data: any, c: any) {\n        return ' + call + ';\n    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    for (const m of [ 'parseTransfer', 'parseDepositAddress' ]) {
+        const go = m.charAt(0).toUpperCase() + m.slice(1);
+        test(m + ': a map row prints map[string]any and reads natively', () => {
+            const out = print('tmp-g11-map-' + m, m, 'this.' + m + ' (this.safeDict (data, 0, {}), c)');
+            expect(out).toContain(go + '(row map[string]any, optionalArgs ...any)');
+            expect(out).toContain('row["a"]');
+            expect(out).not.toContain('GetValue(row');
+        });
+        test(m + ': an untyped argument keeps the box', () => {
+            const out = print('tmp-g11-any-' + m, m, 'this.' + m + ' (data, c)');
+            expect(out).toContain(go + '(row any, optionalArgs ...any)');
+        });
+        test(m + ': a nil argument keeps the box', () => {
+            const out = print('tmp-g11-nil-' + m, m, 'this.' + m + ' (undefined, c)');
+            expect(out).toContain(go + '(row any, optionalArgs ...any)');
+        });
+    }
+});
+
 describe('formatVaultAddress answers *string from a *string parameter', () => {
     const FVA = '    formatVaultAddress (address: Str = undefined): Str {\n        if (address === undefined) {\n            return undefined;\n        }\n'
         + '        if (address.startsWith (\'0x\')) {\n            return address.replace (\'0x\', \'\');\n        }\n        return address;\n    }\n';
