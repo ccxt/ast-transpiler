@@ -45711,12 +45711,33 @@ function h26g03BaseMethod (goTranspiler, callee) {
 // hand-offs to `this.method (..)` arguments and rebinding to a declared []any keep their answers.
 function h26g04SeededListLocal (goTranspiler: GoTranspiler, declaration): boolean {
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-        || !h24n04DeclaredList (declaration.type) || !h24n04EmptyDefaultSafeList (declaration.initializer)
+        || ((declaration.type !== undefined) && !h24n04DeclaredList (declaration.type)) || !h24n04EmptyDefaultSafeList (declaration.initializer)
         || (declaration.initializer.expression.name.text !== 'safeList')) {
+        return false;
+    }
+    if ((declaration.type === undefined) && !h43g10DecodedSeed (goTranspiler, declaration)) {
         return false;
     }
     return goTranspiler.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => goTranspiler.goSafeListUseReadsTheList (n)
         || goTranspiler.goListLocalSinkReadsAsList (n, true) || h26g04NeverNilUse (goTranspiler, n)) !== undefined;
+}
+// an unannotated seed types only on a literal key of a decoded JSON map (ws frame or awaited endpoint), so the
+// frame / endpoint rules print the comma-ok read plus the `[]any{}` default instead of the SafeListSlice wrap
+// the receiver proofs ask for this local's type, which asks this rule again: a re-entry answers untyped
+const H43G10_SEED_IN_PROGRESS = new Set<any> ();
+function h43g10DecodedSeed (goTranspiler: GoTranspiler, declaration): boolean {
+    const [ container, key ] = declaration.initializer.arguments;
+    const recv: any = goTranspiler.goUnwrapParenthesizedNode (container);
+    if ((key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (key.text) || (recv?.kind !== SyntaxKind.Identifier)
+        || H43G10_SEED_IN_PROGRESS.has (declaration)) {
+        return false;
+    }
+    H43G10_SEED_IN_PROGRESS.add (declaration);
+    try {
+        return goTranspiler.h27a11JsonContainer (recv) || goTranspiler.h30a03Receiver (recv, declaration);
+    } finally {
+        H43G10_SEED_IN_PROGRESS.delete (declaration);
+    }
 }
 function h26g04NeverNilUse (goTranspiler: GoTranspiler, node): boolean {
     const parent: any = node.parent;
