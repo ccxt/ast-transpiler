@@ -116947,7 +116947,7 @@ ${this.getIden(identation)}}`;
       return false;
     const declaration = this.rustDeclarationOfIdentifier(arg);
     if (_optionalChain([declaration, 'optionalAccess', _23327 => _23327.kind]) === _ast.SyntaxKind.Parameter)
-      return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration));
+      return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg));
     return this.rustNeverNullDictLocalArg(arg);
   }
   /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
@@ -117021,22 +117021,32 @@ ${this.getIden(identation)}}`;
       return false;
     return this.rustParamType(param) === "Value";
   }
+  /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+   *  caller parameter cannot lend as a map view. */
+  rustArgSlotTakesDictHandle(arg) {
+    const call = _optionalChain([arg, 'optionalAccess', _23338 => _23338.parent]);
+    if (!_is.isCallExpression.call(void 0, call))
+      return false;
+    const at = Array.from(call.arguments).indexOf(arg);
+    const param = at < 0 ? void 0 : _optionalChain([this, 'access', _23339 => _23339.rustScalarCallee, 'call', _23340 => _23340(call), 'optionalAccess', _23341 => _23341.parameters, 'optionalAccess', _23342 => _23342[at]]);
+    return param !== void 0 && this.rustVenueDictValueParam(param);
+  }
   /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
   printVenueDictArg(node, text) {
-    const call = _optionalChain([node, 'optionalAccess', _23338 => _23338.parent]);
+    const call = _optionalChain([node, 'optionalAccess', _23343 => _23343.parent]);
     if (!_is.isIdentifier.call(void 0, node) || !_is.isCallExpression.call(void 0, call) || !_is.isPropertyAccessExpression.call(void 0, call.expression))
       return void 0;
     const at = Array.from(call.arguments).indexOf(node);
     if (at < 0)
       return void 0;
     const callee = this.rustScalarCallee(call);
-    const param = _optionalChain([callee, 'optionalAccess', _23339 => _23339.parameters, 'optionalAccess', _23340 => _23340[at]]);
+    const param = _optionalChain([callee, 'optionalAccess', _23344 => _23344.parameters, 'optionalAccess', _23345 => _23345[at]]);
     if (param === void 0 || !this.rustVenueDictParam(param))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(node);
-    if (_optionalChain([declaration, 'optionalAccess', _23341 => _23341.kind]) === _ast.SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration))
+    if (_optionalChain([declaration, 'optionalAccess', _23346 => _23346.kind]) === _ast.SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration))
       return `${text}.as_map().unwrap_or(&Default::default())`;
-    return _optionalChain([declaration, 'optionalAccess', _23342 => _23342.kind]) === _ast.SyntaxKind.Parameter ? text : `&${text}`;
+    return _optionalChain([declaration, 'optionalAccess', _23347 => _23347.kind]) === _ast.SyntaxKind.Parameter ? text : `&${text}`;
   }
   /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
    *  `priceToPrecision` / `costToPrecision` (stringified like `numberToString`: `3.0` prints `3`). */
@@ -117070,7 +117080,7 @@ ${this.getIden(identation)}}`;
   /** `const m = this.safeMarket (..)` whose every use reads a key, lends the record, or rewrites it from `safeMarket`. */
   /** ral-46i: `const a: Market = s` where `s` is a const declared from `this.safeMarket (..)`: the declaration of `s`. */
   rustSmktAliasSource(declaration) {
-    if (_optionalChain([declaration, 'optionalAccess', _23343 => _23343.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([declaration, 'access', _23344 => _23344.parent, 'optionalAccess', _23345 => _23345.declarations, 'optionalAccess', _23346 => _23346.length]) !== 1)
+    if (_optionalChain([declaration, 'optionalAccess', _23348 => _23348.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([declaration, 'access', _23349 => _23349.parent, 'optionalAccess', _23350 => _23350.declarations, 'optionalAccess', _23351 => _23351.length]) !== 1)
       return void 0;
     if ((declaration.parent.flags & _ast.NodeFlags.Const) === 0)
       return void 0;
@@ -117083,7 +117093,7 @@ ${this.getIden(identation)}}`;
     const source = this.rustDeclarationOfIdentifier(init);
     if (source === void 0 || source === declaration || source.kind !== _ast.SyntaxKind.VariableDeclaration || source.name === init)
       return void 0;
-    if ((_optionalChain([source, 'access', _23347 => _23347.parent, 'optionalAccess', _23348 => _23348.flags]) & _ast.NodeFlags.Const) === 0 || !this.rustIsSafeMarketCall(source.initializer))
+    if ((_optionalChain([source, 'access', _23352 => _23352.parent, 'optionalAccess', _23353 => _23353.flags]) & _ast.NodeFlags.Const) === 0 || !this.rustIsSafeMarketCall(source.initializer))
       return void 0;
     return this.rustEnclosingFunction(source) === this.rustEnclosingFunction(declaration) ? source : void 0;
   }
@@ -117099,7 +117109,7 @@ ${this.getIden(identation)}}`;
     return at >= 0 && !this.rustMarketSlot(this.rustCalleeParams(up), at);
   }
   rustSafeMarketLocalOk(declaration, alias = false) {
-    const file = String(_nullishCoalesce(_optionalChain([declaration, 'access', _23349 => _23349.getSourceFile, 'optionalCall', _23350 => _23350(), 'optionalAccess', _23351 => _23351.fileName]), () => ( "")));
+    const file = String(_nullishCoalesce(_optionalChain([declaration, 'access', _23354 => _23354.getSourceFile, 'optionalCall', _23355 => _23355(), 'optionalAccess', _23356 => _23356.fileName]), () => ( "")));
     if (!/ts[/]src[/]/.test(file) || /ts[/]src[/](pro[/])?test[/]/.test(file))
       return false;
     const name = String(declaration.name.text);
@@ -117131,11 +117141,11 @@ ${this.getIden(identation)}}`;
       return this.rustMarketSlot(this.rustCalleeParams(up), at2) || this.rustSmktAliasValueUse(n);
     }
     if (_is.isBinaryExpression.call(void 0, up) && up.left === n && up.operatorToken.kind === _ast.SyntaxKind.EqualsToken) {
-      return _optionalChain([up, 'access', _23352 => _23352.parent, 'optionalAccess', _23353 => _23353.kind]) === _ast.SyntaxKind.ExpressionStatement && this.rustIsSafeMarketCall(up.right);
+      return _optionalChain([up, 'access', _23357 => _23357.parent, 'optionalAccess', _23358 => _23358.kind]) === _ast.SyntaxKind.ExpressionStatement && this.rustIsSafeMarketCall(up.right);
     }
     if (this.rustDictKeyReadUse(n))
       return true;
-    if (_optionalChain([up, 'optionalAccess', _23354 => _23354.kind]) === _ast.SyntaxKind.VariableDeclaration && up.initializer === n && this.rustSmktAliasSource(up) === declaration && this.rustSafeMarketLocalOk(up, true))
+    if (_optionalChain([up, 'optionalAccess', _23359 => _23359.kind]) === _ast.SyntaxKind.VariableDeclaration && up.initializer === n && this.rustSmktAliasSource(up) === declaration && this.rustSafeMarketLocalOk(up, true))
       return true;
     if (this.rustMarketKeyOfLookup(n))
       return true;
@@ -117203,7 +117213,7 @@ ${this.getIden(identation)}}`;
   }
   /** `crate::types` in the library crates, `ccxt::types` in the test crate. */
   rustTypesPath(node) {
-    return /ts[/]src[/](?:pro[/])?test[/]/.test(String(_nullishCoalesce(_optionalChain([node, 'access', _23355 => _23355.getSourceFile, 'optionalCall', _23356 => _23356(), 'optionalAccess', _23357 => _23357.fileName]), () => ( "")))) ? "ccxt::types" : "crate::types";
+    return /ts[/]src[/](?:pro[/])?test[/]/.test(String(_nullishCoalesce(_optionalChain([node, 'access', _23360 => _23360.getSourceFile, 'optionalCall', _23361 => _23361(), 'optionalAccess', _23362 => _23362.fileName]), () => ( "")))) ? "ccxt::types" : "crate::types";
   }
   /** A `safeMarket` call that lands where the struct goes as is (a struct local, a market return, a lent slot). */
   rustSafeMarketCallNative(node) {
@@ -117245,7 +117255,7 @@ ${this.getIden(identation)}}`;
   // `const markets = this.safeList (this.markets_by_id, id, [])` inside a market-returning method reads the typed
   // by-id store (`&[Market]`, borrowed from the shared store); `const m = markets[i]` borrows one record.
   rustMarketStoreLocal(declaration) {
-    if (_optionalChain([declaration, 'optionalAccess', _23358 => _23358.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || (declaration.parent.flags & _ast.NodeFlags.Const) === 0)
+    if (_optionalChain([declaration, 'optionalAccess', _23363 => _23363.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || (declaration.parent.flags & _ast.NodeFlags.Const) === 0)
       return false;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (init === void 0 || !_is.isCallExpression.call(void 0, init) || !_is.isPropertyAccessExpression.call(void 0, init.expression) || init.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword)
@@ -117255,7 +117265,7 @@ ${this.getIden(identation)}}`;
     const [store, key, dflt] = Array.from(init.arguments).map((a) => this.rustSkipWrappers(a));
     if (!_is.isPropertyAccessExpression.call(void 0, store) || store.expression.kind !== _ast.SyntaxKind.ThisKeyword || String(store.name.text) !== "markets_by_id")
       return false;
-    if (!_is.isArrayLiteralExpression.call(void 0, dflt) || dflt.elements.length !== 0 || !_is.isIdentifier.call(void 0, key) || _optionalChain([this, 'access', _23359 => _23359.rustDeclaredNode, 'call', _23360 => _23360(key), 'optionalAccess', _23361 => _23361.kind]) !== _ast.SyntaxKind.Parameter)
+    if (!_is.isArrayLiteralExpression.call(void 0, dflt) || dflt.elements.length !== 0 || !_is.isIdentifier.call(void 0, key) || _optionalChain([this, 'access', _23364 => _23364.rustDeclaredNode, 'call', _23365 => _23365(key), 'optionalAccess', _23366 => _23366.kind]) !== _ast.SyntaxKind.Parameter)
       return false;
     const fn = this.rustEnclosingFunction(declaration);
     if (!this.rustReturnsMarket(fn) || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(fn.getSourceFile().fileName)))
@@ -117264,19 +117274,19 @@ ${this.getIden(identation)}}`;
       if (this.rustEnclosingFunction(n) !== fn)
         return false;
       const up = n.parent;
-      const decl = _optionalChain([up, 'optionalAccess', _23362 => _23362.parent]);
+      const decl = _optionalChain([up, 'optionalAccess', _23367 => _23367.parent]);
       if (_is.isPropertyAccessExpression.call(void 0, up) && up.expression === n)
         return String(up.name.text) === "length" && !(_is.isBinaryExpression.call(void 0, up.parent) && up.parent.left === up && rustIsAssignmentOperator(up.parent.operatorToken.kind));
       if (!_is.isElementAccessExpression.call(void 0, up) || up.expression !== n)
         return false;
       if (_is.isReturnStatement.call(void 0, up.parent))
         return true;
-      return _optionalChain([decl, 'optionalAccess', _23363 => _23363.kind]) === _ast.SyntaxKind.VariableDeclaration && decl.initializer === up && this.rustMarketStoreElement(decl);
+      return _optionalChain([decl, 'optionalAccess', _23368 => _23368.kind]) === _ast.SyntaxKind.VariableDeclaration && decl.initializer === up && this.rustMarketStoreElement(decl);
     });
   }
   /** `const m = markets[i]` over a store local: read by key readers and returned. */
   rustMarketStoreElement(declaration) {
-    if (_optionalChain([declaration, 'optionalAccess', _23364 => _23364.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || (declaration.parent.flags & _ast.NodeFlags.Const) === 0)
+    if (_optionalChain([declaration, 'optionalAccess', _23369 => _23369.kind]) !== _ast.SyntaxKind.VariableDeclaration || !_is.isIdentifier.call(void 0, declaration.name) || (declaration.parent.flags & _ast.NodeFlags.Const) === 0)
       return false;
     const fn = this.rustEnclosingFunction(declaration);
     return this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
@@ -117304,7 +117314,7 @@ ${this.getIden(identation)}}`;
    *  The local is only read: `.length`, `l[0]` returned, or `l[i]` bound to a const that is lent to any-key readers or
    *  returned. A missing row reads the empty slice, whose length and `[0]` (`first()`) answer as the boxed `Null` did. */
   rust65eByIdListLocal(declaration) {
-    if (_optionalChain([declaration, 'optionalAccess', _23365 => _23365.kind]) !== _ast.SyntaxKind.VariableDeclaration)
+    if (_optionalChain([declaration, 'optionalAccess', _23370 => _23370.kind]) !== _ast.SyntaxKind.VariableDeclaration)
       return false;
     let decision = this.rust65eByIdLists.get(declaration);
     if (decision === void 0) {
@@ -117321,7 +117331,7 @@ ${this.getIden(identation)}}`;
     if (init === void 0 || !_is.isElementAccessExpression.call(void 0, init) || !_is.isIdentifier.call(void 0, init.expression))
       return false;
     const key = this.rustSkipWrappers(init.argumentExpression);
-    if (!_is.isIdentifier.call(void 0, key) || _optionalChain([this, 'access', _23366 => _23366.rustDeclaredNode, 'call', _23367 => _23367(key), 'optionalAccess', _23368 => _23368.kind]) !== _ast.SyntaxKind.Parameter)
+    if (!_is.isIdentifier.call(void 0, key) || _optionalChain([this, 'access', _23371 => _23371.rustDeclaredNode, 'call', _23372 => _23372(key), 'optionalAccess', _23373 => _23373.kind]) !== _ast.SyntaxKind.Parameter)
       return false;
     const fn = this.rustEnclosingFunction(declaration);
     if (fn === void 0 || _is.isSourceFile.call(void 0, fn) || !_RustTranspiler.RUST_BASE_TIER_FILE.test(String(fn.getSourceFile().fileName)) || this.rustReturnsMarket(fn))
@@ -117346,7 +117356,7 @@ ${this.getIden(identation)}}`;
       if (_is.isReturnStatement.call(void 0, up.parent))
         return _is.isNumericLiteral.call(void 0, k) && Number(k.text) === 0;
       const decl = up.parent;
-      return _optionalChain([decl, 'optionalAccess', _23369 => _23369.kind]) === _ast.SyntaxKind.VariableDeclaration && decl.initializer === up && this.rust65eForCounterOf(k, declaration) && this.rustMarketStoreElement(decl);
+      return _optionalChain([decl, 'optionalAccess', _23374 => _23374.kind]) === _ast.SyntaxKind.VariableDeclaration && decl.initializer === up && this.rust65eForCounterOf(k, declaration) && this.rustMarketStoreElement(decl);
     });
   }
   /** ral-65e: `k` is the counter of an enclosing `for (let k = 0; k < l.length; k++)` over the row local `l` itself, never
@@ -117355,9 +117365,9 @@ ${this.getIden(identation)}}`;
     if (!_is.isIdentifier.call(void 0, k))
       return false;
     const counter = this.rustDeclarationOfIdentifier(k);
-    const counterList = _optionalChain([counter, 'optionalAccess', _23370 => _23370.parent]);
-    const loop = _optionalChain([counterList, 'optionalAccess', _23371 => _23371.parent]);
-    if (counter === void 0 || !_is.isVariableDeclaration.call(void 0, counter) || _optionalChain([loop, 'optionalAccess', _23372 => _23372.kind]) !== _ast.SyntaxKind.ForStatement || loop.initializer !== counter.parent || counterList.declarations.length !== 1)
+    const counterList = _optionalChain([counter, 'optionalAccess', _23375 => _23375.parent]);
+    const loop = _optionalChain([counterList, 'optionalAccess', _23376 => _23376.parent]);
+    if (counter === void 0 || !_is.isVariableDeclaration.call(void 0, counter) || _optionalChain([loop, 'optionalAccess', _23377 => _23377.kind]) !== _ast.SyntaxKind.ForStatement || loop.initializer !== counter.parent || counterList.declarations.length !== 1)
       return false;
     const start = this.rustSkipWrappers(counter.initializer);
     if (start === void 0 || !_is.isNumericLiteral.call(void 0, start) || Number(start.text) !== 0)
@@ -117421,7 +117431,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     return `${indent}let mut ${varName}: &crate::types::Market = &${super.printIdentifier(init.expression)}[${this.rustStoreIndexText(init.argumentExpression)}]`;
   }
   rustMarketStoreElementDecl(declaration) {
-    const init = this.rustSkipWrappers(_optionalChain([declaration, 'optionalAccess', _23373 => _23373.initializer]));
+    const init = this.rustSkipWrappers(_optionalChain([declaration, 'optionalAccess', _23378 => _23378.initializer]));
     return init !== void 0 && _is.isElementAccessExpression.call(void 0, init) && this.rustMarketStoreOf(init.expression) !== void 0;
   }
   rustStoreIndexText(keyNode) {
@@ -117455,9 +117465,9 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     if (this.rustNativeBoolArgumentText(arg) !== void 0)
       return this.rustBoolArgumentText(arg, identation);
     const local = _is.isIdentifier.call(void 0, inner) ? this.rustScalarLocalOf(inner) : void 0;
-    if (_optionalChain([local, 'optionalAccess', _23374 => _23374.kind]) === "bool")
+    if (_optionalChain([local, 'optionalAccess', _23379 => _23379.kind]) === "bool")
       return super.printIdentifier(inner);
-    if (_optionalChain([local, 'optionalAccess', _23375 => _23375.kind]) === "obool")
+    if (_optionalChain([local, 'optionalAccess', _23380 => _23380.kind]) === "obool")
       return `(${super.printIdentifier(inner)} == Some(true))`;
     if (local === void 0 && _is.isIdentifier.call(void 0, inner) && this.primitiveKindOfType(this.typeOfNodeIfAny(inner)) === "boolean")
       return `(${this.printNode(arg, identation).trim()}.as_bool() == Some(true))`;
@@ -117465,7 +117475,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   // an annotated map row prints its `m[k]` source at its one read (annotatedMapRowSource): no declaration
   printVariableStatement(node, identation) {
-    const first = _optionalChain([node, 'optionalAccess', _23376 => _23376.declarationList, 'optionalAccess', _23377 => _23377.declarations, 'optionalAccess', _23378 => _23378[0]]);
+    const first = _optionalChain([node, 'optionalAccess', _23381 => _23381.declarationList, 'optionalAccess', _23382 => _23382.declarations, 'optionalAccess', _23383 => _23383[0]]);
     if (this.annotatedMapRowSource(first) !== void 0)
       return "";
     if (first !== void 0 && this.rustClientHandleKeysAliasPrintsKeys(first))
@@ -117491,8 +117501,8 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
    *  the same by-value store the `this.balance[k]['k'] = x` write took, so x keeps its typed local and is boxed there
    *  once (`Value::from(&x)`, or moved at its last use). */
   rustH26r05BalanceRowStore(n) {
-    const up = _optionalChain([n, 'optionalAccess', _23379 => _23379.parent]);
-    if (!_is.isIdentifier.call(void 0, n) || !_is.isBinaryExpression.call(void 0, up) || up.right !== n || up.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([up, 'access', _23380 => _23380.parent, 'optionalAccess', _23381 => _23381.kind]) !== _ast.SyntaxKind.ExpressionStatement)
+    const up = _optionalChain([n, 'optionalAccess', _23384 => _23384.parent]);
+    if (!_is.isIdentifier.call(void 0, n) || !_is.isBinaryExpression.call(void 0, up) || up.right !== n || up.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([up, 'access', _23385 => _23385.parent, 'optionalAccess', _23386 => _23386.kind]) !== _ast.SyntaxKind.ExpressionStatement)
       return false;
     const place = up.left;
     if (!_is.isElementAccessExpression.call(void 0, place) || !_is.isStringLiteralLikeNode.call(void 0, this.rustSkipWrappers(place.argumentExpression)))
@@ -117561,12 +117571,12 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
    *  ws tags the helper filters, and a non-map (`None` / Null) lists nothing, as the helper answered. */
   h26r11FieldAliasEnum(node, parsedArg, kind) {
     const arg = this.bearerEnumArg(node);
-    const text = _optionalChain([parsedArg, 'optionalAccess', _23382 => _23382.trim, 'call', _23383 => _23383()]);
+    const text = _optionalChain([parsedArg, 'optionalAccess', _23387 => _23387.trim, 'call', _23388 => _23388()]);
     if (arg === void 0 || text === void 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== void 0 || _RustTranspiler.RUST_BASE_TIER_FILE.test(this.provenDictFieldPath(node)))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(arg);
-    const list = _optionalChain([declaration, 'optionalAccess', _23384 => _23384.parent]);
-    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23385 => _23385.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h26r11UntaggedMapSource(declaration.initializer))
+    const list = _optionalChain([declaration, 'optionalAccess', _23389 => _23389.parent]);
+    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23390 => _23390.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h26r11UntaggedMapSource(declaration.initializer))
       return void 0;
     const iter = kind === "keys" ? "keys).cloned().map(Value::from)" : "values).cloned()";
     return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
@@ -117574,13 +117584,13 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   // ===== h26-H26-R12
   /** `const v = m[k]` whose next statement only rebinds `v` (no keyed write or push through it): no write-back is due. */
   rustH26r12RebindOnlyBind(read) {
-    const declaration = _optionalChain([read, 'optionalAccess', _23386 => _23386.parent]);
+    const declaration = _optionalChain([read, 'optionalAccess', _23391 => _23391.parent]);
     if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || declaration.initializer !== read || !_is.isIdentifier.call(void 0, declaration.name))
       return false;
     let statement = declaration;
     while (statement !== void 0 && !_is.isStatement.call(void 0, statement))
       statement = statement.parent;
-    const siblings = _nullishCoalesce(_optionalChain([statement, 'optionalAccess', _23387 => _23387.parent, 'optionalAccess', _23388 => _23388.statements]), () => ( []));
+    const siblings = _nullishCoalesce(_optionalChain([statement, 'optionalAccess', _23392 => _23392.parent, 'optionalAccess', _23393 => _23393.statements]), () => ( []));
     const at = siblings.indexOf(statement);
     return at >= 0 && at + 1 < siblings.length && !this.rustH26r12MutatesThrough(siblings[at + 1], String(declaration.name.text));
   }
@@ -117617,7 +117627,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   /** The settled value of a ws `client.resolve (x, hash)` or the item of a cache `.append (x)`: both take `impl Into<Value>`. */
   rustH26r14RecordBoxUse(n) {
-    const call = _optionalChain([n, 'optionalAccess', _23389 => _23389.parent]);
+    const call = _optionalChain([n, 'optionalAccess', _23394 => _23394.parent]);
     if (!_is.isCallExpression.call(void 0, call) || call.arguments[0] !== n || !_is.isPropertyAccessExpression.call(void 0, call.expression))
       return false;
     const name = String(call.expression.name.text);
@@ -117634,7 +117644,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     if (kind !== "str" || checked !== void 0)
       return false;
     const init = this.unwrapParens(declaration.initializer);
-    return init !== void 0 && this.rustIntToStringShape(init) && _optionalChain([this, 'access', _23390 => _23390.rustScalarStrMethod, 'call', _23391 => _23391(init, false, true), 'optionalAccess', _23392 => _23392.method]) === "toString";
+    return init !== void 0 && this.rustIntToStringShape(init) && _optionalChain([this, 'access', _23395 => _23395.rustScalarStrMethod, 'call', _23396 => _23396(init, false, true), 'optionalAccess', _23397 => _23397.method]) === "toString";
   }
   // ===== end h27-R02
   // ===== h27-R05
@@ -117643,8 +117653,8 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
    *  dead; the hop through a non-map row is skipped as the helper skipped it; a fresh REST row carries no tag. */
   h27r05ArrayRowInsert(left, keyText, valueText) {
     const row = left.expression;
-    const list = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23393 => _23393.expression]));
-    const index = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23394 => _23394.argumentExpression]));
+    const list = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23398 => _23398.expression]));
+    const index = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23399 => _23399.argumentExpression]));
     if (!_is.isStringLiteral.call(void 0, left.argumentExpression) || !_is.isElementAccessExpression.call(void 0, row) || list === void 0 || !_is.isIdentifier.call(void 0, list) || index === void 0 || !_is.isIdentifier.call(void 0, index) || keyText !== `Value::Int(${String(index.text)})` || !/\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(left)) || this.rustHelperWriteReadsRoot(row, left.parent.right))
       return void 0;
     const declaration = this.rustSingleLocalDeclaration(list);
@@ -117681,7 +117691,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     const indexSym = this.rustSymbolOf(index);
     const same = (n, sym) => n !== void 0 && _is.isIdentifier.call(void 0, n) && sym !== void 0 && this.rustSymbolOf(n) === sym;
     let loop = left;
-    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23395 => _23395.condition, 'optionalAccess', _23396 => _23396.left]), indexSym)))
+    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23400 => _23400.condition, 'optionalAccess', _23401 => _23401.left]), indexSym)))
       loop = loop.parent;
     if (loop === void 0 || this.rustEnclosingFunction(loop) !== fn)
       return void 0;
@@ -117724,12 +117734,12 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
    *  insertion-order iterators list what `object_keys` / `object_values` listed; a non-map (Null) lists nothing, as before. */
   h27r06FreshParseEnum(node, parsedArg, kind) {
     const arg = this.bearerEnumArg(node);
-    const text = _optionalChain([parsedArg, 'optionalAccess', _23397 => _23397.trim, 'call', _23398 => _23398()]);
+    const text = _optionalChain([parsedArg, 'optionalAccess', _23402 => _23402.trim, 'call', _23403 => _23403()]);
     if (arg === void 0 || text === void 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== void 0)
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(arg);
-    const list = _optionalChain([declaration, 'optionalAccess', _23399 => _23399.parent]);
-    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23400 => _23400.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h27r06FreshParseCall(declaration.initializer) || this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustDictLocalIsTyped(declaration))
+    const list = _optionalChain([declaration, 'optionalAccess', _23404 => _23404.parent]);
+    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23405 => _23405.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || !this.h27r06FreshParseCall(declaration.initializer) || this.rustBorrowedLocalKind(declaration) !== void 0 || this.rustDictLocalIsTyped(declaration))
       return void 0;
     const iter = kind === "keys" ? "keys).cloned().map(Value::from)" : "values).cloned()";
     return `Value::Array(${text}.as_map().into_iter().flat_map(crate::value::HashMap::${iter}.collect())`;
@@ -117782,7 +117792,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   /** On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`)
    *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
   h27r07KeepBoxedKey(node, plan) {
-    if (_optionalChain([plan, 'optionalAccess', _23401 => _23401.h27r07]) !== true || !_is.isElementAccessExpression.call(void 0, node.parent) || node.parent.expression !== node)
+    if (_optionalChain([plan, 'optionalAccess', _23406 => _23406.h27r07]) !== true || !_is.isElementAccessExpression.call(void 0, node.parent) || node.parent.expression !== node)
       return false;
     const key = this.unwrapParens(node.parent.argumentExpression);
     const declaration = _is.isIdentifier.call(void 0, key) ? this.rustDeclaredNode(key) : void 0;
@@ -117908,7 +117918,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   /** `c.append (x)` on a local whose checker type is a ws cache (`ArrayCache*`): the hand-written `append` takes `impl Into<Value>`. */
   rustH27r08CacheAppendUse(n) {
-    const call = _optionalChain([n, 'optionalAccess', _23402 => _23402.parent]);
+    const call = _optionalChain([n, 'optionalAccess', _23407 => _23407.parent]);
     if (!_is.isCallExpression.call(void 0, call) || call.arguments.length !== 1 || call.arguments[0] !== n || !_is.isPropertyAccessExpression.call(void 0, call.expression) || String(call.expression.name.text) !== "append" || !_is.isIdentifier.call(void 0, call.expression.expression))
       return false;
     const t = this.typeOfNodeIfAny(call.expression.expression);
@@ -117936,7 +117946,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     if (!_is.isElementAccessExpression.call(void 0, access) || access.argumentExpression !== keyNode || !_is.isIdentifier.call(void 0, access.expression))
       return false;
     const write = access.parent;
-    if (!_is.isBinaryExpression.call(void 0, write) || write.left !== access || write.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([write, 'access', _23403 => _23403.parent, 'optionalAccess', _23404 => _23404.kind]) !== _ast.SyntaxKind.ExpressionStatement)
+    if (!_is.isBinaryExpression.call(void 0, write) || write.left !== access || write.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([write, 'access', _23408 => _23408.parent, 'optionalAccess', _23409 => _23409.kind]) !== _ast.SyntaxKind.ExpressionStatement)
       return false;
     const value = write.right;
     if (value.kind !== _ast.SyntaxKind.TrueKeyword && value.kind !== _ast.SyntaxKind.FalseKeyword && !_is.isNumericLiteral.call(void 0, value) && !_is.isStringLiteral.call(void 0, value))
@@ -118054,7 +118064,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   h28r05BaseDictParamEnum(node, parsedArg, kind) {
     const arg = this.bearerEnumArg(node);
-    const text = _optionalChain([parsedArg, 'optionalAccess', _23405 => _23405.trim, 'call', _23406 => _23406()]);
+    const text = _optionalChain([parsedArg, 'optionalAccess', _23410 => _23410.trim, 'call', _23411 => _23411()]);
     if (arg === void 0 || text === void 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== void 0)
       return void 0;
     const param = this.rustDeclarationOfIdentifier(arg);
@@ -118093,7 +118103,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
         continue;
       if (_is.isElementAccessExpression.call(void 0, up) && up.expression === id) {
         const top = up.parent;
-        if (_optionalChain([top, 'optionalAccess', _23407 => _23407.kind]) === _ast.SyntaxKind.DeleteExpression || _is.isBinaryExpression.call(void 0, top) && top.left === up && rustIsAssignmentOperator(top.operatorToken.kind))
+        if (_optionalChain([top, 'optionalAccess', _23412 => _23412.kind]) === _ast.SyntaxKind.DeleteExpression || _is.isBinaryExpression.call(void 0, top) && top.left === up && rustIsAssignmentOperator(top.operatorToken.kind))
           return false;
         continue;
       }
@@ -118157,7 +118167,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
         for (const call of found) {
           if (call.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword)
             return false;
-          const a = this.rustSkipWrappers(_optionalChain([call, 'access', _23408 => _23408.arguments, 'optionalAccess', _23409 => _23409[at]]));
+          const a = this.rustSkipWrappers(_optionalChain([call, 'access', _23413 => _23413.arguments, 'optionalAccess', _23414 => _23414[at]]));
           if (a === void 0 || !this.h28r05FreshMapIdent(a, call, 1, returns))
             return false;
         }
@@ -118191,10 +118201,10 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
       return false;
     const d = decls[0];
     const list = d.parent;
-    if (_optionalChain([list, 'optionalAccess', _23410 => _23410.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos)
+    if (_optionalChain([list, 'optionalAccess', _23415 => _23415.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos)
       return false;
     let init = this.rustSkipWrappers(d.initializer);
-    if (_optionalChain([init, 'optionalAccess', _23411 => _23411.kind]) === _ast.SyntaxKind.AwaitExpression)
+    if (_optionalChain([init, 'optionalAccess', _23416 => _23416.kind]) === _ast.SyntaxKind.AwaitExpression)
       init = this.rustSkipWrappers(init.expression);
     if (init !== void 0 && _is.isIdentifier.call(void 0, init))
       return hops > 0 && this.h28r05FreshMapIdent(init, d, hops - 1, returns);
@@ -118208,7 +118218,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   /** `client.resolve (x, hash)` of a string nil local: every ws client `resolve` takes `impl Into<Value>`, so the
    *  local boxes into that slot (`None` -> Null, as the `Value` local held). Receiver must be a plain identifier. */
   h28R07ResolveBox(n, kind) {
-    const call = _optionalChain([n, 'optionalAccess', _23412 => _23412.parent]);
+    const call = _optionalChain([n, 'optionalAccess', _23417 => _23417.parent]);
     if (kind !== "str" || call === void 0 || !_is.isCallExpression.call(void 0, call) || call.arguments.length < 1 || call.arguments[0] !== n)
       return void 0;
     const callee = call.expression;
@@ -118218,8 +118228,8 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   /** `client.subscriptions[k] = x` of a string nil local: the handle's `add_subscription` takes a `Value`. */
   h28R07SubscriptionBox(n, kind) {
-    const write = _optionalChain([n, 'optionalAccess', _23413 => _23413.parent]);
-    if (kind !== "str" || write === void 0 || !_is.isBinaryExpression.call(void 0, write) || write.right !== n || write.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([write, 'access', _23414 => _23414.parent, 'optionalAccess', _23415 => _23415.kind]) !== _ast.SyntaxKind.ExpressionStatement || !_is.isElementAccessExpression.call(void 0, write.left))
+    const write = _optionalChain([n, 'optionalAccess', _23418 => _23418.parent]);
+    if (kind !== "str" || write === void 0 || !_is.isBinaryExpression.call(void 0, write) || write.right !== n || write.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([write, 'access', _23419 => _23419.parent, 'optionalAccess', _23420 => _23420.kind]) !== _ast.SyntaxKind.ExpressionStatement || !_is.isElementAccessExpression.call(void 0, write.left))
       return void 0;
     const access = this.rustClientHandleAccess(write.left.expression);
     return access !== void 0 && access.key === "subscriptions" ? "box" : void 0;
@@ -118231,8 +118241,8 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
    *  bounds, so the helper's padding is dead; a non-map row is skipped as the helper skipped it (a list row ignores a Str key). */
   h29r04BoundedArrRowWrite(left, keyText, right, rhs) {
     const row = left.expression;
-    const list = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23416 => _23416.expression]));
-    const index = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23417 => _23417.argumentExpression]));
+    const list = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23421 => _23421.expression]));
+    const index = this.rustSkipWrappers(_optionalChain([row, 'optionalAccess', _23422 => _23422.argumentExpression]));
     if (!_is.isStringLiteral.call(void 0, left.argumentExpression) || !_is.isElementAccessExpression.call(void 0, row) || list === void 0 || !_is.isIdentifier.call(void 0, list) || index === void 0 || !_is.isIdentifier.call(void 0, index) || keyText !== `Value::Int(${String(index.text)})` || ["timestamp", "datetime", "nonce", "symbol", "checksum", "cache"].includes(String(left.argumentExpression.text)))
       return void 0;
     const declaration = this.rustSingleLocalDeclaration(list);
@@ -118245,7 +118255,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     const indexSym = this.rustSymbolOf(index);
     const same = (n, sym) => n !== void 0 && _is.isIdentifier.call(void 0, n) && sym !== void 0 && this.rustSymbolOf(n) === sym;
     let loop = left;
-    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23418 => _23418.condition, 'optionalAccess', _23419 => _23419.left]), indexSym)))
+    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23423 => _23423.condition, 'optionalAccess', _23424 => _23424.left]), indexSym)))
       loop = loop.parent;
     if (loop === void 0 || this.rustEnclosingFunction(loop) !== fn)
       return void 0;
@@ -118309,12 +118319,12 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   }
   h29r05OptionsDictEnum(node, parsedArg, kind) {
     const arg = this.bearerEnumArg(node);
-    const text = _optionalChain([parsedArg, 'optionalAccess', _23420 => _23420.trim, 'call', _23421 => _23421()]);
+    const text = _optionalChain([parsedArg, 'optionalAccess', _23425 => _23425.trim, 'call', _23426 => _23426()]);
     if (arg === void 0 || text === void 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || this.rustParamShadowOf(arg) !== void 0)
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(arg);
-    const list = _optionalChain([declaration, 'optionalAccess', _23422 => _23422.parent]);
-    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23423 => _23423.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1)
+    const list = _optionalChain([declaration, 'optionalAccess', _23427 => _23427.parent]);
+    if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) || !_is.isIdentifier.call(void 0, declaration.name) || _optionalChain([list, 'optionalAccess', _23428 => _23428.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1)
       return void 0;
     const init = this.rustSkipWrappers(declaration.initializer);
     if (init === void 0 || !_is.isConditionalExpression.call(void 0, init))
@@ -118401,7 +118411,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
         for (const call of found) {
           if (call.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword && call.expression.expression.kind !== _ast.SyntaxKind.SuperKeyword)
             return false;
-          const a = _optionalChain([call, 'access', _23424 => _23424.arguments, 'optionalAccess', _23425 => _23425[at]]);
+          const a = _optionalChain([call, 'access', _23429 => _23429.arguments, 'optionalAccess', _23430 => _23430[at]]);
           if (a !== void 0 && !this.h29r05OptionsValue(a, call, 3))
             return false;
         }
@@ -118449,7 +118459,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
       return false;
     const d = decls[0];
     const list = d.parent;
-    if (_optionalChain([list, 'optionalAccess', _23426 => _23426.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos)
+    if (_optionalChain([list, 'optionalAccess', _23431 => _23431.kind]) !== _ast.SyntaxKind.VariableDeclarationList || (list.flags & _ast.NodeFlags.Const) === 0 || list.declarations.length !== 1 || d.pos > site.pos)
       return false;
     return this.h29r05OptionsValue(d.initializer, d, hops - 1);
   }
@@ -118530,7 +118540,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
         while (top.parent !== void 0 && _is.isParenthesizedExpression.call(void 0, top.parent))
           top = top.parent;
         const w = top.parent;
-        const written = w !== void 0 && _is.isBinaryExpression.call(void 0, w) && w.left === top && rustIsAssignmentOperator(w.operatorToken.kind) || _optionalChain([w, 'optionalAccess', _23427 => _23427.kind]) === _ast.SyntaxKind.DeleteExpression;
+        const written = w !== void 0 && _is.isBinaryExpression.call(void 0, w) && w.left === top && rustIsAssignmentOperator(w.operatorToken.kind) || _optionalChain([w, 'optionalAccess', _23432 => _23432.kind]) === _ast.SyntaxKind.DeleteExpression;
         if (written && (!_is.isStringLiteral.call(void 0, up.argumentExpression) || _RustTranspiler.H29R06_MARKER_KEYS.test(String(up.argumentExpression.text))))
           return false;
       }
@@ -118581,7 +118591,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
         ok = false;
       x.forEachChild(visit);
     };
-    _optionalChain([method, 'access', _23428 => _23428.body, 'optionalAccess', _23429 => _23429.forEachChild, 'call', _23430 => _23430(visit)]);
+    _optionalChain([method, 'access', _23433 => _23433.body, 'optionalAccess', _23434 => _23434.forEachChild, 'call', _23435 => _23435(visit)]);
     seen.delete(method);
     return ok;
   }
@@ -118652,17 +118662,17 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
   /** A clock / id string local (`this.seconds ().toString ()`) as a property value of an object literal: the slot prints
    *  `Value::from(x)` of the `String`, the same `Str` text the `Value` local held, whatever local the literal feeds. */
   h29r08ClockLiteralValue(n, declaration) {
-    const init = this.unwrapParens(_optionalChain([declaration, 'optionalAccess', _23431 => _23431.initializer]));
+    const init = this.unwrapParens(_optionalChain([declaration, 'optionalAccess', _23436 => _23436.initializer]));
     if (init === void 0 || !(this.rustClockString(init) || this.rustIdString(init)))
       return false;
-    return _optionalChain([n, 'access', _23432 => _23432.parent, 'optionalAccess', _23433 => _23433.kind]) === _ast.SyntaxKind.PropertyAssignment && n.parent.initializer === n && _is.isObjectLiteralExpression.call(void 0, n.parent.parent);
+    return _optionalChain([n, 'access', _23437 => _23437.parent, 'optionalAccess', _23438 => _23438.kind]) === _ast.SyntaxKind.PropertyAssignment && n.parent.initializer === n && _is.isObjectLiteralExpression.call(void 0, n.parent.parent);
   }
   // ===== end h29-R08
   // ===== h29-T01
   /** A bare argument of the call a `return` hands back: nothing after that statement runs, so a later mention of the
    *  local does not read it again. The statement holds no other mention; no loop, closure or try lies between. */
   h28t01ReturnedCallArgLastUse(node, declaration) {
-    const call = _optionalChain([node, 'optionalAccess', _23434 => _23434.parent]);
+    const call = _optionalChain([node, 'optionalAccess', _23439 => _23439.parent]);
     if (declaration === void 0 || !_is.isIdentifier.call(void 0, declaration.name) || !_is.isIdentifier.call(void 0, node) || !_is.isCallExpression.call(void 0, call) || call.expression === node || !Array.from(call.arguments).includes(node))
       return false;
     const statement = call.parent;
@@ -118704,7 +118714,7 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
       const declaration = this.rustDeclarationOfIdentifier(arg);
       if (declaration === void 0 || !_is.isVariableDeclaration.call(void 0, declaration) && !_is.isParameterDeclaration.call(void 0, declaration))
         return;
-      const header = _optionalChain([declaration, 'access', _23435 => _23435.parent, 'optionalAccess', _23436 => _23436.parent]);
+      const header = _optionalChain([declaration, 'access', _23440 => _23440.parent, 'optionalAccess', _23441 => _23441.parent]);
       if (header !== void 0 && (_is.isForStatement.call(void 0, header) || _is.isForOfStatement.call(void 0, header) || _is.isForInStatement.call(void 0, header)))
         return;
       if (this.h28t01ReturnedCallArgLastUse(arg, declaration))
@@ -118759,7 +118769,7 @@ ${indent}    ${body("__r06v")}${head[1]}`;
     const indexSym = this.rustSymbolOf(index);
     const same = (n, sym) => n !== void 0 && _is.isIdentifier.call(void 0, n) && sym !== void 0 && this.rustSymbolOf(n) === sym;
     let loop = index;
-    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23437 => _23437.condition, 'optionalAccess', _23438 => _23438.left]), indexSym)))
+    while (loop !== void 0 && !(_is.isForStatement.call(void 0, loop) && same(_optionalChain([loop, 'access', _23442 => _23442.condition, 'optionalAccess', _23443 => _23443.left]), indexSym)))
       loop = loop.parent;
     const fn = this.rustEnclosingFunction(row);
     if (loop === void 0 || this.rustEnclosingFunction(loop) !== fn)
@@ -118826,7 +118836,7 @@ ${indent}    ${body("__r06v")}${head[1]}`;
    *  non-marker keyed writes only): no ws tag can sit in it, so the map's own iterators list what the helper listed. */
   h30r07ConfigDictEnum(node, parsedArg, kind) {
     const arg = this.bearerEnumArg(node);
-    const text = _optionalChain([parsedArg, 'optionalAccess', _23439 => _23439.trim, 'call', _23440 => _23440()]);
+    const text = _optionalChain([parsedArg, 'optionalAccess', _23444 => _23444.trim, 'call', _23445 => _23445()]);
     if (arg === void 0 || text === void 0 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(text) || text !== String(arg.text))
       return void 0;
     if (this.isTestSource(arg) || this.rustParamShadowOf(arg) !== void 0)
@@ -118858,7 +118868,7 @@ ${indent}    ${body("__r06v")}${head[1]}`;
         host = current;
       }
     }
-    if (host === void 0 || host.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([host, 'access', _23441 => _23441.parent, 'optionalAccess', _23442 => _23442.kind]) !== _ast.SyntaxKind.ExpressionStatement || !_is.isElementAccessExpression.call(void 0, host.left) || !this.isNodeInsideNode(chain, host.right) || this.rootPlaceText(host.left) !== String(receiver.text))
+    if (host === void 0 || host.operatorToken.kind !== _ast.SyntaxKind.EqualsToken || _optionalChain([host, 'access', _23446 => _23446.parent, 'optionalAccess', _23447 => _23447.kind]) !== _ast.SyntaxKind.ExpressionStatement || !_is.isElementAccessExpression.call(void 0, host.left) || !this.isNodeInsideNode(chain, host.right) || this.rootPlaceText(host.left) !== String(receiver.text))
       return void 0;
     const base = host.left.expression;
     if (!_is.isIdentifier.call(void 0, base) || !this.rustHelperWriteReadsRoot(host.left, host.right) || !this.isNativeAccessPositionSafe(chain, host))
@@ -120541,12 +120551,12 @@ RustTranspiler.prototype.rustP21DictRowsLocal = function(declaration) {
 };
 RustTranspiler.prototype.rustP21DictRowsLocalUncached = function(declaration) {
   const list = declaration.parent;
-  if (_optionalChain([list, 'optionalAccess', _23443 => _23443.kind]) !== _ast.SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & _ast.NodeFlags.Const) === 0)
+  if (_optionalChain([list, 'optionalAccess', _23448 => _23448.kind]) !== _ast.SyntaxKind.VariableDeclarationList || list.declarations.length !== 1 || (list.flags & _ast.NodeFlags.Const) === 0)
     return false;
   if (declaration.type !== void 0 && declaration.type.getText() !== "Dict[]" || this.rustTestTierSource(declaration))
     return false;
   const init = this.rustSkipWrappers(declaration.initializer);
-  if (_optionalChain([init, 'optionalAccess', _23444 => _23444.kind]) === _ast.SyntaxKind.AwaitExpression) {
+  if (_optionalChain([init, 'optionalAccess', _23449 => _23449.kind]) === _ast.SyntaxKind.AwaitExpression) {
     const all = this.rustSkipWrappers(init.expression);
     const isAll = all !== void 0 && _is.isCallExpression.call(void 0, all) && _is.isPropertyAccessExpression.call(void 0, all.expression) && _is.isIdentifier.call(void 0, all.expression.expression) && String(all.expression.expression.text) === "Promise" && String(all.expression.name.text) === "all";
     if (!isAll && !this.rustDeclaredListProducer(init))
@@ -120596,7 +120606,7 @@ RustTranspiler.prototype.rustP21ReadsAwaitedLocal = function(init) {
   if (!_is.isIdentifier.call(void 0, arg))
     return false;
   const decl = this.rustDeclarationOfIdentifier(arg);
-  return decl !== void 0 && _is.isVariableDeclaration.call(void 0, decl) && _optionalChain([this, 'access', _23445 => _23445.rustSkipWrappers, 'call', _23446 => _23446(decl.initializer), 'optionalAccess', _23447 => _23447.kind]) === _ast.SyntaxKind.AwaitExpression;
+  return decl !== void 0 && _is.isVariableDeclaration.call(void 0, decl) && _optionalChain([this, 'access', _23450 => _23450.rustSkipWrappers, 'call', _23451 => _23451(decl.initializer), 'optionalAccess', _23452 => _23452.kind]) === _ast.SyntaxKind.AwaitExpression;
 };
 RustTranspiler.prototype.rustP21SafeListEmpty = function(init) {
   if (init === void 0 || !_is.isCallExpression.call(void 0, init) || !_is.isPropertyAccessExpression.call(void 0, init.expression) || init.expression.expression.kind !== _ast.SyntaxKind.ThisKeyword)
@@ -120620,7 +120630,7 @@ RustTranspiler.prototype.rustP21RowRead = function(call, recv) {
     if (!_is.isIdentifier.call(void 0, key))
       return void 0;
     const kd = this.rustDeclarationOfIdentifier(key);
-    if (kd === void 0 || !_is.isVariableDeclaration.call(void 0, kd) || _optionalChain([kd, 'access', _23448 => _23448.parent, 'optionalAccess', _23449 => _23449.parent]) === void 0 || !_is.isForStatement.call(void 0, kd.parent.parent))
+    if (kd === void 0 || !_is.isVariableDeclaration.call(void 0, kd) || _optionalChain([kd, 'access', _23453 => _23453.parent, 'optionalAccess', _23454 => _23454.parent]) === void 0 || !_is.isForStatement.call(void 0, kd.parent.parent))
       return void 0;
   }
   let row = call.parent;
@@ -120645,7 +120655,7 @@ RustTranspiler.prototype.printRustP21DictRowsDecl = function(declaration, indent
   const head = [`let mut ${varName}: crate::value::List = `, `let ${varName}: crate::value::List = `].find((h) => text.startsWith(h));
   if (head === void 0) {
     const opt = [`let mut ${varName}: Option<crate::value::List> = `, `let ${varName}: Option<crate::value::List> = `].find((h) => text.startsWith(h));
-    if (opt === void 0 || _optionalChain([declaration, 'access', _23450 => _23450.initializer, 'optionalAccess', _23451 => _23451.kind]) !== _ast.SyntaxKind.AwaitExpression)
+    if (opt === void 0 || _optionalChain([declaration, 'access', _23455 => _23455.initializer, 'optionalAccess', _23456 => _23456.kind]) !== _ast.SyntaxKind.AwaitExpression)
       return void 0;
     return `${indent}let ${varName}: Vec<crate::value::Dict> = crate::value::dict_rows(${text.slice(opt.length)}.unwrap_or_default())`;
   }
@@ -120673,7 +120683,7 @@ RustTranspiler.prototype.printRustP21Length = function(node) {
   return this.printNativeLength(node, this.printNode(this.rustDeclarationOfIdentifier(recv).name, 0));
 };
 RustTranspiler.prototype.printRustP21RowCall = function(call) {
-  const recv = _optionalChain([call, 'access', _23452 => _23452.arguments, 'optionalAccess', _23453 => _23453[0]]);
+  const recv = _optionalChain([call, 'access', _23457 => _23457.arguments, 'optionalAccess', _23458 => _23458[0]]);
   if (recv === void 0 || !_is.isIdentifier.call(void 0, recv) || this.rustP21RowRead(call, recv) === void 0 || !this.rustP21DictRowsLocal(this.rustDeclarationOfIdentifier(recv)))
     return void 0;
   let row = call.parent;
@@ -120690,7 +120700,7 @@ RustTranspiler.prototype.rustP21ElementRowRead = function(access, recv) {
     if (!_is.isIdentifier.call(void 0, key))
       return void 0;
     const kd = this.rustDeclarationOfIdentifier(key);
-    if (kd === void 0 || !_is.isVariableDeclaration.call(void 0, kd) || _optionalChain([kd, 'access', _23454 => _23454.parent, 'optionalAccess', _23455 => _23455.parent]) === void 0 || !_is.isForStatement.call(void 0, kd.parent.parent))
+    if (kd === void 0 || !_is.isVariableDeclaration.call(void 0, kd) || _optionalChain([kd, 'access', _23459 => _23459.parent, 'optionalAccess', _23460 => _23460.parent]) === void 0 || !_is.isForStatement.call(void 0, kd.parent.parent))
       return void 0;
   }
   const row = access.parent;
@@ -120729,7 +120739,7 @@ RustTranspiler.prototype.rustP22KeyedDictRead = function(initializer, optional) 
     if (optional || !_is.isObjectLiteralExpression.call(void 0, dflt) || dflt.properties.length !== 0)
       return void 0;
   }
-  const file = String(_nullishCoalesce(_optionalChain([call, 'access', _23456 => _23456.getSourceFile, 'optionalCall', _23457 => _23457(), 'optionalAccess', _23458 => _23458.fileName]), () => ( "")));
+  const file = String(_nullishCoalesce(_optionalChain([call, 'access', _23461 => _23461.getSourceFile, 'optionalCall', _23462 => _23462(), 'optionalAccess', _23463 => _23463.fileName]), () => ( "")));
   const recv = this.rustSkipWrappers(call.arguments[0]);
   const field = ["options", "urls", "fees"].includes(_nullishCoalesce(this.rustDictField(recv), () => ( ""))) ? String(recv.name.text) : void 0;
   if (!file.includes("ts/src/") || field === void 0 && /ts[/]src[/]pro[/]/.test(file) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call))
@@ -120737,7 +120747,7 @@ RustTranspiler.prototype.rustP22KeyedDictRead = function(initializer, optional) 
   if (field === void 0 && (!_is.isIdentifier.call(void 0, recv) || !this.rustNeverNullDictLocalArg(recv)))
     return void 0;
   const key = this.rustSkipWrappers(call.arguments[1]);
-  const kind = _is.isIdentifier.call(void 0, key) ? _optionalChain([this, 'access', _23459 => _23459.rustScalarLocalOf, 'call', _23460 => _23460(key), 'optionalAccess', _23461 => _23461.kind]) : void 0;
+  const kind = _is.isIdentifier.call(void 0, key) ? _optionalChain([this, 'access', _23464 => _23464.rustScalarLocalOf, 'call', _23465 => _23465(key), 'optionalAccess', _23466 => _23466.kind]) : void 0;
   if (kind !== "str" && kind !== "ostr")
     return void 0;
   const k = `${BaseTranspiler.prototype.transformIdentifier.call(this, key, _nullishCoalesce(this.ReservedKeywordsReplacements[key.text], () => ( key.text)))}${kind === "str" ? ".as_str()" : '.as_deref().unwrap_or("null")'}`;
@@ -120762,7 +120772,7 @@ RustTranspiler.prototype.rustP28OrderRowsParam = function(param) {
 RustTranspiler.prototype.rustP28OrderRowsParamUncached = function(param) {
   if (!_is.isIdentifier.call(void 0, param.name) || param.initializer !== void 0 || param.questionToken !== void 0)
     return false;
-  const ts2 = String(_nullishCoalesce(_optionalChain([param, 'access', _23462 => _23462.type, 'optionalAccess', _23463 => _23463.getText, 'optionalCall', _23464 => _23464()]), () => ( ""))).replace(/\s+/g, "");
+  const ts2 = String(_nullishCoalesce(_optionalChain([param, 'access', _23467 => _23467.type, 'optionalAccess', _23468 => _23468.getText, 'optionalCall', _23469 => _23469()]), () => ( ""))).replace(/\s+/g, "");
   if (ts2 !== "OrderRequest[]" && ts2 !== "PredictionOrderRequest[]")
     return false;
   const method = param.parent;
@@ -120798,7 +120808,7 @@ RustTranspiler.prototype.rustP28OrderRowsBind = function(node, name, indent) {
 };
 var rustR14VenueCallText = /* @__PURE__ */ new Map();
 RustTranspiler.prototype.rustR14RowsParam = function(param) {
-  if (_optionalChain([param, 'optionalAccess', _23465 => _23465.kind]) !== _ast.SyntaxKind.Parameter)
+  if (_optionalChain([param, 'optionalAccess', _23470 => _23470.kind]) !== _ast.SyntaxKind.Parameter)
     return false;
   this.rustR14Decisions ??= /* @__PURE__ */ new WeakMap();
   let hit = this.rustR14Decisions.get(param);
@@ -120819,7 +120829,7 @@ RustTranspiler.prototype.rustR14RowsParamUncached = function(param) {
     return false;
   if (!_is.isIdentifier.call(void 0, param.name) || param.dotDotDotToken !== void 0 || param.initializer !== void 0 || param.questionToken !== void 0)
     return false;
-  if (_optionalChain([param, 'access', _23466 => _23466.type, 'optionalAccess', _23467 => _23467.kind]) !== _ast.SyntaxKind.ArrayType || _optionalChain([param, 'access', _23468 => _23468.type, 'access', _23469 => _23469.elementType, 'optionalAccess', _23470 => _23470.kind]) !== _ast.SyntaxKind.AnyKeyword)
+  if (_optionalChain([param, 'access', _23471 => _23471.type, 'optionalAccess', _23472 => _23472.kind]) !== _ast.SyntaxKind.ArrayType || _optionalChain([param, 'access', _23473 => _23473.type, 'access', _23474 => _23474.elementType, 'optionalAccess', _23475 => _23475.kind]) !== _ast.SyntaxKind.AnyKeyword)
     return false;
   const mods = Array.from(_nullishCoalesce(method.modifiers, () => ( [])));
   if (mods.some((m) => m.kind === _ast.SyntaxKind.StaticKeyword || m.kind === _ast.SyntaxKind.AsyncKeyword) || !mods.some((m) => m.kind === _ast.SyntaxKind.OverrideKeyword))
@@ -121187,7 +121197,7 @@ var CppTranspiler = class extends BaseTranspiler {
     const constructorBody = this.printFunctionBody(node, identation);
     let superCallParams = "";
     let hasSuperCall = false;
-    _optionalChain([node, 'access', _23471 => _23471.body, 'optionalAccess', _23472 => _23472.statements, 'access', _23473 => _23473.forEach, 'call', _23474 => _23474((statement) => {
+    _optionalChain([node, 'access', _23476 => _23476.body, 'optionalAccess', _23477 => _23477.statements, 'access', _23478 => _23478.forEach, 'call', _23479 => _23479((statement) => {
       if (_is.isExpressionStatement.call(void 0, statement)) {
         const expression = statement.expression;
         if (_is.isCallExpression.call(void 0, expression)) {
@@ -121348,7 +121358,7 @@ var CppTranspiler = class extends BaseTranspiler {
   }
   printVariableDeclarationList(node, identation) {
     const declaration = node.declarations[0];
-    if (_optionalChain([declaration, 'optionalAccess', _23475 => _23475.name, 'access', _23476 => _23476.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
+    if (_optionalChain([declaration, 'optionalAccess', _23480 => _23480.name, 'access', _23481 => _23481.kind]) === _ast.SyntaxKind.ArrayBindingPattern) {
       const arrayBindingPattern = declaration.name;
       const arrayBindingPatternElements = arrayBindingPattern.elements;
       const parsedArrayBindingElements = arrayBindingPatternElements.map((e) => this.printNode(e.name, 0));
@@ -121601,14 +121611,14 @@ var CppTranspiler = class extends BaseTranspiler {
     }
     if (node.expression.kind === _ast.SyntaxKind.NewExpression) {
       const expression = node.expression;
-      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _23477 => _23477.arguments]), () => ( []));
+      const argumentsExp = _nullishCoalesce(_optionalChain([expression, 'optionalAccess', _23482 => _23482.arguments]), () => ( []));
       const parsedArg = _nullishCoalesce(argumentsExp.map((n) => this.printNode(n, 0)).join(", "), () => ( ""));
       const newExpression = this.printNode(expression.expression, 0);
       if (expression.expression.kind === _ast.SyntaxKind.Identifier) {
         const id = expression.expression;
         const symbol = this.getChecker().getSymbolAtLocation(expression.expression);
         if (symbol) {
-          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _23478 => _23478.getChecker, 'call', _23479 => _23479(), 'access', _23480 => _23480.getDeclaredTypeOfSymbol, 'call', _23481 => _23481(symbol), 'access', _23482 => _23482.getSymbol, 'call', _23483 => _23483(), 'optionalAccess', _23484 => _23484.declarations]), () => ( []))).map((d) => d.resolve());
+          const declarations = (_nullishCoalesce(_optionalChain([this, 'access', _23483 => _23483.getChecker, 'call', _23484 => _23484(), 'access', _23485 => _23485.getDeclaredTypeOfSymbol, 'call', _23486 => _23486(symbol), 'access', _23487 => _23487.getSymbol, 'call', _23488 => _23488(), 'optionalAccess', _23489 => _23489.declarations]), () => ( []))).map((d) => d.resolve());
           const isClassDeclaration5 = declarations.find((l) => l.kind === _ast.SyntaxKind.InterfaceDeclaration || l.kind === _ast.SyntaxKind.ClassDeclaration);
           if (isClassDeclaration5) {
             return this.getIden(identation) + `${this.THROW_TOKEN} ${id.text}(toString(${parsedArg}))${this.LINE_TERMINATOR}`;
@@ -121723,7 +121733,7 @@ function memoizePairMethod(owner, name) {
     if (args.length !== 2 || a === null || typeof a !== "object" || b === null || typeof b !== "object") {
       return original.apply(owner, args);
     }
-    const cached = _optionalChain([cache, 'access', _23485 => _23485.get, 'call', _23486 => _23486(a), 'optionalAccess', _23487 => _23487.get, 'call', _23488 => _23488(b)]);
+    const cached = _optionalChain([cache, 'access', _23490 => _23490.get, 'call', _23491 => _23491(a), 'optionalAccess', _23492 => _23492.get, 'call', _23493 => _23493(b)]);
     if (cached !== void 0) {
       return cached === UNDEFINED_SENTINEL ? void 0 : cached;
     }
@@ -121763,7 +121773,7 @@ function memoizeUnaryMethod(owner, name) {
 }
 function memoizeBinaryKindMethod(owner, name) {
   const unary = owner[name];
-  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _23489 => _23489.original]), () => ( unary));
+  const original = _nullishCoalesce(_optionalChain([unary, 'optionalAccess', _23494 => _23494.original]), () => ( unary));
   if (typeof original !== "function") {
     return;
   }
@@ -121813,17 +121823,17 @@ function prefetchChecker(checker, root, options = {}) {
   const typeNodes = [], symbolNodes = [], callNodes = [];
   const visit = (node) => {
     const kind = node.kind;
-    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _23490 => _23490.has, 'optionalCall', _23491 => _23491(node)]))
+    if (wantTypes && PREFETCH_TYPE_KINDS.has(kind) && !_optionalChain([getType, 'access', _23495 => _23495.has, 'optionalCall', _23496 => _23496(node)]))
       typeNodes.push(node);
-    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _23492 => _23492.has, 'optionalCall', _23493 => _23493(node)]))
+    if (wantSymbols && kind === _ast.SyntaxKind.Identifier && !_optionalChain([getSymbol, 'access', _23497 => _23497.has, 'optionalCall', _23498 => _23498(node)]))
       symbolNodes.push(node);
-    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _23494 => _23494.has, 'optionalCall', _23495 => _23495(node)]))
+    if (wantSignatures && kind === _ast.SyntaxKind.CallExpression && !_optionalChain([getSig, 'access', _23499 => _23499.has, 'optionalCall', _23500 => _23500(node)]))
       callNodes.push(node);
     node.forEachChild(visit);
   };
   visit(root);
   const run = (nodes, fn) => {
-    if (_optionalChain([fn, 'optionalAccess', _23496 => _23496.seed]) === void 0 || fn.original === void 0)
+    if (_optionalChain([fn, 'optionalAccess', _23501 => _23501.seed]) === void 0 || fn.original === void 0)
       return;
     for (let i = 0; i < nodes.length; i += PREFETCH_BATCH) {
       const chunk = nodes.slice(i, i + PREFETCH_BATCH);
@@ -121839,7 +121849,7 @@ function prefetchChecker(checker, root, options = {}) {
   run(typeNodes, getType);
   run(symbolNodes, getSymbol);
   const api = checker.__astTranspilerApi;
-  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _23497 => _23497.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _23498 => _23498.original, 'optionalAccess', _23499 => _23499.gen]) !== void 0) {
+  if (callNodes.length > 0 && _optionalChain([getSig, 'optionalAccess', _23502 => _23502.seed]) !== void 0 && api !== void 0 && _optionalChain([getSig, 'access', _23503 => _23503.original, 'optionalAccess', _23504 => _23504.gen]) !== void 0) {
     for (let i = 0; i < callNodes.length; i += PREFETCH_BATCH) {
       const chunk = callNodes.slice(i, i + PREFETCH_BATCH);
       const gens = chunk.map((n) => {
@@ -121866,7 +121876,7 @@ function prefetchChecker(checker, root, options = {}) {
 function prefetchDeclarationSignatures(checker, api, root) {
   const getSigDecl = checker.getSignatureFromDeclaration;
   const getTypeOfSymbolAtLocation = checker.getTypeOfSymbolAtLocation;
-  if (_optionalChain([getSigDecl, 'optionalAccess', _23500 => _23500.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _23501 => _23501.original, 'optionalAccess', _23502 => _23502.gen]) === void 0)
+  if (_optionalChain([getSigDecl, 'optionalAccess', _23505 => _23505.seed]) === void 0 || _optionalChain([getSigDecl, 'access', _23506 => _23506.original, 'optionalAccess', _23507 => _23507.gen]) === void 0)
     return;
   const decls = [];
   const visit = (node) => {
@@ -121892,9 +121902,9 @@ function prefetchDeclarationSignatures(checker, api, root) {
     }())));
     api.batch(...chunk.map((decl) => safe(function* () {
       const type = checker.getTypeAtLocation(decl);
-      const symbol = _optionalChain([type, 'optionalAccess', _23503 => _23503.getSymbol, 'optionalAccess', _23504 => _23504.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
-      const location = _optionalChain([symbol, 'optionalAccess', _23505 => _23505.valueDeclaration, 'optionalAccess', _23506 => _23506.resolve, 'call', _23507 => _23507()]);
-      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _23508 => _23508.seed2]) === void 0)
+      const symbol = _optionalChain([type, 'optionalAccess', _23508 => _23508.getSymbol, 'optionalAccess', _23509 => _23509.gen]) !== void 0 ? yield* type.getSymbol.gen() : void 0;
+      const location = _optionalChain([symbol, 'optionalAccess', _23510 => _23510.valueDeclaration, 'optionalAccess', _23511 => _23511.resolve, 'call', _23512 => _23512()]);
+      if (location === void 0 || _optionalChain([getTypeOfSymbolAtLocation, 'optionalAccess', _23513 => _23513.seed2]) === void 0)
         return;
       const symbolType = yield* getTypeOfSymbolAtLocation.original.gen(symbol, location);
       getTypeOfSymbolAtLocation.seed2(symbol, location, symbolType);
@@ -121994,7 +122004,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path3.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _23509 => _23509.dispose, 'call', _23510 => _23510()]);
+    _optionalChain([previous, 'optionalAccess', _23514 => _23514.dispose, 'call', _23515 => _23515()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -122018,7 +122028,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _23511 => _23511.programCache, 'access', _23512 => _23512.shared, 'optionalAccess', _23513 => _23513.snapshot, 'access', _23514 => _23514.dispose, 'call', _23515 => _23515()]);
+    _optionalChain([this, 'access', _23516 => _23516.programCache, 'access', _23517 => _23517.shared, 'optionalAccess', _23518 => _23518.snapshot, 'access', _23519 => _23519.dispose, 'call', _23520 => _23520()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;

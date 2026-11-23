@@ -5898,6 +5898,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
      *  it lends its map view, an empty map for a non-dict (as the callee's shadow reads answer for Null). */
     rustBoxedDictParamLends(param: any): boolean;
+    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+     *  caller parameter cannot lend as a map view. */
+    rustArgSlotTakesDictHandle(arg: any): boolean;
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined;
     /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /

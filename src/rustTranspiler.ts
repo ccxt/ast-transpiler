@@ -41148,7 +41148,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration));
+        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && (this.rustVenueDictParam(declaration) || (this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg)));
         return this.rustNeverNullDictLocalArg(arg);
     }
 
@@ -41214,6 +41214,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
         if (!isMethodDeclaration(param.parent) || this.rustLocalIsReassigned(param, String(param.name.text)) || this.rustParamShadowTable(param.parent).has(String(param.name.text))) return false;
         return this.rustParamType(param) === 'Value';
+    }
+
+    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+     *  caller parameter cannot lend as a map view. */
+    rustArgSlotTakesDictHandle(arg: any): boolean {
+        const call: any = arg?.parent;
+        if (!isCallExpression(call)) return false;
+        const at = Array.from(call.arguments).indexOf(arg);
+        const param: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
+        return param !== undefined && this.rustVenueDictValueParam(param);
     }
 
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */

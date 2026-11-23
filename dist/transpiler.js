@@ -116948,7 +116948,7 @@ ${this.getIden(identation)}}`;
       return false;
     const declaration = this.rustDeclarationOfIdentifier(arg);
     if (declaration?.kind === SyntaxKind7.Parameter)
-      return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration));
+      return declaration.name !== arg && (this.rustVenueDictParam(declaration) || this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg));
     return this.rustNeverNullDictLocalArg(arg);
   }
   /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
@@ -117021,6 +117021,16 @@ ${this.getIden(identation)}}`;
     if (!isMethodDeclaration5(param.parent) || this.rustLocalIsReassigned(param, String(param.name.text)) || this.rustParamShadowTable(param.parent).has(String(param.name.text)))
       return false;
     return this.rustParamType(param) === "Value";
+  }
+  /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+   *  caller parameter cannot lend as a map view. */
+  rustArgSlotTakesDictHandle(arg) {
+    const call = arg?.parent;
+    if (!isCallExpression7(call))
+      return false;
+    const at = Array.from(call.arguments).indexOf(arg);
+    const param = at < 0 ? void 0 : this.rustScalarCallee(call)?.parameters?.[at];
+    return param !== void 0 && this.rustVenueDictValueParam(param);
   }
   /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
   printVenueDictArg(node, text) {
