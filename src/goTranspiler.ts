@@ -59782,3 +59782,48 @@ function h40g23MapLet (goTranspiler: GoTranspiler, container, endpointOnly: bool
     return ok && (((endpoints > 0) && (markets === 0)) || (!endpointOnly && (markets > 0) && (endpoints === 0)));
 }
 // ===== H40-G23 (end) =====
+// ===== H40-G24: list member of a decoded ws frame parameter, `as List` cast or `[]` default (begin) =====
+// `const xs = this.safeList (frame, 'lit'[, []]) [as List]` with `frame` a handler parameter proven to hold the decoded
+// frame (h27a11JsonContainer): the member is []any, another JSON kind or absent, so the comma-ok read answers what
+// SafeListTyped did; where SafeListSlice kept a `[]` default, the nil test restores it.
+function h40g24FrameListRead (goTranspiler: GoTranspiler, node, printed: string): string | undefined {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    let init: any = declaration.initializer;
+    if ((init?.kind === SyntaxKind.AsExpression) && ((init.type?.kind === SyntaxKind.ArrayType)
+        || ((init.type?.kind === SyntaxKind.TypeReference) && (init.type.typeName?.text === 'List')))) {
+        init = init.expression;
+    }
+    const args: any = goTranspiler.goSafeAccessorLocalArgs (init, 'safeList');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (args.key.text)
+        || (args.container?.kind !== SyntaxKind.Identifier) || !goTranspiler.h27a11JsonContainer (args.container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const c: string = args.container.text;
+    const k: string = args.key.text;
+    const match = /^(\n*)(\t*)(.*)$/s.exec (printed);
+    if (match === null) {
+        return undefined;
+    }
+    const [ , lead, iden, body ] = match;
+    const read = `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${k}"].([]any)`;
+    if (new RegExp (`^var ${name} \\[\\]any = (?:ccxt\\.)?SafeListTyped\\(${c}, "${k}"\\)$`).test (body)) {
+        return read;
+    }
+    if ((init.arguments.length === 3) && (body === `var ${name} []any = this.SafeListSlice(${c}, "${k}", []any{})`)) {
+        return `${read}\n${iden}if ${name} == nil {\n${iden}\t${name} = []any{}\n${iden}}`;
+    }
+    return undefined;
+}
+{
+    const printListH40g24 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printListH40g24.call (this, node, identation);
+        const h = h40g24FrameListRead (this, node, printed);
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H40-G24 (end) =====
