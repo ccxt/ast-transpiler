@@ -7754,10 +7754,14 @@ describe('java native list and body-proven returns', () => {
         '    safeValue (a: any, k: any, d: any = undefined): any { return d; }\n' +
         '    safeList (a: any, k: any, d: any = undefined): any { return d; }\n' +
         '    safeDict (a: any, k: any, d: any = undefined): any { return d; }\n' +
-        '}\n';
+        '    parseCandle (data: any): Candle { return data; }\n' +
+        '    parseCandleEcho (data: any): Candle { return data; }\n' +
+        '}\n' +
+        'type Candle = [any, any];\n';
     const VENUE_SOURCE =
         "import { Dict } from './base/types';\n" +
         "import { Exchange } from './base/Exchange';\n" +
+        'type Candle = [any, any];\n' +
         'export default class venuelists extends Exchange {\n' +
         '    parseRows (data: Dict): any[] { return [ data ]; }\n' +
         '    parseRowsChain (data: Dict): any[] { return this.parseRows (data); }\n' +
@@ -7774,6 +7778,8 @@ describe('java native list and body-proven returns', () => {
         '    parseBodyList (data: Dict): any { return [ data ]; }\n' +
         '    parseBodyUnproven (data: Dict): any { return this.safeValue (data, "k"); }\n' +
         '    async parseAsyncRows (data: Dict): Promise<any[]> { return [ data ]; }\n' +
+        '    parseCandle (data: any): Candle { return [ this.safeValue (data, 0), this.safeValue (data, 1) ]; }\n' +
+        '    parseCandleEcho (data: any): Candle { if (this.safeValue (data, 0) === undefined) { return data as Candle; } return [ 1, 2 ]; }\n' +
         '}\n' +
         'type Strings = string[];\n';
 
@@ -7860,6 +7866,14 @@ describe('java native list and body-proven returns', () => {
 
     test('an async method keeps the Object future', () => {
         expect(output).toContain('public java.util.concurrent.CompletableFuture<Object> parseAsyncRows(');
+    });
+
+    test('an override of a tuple method whose returns all build a list narrows to List<Object>', () => {
+        expect(output).toContain('public java.util.List<Object> parseCandle(');
+    });
+
+    test('a tuple override that hands back its argument keeps the boxed declaration', () => {
+        expect(output).toContain('public Object parseCandleEcho(');
     });
 });
 

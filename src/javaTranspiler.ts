@@ -2967,12 +2967,41 @@ export class JavaTranspiler extends BaseTranspiler {
             throw new Error(`java: ${String((node.name as any).text)} overrides a Map base method but its returns do not all print Map`);
         }
         if (ancestor !== undefined && !ancestorBoolean && !ancestorString && !ancestorMap) {
-            return undefined;
+            return baseTier ? undefined : this.javaTupleOverrideListReturn(node);
         }
         if (!this.javaReturnSitesPrintType(node, target)) {
             return undefined;
         }
         return target;
+    }
+
+    // a generated override of a tuple-annotated method (Java prints tuples as List<Object>) whose
+    // ancestor returns the boxed Object or List<Object> narrows to List<Object> (Java returns are
+    // covariant) when every return builds a list; below a List<Object> ancestor anything else fails
+    javaTupleOverrideListReturn(node): string | undefined {
+        const checker: any = this.checkerOrUndefined();
+        const type = node?.type === undefined || checker === undefined ? undefined
+            : this.javaTry(() => checker.getTypeAtLocation(node.type));
+        if (type === undefined || !this.javaTry(() => checker.isTupleType(type))) {
+            return undefined;
+        }
+        const ancestor = this.javaTry(() => this.getMethodOverride(node));
+        if (ancestor === undefined || this.isAsyncFunction(ancestor)) {
+            return undefined;
+        }
+        const ancestorReturn = this.javaNativeReturnType(ancestor)
+            ?? this.javaTry(() => this.printFunctionType(ancestor));
+        const ancestorList = ancestorReturn === JAVA_NATIVE_RETURN_LIST_TYPE;
+        if (!ancestorList && ancestorReturn !== this.DEFAULT_RETURN_TYPE) {
+            return undefined;
+        }
+        if (this.javaReturnSitesPrintType(node, JAVA_NATIVE_RETURN_LIST_TYPE)) {
+            return JAVA_NATIVE_RETURN_LIST_TYPE;
+        }
+        if (ancestorList) {
+            throw new Error(`java: ${String((node.name as any).text)} overrides a List<Object> tuple method but its returns do not all print List<Object>`);
+        }
+        return undefined;
     }
 
     // a venue method annotated plain `int` whose every return is an integer literal or a base
