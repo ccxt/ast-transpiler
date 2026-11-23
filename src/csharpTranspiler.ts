@@ -10374,7 +10374,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         case SyntaxKind.CallExpression:
         case SyntaxKind.AwaitExpression: {
-            const type = this.csharpTypeOfInitializer(node);
+            const type = this.csharpTypeOfInitializer(node)
+                ?? ((node.kind === SyntaxKind.AwaitExpression) ? this.csharpImplicitApiTaskType(this.csharpUnwrapAssertion(node.expression)) : undefined);
             return (type === box) || ((box === 'IDictionary<string, object>') && (type === 'Dictionary<string, object>'));
         }
         }
