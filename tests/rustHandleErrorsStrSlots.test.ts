@@ -18,9 +18,9 @@ const mk = (tag: string, venueHead: string) => {
 describe('the handleErrors override group types its string parameters together', () => {
     test('every declaration spells them string: base, override and the trait slot take &str', () => {
         const { base, venue } = mk('ok', HE);
-        expect(venue).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, (mut )?code: Value, reason: &str, url: &str, method: &str, (mut )?headers: Value, body: &str, /);
-        expect(base).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, (mut )?code: Value, reason: &str, url: &str, method: &str, (mut )?headers: Value, body: &str, /);
-        expect(rustDispatch.slotParams(SLOTS)).toBe('code: crate::Value, reason: &str, url: &str, method: &str, headers: crate::Value, body: &str, response: crate::Value, request_headers: crate::Value, request_body: crate::Value');
+        expect(venue).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, code: i64, reason: &str, url: &str, method: &str, (mut )?headers: Value, body: &str, /);
+        expect(base).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, code: i64, reason: &str, url: &str, method: &str, (mut )?headers: Value, body: &str, /);
+        expect(rustDispatch.slotParams(SLOTS)).toBe('code: i64, reason: &str, url: &str, method: &str, headers: crate::Value, body: &str, response: crate::Value, request_headers: crate::Value, request_body: crate::Value');
         expect(rustDispatch.slotValue('body', 5)).toBe('crate::Value::from(body)');
         // a name at another index is not a string slot
         expect(rustDispatch.isSlotStr('body', 4)).toBe(false);
@@ -28,5 +28,20 @@ describe('the handleErrors override group types its string parameters together',
     test('negative: one declaration spelling a parameter differently keeps that parameter Value', () => {
         const { venue } = mk('no', HE.replace('body: string', 'body: any'));
         expect(venue).toMatch(/reason: &str, url: &str, method: &str, (mut )?headers: Value, (mut )?body: Value, /);
+    });
+});
+
+describe('the handleErrors code parameter (int in every declaration) is an i64 slot', () => {
+    test('base, override and trait slot take i64; a literal compare is native', () => {
+        const { base, venue } = mk('int', HE.replace('code: int', 'code: int').replace('url: string, method', 'url: string, method'));
+        expect(venue).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, code: i64, reason: &str, /);
+        expect(base).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, code: i64, reason: &str, /);
+        expect(rustDispatch.slotParams(SLOTS).startsWith('code: i64, reason: &str')).toBe(true);
+        expect(rustDispatch.slotValue('code', 0)).toBe('crate::Value::from(code)');
+        expect(rustDispatch.isSlotInt('code', 1)).toBe(false);
+    });
+    test('negative: one declaration spelling code differently keeps it Value', () => {
+        const { venue } = mk('intno', HE.replace('code: int', 'code: any'));
+        expect(venue).toMatch(/fn handle_?[eE]rrors\(&(mut )?self, (mut )?code: Value, reason: &str, /);
     });
 });

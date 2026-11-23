@@ -243,6 +243,8 @@ const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptin
 
 // the `string` parameters of the `handle_errors` slot (every declaration spells them `string`): lent `&str` slots
 const RUST_SLOT_STR_ARGS: Record<number, string> = { 1: 'reason', 2: 'url', 3: 'method', 5: 'body' };
+// the `code: int` parameter of the `handle_errors` slot (every declaration spells it `int`): an `i64` slot
+const RUST_SLOT_INT_ARGS: Record<number, string> = { 0: 'code' };
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -323,20 +325,21 @@ export const rustDispatch = {
         }
     },
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : 'crate::Value'}`).join(', '),
+    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : rustDispatch.isSlotInt(a, i) ? 'i64' : 'crate::Value'}`).join(', '),
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number): boolean => (arg === 'path' && i === 0) || RUST_SLOT_STR_ARGS[i] === arg,
+    isSlotInt: (arg: string, i: number): boolean => RUST_SLOT_INT_ARGS[i] === arg,
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string): boolean => slot.includes(': '),
     slotName: (slot: string): string => slot.split(': ')[0],
     /** A `&[..]` slot takes the method's optional-argument slice as is. */
     isSlotSlice: (slot: string): boolean => /^\w+: &\[/.test(slot),
     /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
-    slotArg: (kind: string, arg: string, i: number): string => (kind === 'str' && rustDispatch.isSlotStr(arg, i) ? arg : rustDispatch.fromValue(kind, arg)),
+    slotArg: (kind: string, arg: string, i: number): string => ((kind === 'str' && rustDispatch.isSlotStr(arg, i)) || (kind === 'i64' && rustDispatch.isSlotInt(arg, i)) ? arg : rustDispatch.fromValue(kind, arg)),
     isSlotMarket: (arg: string, i: number): boolean => arg === 'market' && i > 0,
     isSlotCurrency: (arg: string, i: number): boolean => i > 0 && /^(?:currency|from_currency|to_currency)$/.test(arg),
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
-    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
+    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) || rustDispatch.isSlotInt(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
     /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
@@ -566,6 +569,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_NUMBER_CONSTANT_IMPORTS.has(name) && this.rustIsImportedValueName(node)) {
             return `Value::Int(crate::runtime::${name})`;
         }
+        if (this.rustGroupIntParamUnboundRead(node)) return `Value::from(${name})`;
         return this.rustOwnedUseMark(node, this.printRustBytesLocalRead(node) ?? this.printWsBookLocalUse(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotConcat(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node));
     }
 
@@ -1153,6 +1157,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Native `==`/`!=` on the unwrapped payload when the checker proves the
     // Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
+        const groupInt = this.printGroupIntParamCompare(left, right, op); if (groupInt !== undefined) return groupInt;
         const counterTest = isBinaryExpression(left?.parent) && left.parent.right === right ? this.printI64CounterCompare(left.parent) : undefined;
         if (counterTest !== undefined) return counterTest.startsWith('Value::Bool(') ? counterTest.slice('Value::Bool('.length, -1) : counterTest;
         const neverNull = this.printNeverNullContainerTest(left, op); if (neverNull !== undefined) return neverNull;
@@ -2111,6 +2116,8 @@ export class RustTranspiler extends BaseTranspiler {
     private rustNativeCompares = new WeakSet<any>();
 
     printNativeNumericComparison(node, operator, leftText, rightText) {
+        const groupInt = this.printGroupIntParamCompare(node.left, node.right, node.operatorToken.kind);
+        if (groupInt !== undefined) return this.isBooleanPosition(node) ? groupInt : `Value::Bool(${groupInt})`;
         const unwrap = (text: string) => `${text}.as_f64().unwrap_or(f64::NAN)`;
         const comparison = `${unwrap(leftText)} ${operator} ${unwrap(rightText)}`;
         this.rustNativeCompares.add(node);
@@ -7056,7 +7063,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `n.toString()` of an `i64` scalar local. */
     rustIntToStringShape(node): boolean {
         const method = node !== undefined ? this.rustScalarStrMethod(node, false, true) : undefined;
-        return method !== undefined && method.recvKind === 'int';
+        return method !== undefined && method.recvKind === 'int' && !this.rustGroupIntParamUnboundRead(method.recv);
     }
 
     rustStrCastCall(node): any {
@@ -12759,6 +12766,7 @@ export class RustTranspiler extends BaseTranspiler {
         // xd: an `Int` parameter of a typed base filter signature is a native `Option<i64>` already: read as is
         if (this.rustTypedFilterParamOf(inner)?.rustType === 'Option<i64>') return { kind: 'oint', text: super.printIdentifier(inner) };
         const kind = this.rustOptParamKind(inner);
+        if (kind === 'int' && this.rustGroupIntParamUnboundRead(inner)) return { kind, text: super.printIdentifier(inner) };
         return kind === undefined ? undefined : { kind, text: `${super.printIdentifier(inner)}.${RustTranspiler.RUST_PARAM_READ[kind]}` };
     }
 
@@ -15627,6 +15635,7 @@ export class RustTranspiler extends BaseTranspiler {
             const p = sig.params[i];
             if (p !== undefined && (/^Value\b/.test(p.type) || p.type === 'impl Into<crate::Value>')) return `${p.name}.clone()`;
             if (p !== undefined && p.type === '&str') return rustDispatch.isSlotStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
+            if (p !== undefined && p.type === 'i64') return rustDispatch.isSlotInt(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'Option<&crate::types::Market>') return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Currency>') return p.name;
             if (p !== undefined && p.type === '&[Value]' && rustDispatch.isSlotSlice(_slot)) return p.name;
@@ -36069,7 +36078,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
         const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustLentSlotParam(p) || this.rustPriceSlotParam(p)
-            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p) && this.rustParamIsRead(node, p)));
+            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p) && !this.rustGroupIntParamUnbound(p) && this.rustParamIsRead(node, p)));
         return lent.filter((p: any) => !this.rustVenueDictParam(p)).map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
@@ -39096,6 +39105,8 @@ export class RustTranspiler extends BaseTranspiler {
     // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every
     // override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and every forwarder.
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS: Record<string, string[]> = { 'sign': [ 'path' ], 'handleErrors': [ '', 'reason', 'url', 'method', '', 'body' ] };
+    // the same for `int` parameters (printed `i64`, slot rustDispatch.isSlotInt); any name, the declared type decides
+    private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS: Record<string, number[]> = { 'handleErrors': [ 0 ] };
 
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
@@ -39109,11 +39120,12 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         const inherent = RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS[name];
         const index = Array.from(method.parameters).indexOf(param);
-        const pname = inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
+        const int = inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index);
+        const pname = int ? String(param.name.text) : inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
         if ((inherent !== undefined ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
-        const spelled = `${pname}:${inherent !== undefined ? 'Str' : 'string'}`;
+        const spelled = `${int ? '' : pname}:${inherent !== undefined ? 'Str' : int ? 'int' : 'string'}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
@@ -39132,7 +39144,8 @@ export class RustTranspiler extends BaseTranspiler {
                 for (const f of entries) {
                     for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
                         seen++;
-                        if ((m[1].split(',')[index] ?? '').replace(/\s+/g, '') !== spelled) agree = false;
+                        const declared = (m[1].split(',')[index] ?? '').replace(/\s+/g, '');
+                        if ((int ? declared.replace(/^\w+/, '') : declared) !== spelled) agree = false;
                     }
                 }
             }
@@ -39298,6 +39311,35 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustVenueStrParamType(param) !== '&str') return false;
         // ral-64x: also a whole argument of a venue call whose parameter there prints `&str` (lent as it came in)
         return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str');
+    }
+
+    /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
+     *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
+    rustGroupIntParamUnbound(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || this.rustVenueStrParamType(param) !== 'i64') return false;
+        const method: any = param.parent;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        if (!this.rustOverrideGroupParam(method, param, file)) return false;
+        return !this.rustLocalIsReassigned(param, String(param.name.text));
+    }
+
+    /** `code === 429` / `code >= 400` over an unbound `int` group slot and an integer literal: the `i64` compare
+     *  (is_equal / the ordered helpers compare an `Int` and an integer literal exactly so). */
+    printGroupIntParamCompare(leftNode: any, rightNode: any, op: any): string | undefined {
+        const sign = ({ [SyntaxKind.EqualsEqualsEqualsToken]: '==', [SyntaxKind.EqualsEqualsToken]: '==', [SyntaxKind.ExclamationEqualsEqualsToken]: '!=', [SyntaxKind.ExclamationEqualsToken]: '!=',
+            [SyntaxKind.LessThanToken]: '<', [SyntaxKind.LessThanEqualsToken]: '<=', [SyntaxKind.GreaterThanToken]: '>', [SyntaxKind.GreaterThanEqualsToken]: '>=' } as Record<number, string>)[op];
+        if (sign === undefined) return undefined;
+        const left: any = this.unwrapParens(leftNode);
+        const right: any = this.unwrapParens(rightNode);
+        const lit = (n: any) => this.rustScalarIntLiteral(n);
+        if (isIdentifier(left) && this.rustGroupIntParamUnboundRead(left) && lit(right) !== undefined) return `${String(left.text)} ${sign} ${lit(right)}`;
+        if (isIdentifier(right) && this.rustGroupIntParamUnboundRead(right) && lit(left) !== undefined) return `${lit(left)} ${sign} ${String(right.text)}`;
+        return undefined;
+    }
+
+    rustGroupIntParamUnboundRead(node: any): boolean {
+        const param: any = this.rustDeclaredNode(node);
+        return param?.kind === SyntaxKind.Parameter && param.name !== node && this.rustGroupIntParamUnbound(param);
     }
 
     rustVenueStrParamUnboundRead(node: any): boolean {
