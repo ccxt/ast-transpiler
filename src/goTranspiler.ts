@@ -54131,6 +54131,8 @@ GoTranspiler.prototype.h29a10PromiseAllList = function (list) {
         return (p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && (p.name?.text === 'length') && this.goJsonOriginListUseIsReadOnly(n, name);
     });
     const types = new Set(this.h29a10Tasks(call.arguments[0]).map((t: any) => ccxtGoEndpointElement(this, this.goUnwrapParenthesizedNode(t))));
+    // wrapper tasks (no stub element) are not typed by the PromiseAllTyped pass
+    types.delete(undefined);
     const pushed = this.h29a10Tasks(call.arguments[0]).some((t: any) => t.parent?.kind === SyntaxKind.CallExpression);
     if ((types.size === 1) && (!pushed || keys.every((k: any) => k?.kind === SyntaxKind.Identifier))) {
         return false;
@@ -60247,3 +60249,102 @@ function h41g18OnlyJsonWrites (go: any, body: any, param: any): boolean {
     return !bad && (jsonWrites > 0);
 }
 // ===== H41-G18 (end) =====
+// ===== H41-G25 =====
+// `this.w (.., lit)` where w is an async method of the same class whose every return is undefined or one local whose
+// every write is undefined, an awaited typed endpoint call, or a parameter bound at this call to an empty list/dict
+// literal: the task resolves to a decoded JSON document, the literal or nil, so it joins the h29a10 endpoint tasks
+export interface GoTranspiler {
+    h41g25WrapperTask(node): boolean;
+}
+GoTranspiler.prototype.h41g25WrapperTask = function (node) {
+    const call: any = this.goUnwrapParenthesizedNode(node);
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    let method: any = undefined;
+    try {
+        const declarations: any[] = this.getChecker().getSymbolAtLocation(callee.name)?.declarations?.map((d: any) => d.resolve()) ?? [];
+        method = (declarations.length === 1) ? declarations[0] : undefined;
+    } catch (e) {
+        return false;
+    }
+    const cls: any = method?.parent;
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined) || (cls?.kind !== SyntaxKind.ClassDeclaration)
+        || (cls !== this.goEnclosingFunction(call)?.parent) || !(method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.AsyncKeyword)
+        || (call.arguments.length > method.parameters.length)) {
+        return false;
+    }
+    const emptyLiteral = (e: any): boolean => {
+        const v: any = this.goUnwrapParenthesizedNode(e);
+        return ((v?.kind === SyntaxKind.ArrayLiteralExpression) && (v.elements.length === 0))
+            || ((v?.kind === SyntaxKind.ObjectLiteralExpression) && (v.properties.length === 0));
+    };
+    const isUndefined = (e: any): boolean => (e === undefined) || ((e.kind === SyntaxKind.Identifier) && (e.text === 'undefined'));
+    const descendants: any[] = this.goDescendantsOf(method.body);
+    // a parameter counts only when it is never written and this call binds it to an empty literal
+    const literalParam = (e: any): boolean => {
+        const v: any = this.goUnwrapParenthesizedNode(e);
+        const index = (v?.kind === SyntaxKind.Identifier) ? method.parameters.findIndex((p: any) => (p.name?.kind === SyntaxKind.Identifier) && (p.name.text === v.text)) : -1;
+        return (index >= 0) && emptyLiteral(call.arguments[index]) && !descendants.some((n: any) => this.goWritesOrRebindsName(n, v.text, []));
+    };
+    const endpointAwait = (e: any): boolean => {
+        const v: any = this.goUnwrapParenthesizedNode(e);
+        return (v?.kind === SyntaxKind.AwaitExpression) && this.h29a10EndpointTask(v.expression);
+    };
+    const writes = (name: string): any[] | undefined => {
+        const out: any[] = [];
+        for (const n of descendants) {
+            if ((n.kind === SyntaxKind.Identifier) && (n.text === name)) {
+                const p: any = n.parent;
+                if ((p?.kind === SyntaxKind.VariableDeclaration) && (p.name === n)) {
+                    out.push(p.initializer);
+                } else if ((p?.kind === SyntaxKind.BinaryExpression) && (p.left === n) && (p.operatorToken.kind === SyntaxKind.EqualsToken)) {
+                    out.push(p.right);
+                } else if (this.goWritesOrRebindsName(n, name, [])) {
+                    return undefined;
+                }
+            }
+        }
+        return out;
+    };
+    let proven = true;
+    let returns = 0;
+    for (const n of descendants) {
+        if (n.kind !== SyntaxKind.ReturnStatement) {
+            continue;
+        }
+        returns++;
+        if (this.goEnclosingFunction(n) !== method) {
+            proven = false;
+            break;
+        }
+        const r: any = this.goUnwrapParenthesizedNode(n.expression);
+        if (isUndefined(r)) {
+            continue;
+        }
+        const ws: any[] | undefined = (r.kind === SyntaxKind.Identifier) ? writes(r.text) : undefined;
+        if ((ws === undefined) || (ws.length === 0) || !ws.every((w: any) => isUndefined(w) || endpointAwait(w) || literalParam(w))) {
+            proven = false;
+            break;
+        }
+    }
+    return proven && (returns > 0);
+};
+{
+    const endpointTaskH41g25 = GoTranspiler.prototype.h29a10EndpointTask;
+    GoTranspiler.prototype.h29a10EndpointTask = function (node) {
+        return endpointTaskH41g25.call(this, node) || this.h41g25WrapperTask(node);
+    };
+    // a loop-counter row of such a Promise.all result takes the same comma-ok read as a JSON list row
+    const jsonListH41g25 = GoTranspiler.prototype.h28a10JsonList;
+    GoTranspiler.prototype.h28a10JsonList = function (node) {
+        return jsonListH41g25.call(this, node) || this.h29a10PromiseAllList(node);
+    };
+    // its slots are decoded documents (or the empty literal), so lists cut from it hold no scalar pointer
+    const jsonOriginH41g25 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        return jsonOriginH41g25.call(this, node, depth) || ((node?.kind === SyntaxKind.Identifier) && this.h29a10PromiseAllList(node));
+    };
+}
+// ===== H41-G25 (end) =====
