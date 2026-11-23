@@ -39460,6 +39460,8 @@ export class RustTranspiler extends BaseTranspiler {
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS: Record<string, string> = { 'safeCurrencyCode': 'currencyId' };
+    // the same for `string` parameters dispatched by name (no trait slot): method -> parameter names by index, printed `&str`
+    private static readonly RUST_INHERENT_GROUP_STR_PARAMS: Record<string, string[]> = { 'handleTextMessage': [ '', 'message' ] };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
 
@@ -39471,10 +39473,11 @@ export class RustTranspiler extends BaseTranspiler {
         const index = Array.from(method.parameters).indexOf(param);
         const ostr = inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS[name] ?? []).includes(index);
         const int = ostr || (inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index));
-        const pname = int ? String(param.name.text) : inherent ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
+        const inherentStr = inherent === undefined && !int ? RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name]?.[index] : undefined;
+        const pname = int ? String(param.name.text) : inherent ?? inherentStr ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
-        if ((inherent !== undefined ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        if ((inherent !== undefined || inherentStr ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
         const spelled = `${int ? '' : pname}:${inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string'}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
