@@ -19605,7 +19605,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const shadow of table.values()) {
             const empty = `__${shadow.name}_empty`;
             // a lent string-list parameter is the slice itself: its reads need no binding
-            if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
+            if (this.rustVenueStrListParam(shadow.declaration) || (this as any).rustR14RowsParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustVenueDictParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             // a typed request-row list parameter is already bound as `Vec<Dict>`: no slice shadow
             if ((this as any).rustP28OrderRowsParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
@@ -42314,3 +42314,107 @@ export class RustTranspiler extends BaseTranspiler {
     return `${indent}let ${name}: Vec<crate::value::Dict> = crate::value::dict_rows(std::sync::Arc::new(__it.next().unwrap_or_default().as_array().cloned().unwrap_or_default()));\n`;
 };
 // ===== end h38-H38-P28
+
+// ===== h39-R14: a base-tier override's `any[]` row list read only by `.length` and `safeDict (p, k)` is a lent slice
+// `p: &[crate::Value]` (dispatch kind `vlist`: a non-list argument is the empty slice); a row read is the slice element
+// when it is a map, else the empty map: the answer `safe_dict_t` gives for out of range, Null, "" and a non-map.
+const rustR14VenueCallText = new Map<string, string>();
+(RustTranspiler.prototype as any).rustR14RowsParam = function (this: any, param: any): boolean {
+    if (param?.kind !== SyntaxKind.Parameter) return false;
+    this.rustR14Decisions ??= new WeakMap<any, boolean>();
+    let hit = this.rustR14Decisions.get(param);
+    if (hit === undefined) {
+        this.rustR14Decisions.set(param, false);
+        try { hit = this.rustR14RowsParamUncached(param); } catch (e) { hit = false; }
+        this.rustR14Decisions.set(param, hit);
+    }
+    return hit;
+};
+(RustTranspiler.prototype as any).rustR14RowsParamUncached = function (this: any, param: any): boolean {
+    const method: any = param.parent;
+    if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+    if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
+    if (param.type?.kind !== SyntaxKind.ArrayType || param.type.elementType?.kind !== SyntaxKind.AnyKeyword) return false;
+    const mods: any[] = Array.from(method.modifiers ?? []);
+    if (mods.some((m: any) => m.kind === SyntaxKind.StaticKeyword || m.kind === SyntaxKind.AsyncKeyword) || !mods.some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+    const params: any[] = Array.from(method.parameters);
+    if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined)) return false;
+    const name = String(method.name.text);
+    if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+    const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+    if (at < 0) return false;
+    // the overridden declaration is a base-tier method, and no venue source calls the name directly (base callers
+    // reach the override through the by-name arm, which decodes the slice)
+    const base: any = this.getMethodOverride(method);
+    if (base === undefined || base === method || !RustTranspiler['RUST_BASE_TIER_FILE'].test(String(base.getSourceFile().fileName))) return false;
+    if (this.rustR14VenueCalled(file.slice(0, at) + '/ts/src', name)) return false;
+    if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+    let rows = 0;
+    for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+        if (n === param.name || n === param) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== param) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const up: any = n.parent;
+        if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') continue;
+        if (this.rustR14RowKey(up, n) === undefined) return false;
+        rows++;
+    }
+    return rows > 0;
+};
+(RustTranspiler.prototype as any).rustR14VenueCalled = function (this: any, srcRoot: string, name: string): boolean {
+    let text = rustR14VenueCallText.get(srcRoot);
+    if (text === undefined) {
+        const parts: string[] = [];
+        for (const dir of [ '', '/pro', '/prediction' ]) {
+            let entries: string[] = [];
+            try { entries = fs.readdirSync(srcRoot + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+            for (const f of entries) parts.push(readRustTsIndexSource(`${srcRoot}${dir}/${f}`) ?? '');
+        }
+        text = parts.join('\n');
+        rustR14VenueCallText.set(srcRoot, text);
+    }
+    return new RegExp(`\\.${name}\\s*\\(`).test(text);
+};
+// `this.safeDict (p, k)` (k a numeric literal or an i64 `for` counter, no default or `{}`) on the parameter `recv`
+(RustTranspiler.prototype as any).rustR14RowKey = function (this: any, call: any, recv: any): any {
+    if (!isCallExpression(call) || call.arguments.length < 2 || call.arguments.length > 3 || call.arguments[0] !== recv) return undefined;
+    const callee: any = call.expression;
+    if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || String(callee.name.text) !== 'safeDict') return undefined;
+    const dflt: any = call.arguments.length === 3 ? this.rustSkipWrappers(call.arguments[2]) : undefined;
+    if (dflt !== undefined && (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0)) return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    if (isNumericLiteral(key)) return Number.isInteger(Number(key.text)) && Number(key.text) >= 0 ? key : undefined;
+    if (!isIdentifier(key)) return undefined;
+    const kd: any = this.rustDeclarationOfIdentifier(key);
+    return kd !== undefined && isVariableDeclaration(kd) && kd.parent?.parent !== undefined && isForStatement(kd.parent.parent) ? key : undefined;
+};
+(RustTranspiler.prototype as any).rustR14RowText = function (this: any, node: any): string | undefined {
+    const call: any = this.rustSkipWrappers(node);
+    if (call === undefined || !isCallExpression(call) || call.arguments === undefined || call.arguments.length < 2 || !isIdentifier(call.arguments[0])) return undefined;
+    const param: any = this.rustDeclarationOfIdentifier(call.arguments[0]);
+    if (param === undefined || !this.rustR14RowsParam(param) || this.rustR14RowKey(call, call.arguments[0]) === undefined) return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    const index = isNumericLiteral(key) ? String(Number(key.text)) : (this.rustI64CounterUse(key) ? `${String(key.text)} as usize` : undefined);
+    if (index === undefined) return undefined;
+    return `(if let Some(Value::Dict(__m)) = ${this.printNode(param.name, 0)}.get(${index}) { std::sync::Arc::clone(__m) } else { Default::default() })`;
+};
+{
+    const proto: any = RustTranspiler.prototype;
+    const paramType = proto.rustParamType;
+    proto.rustParamType = function (this: any, param: any): string {
+        return this.rustR14RowsParam(param) ? '&[crate::Value]' : paramType.call(this, param);
+    };
+    const rowDecl = proto.rustP21RowReadText;
+    proto.rustP21RowReadText = function (this: any, declaration: any): string | undefined {
+        return this.rustR14RowText(declaration.initializer) ?? rowDecl.call(this, declaration);
+    };
+    const rowCall = proto.printRustP21RowCall;
+    proto.printRustP21RowCall = function (this: any, call: any): string | undefined {
+        const text = this.rustR14RowText(call);
+        return text !== undefined ? `Value::Dict(${text})` : rowCall.call(this, call);
+    };
+}
+// ===== end h39-R14
