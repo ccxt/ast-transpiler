@@ -60464,3 +60464,50 @@ function h41g17DictRead (goTranspiler: GoTranspiler, node, printed: string): str
     };
 }
 // ===== H41-G17 (end) =====
+// ===== H42-G12 (begin) =====
+// `const x = this.safeList (F, 'lit', [])` on a proven ws frame that printed an untyped local: x is a []any (the member list
+// or the empty default; SafeList answers the default for nil, absent and non-list members), so the local takes that type
+// when x is never rebound, written into, or used as a receiver other than `.length`
+function h42g12UntypedFrameListRead (go: GoTranspiler, node, printed: string): string | undefined {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.type !== undefined)) {
+        return undefined;
+    }
+    const init: any = declaration.initializer;
+    const args: any = go.goSafeAccessorLocalArgs (init, 'safeList');
+    const dflt: any = init?.arguments?.[2];
+    if ((args === undefined) || (init.arguments.length !== 3) || (dflt?.kind !== SyntaxKind.ArrayLiteralExpression) || (dflt.elements.length !== 0)
+        || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (args.key.text)
+        || (args.container?.kind !== SyntaxKind.Identifier) || !go.h27a11JsonContainer (args.container)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const c: string = args.container.text;
+    const k: string = args.key.text;
+    const match = /^(\n*)(\t*)(.*)$/s.exec (printed);
+    if ((match === null) || (match[3] !== `var ${name} any = this.SafeList(${c}, "${k}", []any{})`)) {
+        return undefined;
+    }
+    const scope: any = go.goEnclosingFunction (declaration);
+    if ((scope === undefined) || h27a11WritesInto (go, scope, name, declaration)) {
+        return undefined;
+    }
+    const receiverUse = go.hasNodeWhere (scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        && (((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.expression === n) && (n.parent.name?.text !== 'length'))
+            || ((n.parent?.kind === SyntaxKind.AsExpression) || (n.parent?.kind === SyntaxKind.ElementAccessExpression))));
+    if (receiverUse) {
+        return undefined;
+    }
+    const [ , lead, iden ] = match;
+    return `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${k}"].([]any)\n${iden}if ${name} == nil {\n${iden}\t${name} = []any{}\n${iden}}`;
+}
+{
+    const printListH42g12 = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = printListH42g12.call (this, node, identation);
+        const h = h42g12UntypedFrameListRead (this, node, printed);
+        return (h !== undefined) ? h : printed;
+    };
+}
+// ===== H42-G12 (end) =====
