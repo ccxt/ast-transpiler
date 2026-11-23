@@ -21024,6 +21024,28 @@ describe ('go: an async venue number parameter every caller feeds a float64', ()
             + '    async helper (symbol: string, amount: any, type: string, params = {}): Promise<any> {\n        if (amount === undefined) {\n            return undefined;\n        }\n        return this.numberToString (amount);\n    }\n}\n');
         expect (go).not.toContain ('amount float64, typeVar');
     });
+    test ('a negated float64 argument at one site prints float64 (fails on the base printer)', () => {
+        const go = run (head + callers.replace ('ARG', '-amount')
+            + '    async helper (symbol: string, amount: Num, type: string, params = {}): Promise<any> {\n        return this.numberToString (amount);\n    }\n}\n');
+        expect (go).toContain ('helperBody(ch chan any, symbol any, amount float64, typeVar string');
+    });
+    test ('an int literal at every site prints int64 (fails on the base printer)', () => {
+        const go = run (head + '    async addMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, amount, 1, params);\n    }\n'
+            + '    async reduceMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, amount, 2, params);\n    }\n'
+            + '    async helper (symbol: string, amount: number, kind: number, params = {}): Promise<any> {\n        return { \'type\': kind };\n    }\n}\n');
+        expect (go).toContain ('amount float64, kind int64');
+    });
+    test ('an int literal at one site and a decimal at another keeps the box', () => {
+        const go = run (head + '    async addMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, amount, 1, params);\n    }\n'
+            + '    async reduceMargin (symbol: string, amount: number, params = {}): Promise<any> {\n        return await this.helper (symbol, amount, 2.5, params);\n    }\n'
+            + '    async helper (symbol: string, amount: number, kind: number, params = {}): Promise<any> {\n        return { \'type\': kind };\n    }\n}\n');
+        expect (go).toContain ('kind any');
+    });
+    test ('a negated untyped argument keeps the box', () => {
+        const go = run (head + callers.replace ('ARG', '-this.safeNumber (params, \'x\')')
+            + '    async helper (symbol: string, amount: Num, type: string, params = {}): Promise<any> {\n        return this.numberToString (amount);\n    }\n}\n');
+        expect (go).not.toContain ('amount float64, typeVar');
+    });
 });
 
 describe('*string family stores follow CCXT_GO_STRING_PTR_METHOD_NAMES', () => {

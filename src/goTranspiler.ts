@@ -35290,7 +35290,8 @@ GoTranspiler.prototype.goAnnotateMethodTypes = function (methodsTypes, file) {
 };
 // the value types an async parameter takes: a map is passed as a map everywhere; a string is passed
 // as a string unless the body feeds it into a nullable (`*string`) parameter slot; a float64 is a plain number
-const GO_ASYNC_PARAMETER_TYPES = [ 'map[string]any', 'string', 'float64' ];
+// an int64 is a plain integer (a literal or an int64 local)
+const GO_ASYNC_PARAMETER_TYPES = [ 'map[string]any', 'string', 'float64', 'int64' ];
 // the aliases that print a `*T` Go type for a required parameter
 const GO_NULLABLE_PARAM_ALIASES = /^(?:Str|Int|Num|Bool)$/;
 // The Go type the printed argument of every same-file call site carries when they agree on one the
@@ -35309,7 +35310,8 @@ GoTranspiler.prototype.goCallSiteParameterCandidates = function (fn, param, inde
         if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement)) {
             return [];
         }
-        const printed = this.goPrintedArgType(arg);
+        // an integer literal (or its negation) is an untyped Go constant the numeric-literal site proof accepts as int64
+        const printed = goNumericSlotArgPasses(this, arg, 'int64') ? 'int64' : this.goPrintedArgType(arg);
         if ((printed === undefined) || (GO_ASYNC_PARAMETER_TYPES.indexOf(printed) < 0)) {
             return []; // an unnameable or unpassable argument type proves nothing
         }
@@ -35327,6 +35329,24 @@ GoTranspiler.prototype.goCallSiteParameterCandidates = function (fn, param, inde
     }
     return types;
 };
+
+export interface GoTranspiler {
+    goNegatedFloat64ArgType(arg): string | undefined;
+}
+// `-x` on an identifier the printer declares float64 prints the native `-x`, itself a float64
+GoTranspiler.prototype.goNegatedFloat64ArgType = function (arg) {
+    if ((arg?.kind !== SyntaxKind.PrefixUnaryExpression) || (arg.operator !== SyntaxKind.MinusToken)
+        || (arg.operand?.kind !== SyntaxKind.Identifier) || (this.goPrintedArgType(arg.operand) !== 'float64')) {
+        return undefined;
+    }
+    return (this.printNode(arg, 0).trim() === ('-' + this.printNode(arg.operand, 0).trim())) ? 'float64' : undefined;
+};
+{
+    const printedArgType = GoTranspiler.prototype.goPrintedArgType;
+    GoTranspiler.prototype.goPrintedArgType = function (arg) {
+        return printedArgType.call(this, arg) ?? this.goNegatedFloat64ArgType(arg);
+    };
+}
 
 // true when the body passes `param` as an argument to a call whose parameter is declared a nullable
 // alias (`Str`/`Int`/`Num`/`Bool`) or an `undefined`-bearing union: that slot prints a `*T`
