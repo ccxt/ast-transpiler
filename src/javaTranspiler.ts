@@ -2349,14 +2349,30 @@ export class JavaTranspiler extends BaseTranspiler {
     // a fixed `string[]` / `Strings` parameter of an async method first declared in the Exchange tier prints
     // `java.util.List<String>`; every override shares the annotation (Java overrides are invariant)
     javaUnifiedStringListParameterType(name, method, type, checker): string | undefined {
-        if ((name !== 'Strings' && !this.javaIsStringArrayType(checker, type)) || !isIdentifier(method.name) || !this.isAsyncFunction(method)) {
+        if ((name !== 'Strings' && !this.javaIsStringArrayType(checker, type)) || !isIdentifier(method.name)) {
             return undefined;
         }
         let root = method;
         for (let m = this.getMethodOverride(method); m !== undefined; m = this.getMethodOverride(m)) {
             root = m;
         }
-        return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName) ? JAVA_STRING_LIST_TYPE : undefined;
+        if (!JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName)) {
+            return undefined;
+        }
+        return this.isAsyncFunction(method) || this.javaOverriddenSyncStringListSlot(name, method, type, checker)
+            ? JAVA_STRING_LIST_TYPE : undefined;
+    }
+
+    // a sync `string[]` slot (not `Strings`) of a base method that venues override and no hand-written Java declares
+    // or calls: the base's own callers hand List<String>, and every override shares the annotation
+    javaOverriddenSyncStringListSlot(name, method, type, checker): boolean {
+        if (name === 'Strings' || !checker.isArrayType(type) || typeof this.javaRepoMethodUses !== 'function') {
+            return false;
+        }
+        const methodName = String(method.name.text);
+        const own = (method.parent?.members ?? []).filter((m) => isMethodDeclaration(m) && (m.name as any)?.text === methodName).length;
+        const uses = own === 1 ? this.javaRepoMethodUses(methodName, method.getSourceFile().fileName) : undefined;
+        return uses !== undefined && uses.declared > 1 && !uses.handWritten;
     }
 
     // an `x: Strings = undefined` parameter of an async method first declared in the (Prediction)Exchange tier
