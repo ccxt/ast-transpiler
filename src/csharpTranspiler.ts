@@ -3384,11 +3384,19 @@ export class CSharpTranspiler extends BaseTranspiler {
         for (const call of calls) {
             const argument = call.arguments?.[index];
             if ((argument === undefined) || (call.arguments.length > method.parameters.length) || (argument.kind === SyntaxKind.SpreadElement)
-                || ((this.csharpNonNullStringOperandType(argument) !== 'string') && !this.csharpResolvedStringArgument(argument))) {
+                || ((this.csharpNonNullStringOperandType(argument) !== 'string') && !this.csharpResolvedStringArgument(argument)
+                    && !this.csharpDeclaredStringFieldArgument(argument))) {
                 return undefined;
             }
         }
         return 'string';
+    }
+
+    // `this.<field>` the hand-written base declares `string` (the C# value is already that type)
+    csharpDeclaredStringFieldArgument(argument): boolean {
+        const value = this.csharpUnparenthesized(argument);
+        return isPropertyAccessExpression(value) && (value.expression?.kind === SyntaxKind.ThisKeyword) && isIdentifier(value.name)
+            && (this.csharpDeclaredBaseFieldType(value.name.text) === 'string');
     }
 
     // a local the embedding build layer declares a non-null `string` (it retypes after printing)

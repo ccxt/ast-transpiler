@@ -277,3 +277,38 @@ describe ('csharp venue-private nullable number parameters seen from the pro fil
         expect(a).toContain('required(object amount)');
     });
 });
+
+describe ('csharp venue-private string parameters fed by a declared string base field', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-string-field');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    privateKey: string;\n    options: any;\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            '    f () { return this.sign (this.privateKey) + this.other (this.options); }\n' +
+            "    sign (key: string): string { return key + '.s'; }\n" +
+            "    other (v: string): string { return v + '.x'; }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER, 'declaredBaseFieldTypes': { 'privateKey': 'string', 'options': 'object' } } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a base field declared string types the parameter', () => {
+        expect(a).toContain('sign(string key)');
+    });
+
+    test('a base field declared object keeps object', () => {
+        expect(a).toContain('other(object v)');
+    });
+});
