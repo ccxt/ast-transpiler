@@ -41236,25 +41236,15 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && (this.rustVenueDictParam(declaration) || (this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg)));
+        // a borrowed map view cannot feed a slot that takes the dict handle
+        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && ((this.rustVenueDictParam(declaration) && (this.rustVenueDictValueParam(declaration) || !this.rustArgSlotTakesDictHandle(arg))) || (this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg)));
         return this.rustNeverNullDictLocalArg(arg);
     }
 
-    /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
+    /** The value of an object-literal entry (`'info': x`): the slot takes the dict handle, so the entry shares it. */
     rustVenueDictValueUse(id: any): boolean {
         const up: any = id?.parent;
-        if (up === undefined || !isPropertyAssignment(up) || up.initializer !== id || !isObjectLiteralExpression(up.parent)) return false;
-        // the boxed slot moved into a last-use entry with no copy: a borrowed slot would add one there
-        let fn: any = up.parent;
-        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
-        let later = false;
-        const visit = (n: any) => {
-            if (later) return;
-            if (isIdentifier(n) && n.text === id.text && n.pos > id.pos) later = true;
-            n.forEachChild(visit);
-        };
-        if (fn?.body !== undefined) fn.body.forEachChild(visit);
-        return later;
+        return up !== undefined && isPropertyAssignment(up) && up.initializer === id && isObjectLiteralExpression(up.parent);
     }
 
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
@@ -41296,7 +41286,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(node) || !this.rustVenueDictValueUse(node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
-        return `Value::Dict(${text}.clone())`;
+        return `Value::from(${text})`;
     }
 
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
