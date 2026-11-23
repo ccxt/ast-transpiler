@@ -10942,6 +10942,51 @@ describe('java base-tier Map returns', () => {
         expect(print(undefined)).toMatch(/public Object buildMap\(/);
     });
 });
+// a base-tier `: Dict` method that venues override carries the Map return when every return is an object literal
+// and no hand-written Java calls it (the overrides are then bound to Map)
+describe('java base-tier overridden Map returns', () => {
+    const TMP = path.join(__dirname, 'files', 'tmp-base-overridden-map-returns');
+    const BASE_FIXTURE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const OVERRIDDEN = { declared: 5, mentions: 1, handWritten: false, calls: [] as any[] };
+    const BASE_SOURCE =
+        "export class BaseExchange {\n" +
+        "    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n" +
+        "    first (): void {\n" +
+        "    }\n" +
+        "    sign (path: string, api: string[] = [ 'public' ], method: string = 'GET', params: { [key: string]: any } = {}): { [key: string]: any } {\n" +
+        "        return { 'url': undefined, 'method': undefined };\n" +
+        "    }\n" +
+        "    maybe (a: number): { [key: string]: any } {\n" +
+        "        if (a > 1) {\n" +
+        "            return { 'a': a };\n" +
+        "        }\n" +
+        "        return undefined;\n" +
+        "    }\n" +
+        "}\n";
+    const print = (uses: any) => {
+        const byPath = newJavaTranspiler();
+        const printer: any = (byPath as any).javaTranspiler;
+        if (uses !== undefined) {
+            printer.javaRepoMethodUses = (name: string) => uses(name);
+        }
+        return byPath.transpileJavaByPath(BASE_FIXTURE).content as string;
+    };
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE_FIXTURE), { recursive: true });
+        fs.writeFileSync(BASE_FIXTURE, BASE_SOURCE);
+    });
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+    test('an overridden base method whose returns are all literals prints the Map return', () => {
+        expect(print(() => OVERRIDDEN)).toMatch(/java\.util\.Map<String, Object> sign\(/);
+    });
+    test('a null return, a hand-written caller or no repo facts keeps Object', () => {
+        expect(print(() => OVERRIDDEN)).toMatch(/public Object maybe\(/);
+        expect(print(() => ({ ...OVERRIDDEN, handWritten: true }))).toMatch(/public Object sign\(/);
+        expect(print(undefined)).toMatch(/public Object sign\(/);
+    });
+});
 // a base-tier `: string` method whose returns all print String carries the String return on the same sole terms
 describe('java base-tier String returns', () => {
     const TMP = path.join(__dirname, 'files', 'tmp-base-string-returns');

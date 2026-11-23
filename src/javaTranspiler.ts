@@ -2866,8 +2866,8 @@ export class JavaTranspiler extends BaseTranspiler {
     // The native Java return a generated method declaration prints with, when its TS
     javaNativeReturnType(node): string | undefined {
         if (node === undefined || node.kind !== SyntaxKind.MethodDeclaration
-            || node.name === undefined || node.type === undefined || node.body === undefined
-            || !isClassDeclaration(node.parent)) {
+            || node.name === undefined || node.body === undefined || !isClassDeclaration(node.parent)
+            || (node.type === undefined && !this.javaOverridesMapReturn(node))) {
             return undefined;
         }
         if (this.javaReturnTypeInProgress.has(node)) {
@@ -2902,7 +2902,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if ((!generated && !baseTier) || this.isAsyncFunction(node)) {
             return undefined;
         }
-        let target = this.javaNativeReturnTypeTarget(node);
+        let target = node.type === undefined ? undefined : this.javaNativeReturnTypeTarget(node);
         if (target === undefined && !baseTier && this.javaIntReturnIsLong(node)) {
             return 'Long';
         }
@@ -2911,8 +2911,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (target === undefined && !baseTier) {
             target = this.javaReturnTypeFromBody(node);
         }
+        if (target !== JAVA_NATIVE_RETURN_MAP_TYPE && this.javaOverridesMapReturn(node)) {
+            throw new Error(`java: ${String((node.name as any).text)} overrides a Map base method but its returns do not all print Map`);
+        }
         if (target === undefined || (baseTier && target !== 'Boolean' && !this.javaBaseMapReturnIsSole(node, target)
-            && !this.javaBaseStringReturnIsSole(node, target))) {
+            && !this.javaBaseStringReturnIsSole(node, target) && !this.javaBaseMapReturnBindsOverrides(node, target))) {
             return undefined;
         }
         // an override prints the base declaration's boxed signature; a Boolean base
@@ -2929,7 +2932,13 @@ export class JavaTranspiler extends BaseTranspiler {
         if (ancestorString && !this.javaReturnSitesPrintType(node, target)) {
             throw new Error(`java: ${String((node.name as any).text)} overrides a String method but its returns do not all print String`);
         }
-        if (ancestor !== undefined && !ancestorBoolean && !ancestorString) {
+        // a Map base signature binds every override to Map as well (javaBaseMapReturnBindsOverrides)
+        // a prediction venue overrides the Exchange-tier body PredictionExchange.java carries
+        const ancestorMap = !ancestorBoolean && !ancestorString && target === JAVA_NATIVE_RETURN_MAP_TYPE && this.javaOverridesMapReturn(node);
+        if (ancestorMap && !this.javaReturnSitesPrintType(node, target)) {
+            throw new Error(`java: ${String((node.name as any).text)} overrides a Map base method but its returns do not all print Map`);
+        }
+        if (ancestor !== undefined && !ancestorBoolean && !ancestorString && !ancestorMap) {
             return undefined;
         }
         if (!this.javaReturnSitesPrintType(node, target)) {
@@ -2969,6 +2978,26 @@ export class JavaTranspiler extends BaseTranspiler {
         const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
         return uses !== undefined && uses.declared === 1 && uses.mentions === 0 && !uses.handWritten
             && this.javaTry(() => this.getMethodOverride(node)) === undefined;
+    }
+
+    // the nearest ancestor (for a prediction venue: the Exchange-tier body PredictionExchange.java carries) prints a Map return
+    javaOverridesMapReturn(node): boolean {
+        const ancestor = this.javaTry(() => this.getMethodOverride(node))
+            ?? (JAVA_NATIVE_PARAMETER_PREDICTION_FILES.test(node.getSourceFile().fileName)
+                ? this.exchangeTierMethods().get(String((node.name as any)?.text)) : undefined);
+        return ancestor !== undefined && ancestor !== node && ancestor.type !== undefined
+            && this.javaNativeReturnType(ancestor) === JAVA_NATIVE_RETURN_MAP_TYPE;
+    }
+
+    // a base-tier `: Dict` method that venues override prints its Map return when every return is an object
+    // literal and no hand-written Java calls it; each override is then bound to Map (javaNativeReturnTypeUncached)
+    javaBaseMapReturnBindsOverrides(node, target: string): boolean {
+        if (target !== JAVA_NATIVE_RETURN_MAP_TYPE || !isIdentifier(node.name) || typeof this.javaRepoMethodUses !== 'function'
+            || !this.javaEveryReturn(node.body, (r) => r.expression !== undefined && isObjectLiteralExpression(this.javaUnwrapReturnExpression(r.expression)))) {
+            return false;
+        }
+        const uses = this.javaTry(() => this.javaRepoMethodUses(String(node.name.text), node.getSourceFile().fileName));
+        return uses !== undefined && uses.declared > 1 && !uses.handWritten && this.javaTry(() => this.getMethodOverride(node)) === undefined;
     }
 
     // a base-tier `: string` method under the same sole-declaration terms prints its String return
@@ -3033,7 +3062,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // the carriable Map/List target every return site prints when the annotation names none
     // (a string-array or tuple annotation can only be a Map)
     javaReturnTypeFromBody(method): string | undefined {
-        const candidates = (this.javaStringArrayAnnotation(method) || isTupleTypeNode(method?.type))
+        const candidates = (this.javaStringArrayAnnotation(method) || (method?.type !== undefined && isTupleTypeNode(method.type)))
             ? [JAVA_NATIVE_RETURN_MAP_TYPE]
             : [JAVA_NATIVE_RETURN_MAP_TYPE, JAVA_NATIVE_RETURN_LIST_TYPE];
         for (const target of candidates) {
