@@ -1338,6 +1338,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** `n` is the key of `this.safeString (o, n[, d])`: `safe_string` / `safe_string_opt` take the key as `impl ScalarArg`,
+     *  whose `&String` arm reads the same key the `Str` box gave (`scalar_key`). */
+    rustSafeStringScalarKey(n: Node): boolean;
     /** r04b: `n` is the key argument of `this.safeDict (this.balance, n, d)`; the declared `Dict` field read takes the lent key
      *  (`None` keys as \"null\", the `stringify_param(&Null)` the boxed key gave). */
     rustBalanceSafeDictKey(n: Node): boolean;
@@ -5192,6 +5195,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentParamsSlot(call: any, arg: any): boolean;
     /** `&x` for a handed dict local lent to a lent-params slot. */
     printLentParamsArg(node: any, text: string): string | undefined;
+    /** A parameter named anywhere in the body (an unread typed slot needs no `Value` binding). */
+    rustParamIsRead(node: any, param: any): boolean;
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string;
     /** A base `handleUntilOption` / `handleParam*` call, or any `this.handle*` call whose slot 1 the checker types as a
@@ -5582,7 +5587,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
-    /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
+    /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean;
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed

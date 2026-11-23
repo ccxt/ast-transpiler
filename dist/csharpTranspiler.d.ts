@@ -541,6 +541,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpMemberAliasLocalType(declaration: any): string | undefined;
     csharpElementRowLocalType(declaration: any): string | undefined;
     csharpElementTupleLocalType(declaration: any, parsedValue: string): string | undefined;
+    csharpTupleElementSlotRead(node: any): string | undefined;
     csharpElementRowKeyIsString(node: any): boolean;
     csharpBindingNames(name: any): string[];
     csharpElementRowUseIsDictionaryShaped(use: any): boolean;
@@ -623,6 +624,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpScalarElementKinds(node: any): number;
     csharpOperandIsNullLiteral(node: any): boolean;
     csharpCallReturnType(initializer: any): string | undefined;
+    csharpParseToIntBindsTypedTwin(call: any): boolean;
     csharpTypeOfInitializer(initializer: any): string | undefined;
     csharpClassIsOrExtends(cls: any, owner: any): boolean;
     csharpCollectionBoxOfType(checker: any, type: any): string | undefined;
@@ -630,6 +632,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIsInferredCollectionCall(value: any, awaited?: boolean): boolean;
     csharpLocalHoldsInferredCollection(declaration: any): boolean;
     csharpInferredCallReturnType(call: any, awaited?: boolean): string | undefined;
+    csharpAsyncStringReturnType(node: any): string | undefined;
+    csharpCheckerTypeIsStringOrNull(checker: any, expression: any): boolean;
     csharpTypeNameIsShadowed(scope: any, csharpType: string): boolean;
     csharpLocalIsSafeToType(scope: any, declaration: any, varName: string, csharpType: string, safeAccessor?: boolean): boolean;
     csharpShadowedNumericParamType(node: any): string | undefined;

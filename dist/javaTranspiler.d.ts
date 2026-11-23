@@ -151,6 +151,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
         type: any;
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
+    javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
     javaPrintsListArgument(arg: any, producerDeclared?: (name: string) => boolean): boolean;
     javaNativeParameterClassType(name: string, symbol: any): string | undefined;
@@ -177,8 +178,11 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueCalleeReturnType(call: any): string | undefined;
     javaNativeReturnType(node: any): string | undefined;
     javaNativeReturnTypeUncached(node: any): string | undefined;
+    javaTupleOverrideListReturn(node: any): string | undefined;
     javaIntReturnIsLong(node: any): boolean;
     javaBaseMapReturnIsSole(node: any, target: string): boolean;
+    javaOverridesMapReturn(node: any): boolean;
+    javaBaseMapReturnBindsOverrides(node: any, target: string): boolean;
     javaBaseStringReturnIsSole(node: any, target: string): boolean;
     javaNativeReturnTypeTarget(node: any): string | undefined;
     javaArrayReturnType(type: any): boolean;

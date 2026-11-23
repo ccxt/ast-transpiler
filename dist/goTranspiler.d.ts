@@ -622,7 +622,7 @@ export declare function ccxtGoAwaitReceiveUnbox(goTranspiler: any, awaitNode: an
     wrap: (recv: any) => string;
 };
 export { ccxtGoTupleResultJoin };
-export declare function installCcxtGoLocalTypes(goTranspiler: any, unifiedInt64Params?: any): void;
+export declare function installCcxtGoLocalTypes(goTranspiler: any, unifiedInt64Params?: any, unifiedFloat64Params?: any): void;
 export declare function ccxtGoTupleParamsElementType(goTranspiler: any, element: any): any;
 declare class GoNilDeclaredAssignmentScan {
     [key: string]: any;
@@ -712,6 +712,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     unifiedNullableInt64Params: {
         [method: string]: number[];
     };
+    unifiedFloat64Params: {
+        [method: string]: number[];
+    } | undefined;
     uncalledStringParams: {
         [method: string]: number[];
     };
@@ -1286,6 +1289,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goRequiredStringParameterType(param: any): string | undefined;
     goParameterBodyTakes(fn: any, param: any, goType: string): boolean;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
+    goWsClientParameterType(fn: any, param: any): string | undefined;
+    goBaseExchangeMemberParameter(fn: any, index: number): any;
     goWsFrameParameterType(fn: any, param: any): string | undefined;
     goWsFrameReadsStayNative(body: any, param: any): boolean;
     goWsFrameInOpHasInitClause(inNode: any, param: any): boolean;
@@ -1814,6 +1819,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGb08IsDictExpression(expr: any): boolean;
     goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
     goAwaitedObjectListRead(node: any, keyNode: any): boolean;
+    goBoundedAwaitedListRead(node: any): boolean;
     goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
     goTryEnclosingMethod(node: any): any;
