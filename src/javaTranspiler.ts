@@ -5069,9 +5069,9 @@ export class JavaTranspiler extends BaseTranspiler {
         return `((java.util.Map<?, ?>)this.ohlcvs.get(${symbolText})).get(${keyText})`;
     }
 
-    // `this.ohlcvs[s][k] = v` on a fresh row: the base declares the rows `Map<String, Map<String, Object>>`
-    // and every writer stores a plain HashMap, so the put is the helper's Map branch (a null value is kept)
-    javaOhlcvsElementWrite(left, rhs: string): string | undefined {
+    // `this.ohlcvs[s][k] = v` on a fresh row, or any row when v is never null: the base declares the rows
+    // `Map<String, Map<String, Object>>`, so the put is the helper's Map branch (a null value is kept)
+    javaOhlcvsElementWrite(left, rhs: string, value?): string | undefined {
         const inner = this.unwrapPrintTransparentExpression(left.expression);
         if (inner === undefined || !isElementAccessExpression(inner) || !this.javaIsOhlcvsField(inner.expression)) {
             return undefined;
@@ -5083,7 +5083,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const isString = (n) => this.javaScalarFamily(n) === 'string' || this.javaDeclaredStringType(n);
-        if (!isString(symbolNode) || !this.javaOhlcvsEntryIsFresh(left, symbolNode)) {
+        if (!isString(symbolNode)
+            || (!this.javaOhlcvsEntryIsFresh(left, symbolNode) && (value === undefined || this.elementWriteValueMayBeNull(value)))) {
             return undefined;
         }
         return `this.ohlcvs.get(${symbolNode.text}).put(${this.printNode(key, 0).trim()}, ${rhs})`;
@@ -6625,7 +6626,7 @@ export class JavaTranspiler extends BaseTranspiler {
         const lastKey = keyStrs[keyStrs.length - 1];
         const rhs     = this.printNode(right, 0);
         const keyArg  = this.elementWriteKeyText(keys[keys.length - 1], lastKey);
-        const ohlcvsWrite = keys.length === 2 ? this.javaOhlcvsElementWrite(left, rhs) : undefined;
+        const ohlcvsWrite = keys.length === 2 ? this.javaOhlcvsElementWrite(left, rhs, right) : undefined;
         if (ohlcvsWrite !== undefined) {
             return ohlcvsWrite;
         }
