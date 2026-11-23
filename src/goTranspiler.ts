@@ -17180,7 +17180,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // an async declaration takes the opt-in `asyncMethodSuffix` (`fetchTicker` -> `FetchTickerAsync`)
         const name = (this.asyncMethodSuffix && this.isAsyncFunction(node)) ? goName + this.asyncMethodSuffix : goName;
         // a market producer whose every path answers a dictionary prints that map
-        const printedType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
+        const printedType = (this.goMarketProducerReturnType(node) ?? this.goNonceReturnType(node) ?? this.goCacheIndexReturnType(node) ?? this.goWsCacheReturnType(node) ?? this.goBasePairReturnType(node) ?? this.printFunctionType(node)).trim();
         const returnType = (printedType === 'any') ? (this.goStrPtrFamilyReturnType(node) ?? printedType) : printedType;
         const parsedArgs = this.printMethodParameters(node);
         const methodToken = this.METHOD_TOKEN ? this.METHOD_TOKEN + " " : " ";
@@ -46821,7 +46821,7 @@ GoTranspiler.prototype.h26g31NonPointerMethodSource = function (expr) {
     h26g31Seen.set(method, false);
     const name = this.transformMethodNameIfNeeded(String(method.name?.text ?? ''));
     const retyped = (this.provenReturnFamilies ?? []).some((f) => f.names.includes(name))
-        || (this.goMarketProducerReturnType(method) ?? this.goNonceReturnType(method) ?? this.goWsCacheReturnType(method)
+        || (this.goMarketProducerReturnType(method) ?? this.goNonceReturnType(method) ?? this.goCacheIndexReturnType(method) ?? this.goWsCacheReturnType(method)
             ?? this.goBasePairReturnType(method) ?? this.goStrPtrFamilyReturnType(method)) !== undefined;
     const declared = method.type?.getText?.() ?? '';
     const returns = this.goFunctionLevelReturns(method.body);
@@ -59915,3 +59915,85 @@ function h40g25BoundedDictRead (goTranspiler: GoTranspiler, declaration, printed
     };
 }
 // ===== H40-G25 (end) =====
+// ===== H40-G30: getCacheIndex returns int64 =====
+// `BaseExchange.getCacheIndex` and every override print `int64` (the Go interface pins one signature):
+// each return must be an integer constant, an int64 operand or an int operand (loop index, length), else it throws.
+export interface GoTranspiler {
+    goCacheIndexReturnType(node): string | undefined;
+    goCacheIndexReturnKind(expression): string | undefined;
+    goIsBaseCacheIndexMethod(fn): boolean;
+}
+const goCacheIndexReturnCache = new WeakMap<object, string | undefined>();
+GoTranspiler.prototype.goCacheIndexReturnType = function (node) {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.name?.text !== 'getCacheIndex') || (node.parameters?.length !== 2)) {
+        return undefined;
+    }
+    if (goCacheIndexReturnCache.has(node)) {
+        return goCacheIndexReturnCache.get(node);
+    }
+    let result: string | undefined = undefined;
+    if (this.goIsBaseCacheIndexMethod(node)) {
+        const returns = this.goDescendantsOf(node.body).filter((n: any) => (n.kind === SyntaxKind.ReturnStatement) && (this.goEnclosingFunction(n) === node));
+        const bad = (returns.length === 0) ? node : returns.find((r: any) => (r.expression === undefined) || (this.goCacheIndexReturnKind(r.expression) === undefined));
+        if (bad !== undefined) {
+            throw new Error(`goCacheIndexReturnType: ${this.goEnclosingClassName(node)}.getCacheIndex returns unproven \`${bad.getText?.() ?? ''}\`; the interface pins int64`);
+        }
+        result = 'int64';
+    }
+    goCacheIndexReturnCache.set(node, result);
+    return result;
+};
+// 'int64' (prints as is), 'int' (needs the int64 conversion) or 'const' (an integer constant), else undefined
+GoTranspiler.prototype.goCacheIndexReturnKind = function (expression) {
+    const inner: any = this.goUnwrapParenthesizedNode(expression);
+    if ((this.goNumericLiteralKind(inner) === 'int') && ((inner.kind === SyntaxKind.NumericLiteral) || this.goIsSignedNumericLiteral(inner))) {
+        return 'const';
+    }
+    const type = this.goOperandStaticType(inner, this.printNode(inner, 0));
+    return (type === 'int64') ? 'int64' : ((type === 'int') ? 'int' : ((type === 'const-int') ? 'const' : undefined));
+};
+// the class chain of `fn` (not async, with a body) ends in `BaseExchange.getCacheIndex`
+GoTranspiler.prototype.goIsBaseCacheIndexMethod = function (fn) {
+    const checker: any = this.checkerOrUndefined();
+    if ((checker === undefined) || (fn.body === undefined) || this.isAsyncFunction(fn)) {
+        return false;
+    }
+    let current: any = fn;
+    for (let depth = 0; depth < 12; depth++) {
+        const cls: any = this.goEnclosingClass(current);
+        if (cls === undefined) {
+            return false;
+        }
+        const clause: any = (cls.heritageClauses ?? []).find((c: any) => c.token === SyntaxKind.ExtendsKeyword);
+        if (clause === undefined) {
+            return (cls.name?.text === 'BaseExchange');
+        }
+        const symbol = checker.getTypeAtLocation(clause.types?.[0])?.getProperty?.('getCacheIndex');
+        const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d: any) => d.resolve())?.[0];
+        if (declaration?.kind !== SyntaxKind.MethodDeclaration) {
+            return false;
+        }
+        current = declaration;
+    }
+    return false;
+};
+{
+    const printReturnH40g30 = GoTranspiler.prototype.printReturnStatement;
+    GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+        const fn: any = (node?.expression !== undefined) ? this.goEnclosingFunction(node) : undefined;
+        const kind = ((fn === undefined) || (this.goCacheIndexReturnType(fn) !== 'int64')) ? undefined : this.goCacheIndexReturnKind(node.expression);
+        if ((kind !== 'int') && (kind !== 'const')) {
+            return printReturnH40g30.call(this, node, identation);
+        }
+        const printed = this.goUnwrapPrintedParens(this.printNode(node.expression, identation).trim());
+        // a constant the printer boxed (`OpNeg(1)`) prints as the literal itself
+        const literal = this.goUnwrapParenthesizedNode(node.expression).getText().replace(/\s+/g, '');
+        if ((kind === 'const') && /^(?:-?[0-9]+|int64\(-?[0-9]+\))$/.test(printed)) {
+            return printReturnH40g30.call(this, node, identation);
+        }
+        const leadingComment = this.printLeadingComments(node, identation);
+        const trailingComment = this.printTraillingComment(node, identation);
+        return leadingComment + this.getIden(identation) + 'return int64(' + ((kind === 'const') ? literal : printed) + ')' + (trailingComment ? ' ' + trailingComment : '');
+    };
+}
+// ===== H40-G30 (end) =====

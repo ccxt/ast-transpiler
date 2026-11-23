@@ -21270,3 +21270,44 @@ describe('a safeDict of a bounded []any list element prints the comma-ok map ass
         expect(out).not.toContain('rows[i].(map[string]any)');
     });
 });
+
+describe ('goCacheIndexInt64', () => {
+    // getCacheIndex () is int64 in the Go interface, the base and every override
+    const BASE = 'type int = number;\ntype Int = number | undefined;\ntype Dict = { [key: string]: any };\n'
+        + 'class BaseExchange {\n'
+        + '    safeInteger (o: any, k: string, d?: int): Int { return 1; }\n'
+        + '    safeDict (o: any, k: any): Dict | undefined { return o; }\n'
+        + '    getCacheIndex (orderbook: Dict, deltas: any[]): number { return -1; }\n'
+        + '}\n';
+    const go = (derived: string) => new Transpiler({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } })
+        .transpileGo(BASE + 'class Venue extends BaseExchange {\n' + derived + '\n}\n').content;
+    const venue = (out: string) => out.substring(out.indexOf('func (this *Venue) GetCacheIndex('));
+
+    test('base getCacheIndex prints int64 (fails on the base printer)', () => {
+        expect(go('')).toMatch(/func \(this \*BaseExchange\) GetCacheIndex\(orderbook \S+, deltas \S+\) int64 \{/);
+    });
+    test('an override returning -1, a loop index, an index sum and a length prints int64 with int conversions', () => {
+        const out = venue(go('override getCacheIndex (orderbook: Dict, cache: any[]): number {\n'
+            + '        const nonce = this.safeInteger (orderbook, "nonce");\n'
+            + '        if (nonce === undefined) { return -1; }\n'
+            + '        for (let i = 0; i < cache.length; i++) {\n'
+            + '            if (i === 3) { return i; }\n'
+            + '            if (i === 4) { return i + 1; }\n'
+            + '        }\n'
+            + '        return cache.length;\n'
+            + '    }'));
+        expect(out).toContain(') int64 {');
+        expect(out).toContain('return int64(-1)');
+        expect(out).toContain('return int64(i)');
+        expect(out).toContain('return int64(i + 1)');
+        expect(out).toMatch(/return int64\((?:len|GetArrayLength)\(cache\)\)/);
+    });
+    test('negative: an unproven return throws instead of printing a wrong signature', () => {
+        expect(() => go('override getCacheIndex (orderbook: Dict, cache: any[]): number { const d: any = 1; return d; }')).toThrow(/getCacheIndex returns unproven/);
+        expect(() => go('override getCacheIndex (orderbook: Dict, cache: any[]): number { return this.safeInteger (orderbook, "n"); }')).toThrow(/getCacheIndex returns unproven/);
+    });
+    test('negative: a getCacheIndex of a class that is not a BaseExchange descendant is untouched', () => {
+        const out = new Transpiler({ 'verbose': false }).transpileGo('class Other {\n    getCacheIndex (a: any, b: any[]): any { return 1; }\n}\n').content;
+        expect(out).toContain('func (this *Other) GetCacheIndex(a any, b any) any {');
+    });
+});
