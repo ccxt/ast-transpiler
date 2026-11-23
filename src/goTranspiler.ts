@@ -59758,12 +59758,7 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
                 return undefined;
             }
             const d: any = this.goAnyBoxLocalDeclaration (n);
-            if (d?.kind === SyntaxKind.Parameter) {
-                return this.goNativeParameterType (d);
-            }
-            // a nil-seeded let the endpoint join declares map[string]any is a typed map receiver too
-            const t = this.goResolvedLocalGoType (n);
-            return ((t === undefined) || (t === 'any')) ? (ccxtGoNilJoinDeclarationType (this, n) ?? t) : t;
+            return (d?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType (d) : this.goResolvedLocalGoType (n);
         };
         const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
         if (((goTypeOf (container) !== 'map[string]any') && !h40g23MapLet (this, container, false)) || (!literalKey && (goTypeOf (key) !== 'string'))) {
