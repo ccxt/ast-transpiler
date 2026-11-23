@@ -15356,7 +15356,7 @@ describe('ral-zg: a Dict[] row next to a differently sourced same-named sibling 
     });
     test('handed on whole into a map literal: Option<Dict>, boxed back to exactly Null or the map', () => {
         const out = mk(body("const row = this.safeDict (response, 'first');", "result.push (this.safeOrder ({ 'info': row, 'id': this.safeString (row, 'id') }));"));
-        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = \(match rows\.get\(i as usize\) \{ Some\(Value::Dict\(__m\)\) => Some\(std::sync::Arc::clone\(__m\)\), _ => None \}\);/);
         expect(out).toContain('m.insert(\"info\".to_string(), row.clone().map_or(Value::Null, Value::Dict));');
     });
     test('negative: a sibling declared with var (function-scoped) keeps the row Value', () => {
@@ -15379,7 +15379,7 @@ describe('ral-zg: a Dict[] row assigned whole into an outer let keeps Option<Dic
     const body = (target: string) => "    pick (response: Dict, id: Str) {\n        const rows: Dict[] = this.safeList (response, 'data', []);\n        " + target + "\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            if (this.safeString (row, 'id') === id) {\n                found = row;\n                break;\n            }\n        }\n        return this.parseRow (found);\n    }";
     test('found = row: the row is Option<Dict> and the write boxes it back', () => {
         const out = mk(body('let found: Dict = {};'));
-        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = \(match rows\.get\(i as usize\) \{ Some\(Value::Dict\(__m\)\) => Some\(std::sync::Arc::clone\(__m\)\), _ => None \}\);/);
         expect(out).toContain('found = row.map_or(Value::Null, Value::Dict);');
     });
     test('negative: a target declared after the row (a var hoisted past it) keeps the row Value', () => {
@@ -15402,7 +15402,7 @@ describe('ral-zg: a Dict[] row appended whole to a cache local takes Option<Dict
     const body = (target: string) => "    prune (newCache: any, cache: any, symbol: Str) {\n        const entries: Dict[] = this.toArray (cache);\n        for (let i = 0; i < entries.length; i++) {\n            const entry = entries[i];\n            if (this.safeString (entry, 'symbol') !== symbol) {\n                " + target + ".append (entry);\n            }\n        }\n        return newCache;\n    }";
     test('newCache.append (entry): Option<Dict> boxed back at the append', () => {
         const out = mk(body('newCache'));
-        expect(out).toMatch(/let mut entry: Option<crate::value::Dict> = entries\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toMatch(/let mut entry: Option<crate::value::Dict> = \(match entries\.get\(i as usize\) \{ Some\(Value::Dict\(__m\)\) => Some\(std::sync::Arc::clone\(__m\)\), _ => None \}\);/);
         expect(out).toContain('newCache.append(entry.map_or(Value::Null, Value::Dict));');
     });
     test('negative: appending to the row itself keeps it Value', () => {
@@ -15795,7 +15795,7 @@ describe('ral-40g: a Dict[] row written at a literal key takes Option<Dict> with
     const body = (key: string) => "    tag (response: Dict) {\n        const rows: Dict[] = this.safeList (response, 'rows', []);\n        for (let i = 0; i < rows.length; i++) {\n            const row = rows[i];\n            const q = this.safeString (row, 'quote');\n            row[" + key + "] = q;\n        }\n        return this.parseBalance (response);\n    }";
     test('row[\'symbol\'] = q: optional row, if let Some insert', () => {
         const out = mk(body("'symbol'"));
-        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = rows\.get\(i as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_opt_dict\(\);/);
+        expect(out).toMatch(/let mut row: Option<crate::value::Dict> = \(match rows\.get\(i as usize\) \{ Some\(Value::Dict\(__m\)\) => Some\(std::sync::Arc::clone\(__m\)\), _ => None \}\);/);
         expect(out).toContain('if let Some(__d) = &mut row { std::sync::Arc::make_mut(__d).insert("symbol".into(), ');
         expect(out).not.toContain('add_element_to_object(&mut row');
     });
@@ -23126,7 +23126,7 @@ describe('ral-67e: same-named sibling-block declarations are typed by their own 
             // the last property read moves the element (no copy)
             expect(out).toContain('m.insert("id".to_string(), order.map(Value::from).unwrap_or(Value::Null));');
             // the sibling twin keeps its own (Dict) decision
-            expect(out).toContain('let mut order: Option<crate::value::Dict> = data.get(i as usize)');
+            expect(out).toContain('let mut order: Option<crate::value::Dict> = (match data.get(i as usize) { Some(Value::Dict(__m)) => Some(std::sync::Arc::clone(__m)), _ => None });');
         } finally {
             fs.rmSync (root, { recursive: true, force: true });
         }
