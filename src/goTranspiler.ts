@@ -50784,7 +50784,7 @@ GoTranspiler.prototype.h28a03JoinedEndpointLocal = function (node: any): boolean
             writes += 1;
             return true;
         }
-        return this.goJsonOriginUseIsReadOnly(n, name);
+        return this.goJsonOriginUseIsReadOnly(n, name) || this.h42g22ReaderArgument(n);
     });
     return readOnly && (writes > 0);
 };
@@ -60511,3 +60511,46 @@ function h42g12UntypedFrameListRead (go: GoTranspiler, node, printed: string): s
     };
 }
 // ===== H42-G12 (end) =====
+// ===== H42-G22 =====
+// `let R: Dict;` with no initializer whose every write is a statement `R = await <endpoint>` of the same method: R is a
+// decoded JSON document (or the nil map before a write) wherever it is read, so a member read of it holds no list pointer
+export interface GoTranspiler {
+    h42g22EndpointArmsContainer(node): boolean;
+    h42g22ReaderArgument(node): boolean;
+}
+// the document as the first argument of a base reader: the call reads one member and never writes the document
+const H42G22_READERS = new Set ([ 'safeDict', 'safeList', 'safeString', 'safeInteger', 'safeNumber', 'safeBool', 'safeStringLower', 'safeStringUpper', 'safeTimestamp' ]);
+GoTranspiler.prototype.h42g22ReaderArgument = function (node): boolean {
+    const call: any = node.parent;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === node) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && H42G22_READERS.has(call.expression.name?.text)
+        && !call.arguments.slice(1).some((a: any) => (a.kind === SyntaxKind.Identifier) && (a.text === node.text));
+};
+GoTranspiler.prototype.h42g22EndpointArmsContainer = function (node): boolean {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || (declaration.initializer !== undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        return false;
+    }
+    const scope: any = this.goEnclosingFunction(declaration);
+    let writes = 0;
+    const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
+        const assign: any = n.parent;
+        if ((assign?.kind === SyntaxKind.BinaryExpression) && (assign.left === n) && (assign.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+            const value: any = this.goUnwrapParenthesizedNode(assign.right);
+            const endpoint = (value?.kind === SyntaxKind.AwaitExpression)
+                && (this.goAwaitedCallIsImplicitEndpoint(value.expression) || this.goAwaitedCallIsRequestStub(value.expression));
+            writes += endpoint ? 1 : 0;
+            return endpoint && (assign.parent?.kind === SyntaxKind.ExpressionStatement) && (this.goEnclosingFunction(assign) === scope);
+        }
+        return this.goJsonOriginUseIsReadOnly(n, name) || this.h42g22ReaderArgument(n);
+    });
+    return readOnly && (writes > 0);
+};
+{
+    const jsonOriginH42g22 = GoTranspiler.prototype.goJsonOriginContainer;
+    GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
+        return jsonOriginH42g22.call(this, node, depth) || ((depth <= 5) && this.h42g22EndpointArmsContainer(node));
+    };
+}
+// ===== H42-G22 (end) =====
