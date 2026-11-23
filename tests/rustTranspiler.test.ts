@@ -27255,6 +27255,36 @@ describe('h34-P22: `safeDict (d, k)` on a plain `Dict` local with a string key r
         expect (out).not.toContain ('if let Some(Value::Dict(__m))');
     });
 });
+describe('h41-R19: `safeDict (this.options|urls|fees, k)` with a string key reads the config field natively', () => {
+    const run = (body: string, file = 'ts/src/pro/venue.ts') => {
+        const root = fs.mkdtempSync (path.join (os.tmpdir (), 'r19-'));
+        fs.mkdirSync (path.join (root, 'ts/src/base'), { recursive: true });
+        fs.mkdirSync (path.join (root, path.dirname (file)), { recursive: true });
+        fs.writeFileSync (path.join (root, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    urls: Dict = {};\n    fees: Dict = {};\n    safeString (o: any, k: any, d: Str = undefined): Str { return o[k]; }\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o[k]; }\n    hold (x: any): any { return x; }\n}\n");
+        const up = file.split ('/').length - 3;
+        fs.writeFileSync (path.join (root, file), "import Exchange from '" + '../'.repeat (up) + "./base/Exchange.js';\nimport type { Dict, Str } from '" + '../'.repeat (up) + "./base/Exchange.js';\nexport default class venue extends Exchange {\n" + body + "}\n");
+        const t = new Transpiler ({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath (path.join (root, file)).content; } finally { fs.rmSync (root, { recursive: true, force: true }); }
+    };
+    const body = (read: string) => "    m (sandbox: boolean, params: Dict) {\n        let urlKey: string = 'api';\n        if (sandbox) {\n            urlKey = 'test';\n        }\n        const id = this.safeString (params, 'id');\n" + read + "    }\n";
+    test('a ws file reads `this.urls` by a `string` key: the empty map for a missing / Null / non-map entry', () => {
+        const out = run (body ("        const apiUrls = this.safeDict (this.urls, urlKey, {});\n        return this.safeString (apiUrls, 'ws');\n"));
+        expect (out).toContain ('(if let Some(Value::Dict(__m)) = self.urls.get(urlKey.as_str()) { std::sync::Arc::clone(__m) } else { Default::default() })');
+        expect (out).not.toContain ('safe_dict_t(&self.urls');
+    });
+    test('a `Str` key reads "null" for None on `this.options`', () => {
+        const out = run (body ("        const o = this.safeDict (this.options, id, {});\n        return this.safeString (o, 'x');\n"), 'ts/src/venue.ts');
+        expect (out).toContain ('self.options.get(id.as_deref().unwrap_or("null"))');
+    });
+    test('negative: a non-empty default keeps the helper', () => {
+        const out = run (body ("        const o = this.safeDict (this.fees, urlKey, { 'a': 1 });\n        return this.safeString (o, 'x');\n"));
+        expect (out).not.toContain ('self.fees.get(');
+    });
+    test('negative: a ws local receiver keeps the helper', () => {
+        const out = run (body ("        const d: Dict = this.safeDict (params, 'd', {});\n        const o = this.safeDict (d, urlKey, {});\n        return this.safeString (o, 'x');\n"));
+        expect (out).not.toContain ('d.get(urlKey');
+    });
+});
 describe('h34-P25: `rows[k]` on a converted `Dict[]` local reads the same converted row', () => {
     const run = (body: string) => {
         const root = fs.mkdtempSync (path.join (os.tmpdir (), 'p25-'));

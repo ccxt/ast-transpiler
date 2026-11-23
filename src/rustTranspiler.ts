@@ -42629,15 +42629,18 @@ export class RustTranspiler extends BaseTranspiler {
         if (optional || !isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return undefined;
     }
     const file = String(call.getSourceFile?.()?.fileName ?? '');
-    if (!file.includes('ts/src/') || /ts[/]src[/](pro|test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
     const recv: any = this.rustSkipWrappers(call.arguments[0]);
-    if (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv)) return undefined;
+    // the base config fields `options` / `urls` / `fees` print as plain `Dict` fields, never a ws marker map
+    const field = [ 'options', 'urls', 'fees' ].includes(this.rustDictField(recv) ?? '') ? String(recv.name.text) : undefined;
+    if (!file.includes('ts/src/') || (field === undefined && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
+    if (field === undefined && (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv))) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
     const kind = isIdentifier(key) ? this.rustScalarLocalOf(key)?.kind : undefined;
     if (kind !== 'str' && kind !== 'ostr') return undefined;
     const k = `${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}`;
     const m = `std::sync::Arc::clone(__m)`;
-    return `(if let Some(Value::Dict(__m)) = ${(BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text)}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
+    const r = field !== undefined ? `self.${field}` : (BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    return `(if let Some(Value::Dict(__m)) = ${r}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
 };
 // ===== end h34-H34-P22
 
