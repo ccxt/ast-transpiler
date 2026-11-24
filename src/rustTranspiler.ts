@@ -44191,6 +44191,7 @@ export class RustTranspiler extends BaseTranspiler {
 // Converted once at the read (`crate::value::dict_rows`: a non-map element is the empty map in its slot, the answer
 // `safe_dict_t` gives today); its row reads `const row = this.safeDict (rows, k)` are bounds-tested slice reads.
 (RustTranspiler.prototype as any).rustP21DictRowsLocal = function (this: any, declaration: any): boolean {
+    if (declaration !== undefined && isParameterDeclaration(declaration) && this.rustR24RowsParam(declaration)) return true;
     if (declaration !== undefined && isParameterDeclaration(declaration)) return this.rustP28OrderRowsParam(declaration) || this.rustR14RowsParam(declaration);
     if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;
     this.rustP21Decisions ??= new WeakMap<any, boolean>();
@@ -44495,3 +44496,115 @@ const rustR14VenueCallText = new Map<string, string>();
     };
 }
 // ===== end h40-R09
+
+// ===== h48-R24: a venue-private `OrderRequest[]` parameter read only by length and rows is a list of maps
+// Printed `Vec<Dict>` when every caller hands on a typed createOrders' row-bound `orders` (P28); its rows read as P21
+// typed elements. Any other caller (a boxed list, an inline element read) keeps the `Value` parameter.
+(RustTranspiler.prototype as any).rustR24RowsBody = function (this: any, param: any): boolean {
+    if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
+    if (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'OrderRequest[]') return false;
+    const method: any = param.parent;
+    if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent) || this.rustTestTierSource(param)) return false;
+    const mods: any[] = Array.from(method.modifiers ?? []);
+    if (mods.some((m: any) => m.kind === SyntaxKind.StaticKeyword || m.kind === SyntaxKind.AsyncKeyword || m.kind === SyntaxKind.OverrideKeyword)) return false;
+    if (this.getMethodOverride(method) !== undefined || this.toSnakeCaseName(String(method.name.text)) in (this.rustVirtualDispatch ?? {})) return false;
+    if (this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
+    if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+    let rows = 0;
+    for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+        if (n === param.name || n === param) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== param) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const up: any = n.parent;
+        if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') continue;
+        if (this.rustP21RowRead(up, n) === undefined && this.rustP21ElementRowRead(up, n) === undefined) return false;
+        rows++;
+    }
+    return rows > 0;
+};
+(RustTranspiler.prototype as any).rustR24RowsParam = function (this: any, param: any): boolean {
+    if (param?.kind !== SyntaxKind.Parameter) return false;
+    this.rustR24Decisions ??= new WeakMap<any, boolean>();
+    let hit = this.rustR24Decisions.get(param);
+    if (hit !== undefined) return hit;
+    this.rustR24Decisions.set(param, false);
+    try { hit = this.rustR24RowsParamUncached(param); } catch (e) { hit = false; }
+    this.rustR24Decisions.set(param, hit);
+    return hit;
+};
+(RustTranspiler.prototype as any).rustR24RowsParamUncached = function (this: any, param: any): boolean {
+    if (!this.rustR24RowsBody(param)) return false;
+    const method: any = param.parent;
+    const name = String(method.name.text);
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+    const at = file.search(/\/ts\/src\/(?:pro\/|prediction\/)?[^/]+\.ts$/);
+    if (at < 0) return false;
+    // every call in the tree is one of this file's own calls, and each hands on a row-bound typed `orders`
+    const calls: any[] = this.rustVenueStrCallSites(method);
+    // the venue's other files (pro, prediction, a subclass) may call the name too: then it stays boxed
+    const root = file.slice(0, at) + '/ts/src';
+    const venue = file.slice(file.lastIndexOf('/') + 1).replace(/\.ts$/, '');
+    const callRe = new RegExp(`\\.${name}\\s*\\(`, 'g');
+    let others = 0;
+    for (const dir of [ '', '/pro', '/prediction' ]) {
+        let entries: string[] = [];
+        try { entries = fs.readdirSync(root + dir).filter(isRustTsIndexSource); } catch (e) { continue; }
+        for (const f of entries) {
+            const path = `${root}${dir}/${f}`;
+            if (path === file) continue;
+            const text = readRustTsIndexSource(path) ?? '';
+            if (f === `${venue}.ts` || new RegExp(`extends\\s+${venue}\\b`).test(text)) others += text.match(callRe)?.length ?? 0;
+        }
+    }
+    const own = (readRustTsIndexSource(file) ?? '').match(callRe)?.length ?? 0;
+    if (calls.length === 0 || others !== 0 || calls.length !== own) return false;
+    const index = Array.from(method.parameters).indexOf(param);
+    return calls.every((call: any) => {
+        const arg: any = call.arguments[index];
+        if (arg === undefined || !isIdentifier(arg)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(arg);
+        return d !== undefined && isParameterDeclaration(d) && this.rustP28OrderRowsParam(d);
+    });
+};
+{
+    const proto: any = RustTranspiler.prototype;
+    const paramType = proto.rustParamType;
+    proto.rustParamType = function (this: any, param: any): string {
+        return this.rustR24RowsParam(param) ? 'Vec<crate::value::Dict>' : paramType.call(this, param);
+    };
+    // a typed createOrders' `orders` may also be handed whole to such a parameter
+    const p28 = proto.rustP28OrderRowsParamUncached;
+    proto.rustP28OrderRowsParamUncached = function (this: any, param: any): boolean {
+        if (p28.call(this, param)) return true;
+        return this.rustR24OrderRowsWithHandOn(param);
+    };
+}
+(RustTranspiler.prototype as any).rustR24OrderRowsWithHandOn = function (this: any, param: any): boolean {
+    if (!isIdentifier(param.name) || param.initializer !== undefined || param.questionToken !== undefined) return false;
+    const ts = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
+    if (ts !== 'OrderRequest[]') return false;
+    const method: any = param.parent;
+    if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || this.rustTestTierSource(param)) return false;
+    if (this.rustTypedSignature(method) === undefined || this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+    let handOn = 0;
+    for (const n of this.rustScopeNameNodes(method, String(param.name.text)) as any[]) {
+        if (n === param.name || n === param) continue;
+        if (!isIdentifier(n) || this.rustDeclarationOfIdentifier(n) !== param) {
+            if (isIdentifier(n) && this.rustIdentifierIsPropertyName(n)) continue;
+            return false;
+        }
+        const up: any = n.parent;
+        if (isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'length') continue;
+        if (this.rustP21RowRead(up, n) !== undefined || this.rustP21ElementRowRead(up, n) !== undefined) continue;
+        if (!isCallExpression(up) || up.expression === n || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const params = this.rustCalleeParams(up);
+        const at = Array.from(up.arguments).indexOf(n);
+        if (params === undefined || at < 0 || at >= params.length || !this.rustR24RowsBody(params[at])) return false;
+        handOn++;
+    }
+    // the list moves into its one hand-on: no other use of it
+    return handOn === 1 && this.rustScopeNameNodes(method, String(param.name.text)).filter((n: any) => n !== param.name && n !== param && !this.rustIdentifierIsPropertyName(n)).length === 1;
+};
+// ===== end h48-R24
