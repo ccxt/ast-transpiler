@@ -23010,6 +23010,7 @@ export class RustTranspiler extends BaseTranspiler {
         'MarginModification',
         'Order[]',
         'TransferEntry',
+        'FundingHistory[]',
     ]);
 
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined {
@@ -23244,6 +23245,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a list the method builds (`Vec<Value>` local or literal) of untyped / map elements hands on its own vector
         if (kind === 'list' && this.rustBoxedElementList(exp) && !this.rustUntypedLocalCaller(fn)) { const built = this.rustBaseListPayload(this.unwrapParens(exp)); if (built !== undefined) return built; }
         const printed = this.printNode(exp, 0).trim();
+        // a base list filter already returns `List` (the ccxt pass drops a trailing `.into_list()` on it)
+        if (kind === 'list' && this.rustBaseListFilterOperand(exp, printed)) return `${printed}.into_list()`;
         const read = this.rustEmptyDefaultReaderPayload(exp, printed, kind);
         if (read !== undefined) return read;
         // the runtime `extend` builds a fresh map on every input, so its typed twin answers the same map
@@ -23289,6 +23292,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const file = String(this.rustScalarCallee(call)?.getSourceFile?.()?.fileName ?? '');
         return file !== '' && !RustTranspiler.RUST_BASE_TIER_FILE.test(file) && file !== String(fn.getSourceFile?.()?.fileName ?? '');
+    }
+
+    /** `this.filterBy*SinceLimit (..)` (optionally `as T[]`) of the base, printed as the bare call. */
+    rustBaseListFilterOperand(exp: any, printed: string): boolean {
+        let v: any = this.unwrapParens(exp);
+        if (v !== undefined && isAsExpression(v)) v = this.unwrapParens(v.expression);
+        if (v === undefined || !isCallExpression(v) || !isPropertyAccessExpression(v.expression) || v.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const method = String(v.expression.name.text);
+        if (!RustTranspiler.RUST_BASE_FILTER_LISTS.has(method) || this.rustBaseFilterReturnKind(v, method) !== 'list') return false;
+        return printed.startsWith(`self.${method}(`) && printed.endsWith(')') && this.rustBalancedText(printed.slice(`self.${method}(`.length, -1));
     }
 
     /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
