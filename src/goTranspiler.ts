@@ -61115,7 +61115,7 @@ Object.assign (CCXT_GO_HELPER_RETURN_TYPES, { 'this.HandleErrors': '*bool', 'exc
         return (goType === GO_SAFE_DICT_LOCAL_TYPE) && h45g12MarketSlotSites(this, fn, index);
     };
 }
-function h45g12MarketSlotSites (go: any, fn: any, index: number): boolean {
+function h45g12MarketSlotSites (go: any, fn: any, index: number, self: any = undefined): boolean {
     const param: any = fn?.parameters?.[index];
     if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || go.isAsyncFunction(fn)
         || (param?.type?.getText?.() !== 'Market') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
@@ -61132,8 +61132,13 @@ function h45g12MarketSlotSites (go: any, fn: any, index: number): boolean {
         if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (call.runner !== undefined)) {
             return false;
         }
+        if ((self !== undefined) && (arg.kind === SyntaxKind.Identifier) && (go.goDeclarationOfIdentifier(arg) === self)) {
+            continue;
+        }
         const nil = (arg.kind === SyntaxKind.Identifier) && (arg.text === 'undefined');
-        if (!nil && (go.goPrintedArgType(arg) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+        const joined = (arg.kind === SyntaxKind.Identifier) && (go.goDeclarationOfIdentifier(arg)?.type?.getText?.() === 'Market')
+            && (H47G20_PENDING.has(go.goDeclarationOfIdentifier(arg)) || (ccxtGoNilJoinDeclarationType(go, arg) === GO_SAFE_DICT_LOCAL_TYPE));
+        if (!nil && !joined && (go.goPrintedArgType(arg) !== GO_SAFE_DICT_LOCAL_TYPE)) {
             return false;
         }
     }
@@ -61368,3 +61373,38 @@ for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'pr
     };
 }
 // ===== tabled dict slot fed an awaited boxed local (end) =====
+// ===== H47-G20 (begin): a nil-declared Market local handed to a required Market slot =====
+const H47G20_PENDING = new Set<any> ();
+// `let market: Market = undefined` written only by map rows may be read before a write by a same-file method whose
+// `Market` slot the H45-G12 proof types map[string]any once this local is a map: a nil map there is the absent market
+{
+    const callArmH47g20 = CCXT_GO_NIL_JOIN_READ_RULE.arms[ts.SyntaxKind.CallExpression];
+    CCXT_GO_NIL_JOIN_READ_RULE.arms[ts.SyntaxKind.CallExpression] = function (parent, child, goTranspiler, node) {
+        return callArmH47g20 (parent, child, goTranspiler) || h47g20MarketSlotRead (goTranspiler, parent, child, node);
+    };
+}
+function h47g20MarketSlotRead (go: any, call: any, child: any, node: any): boolean {
+    const index = call.arguments.indexOf (child);
+    const self: any = (child === node) ? go.goDeclarationOfIdentifier (node) : undefined;
+    if ((index < 0) || (self?.type?.getText?.() !== 'Market') || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    let fn: any;
+    try {
+        fn = go.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
+    } catch (e) {
+        return false;
+    }
+    if (fn?.getSourceFile?.() !== call.getSourceFile ()) {
+        return false;
+    }
+    // two such locals handing to one slot prove each other: the one being joined is assumed a map
+    H47G20_PENDING.add (self);
+    try {
+        return h45g12MarketSlotSites (go, fn, index, self);
+    } finally {
+        H47G20_PENDING.delete (self);
+    }
+}
+// ===== H47-G20 (end)
