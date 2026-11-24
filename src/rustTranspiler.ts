@@ -39760,6 +39760,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_INHERENT_GROUP_STR_PARAMS: Record<string, string[]> = { 'handleTextMessage': [ '', 'message' ],
         'calculateRateLimiterCost': [ '', 'method', 'path' ],
         'signEvmTransaction': [ '', 'privateKey' ],
+        'calculateFee': [ 'symbol', '', 'side' ],
     };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
