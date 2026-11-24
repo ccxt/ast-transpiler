@@ -27810,8 +27810,26 @@ describe('rust venue initializeClient Promise<boolean> prints -> bool', () => {
         expect(out).toContain('return true;');
         expect(out).not.toContain('Value::Bool(self.initializeClient())');
     });
-    test('negative: Promise<Bool> and Promise<any> keep -> Value', () => {
-        expect(build('ic2', 'Promise<Bool>')).toMatch(/fn initializeClient\(&(?:mut )?self\) -> Value \{/);
+    test('a Promise<Bool> declaration returns Option<bool>; Promise<any> keeps -> Value', () => {
+        expect(build('ic2', 'Promise<Bool>')).toMatch(/fn initializeClient\(&(?:mut )?self\) -> Option<bool> \{/);
         expect(build('ic3', 'Promise<any>')).toMatch(/fn initializeClient\(&(?:mut )?self\) -> Value \{/);
+    });
+    test('a Promise<Bool> body with an undefined fallthrough returns None, its flag returns Some', () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-ic4-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), 'export type Dict = { [key: string]: any };\nexport type Bool = boolean | undefined;\nexport default class Exchange {\n    options: Dict = {};\n    safeBool (o: any, k: string, d: boolean = undefined): boolean { return o[k] ?? d; }\n}\n');
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Bool } from './base/Exchange.js';\n"
+            + "export default class venue extends Exchange {\n"
+            + "    async initializeClient (params: Dict = {}): Promise<Bool> {\n        const fee = this.safeBool (params, 'builderFee', true);\n        if (!fee) {\n            return false;\n        }\n"
+            + "        if (this.safeBool (this.options, 'approved', false)) {\n            return true;\n        }\n        return undefined;\n    }\n"
+            + "    async fetchIt (params = {}) {\n        await this.initializeClient (params);\n        return 1;\n    }\n}\n");
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        let out = '';
+        try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+        expect(out).toMatch(/fn initializeClient\([^)]*\) -> Option<bool> \{/);
+        expect(out).toContain('return Some(false);');
+        expect(out).toContain('return Some(true);');
+        expect(out).toContain('return None;');
+        expect(out).not.toContain('return Value::Null;');
     });
 });

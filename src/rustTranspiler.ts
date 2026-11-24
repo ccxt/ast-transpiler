@@ -6672,7 +6672,8 @@ export class RustTranspiler extends BaseTranspiler {
         // every body returns the symbol -> tiers map it builds (`-> Dict`)
         parseLeverageTiers: [ 'LeverageTiers', 'dict' ],
         // venue client setup: `true` once set up, `false` when it caught an error (an async declaration spells `Promise<..>`)
-        initializeClient: [ 'Promise<boolean>', 'bool' ],
+        // `Promise<Bool>` venues also return `undefined` (`-> Option<bool>`): the n-th kind belongs to the n-th spelling
+        initializeClient: [ 'Promise<boolean>|Promise<Bool>', 'bool|obool' ],
         // venue builder-fee gate: true when approved (or already), false when skipped or refused (async: awaited at each call)
         handleBuilderFeeApproval: [ 'Promise<boolean>', 'bool' ],
     };
@@ -6698,7 +6699,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.isAsyncFunction(node) !== (Array.isArray(entry) && entry[0].startsWith('Promise<'))) return undefined;
         const declared = String(node.type?.getText?.() ?? '').trim();
         if (!Array.isArray(entry) || !(entry[0] === declared || entry[0].split('|').includes(declared))) return undefined;
-        return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? entry[1] : undefined;
+        const kinds = entry[1].split('|');
+        return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? (kinds[entry[0].split('|').indexOf(declared)] ?? kinds[0]) : undefined;
     }
 
     /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
