@@ -14130,6 +14130,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'fetchUnifiedOrder': [ 0 ],
     // its one base caller passes the `tx` Dict literal; every override reads it with safe* readers
     'signEvmTransaction': [ 0 ],
+    // every tree caller passes a `{}`-defaulted safeDict row, an extend copy or a typed map
+    'parsePredictionOrder': [ 0 ],
 };
 // the async rows above (each one's typed wrapper converts its struct argument)
 const GO_BASE_DICT_ASYNC_PARAMS: string[] = [
