@@ -40058,7 +40058,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declared = this.rustVenueScalarTypeOf(type, param.type);
         if (declared === undefined || (optional && declared === 'bool')) return undefined;
         const rustType = optional && !declared.startsWith('Option<') ? `Option<${declared}>` : declared;
-        if (rustType.includes('f64') && !group && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
+        if (rustType.includes('f64') && !group && !this.rustVenueFloatUsesStayInside(method, param) && !this.rustVenueFloatArgsAllFloat(method, param)) return undefined;
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
         if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType)) && !this.rustVenueOptStrParam(method, param, rustType) && !this.rustVenueStrParam(method, param, rustType)) return undefined;
@@ -40786,6 +40786,17 @@ export class RustTranspiler extends BaseTranspiler {
             return false;
         }
         return true;
+    }
+
+    /** Every in-file caller passes its own unwritten typed `number` / `Num` parameter by name: the argument already is
+     *  a `Float` (or `Null`), so an `f64` rebinding keeps every variant and any body read stays as it was. */
+    rustVenueFloatArgsAllFloat(method: any, param: any): boolean {
+        const at = Array.from(method.parameters).indexOf(param);
+        const calls = this.rustVenueStrCallSites(method);
+        return calls.length > 0 && calls.every((call: any) => {
+            const arg: any = call.arguments[at] === undefined ? undefined : this.unwrapParens(call.arguments[at]);
+            return arg !== undefined && isIdentifier(arg) && [ 'num', 'onum' ].includes(this.rustOptParamKind(arg) ?? '');
+        });
     }
 
     rustVenueArithmeticArg(arg: any): boolean {
