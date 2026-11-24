@@ -157,3 +157,50 @@ describe ('csharp venue-private params bag fed by an omit or a destructured slot
         expect(a).toContain('otherSlot(string s, object parameters = null)');
     });
 });
+
+describe ('csharp venue-private dictionary row parameter', () => {
+    // a required `row: Dict` of a venue-private method prints IDictionary when every caller of its
+    // venue chain passes a value already printed as a dictionary
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-dict-row');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    safeString (a: any, k: any): any { return a; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any, rows: any) { return [ this.typedRow (this.extend (x, { 'a': 1 })), this.boxedRow (x), this.writtenRow ({}), this.optionalRow () ]; }\n" +
+            "    typedRow (row: Dict) { return this.safeString (row, 'k'); }\n" +
+            "    boxedRow (row: Dict) { return this.safeString (row, 'k'); }\n" +
+            "    writtenRow (row: Dict) { row = this.extend (row, {}); return this.safeString (row, 'k'); }\n" +
+            "    optionalRow (row: Dict = undefined) { return this.safeString (row, 'k'); }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('every caller passes a dictionary: the row prints IDictionary', () => {
+        expect(a).toContain('typedRow(IDictionary<string, object> row)');
+    });
+
+    test('a boxed argument keeps object (nil / wrong kind stay what they are)', () => {
+        expect(a).toContain('boxedRow(object row)');
+    });
+
+    test('a body that rebinds the row keeps object', () => {
+        expect(a).toContain('writtenRow(object row)');
+    });
+
+    test('an optional row keeps object', () => {
+        expect(a).toContain('optionalRow(object row = null)');
+    });
+});

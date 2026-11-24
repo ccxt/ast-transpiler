@@ -3213,7 +3213,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 }
                 Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
                     const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
-                        ?? this.csharpVenueDictParamsKind(method, parameter, index, calls);
+                        ?? this.csharpVenueDictParamsKind(method, parameter, index, calls)
+                        ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
                     if (kind === 'string') {
                         this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
                     }
@@ -3304,6 +3305,38 @@ export class CSharpTranspiler extends BaseTranspiler {
                 return undefined;
             }
             if ((args[index] !== undefined) && !this.csharpDictArgumentIsTyped(args[index])) {
+                return undefined;
+            }
+        }
+        return 'IDictionary<string, object>';
+    }
+
+    // a required `x: Dict` parameter of a venue-private method prints IDictionary when no subclass overrides
+    // it, the body never rebinds it or uses it as a conditional arm, and every `this.` call passes a value
+    // already printed as a dictionary; one boxed argument keeps object
+    csharpVenueDictRowParamKind(method, parameter, index: number, calls: any[]): string | undefined {
+        if (!isIdentifier(parameter.name) || (parameter.initializer !== undefined) || (parameter.questionToken !== undefined)
+            || (parameter.dotDotDotToken !== undefined) || (parameter.type === undefined) || (parameter.type.getText().trim() !== 'Dict')
+            || this.csharpVenueOverriddenMethods.has(method) || this.csharpNameIsRebound(parameter, method)) {
+            return undefined;
+        }
+        const name = parameter.name.text;
+        let armed = false;
+        const walk = (node: any) => {
+            if (!armed && (node.kind === SyntaxKind.ConditionalExpression)) {
+                armed = [ node.whenTrue, node.whenFalse ].some((arm) => isIdentifier(this.csharpUnparenthesized(arm)) && (this.csharpUnparenthesized(arm).text === name));
+            }
+            node.forEachChild(walk);
+        };
+        method.body?.forEachChild(walk);
+        const proKinds = this.csharpProFileCallKinds(method, index, true);
+        if (armed || (proKinds === undefined) || (proKinds.length !== 0)) {
+            return undefined;
+        }
+        for (const call of calls) {
+            const args: any[] = Array.from(call.arguments ?? []);
+            if ((args.length > method.parameters.length) || args.some((a) => isSpreadElement(a))
+                || (args[index] === undefined) || !this.csharpDictArgumentIsTyped(args[index])) {
                 return undefined;
             }
         }
