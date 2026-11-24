@@ -8386,7 +8386,27 @@ function ccxtGoTupleStringReadIsSafe (goTranspiler, node) {
             return true;
         }
     }
+    if ((current === node) && ccxtGoTupleStringFeedsProvenStrParam (goTranspiler, node)) {
+        return true;
+    }
     return (current === node) && goReadRuleAccepts (NIL_DECLARED_READ_RULE, goTranspiler, node);
+}
+
+// `this.m (.., x, ..)` with x a `let x: Str = undefined` local and that slot a required venue `Str` parameter whose
+// *string proof holds once x is taken as *string: the two print together, the callee nil-tests what the box held
+function ccxtGoTupleStringFeedsProvenStrParam (goTranspiler, node) {
+    const call = node.parent;
+    const local = ccxtGoParamDeclarationOf (goTranspiler, node);
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression === node) || (local?.kind !== ts.SyntaxKind.VariableDeclaration)
+        || (local.type?.kind !== ts.SyntaxKind.TypeReference) || (local.type.typeName?.getText () !== 'Str')) {
+        return false;
+    }
+    const callee = stringPtrParamCallDeclaration (goTranspiler, call);
+    const param = callee?.parameters?.[call.arguments.indexOf (node)];
+    if ((param === undefined) || (param.type?.getText () !== 'Str')) {
+        return false;
+    }
+    return goStringPtrParamProvenAssuming (goTranspiler, param, local);
 }
 
 // callee -> exact argument indices bound through GetArg (derefs a pointer, folds a nil one to the default)
@@ -13183,6 +13203,17 @@ function goStringPtrAssumedArg (go, arg): boolean {
     }
     const decl = go.goGetArgCalleeDeclaration (arg);
     return (decl !== undefined) && GO_STR_PTR_ASSUMED.has (decl);
+}
+function goStringPtrParamProvenAssuming (go, param, local): boolean {
+    if (GO_STR_PTR_ASSUMED.has (local)) {
+        return goStringPtrParamProven (go, param);
+    }
+    GO_STR_PTR_ASSUMED.add (local);
+    try {
+        return goStringPtrParamProven (go, param);
+    } finally {
+        GO_STR_PTR_ASSUMED.delete (local);
+    }
 }
 function goStringPtrFlowsIntoProvenParam (go, param, callee, argIndex: number): boolean {
     const decl: any = go.goGetArgCalleeDeclaration (callee);
