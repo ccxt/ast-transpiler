@@ -2406,6 +2406,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (unifiedInt !== undefined) {
             return unifiedInt;
         }
+        const venueDict = testTier ? undefined : this.javaVenueNullableDictParameterType(node, name, symbol, method);
+        if (venueDict !== undefined) {
+            return venueDict;
+        }
         if (name === undefined) {
             return this.javaPlainParameterTypeOf(node, type, checker);
         }
@@ -2480,6 +2484,29 @@ export class JavaTranspiler extends BaseTranspiler {
         // the parameter is never reassigned in the caller's body
         return !this.javaTreeSome((method as any).body, (n) => (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
             && isIdentifier(n.left) && n.left.text === arg.text) || undefined);
+    }
+
+    // a fixed `NullableDict` slot of a venue-private method (no ancestor, never written, no foreign, hand-written or
+    // dynamic use) prints a Map when every own-file `this.name (..)` caller hands a local the printer declares a Map
+    javaVenueNullableDictParameterType(node, name, symbol, method): string | undefined {
+        if (name !== 'NullableDict' || typeof this.javaRepoMethodUses !== 'function' || !isIdentifier(method.name)
+            || !JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(symbol?.declarations?.[0]?.resolve()?.getSourceFile?.()?.fileName ?? '')
+            || !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'))
+            || this.getMethodOverride(method) !== undefined || this.javaParameterIsWritten(node)
+            || this.javaParameterIsTypeofTested(node)) {
+            return undefined;
+        }
+        const methodName = String(method.name.text);
+        const uses = this.javaRepoMethodUses(methodName, node.getSourceFile().fileName);
+        if (uses === undefined || uses.foreignCalls !== 0 || uses.mentions > 0 || uses.handWritten) {
+            return undefined;
+        }
+        const position = method.parameters.indexOf(node);
+        const internal = this.javaThisCallsInFile(node.getSourceFile(), methodName);
+        const isMap = (arg) => arg !== undefined && isIdentifier(arg) && this.printNode(arg, 0) === arg.text
+            && (this.javaDeclaredTypeOf(arg) ?? '').replace(/^final\s+/, '').replace(/\s+/g, '').replace(/^java\.util\./, '') === 'Map<String,Object>';
+        return internal.length > 0 && internal.every((call) => isMap(call.arguments?.[position]))
+            ? JAVA_NATIVE_DICT_PARAMETER_TYPE : undefined;
     }
 
     // a sync `string[]` slot (not `Strings`) of a base method that venues override and no hand-written Java declares
