@@ -15763,6 +15763,8 @@ function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const indexes = Object.prototype.hasOwnProperty.call (GO_BASE_STR_PTR_PARAMS, fn.name.text) ? GO_BASE_STR_PTR_PARAMS[fn.name.text] : undefined;
     if ((indexes === undefined) || !indexes.includes (fn.parameters.indexOf (param))) { return undefined; }
     const declared = String (param.type?.getText () ?? '').trim ();
+    // the key row follows the `Str` declaration only; a plain `string` key keeps its earlier printing
+    if ((fn.name.text === 'getSupportedMapping') && (declared !== 'Str')) { return undefined; }
     if (goIsBaseExchangeFile (fn)) { return ((fn.name.text !== 'handleErrors') || (declared === 'Str')) ? '*string' : undefined; }
     if (!go.goMethodKeepsBaseSignature (fn)) { return undefined; }
     // an override prints the base signature or the interface breaks: fail the build instead of boxing
