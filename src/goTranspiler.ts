@@ -14158,6 +14158,8 @@ export function goDynamicCallParamsCheck (): string[] {
 export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'safeTrade': [ 0 ], 'safeLedgerEntry': [ 0 ], 'safeLiquidation': [ 0 ], 'safeCurrencyStructure': [ 0 ],
     'mergeBalanceAccount': [ 0 ],
+    // every tree caller passes a map local, this.balance or a `{}`-defaulted safeDict read
+    'safeBalance': [ 0 ],
     // a map receiver every tree call site passes as a map (no site calls it by quoted name)
     'cleanOrderBook': [ 0 ],
     // its one caller passes a parseTickers map
@@ -14401,7 +14403,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
         if (h30a18MapArg (go, name, call, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)
-            && !goDictParamAwaitedBoxedLocal (go, arg)) { return false; }
+            && !goDictParamAwaitedBoxedLocal (go, arg) && !goDictParamBalanceFieldArg (arg)) { return false; }
     }
     const tree = go.goTsSrcTree (fn.getSourceFile ());
     if (tree === undefined) { return false; }
@@ -14483,12 +14485,18 @@ function goDictParamSiblingSiteProven (go: any, tree: any, name: string, site: a
     go.setContext ({ src, 'checker': entry.batch['checker'], program });
     try {
         if (h30a18MapArg (go, name, call, arg)) { return true; }
-        return (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) || goDictParamAwaitedMapArg (go, arg) || goDictParamTabledSafeDictArg (go, call, arg);
+        return (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) || goDictParamAwaitedMapArg (go, arg) || goDictParamTabledSafeDictArg (go, call, arg)
+            || goDictParamBalanceFieldArg (arg);
     } catch (e) {
         return false;
     } finally {
         go.setContext (saved);
     }
+}
+
+// `this.balance` is the BaseExchange field go/v4/exchange.go declares `map[string]any` (never rebound to another kind)
+function goDictParamBalanceFieldArg (arg: any): boolean {
+    return (arg?.kind === SK.PropertyAccessExpression) && (arg.expression?.kind === SK.ThisKeyword) && (arg.name?.text === 'balance');
 }
 
 // the printed-signature and body proofs, or the reason the parameter keeps the box
