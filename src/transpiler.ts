@@ -296,6 +296,16 @@ function getApi(cache: ITranspileProgramCache): API {
     return cache.api;
 }
 
+/** Stops every TS7 API server this isolate started; the next transpile starts a new one. */
+function closeApiServers(): void {
+    const printers: any[] = [ RustTranspiler, CSharpTranspiler ];
+    const owned: any[] = [ processApi, printers[0].rustSignProofApi, printers[1].csharpProParseApi ];
+    processApi = undefined;
+    printers[0].rustSignProofApi = undefined;
+    printers[1].csharpProParseApi = undefined;
+    for (const api of owned) api?.close();
+}
+
 // a snapshot with one synthetic program over rootFiles; `files` overlays virtual file contents
 function createSnapshotProgram(cache: ITranspileProgramCache, rootFiles: string[], files: Record<string, string>): [Snapshot, Program, Checker] {
     const snapshot = getApi(cache).createSnapshot({
@@ -842,6 +852,7 @@ class TranspileProgramBatch {
 export {
     Transpiler,
     TranspileProgramBatch,
+    closeApiServers,
     // the TS7 flag enums of the typescript the generator runs on, for consumer hooks whose
     // own `typescript` resolution may be an older 7.x lacking them
     CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags,

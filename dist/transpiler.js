@@ -123260,6 +123260,15 @@ function getApi(cache) {
   cache.api ??= processApi ??= new API5({ cwd: process.cwd() });
   return cache.api;
 }
+function closeApiServers() {
+  const printers = [RustTranspiler, CSharpTranspiler];
+  const owned = [processApi, printers[0].rustSignProofApi, printers[1].csharpProParseApi];
+  processApi = void 0;
+  printers[0].rustSignProofApi = void 0;
+  printers[1].csharpProParseApi = void 0;
+  for (const api of owned)
+    api?.close();
+}
 function createSnapshotProgram(cache, rootFiles, files) {
   const snapshot = getApi(cache).createSnapshot({
     fileSystem: { kind: "layer", files },
@@ -123696,6 +123705,7 @@ export {
   TypeFlags7 as TypeFlags,
   TypeFormatFlags,
   alignGoTrailingComments,
+  closeApiServers,
   Transpiler as default,
   goDictParamTypesSelfTest,
   goDynamicCallParamsCheck,

@@ -123259,6 +123259,15 @@ function getApi(cache) {
   cache.api ??= processApi ??= new (0, _sync.API)({ cwd: process.cwd() });
   return cache.api;
 }
+function closeApiServers() {
+  const printers = [RustTranspiler, CSharpTranspiler];
+  const owned = [processApi, printers[0].rustSignProofApi, printers[1].csharpProParseApi];
+  processApi = void 0;
+  printers[0].rustSignProofApi = void 0;
+  printers[1].csharpProParseApi = void 0;
+  for (const api of owned)
+    _optionalChain([api, 'optionalAccess', _23757 => _23757.close, 'call', _23758 => _23758()]);
+}
 function createSnapshotProgram(cache, rootFiles, files) {
   const snapshot = getApi(cache).createSnapshot({
     fileSystem: { kind: "layer", files },
@@ -123335,7 +123344,7 @@ var Transpiler = class _Transpiler {
     const src = _nullishCoalesce(program.getSourceFile(fileName), () => ( program.getSourceFile(path3.resolve(fileName))));
     const previous = this.snapshot;
     this.snapshot = snapshot;
-    _optionalChain([previous, 'optionalAccess', _23757 => _23757.dispose, 'call', _23758 => _23758()]);
+    _optionalChain([previous, 'optionalAccess', _23759 => _23759.dispose, 'call', _23760 => _23760()]);
     return this.setContext({ src, checker, program });
   }
   createProgramInMemoryAndSetContext(content) {
@@ -123359,7 +123368,7 @@ var Transpiler = class _Transpiler {
   // long as the file's text on disk still equals the snapshot's. Replaces any
   // previous shared program; pass [] to drop it.
   setSharedProgram(paths) {
-    _optionalChain([this, 'access', _23759 => _23759.programCache, 'access', _23760 => _23760.shared, 'optionalAccess', _23761 => _23761.snapshot, 'access', _23762 => _23762.dispose, 'call', _23763 => _23763()]);
+    _optionalChain([this, 'access', _23761 => _23761.programCache, 'access', _23762 => _23762.shared, 'optionalAccess', _23763 => _23763.snapshot, 'access', _23764 => _23764.dispose, 'call', _23765 => _23765()]);
     this.programCache.shared = void 0;
     if (paths.length === 0) {
       return;
@@ -123719,5 +123728,6 @@ var TranspileProgramBatch = class {
 
 
 
-exports.CCXT_GO_BOOL_METHOD_NAMES = CCXT_GO_BOOL_METHOD_NAMES; exports.CCXT_GO_HELPER_RETURN_TYPES = CCXT_GO_HELPER_RETURN_TYPES; exports.CCXT_GO_STRING_PTR_METHOD_NAMES = CCXT_GO_STRING_PTR_METHOD_NAMES; exports.CheckFlags = _sync.CheckFlags; exports.ElementFlags = _sync.ElementFlags; exports.IndexKind = _sync.IndexKind; exports.ObjectFlags = _sync.ObjectFlags; exports.RUST_DECLARED_DICT_LOCALS = RUST_DECLARED_DICT_LOCALS; exports.SignatureKind = _sync.SignatureKind; exports.SymbolFlags = _sync.SymbolFlags; exports.SyntaxKind = _ast.SyntaxKind; exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.TypeFlags = _sync.TypeFlags; exports.TypeFormatFlags = _sync.TypeFormatFlags; exports.alignGoTrailingComments = alignGoTrailingComments; exports.default = Transpiler; exports.goDictParamTypesSelfTest = goDictParamTypesSelfTest; exports.goDynamicCallParamsCheck = goDynamicCallParamsCheck; exports.goHandleErrorsCodeSelfTest = goHandleErrorsCodeSelfTest; exports.goNilJoinTypeSelfTest = goNilJoinTypeSelfTest; exports.goParseFrameParamTypesSelfTest = goParseFrameParamTypesSelfTest; exports.installCcxtGoDictParams = installCcxtGoDictParams; exports.installCcxtGoFeeTierLiterals = installCcxtGoFeeTierLiterals; exports.installCcxtGoGb05ParamTypes = installCcxtGoGb05ParamTypes; exports.installCcxtGoGb11HandleErrorsCode = installCcxtGoGb11HandleErrorsCode; exports.installCcxtGoHooks = installCcxtGoHooks; exports.installCcxtGoIndexableTypes = installCcxtGoIndexableTypes; exports.installCcxtGoLocalTypes = installCcxtGoLocalTypes; exports.installCcxtGoParamTypes = installCcxtGoParamTypes; exports.installCcxtGoSignTyping = installCcxtGoSignTyping; exports.installCcxtGoTupleSlotReads = installCcxtGoTupleSlotReads; exports.installFmGo5G01 = installFmGo5G01; exports.installFmGo5G04 = installFmGo5G04; exports.installFmGo5GP08 = installFmGo5GP08; exports.installFmGo5OG02 = installFmGo5OG02; exports.installNumParams = installNumParams; exports.installRfGo5OwnedTables = installRfGo5OwnedTables; exports.rustDispatch = rustDispatch; exports.rustDropUnusedMut = rustDropUnusedMut;
+
+exports.CCXT_GO_BOOL_METHOD_NAMES = CCXT_GO_BOOL_METHOD_NAMES; exports.CCXT_GO_HELPER_RETURN_TYPES = CCXT_GO_HELPER_RETURN_TYPES; exports.CCXT_GO_STRING_PTR_METHOD_NAMES = CCXT_GO_STRING_PTR_METHOD_NAMES; exports.CheckFlags = _sync.CheckFlags; exports.ElementFlags = _sync.ElementFlags; exports.IndexKind = _sync.IndexKind; exports.ObjectFlags = _sync.ObjectFlags; exports.RUST_DECLARED_DICT_LOCALS = RUST_DECLARED_DICT_LOCALS; exports.SignatureKind = _sync.SignatureKind; exports.SymbolFlags = _sync.SymbolFlags; exports.SyntaxKind = _ast.SyntaxKind; exports.TranspileProgramBatch = TranspileProgramBatch; exports.Transpiler = Transpiler; exports.TypeFlags = _sync.TypeFlags; exports.TypeFormatFlags = _sync.TypeFormatFlags; exports.alignGoTrailingComments = alignGoTrailingComments; exports.closeApiServers = closeApiServers; exports.default = Transpiler; exports.goDictParamTypesSelfTest = goDictParamTypesSelfTest; exports.goDynamicCallParamsCheck = goDynamicCallParamsCheck; exports.goHandleErrorsCodeSelfTest = goHandleErrorsCodeSelfTest; exports.goNilJoinTypeSelfTest = goNilJoinTypeSelfTest; exports.goParseFrameParamTypesSelfTest = goParseFrameParamTypesSelfTest; exports.installCcxtGoDictParams = installCcxtGoDictParams; exports.installCcxtGoFeeTierLiterals = installCcxtGoFeeTierLiterals; exports.installCcxtGoGb05ParamTypes = installCcxtGoGb05ParamTypes; exports.installCcxtGoGb11HandleErrorsCode = installCcxtGoGb11HandleErrorsCode; exports.installCcxtGoHooks = installCcxtGoHooks; exports.installCcxtGoIndexableTypes = installCcxtGoIndexableTypes; exports.installCcxtGoLocalTypes = installCcxtGoLocalTypes; exports.installCcxtGoParamTypes = installCcxtGoParamTypes; exports.installCcxtGoSignTyping = installCcxtGoSignTyping; exports.installCcxtGoTupleSlotReads = installCcxtGoTupleSlotReads; exports.installFmGo5G01 = installFmGo5G01; exports.installFmGo5G04 = installFmGo5G04; exports.installFmGo5GP08 = installFmGo5GP08; exports.installFmGo5OG02 = installFmGo5OG02; exports.installNumParams = installNumParams; exports.installRfGo5OwnedTables = installRfGo5OwnedTables; exports.rustDispatch = rustDispatch; exports.rustDropUnusedMut = rustDropUnusedMut;
 //# sourceMappingURL=transpiler.cjs.map
