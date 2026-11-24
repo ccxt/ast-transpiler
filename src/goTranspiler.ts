@@ -50496,9 +50496,29 @@ GoTranspiler.prototype.h27g37SpawnArgIsString = function (arg) {
     if (printed === 'string') {
         return true;
     }
+    if (((printed === undefined) || (printed === '*string') || (printed === 'any')) && goH45g08DeclaredStringParam(this, arg)) {
+        return true;
+    }
     return (printed === '*string') && (arg.kind === SyntaxKind.Identifier)
         && (this.goDefaultedSafeStringLocal(arg) || this.goHasEnclosingNilGuard(arg) || this.goHasExitingNilGuard(arg));
 };
+// a required parameter of the calling method declared `string` (no `?`, no default) that it never writes:
+// the declaration rules out nil, so the spawned callee takes the Go string it declares
+function goH45g08DeclaredStringParam (goTranspiler: GoTranspiler, arg): boolean {
+    let param: any;
+    try {
+        param = (arg?.kind === SyntaxKind.Identifier) ? goTranspiler.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.() : undefined;
+    } catch (e) {
+        return false;
+    }
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (param.questionToken !== undefined)
+        || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.type?.kind !== SyntaxKind.StringKeyword)
+        || (fn?.body === undefined)) {
+        return false;
+    }
+    return goTranspiler.goNameWriteSites (fn.body, param.name.text, param).length === 0;
+}
 GoTranspiler.prototype.h27g37SpawnArgDeref = function (node, printed: string) {
     const call: any = node?.parent;
     if ((call?.kind !== SyntaxKind.CallExpression) || (this.goThisCallName(call) !== 'spawn')) {
