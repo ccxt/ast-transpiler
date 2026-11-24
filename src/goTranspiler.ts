@@ -3590,6 +3590,10 @@ function ccxtGoLocalHasNativeUse (goTranspiler, initializer, goType) {
                 || (isCompare (parent.operatorToken.kind) && [ parent.left, parent.right ].some ((side) => (side.kind === SK.TrueKeyword) || (side.kind === SK.FalseKeyword))));
         }
         if ((goType === 'string') || (goType === '*string')) {
+            // a *string handed to a slot its callee derefs at entry (SafeSymbol / SafeMarket / Market ..) reads as the box did
+            if ((goType === '*string') && (current === node) && h27g13LocalReadDerefs (node)) {
+                return true;
+            }
             if (parent.kind !== SK.BinaryExpression) {
                 return false;
             }
