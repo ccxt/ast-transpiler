@@ -41317,7 +41317,8 @@ export class RustTranspiler extends BaseTranspiler {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
-                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)));
+                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)))
+                        || this.rustLocalHoldsFreshBook(decl, init);
                     if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
             }
@@ -41349,6 +41350,40 @@ export class RustTranspiler extends BaseTranspiler {
         // the default, when given, is a fresh map
         const dflt: any = init.arguments[2] === undefined ? undefined : this.unwrapParens(init.arguments[2]);
         return dflt === undefined || (isObjectLiteralExpression(dflt) && dflt.properties.length === 0) || this.rustCallReturnsFreshLiteral(dflt);
+    }
+
+    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
+     *  every `return` is an object literal of primitive-typed values: a key write cannot reach the message. */
+    rustLocalHoldsFreshBook(decl: any, init: any): boolean {
+        if (decl === undefined || !isVariableDeclaration(decl) || init === undefined) return false;
+        if (this.rustWsOrderBookClassType(this.getChecker().getTypeAtLocation(decl.name)) || this.rustReadsOrderbooksStore(decl.name)) return true;
+        const store: any = isElementAccessExpression(init) ? init.expression : undefined;
+        if (store !== undefined && isPropertyAccessExpression(store) && store.expression.kind === SyntaxKind.ThisKeyword && store.name.text === 'orderbooks') return true;
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const callee: any = this.rustCalleeDeclaration(init);
+        if (callee === undefined || !isMethodDeclaration(callee) || callee.body === undefined) return false;
+        const rets: any[] = [];
+        let nested = false;
+        const visit = (n: any): void => {
+            if (isFunctionLike(n)) { nested = true; return; }
+            if (isReturnStatement(n)) rets.push(n.expression);
+            n.forEachChild(visit);
+        };
+        callee.body.forEachChild(visit);
+        return !nested && rets.length > 0 && rets.every((r: any) => {
+            let e: any = r;
+            while (e !== undefined && (isParenthesizedExpression(e) || isAsExpression(e))) e = e.expression;
+            return e !== undefined && isObjectLiteralExpression(e) && e.properties.every((p: any) => isPropertyAssignment(p) && this.rustPrimitiveValue(p.initializer));
+        });
+    }
+
+    /** An expression the checker types as string, number, boolean, null or undefined only (never a shared map or list). */
+    rustPrimitiveValue(e: any): boolean {
+        if (isIdentifier(e) && e.text === 'undefined') return true;
+        const t: any = this.getChecker().getTypeAtLocation(e);
+        const parts: any[] = t !== undefined && (t.flags & TypeFlags.Union) ? (typeParts(t) ?? []) : [ t ];
+        const prim = TypeFlags.StringLike | TypeFlags.NumberLike | TypeFlags.BooleanLike | TypeFlags.Undefined | TypeFlags.Null;
+        return parts.length > 0 && parts.every((x: any) => x !== undefined && (x.flags & prim) !== 0 && (x.flags & TypeFlags.Object) === 0);
     }
 
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
