@@ -64,6 +64,7 @@ describe('an async venue Promise<[boolean | string, Dict]> method carries a type
         const dir = path.join(tmp, 'ts', 'src');
         fs.mkdirSync(dir, { 'recursive': true });
         fs.writeFileSync(path.join(dir, 'venue.ts'), 'type Dict = { [key: string]: any };\ntype Str = string | undefined;\nclass Exchange {\n'
+            + '    options: Dict = {};\n    safeString (o: any, k: any): Str { return undefined; }\n'
             + '    handleOptionAndParams (a: any, b: any, c: any): [any, Dict] { return [ a, b ]; }\n    async fetchX (a: any): Promise<Dict> { return {}; }\n}\n'
             + 'class venue extends Exchange {\n' + body + '}\n');
         const inst: any = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 }, asyncMethodSuffix: 'Async' } });
@@ -95,6 +96,23 @@ describe('an async venue Promise<[boolean | string, Dict]> method carries a type
     });
     test('a string slot fed a nullable Str keeps the untyped list', () => {
         const out = run('    async acc (params: Dict, s: Str = undefined): Promise<[string, Dict]> {\n        return [ s, params ];\n    }\n'
+            + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return id;\n    }\n');
+        expect(out).not.toContain('MapPair[string]');
+    });
+    test('a Str local nil-guarded by a throw right before the return sends MapPair[string]', () => {
+        const out = run('    async acc (params: Dict): Promise<[string, Dict]> {\n        const [ v, rest ] = this.handleOptionAndParams (params, \'loadAcc\', \'id\');\n        let id: Str = this.safeString (rest, \'id\');\n        if (id === undefined) {\n            id = this.safeString (this.options, \'id\');\n        }\n        if (id === undefined) {\n            throw new Error (\'no id\');\n        }\n        return [ id, rest ];\n    }\n'
+            + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return \'x+\' + id;\n    }\n');
+        expect(out).toContain('ch <- AsyncResult[MapPair[string]]{Value: MapPair[string]{V: *id, P: ');
+        expect(out).toContain('var id string = idrestPair.Value.V');
+        expect(out).not.toContain('*id\n');
+    });
+    test('a Str local guarded only by a nil test that does not exit keeps the untyped list', () => {
+        const out = run('    async acc (params: Dict): Promise<[string, Dict]> {\n        const [ v, rest ] = this.handleOptionAndParams (params, \'loadAcc\', \'id\');\n        let id: Str = this.safeString (rest, \'id\');\n        if (id === undefined) {\n            id = this.safeString (this.options, \'id\');\n        }\n        return [ id as string, rest ];\n    }\n'
+            + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return id;\n    }\n');
+        expect(out).not.toContain('MapPair[string]');
+    });
+    test('a Str local reassigned between the guard and the return keeps the untyped list', () => {
+        const out = run('    async acc (params: Dict): Promise<[string, Dict]> {\n        let id: Str = this.safeString (params, \'id\');\n        if (id === undefined) {\n            throw new Error (\'no id\');\n        }\n        id = this.safeString (params, \'other\');\n        return [ id, params ];\n    }\n'
             + '    async a (p: Dict) {\n        const [ id, rest ] = await this.acc (p);\n        return id;\n    }\n');
         expect(out).not.toContain('MapPair[string]');
     });

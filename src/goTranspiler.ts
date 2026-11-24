@@ -11992,6 +11992,9 @@ function ccxtGoAsyncVenuePairTypedSlot0 (goTranspiler, e, slot0) {
     } else if ((e?.kind === ts.SyntaxKind.StringLiteral) || (e?.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral)) {
         return true;
     }
+    if ((slot0 === 'string') && ccxtGoAsyncVenuePairNarrowedString (goTranspiler, e)) {
+        return true;
+    }
     // a `boolean` / `string` parameter with a literal default, or a local seeded and only ever assigned a literal of the kind
     const declaration = (e?.kind === ts.SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (goTranspiler, e) : undefined;
     const keyword = (slot0 === 'bool') ? ts.SyntaxKind.BooleanKeyword : ts.SyntaxKind.StringKeyword;
@@ -12005,6 +12008,16 @@ function ccxtGoAsyncVenuePairTypedSlot0 (goTranspiler, e, slot0) {
     return (scope !== undefined) && !goTranspiler.hasNodeWhere (scope, (n) => (n.kind === ts.SyntaxKind.BinaryExpression) && (n.left?.kind === ts.SyntaxKind.Identifier)
         && (n.left.text === name) && (n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
         && ((n.operatorToken.kind !== ts.SyntaxKind.EqualsToken) || !literal (n.right)));
+}
+
+// a `*string` local whose `return [ x, .. ]` directly follows `if (x === undefined) { throw / return }`: the pair sends `*x`
+function ccxtGoAsyncVenuePairNarrowedString (goTranspiler, e) {
+    const ret = e?.parent?.parent;
+    const block = ret?.parent;
+    const at = ((ret?.kind === ts.SyntaxKind.ReturnStatement) && (block?.kind === ts.SyntaxKind.Block)) ? block.statements.indexOf (ret) : -1;
+    const scope = (at > 0) ? goTranspiler?.goEnclosingFunction?.(e) : undefined;
+    return (e?.kind === ts.SyntaxKind.Identifier) && (scope !== undefined) && (goTranspiler.goDeclaredTypeOfIdentifier?.(e) === '*string')
+        && goTranspiler.goStatementExitsOnNil (block.statements[at - 1], e) && !goTranspiler.goLocalIsReboundInClosure (scope, e);
 }
 
 function installCcxtGoAsyncVenuePairs (goTranspiler) {
@@ -12041,11 +12054,12 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         const text0 = String (this.printNode (expr.elements[0], 0)).trim ();
         const v = (slot0 === 'int64') ? ccxtGoVenueIntSlot (expr.elements[0], text0)
             : ((text0.includes ('\n') || ((slot0 !== 'any') && !ccxtGoAsyncVenuePairTypedSlot0 (this, expr.elements[0], slot0))) ? undefined : text0);
+        const sent = ((v !== undefined) && (slot0 === 'string') && ccxtGoAsyncVenuePairNarrowedString (this, ccxtGoUnwrapParens (expr.elements[0]))) ? '*' + v : v;
         if ((m === null) || (v === undefined)) {
             return printed;
         }
         const p = ccxtGoVenueSlotText (this, expr.elements[1], 'map[string]any', 'MapTyped');
-        return m[1] + ccxtGoAsyncVenuePairCarrier (slot0) + '{Value: MapPair[' + slot0 + ']{V: ' + v + ', P: ' + p + '}}' + m[2];
+        return m[1] + ccxtGoAsyncVenuePairCarrier (slot0) + '{Value: MapPair[' + slot0 + ']{V: ' + sent + ', P: ' + p + '}}' + m[2];
     };
     // `const [ a, b ] = await this.m (..)` / `const h = await this.m (..)`
     const printDeclaration = goTranspiler.printVariableDeclarationList;
@@ -12129,6 +12143,10 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
     const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
     goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
         const known = shippedDeclared.call (this, node);
+        // a `string` pair slot is never nil, whatever the tuple element rule answered
+        if ((known === '*string') && (ccxtGoAsyncVenuePairBinding (this, node) === 0) && (ccxtGoAsyncVenuePairBindingSlot0 (this, node) === 'string')) {
+            return 'string';
+        }
         if (known !== undefined) {
             return known;
         }
