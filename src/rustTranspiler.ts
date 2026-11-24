@@ -41738,7 +41738,9 @@ export class RustTranspiler extends BaseTranspiler {
             for (const f of entries) {
                 const text = readRustTsIndexSource(`${root}${dir}/${f}`) ?? '';
                 if (!text.includes(name)) continue;
-                if (quoted.test(text)) return -1;
+                // a quoted name in another venue file that declares its own copy names that copy (when this one overrides nothing)
+                const own = counted(dir) && f === base;
+                if (quoted.test(text) && (own || dir === '/base' || !declares.test(text) || this.getMethodOverride(method) !== undefined)) return -1;
                 const n = (text.match(call) ?? []).length;
                 if (n === 0) continue;
                 if (counted(dir) && f === base) count += n;
