@@ -4226,12 +4226,44 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     } finally {
         CCXT_GO_RETURN_TYPE_IN_PROGRESS.delete (node);
     }
+    h49g32DropAssumption (goTranspiler, node, result);
     CCXT_GO_RETURN_TYPE_CACHE.set (node, result);
     return result;
 }
 
 
-// a `string` method whose paths are string values or SafeString calls with a literal default (never nil):
+// `s += this.m (..)` inside m, m declared `: string`: while m's return proof runs the call is assumed `string`;
+// when the proof then fails, the locals typed under that assumption are re-derived
+const H49G32_ASSUMED = new Set ();
+function h49g32SelfStringCall (goTranspiler, expression) {
+    const call = ccxtGoUnwrapParens (expression);
+    if ((call?.kind !== ts.SyntaxKind.CallExpression) || (call.expression?.kind !== ts.SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== ts.SyntaxKind.ThisKeyword)) {
+        return false;
+    }
+    const method = goTranspiler.goEnclosingFunction (call);
+    if ((method?.kind !== ts.SyntaxKind.MethodDeclaration) || (method.type?.kind !== ts.SyntaxKind.StringKeyword)
+        || (method.name?.text !== call.expression.name?.text)) {
+        return false;
+    }
+    if (CCXT_GO_RETURN_TYPE_IN_PROGRESS.has (method)) {
+        H49G32_ASSUMED.add (method);
+        return true;
+    }
+    return ccxtGoAnnotatedMethodReturnType (goTranspiler, method) === 'string';
+}
+function h49g32DropAssumption (goTranspiler, node, result) {
+    if (!H49G32_ASSUMED.delete (node) || (result === 'string')) {
+        return;
+    }
+    const visit = (n) => {
+        if (n.kind === ts.SyntaxKind.VariableDeclaration) {
+            goTranspiler.goDeclaredTypeCache?.delete (n);
+        }
+        ts.forEachChild (n, visit);
+    };
+    visit (node);
+}
 // those calls print dereferenced, so the method returns `string`
 const GO_DEREF_SAFE_STRING_RETURNS = new WeakSet ();
 function goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) {
@@ -18749,7 +18781,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         }
                     } else if ((op === SyntaxKind.PlusEqualsToken) && (goType === 'string')
                         && ((this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === 'string')
-                            || stringWriteProven || this.goH20g12GuardedPointerAppend(parent.right))) {
+                            || stringWriteProven || this.goH20g12GuardedPointerAppend(parent.right)
+                            || h49g32SelfStringCall(this, parent.right))) {
                         return false;
                     } else if ((op >= SyntaxKind.FirstCompoundAssignment) && (op <= SyntaxKind.LastCompoundAssignment)) {
                         return true;
