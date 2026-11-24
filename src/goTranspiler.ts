@@ -61410,3 +61410,38 @@ function h47g20MarketSlotRead (go: any, call: any, child: any, node: any): boole
     }
 }
 // ===== H47-G20 (end)
+// ===== H47-G30: `this.exceptions['ws'][k]` reads the ExceptionsWs view =====
+// `exceptions` is declared Dictionary<Dict> and is written once at options init, where the base
+// also keeps BaseExchange.ExceptionsWs (exceptions["ws"] as stored, nil when absent or not a map)
+const goExceptionsWsUpstreamViewRead = GoTranspiler.prototype.goUrlsViewRead;
+GoTranspiler.prototype.goUrlsViewRead = function (node, baseExpr, keys, keyStrs: string[]) {
+    const shipped = goExceptionsWsUpstreamViewRead.call (this, node, baseExpr, keys, keyStrs);
+    if ((shipped !== undefined) || this.isGoElementAccessAssignmentTarget (node)) {
+        return shipped;
+    }
+    // the chain arrives either flattened (`this.exceptions` with keys ws, k) or as a ws receiver with one key
+    let field: any = baseExpr;
+    let wsKey: any = keys[0];
+    let entry = 1;
+    if (keys.length === 1) {
+        let receiver: any = baseExpr;
+        while (receiver?.kind === SyntaxKind.AsExpression) {
+            receiver = receiver.expression;
+        }
+        if (receiver?.kind !== SyntaxKind.ElementAccessExpression) {
+            return undefined;
+        }
+        field = receiver.expression;
+        wsKey = receiver.argumentExpression;
+        entry = 0;
+    } else if (keys.length !== 2) {
+        return undefined;
+    }
+    if ((wsKey?.kind !== SyntaxKind.StringLiteral) || (wsKey.text !== 'ws')
+        || !this.isGoThisPropertyAccessExpression (field) || (field.name?.text !== 'exceptions')
+        || (this.goFieldContainerTypeNative (field) !== 'map[string]any') || !this.goKeyIsString (keys[entry], keyStrs[entry])) {
+        return undefined;
+    }
+    return `this.ExceptionsWs[${keyStrs[entry]}]`;
+};
+// ===== end H47-G30
