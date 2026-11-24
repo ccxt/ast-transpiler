@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -234,7 +234,7 @@ export interface RustMethodSignature {
 // The typed parameter kinds a dispatch arm decodes from `args[i]` and a forwarder from its `Value` slot.
 // keys a map read routes through the shared order-book store (value.rs `get_map_value_k`)
 const RUST_BOOK_META_KEYS = new Set<string>([ 'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache' ]);
-const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref', 'dictref' ]);
+const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref', 'dictref', 'optmapref' ]);
 // a native return a by-name arm boxes back to `Value`
 const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
 
@@ -247,6 +247,11 @@ const RUST_SLOT_STR_ARGS: Record<number, string> = { 1: 'reason', 2: 'url', 3: '
 const RUST_SLOT_INT_ARGS: Record<number, string> = { 0: 'code' };
 // the `requestBody: Str` parameter of the `handle_errors` slot: an `Option<&str>` slot
 const RUST_SLOT_OSTR_ARGS: Record<number, string> = { 8: 'request_body' };
+// the `headers: Dict` / `requestHeaders: NullableDict` parameters of the `handle_errors` slot: a lent map / an optional lent map
+const RUST_SLOT_MAPREF_ARGS: Record<number, string> = { 4: 'headers' };
+const RUST_SLOT_OPTMAPREF_ARGS: Record<number, string> = { 7: 'request_headers' };
+const RUST_MAPREF_TYPE = '&indexmap::IndexMap<String, Value>';
+const RUST_OPTMAPREF_TYPE = 'Option<&indexmap::IndexMap<String, Value>>';
 
 export const rustDispatch = {
     isTyped: (kind: string): boolean => RUST_DISPATCH_TYPED_KINDS.has(kind),
@@ -283,6 +288,7 @@ export const rustDispatch = {
         case 'mapref': return `args.get(${i}).and_then(crate::Value::as_map).unwrap_or(&Default::default())`;
         // a borrowed dict slot: the arm lends the boxed map's handle, an empty map for a missing / non-map argument
         case 'dictref': return `&match args.get(${i}) { Some(crate::Value::Dict(__d)) => std::sync::Arc::clone(__d), _ => Default::default() }`;
+        case 'optmapref': return `args.get(${i}).and_then(crate::Value::as_map)`;
         // ral-ve: an order-book side slot wraps the boxed side marker once
         case 'side': return `crate::pro::order_book::Side::of(args.get(${i}).cloned().unwrap_or(crate::Value::Null))`;
         // a book slot lends the boxed book once (a non-book value is no book)
@@ -314,6 +320,7 @@ export const rustDispatch = {
         case 'vlist': return rustDispatch.arg(kind, i);
         case 'dictrows': return rustDispatch.arg(kind, i);
         case 'mapref': return rustDispatch.arg(kind, i);
+        case 'optmapref': return rustDispatch.arg(kind, i);
         case 'client': return rustDispatch.arg(kind, i);
         case 'dictref': return rustDispatch.arg(kind, i);
         default: return undefined;
@@ -333,26 +340,29 @@ export const rustDispatch = {
         case 'optcurrency': return v;
         case 'mapref': return `${v}.as_map().unwrap_or(&Default::default())`;
         case 'dictref': return `&match &${v} { crate::Value::Dict(__d) => std::sync::Arc::clone(__d), _ => Default::default() }`;
+        case 'optmapref': return `${v}.as_map()`;
         default: return v;
         }
     },
     /** Parameter list of a `DerivedExchange` slot: its `market` and currency arguments (never the first) are lent structs. */
-    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : rustDispatch.isSlotInt(a, i) ? 'i64' : rustDispatch.isSlotOptStr(a, i) ? 'Option<&str>' : 'crate::Value'}`).join(', '),
+    slotParams: (args: string[]): string => args.map((a, i) => rustDispatch.isSlotTyped(a) ? a : `${a}: ${rustDispatch.isSlotMarket(a, i) ? 'Option<&crate::types::Market>' : rustDispatch.isSlotCurrency(a, i) ? 'Option<&crate::types::Currency>' : rustDispatch.isSlotStr(a, i) ? '&str' : rustDispatch.isSlotInt(a, i) ? 'i64' : rustDispatch.isSlotOptStr(a, i) ? 'Option<&str>' : rustDispatch.isSlotMapRef(a, i) ? RUST_MAPREF_TYPE : rustDispatch.isSlotOptMapRef(a, i) ? RUST_OPTMAPREF_TYPE : 'crate::Value'}`).join(', '),
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number): boolean => (arg === 'path' && i === 0) || RUST_SLOT_STR_ARGS[i] === arg,
     isSlotInt: (arg: string, i: number): boolean => RUST_SLOT_INT_ARGS[i] === arg,
     isSlotOptStr: (arg: string, i: number): boolean => RUST_SLOT_OSTR_ARGS[i] === arg,
+    isSlotMapRef: (arg: string, i: number): boolean => RUST_SLOT_MAPREF_ARGS[i] === arg,
+    isSlotOptMapRef: (arg: string, i: number): boolean => RUST_SLOT_OPTMAPREF_ARGS[i] === arg,
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string): boolean => slot.includes(': '),
     slotName: (slot: string): string => slot.split(': ')[0],
     /** A `&[..]` slot takes the method's optional-argument slice as is. */
     isSlotSlice: (slot: string): boolean => /^\w+: &\[/.test(slot),
     /** A forwarder's argument for an inherent parameter of `kind`: a slot already of that type passes by name. */
-    slotArg: (kind: string, arg: string, i: number): string => ((kind === 'str' && rustDispatch.isSlotStr(arg, i)) || (kind === 'i64' && rustDispatch.isSlotInt(arg, i)) || (kind === 'optstr' && rustDispatch.isSlotOptStr(arg, i)) ? arg : rustDispatch.fromValue(kind, arg)),
+    slotArg: (kind: string, arg: string, i: number): string => ((kind === 'str' && rustDispatch.isSlotStr(arg, i)) || (kind === 'i64' && rustDispatch.isSlotInt(arg, i)) || (kind === 'optstr' && rustDispatch.isSlotOptStr(arg, i)) || (kind === 'mapref' && rustDispatch.isSlotMapRef(arg, i)) || (kind === 'optmapref' && rustDispatch.isSlotOptMapRef(arg, i)) ? arg : rustDispatch.fromValue(kind, arg)),
     isSlotMarket: (arg: string, i: number): boolean => arg === 'market' && i > 0,
     isSlotCurrency: (arg: string, i: number): boolean => i > 0 && /^(?:currency|from_currency|to_currency)$/.test(arg),
     /** A `DerivedExchange` slot argument handed on in a `&[Value]` tail. */
-    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) || rustDispatch.isSlotInt(arg, i) || rustDispatch.isSlotOptStr(arg, i) ? `crate::Value::from(${arg})` : `${arg}.clone()`),
+    slotValue: (arg: string, i: number): string => (rustDispatch.isSlotMarket(arg, i) || rustDispatch.isSlotCurrency(arg, i) || rustDispatch.isSlotStr(arg, i) || rustDispatch.isSlotInt(arg, i) || rustDispatch.isSlotOptStr(arg, i) ? `crate::Value::from(${arg})` : rustDispatch.isSlotMapRef(arg, i) ? `crate::Value::Map(${arg}.clone())` : rustDispatch.isSlotOptMapRef(arg, i) ? `${arg}.map_or(crate::Value::Null, |m| crate::Value::Map(m.clone()))` : `${arg}.clone()`),
     /** A sync method with a native return still gets a by-name arm (it boxes back inside the arm). */
     isNativeReturn: (ret: string): boolean => RUST_DISPATCH_NATIVE_RETURNS.has(ret),
     /** A typed-return base method (or override): it keeps every arm it had as `-> Value`, sync ws handler arms too. */
@@ -4370,6 +4380,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
+        const groupMap = this.rustGroupMapParamType(param); if (groupMap !== undefined) return groupMap;
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
         if (this.rustWsHandleParam(param)) return `&${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
         if (this.rustMarketSlotParam(param)) return 'Option<&crate::types::Market>';
@@ -15641,7 +15652,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
         'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
         'Vec<crate::value::Dict>': 'dictrows',
-        '&indexmap::IndexMap<String, Value>': 'mapref', '&crate::pro::ws_client::ClientHandle': 'client',
+        '&indexmap::IndexMap<String, Value>': 'mapref', 'Option<&indexmap::IndexMap<String, Value>>': 'optmapref', '&crate::pro::ws_client::ClientHandle': 'client',
         '&crate::value::Dict': 'dictref',
         '&mut Option<crate::pro::order_book::Book>': 'book', '&mut Option<ccxt::pro::order_book::Book>': 'book',
     };
@@ -15688,6 +15699,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (p !== undefined && p.type === '&str') return rustDispatch.isSlotStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'i64') return rustDispatch.isSlotInt(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
             if (p !== undefined && p.type === 'Option<&str>') return rustDispatch.isSlotOptStr(_slot, i) ? p.name : `crate::Value::from(${p.name})`;
+            if (p !== undefined && p.type === RUST_MAPREF_TYPE && rustDispatch.isSlotMapRef(_slot, i)) return p.name;
+            if (p !== undefined && p.type === RUST_OPTMAPREF_TYPE && rustDispatch.isSlotOptMapRef(_slot, i)) return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Market>') return p.name;
             if (p !== undefined && p.type === 'Option<&crate::types::Currency>') return p.name;
             if (p !== undefined && p.type === '&[Value]' && rustDispatch.isSlotSlice(_slot)) return p.name;
@@ -17825,7 +17838,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (sig) {
                 const watchCall = this.printWsWatchCall(node, 'self', methodName, identation); if (watchCall !== undefined) return watchCall;
                 const calleeParams = this.rustCalleeParams(node);
-                const printArg = (a, at) => calleeParams !== undefined && at < calleeParams.length && this.rustBookSideParam(calleeParams[at]) ? this.printBookSideArg(a, 0) : this.rustMarketSlot(calleeParams, at) ? this.rustMarketSlotArgText(a, 0) : this.rustCurrencySlot(calleeParams, at) ? this.rustCurrencySlotArgText(a, 0) : this.rustVenueStrSlot(calleeParams, at) !== undefined ? this.rustVenueStrArgText(a, this.rustVenueStrSlot(calleeParams, at), 0) : this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
+                const printArg = (a, at) => this.rustGroupMapSlot(calleeParams, at) !== undefined ? this.rustGroupMapArgText(a, this.rustGroupMapSlot(calleeParams, at)!, 0) : calleeParams !== undefined && at < calleeParams.length && this.rustBookSideParam(calleeParams[at]) ? this.printBookSideArg(a, 0) : this.rustMarketSlot(calleeParams, at) ? this.rustMarketSlotArgText(a, 0) : this.rustCurrencySlot(calleeParams, at) ? this.rustCurrencySlotArgText(a, 0) : this.rustVenueStrSlot(calleeParams, at) !== undefined ? this.rustVenueStrArgText(a, this.rustVenueStrSlot(calleeParams, at), 0) : this.rustNativeMapArgumentSlot(calleeParams, at) !== undefined
                     ? this.rustMapArgumentText(a, 0)
                     : this.rustNativeStrVecArgumentSlot(calleeParams, at)
                         ? this.rustStrVecArgumentText(a, 0)
@@ -17933,7 +17946,7 @@ export class RustTranspiler extends BaseTranspiler {
             const arg: any = this.unwrapParens(node.arguments[at]);
             return isIdentifier(arg) && node.arguments.slice(0, at).some((e: any) => isIdentifier(e) && e.text === arg.text);
         };
-        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustStrListSliceLent(node.arguments[at]) ? RustTranspiler.rustLentMark(a) : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
+        const cloned = args.map((a, at) => at >= node.arguments.length || this.rustVenueStrSlot(params, at) !== undefined || this.rustGroupMapSlot(params, at) !== undefined || this.rustMarketSlot(params, at) || this.rustCurrencySlot(params, at) ? a : this.rustStrListSliceLent(node.arguments[at]) ? RustTranspiler.rustLentMark(a) : this.rustWsWatchSlot(node, at) ? this.rustWsWatchSlotText(node.arguments[at], a) : (at === 0 && this.printExtendHeadArg(node.arguments[0], a) !== undefined ? a : ((at < fixed || readEarlier(at)) && this.rustOwnedArgText(node.arguments[at], a) !== a ? `\u0004${a}` : this.rustSliceArgText(a))));
         this.h28t01ReturnedSliceMoves(node, cloned);
         if (optName !== undefined) {
             // ral-62o: the `Option<String>` twin of the reader, chosen from the call node (`_k` when the key is a plain literal)
@@ -18094,6 +18107,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (let at = node.arguments.length; at < params.length && this.rustVenuePositional(params[at]); at++) pads.push(this.rustPositionalPad(params[at]));
         return [ ...Array.from(node.arguments).map((arg, at) => {
             if (this.rustStrListSliceLent(arg)) return RustTranspiler.rustLentMark(String((arg as any).text));
+            const groupMap = this.rustGroupMapSlot(params, at); if (groupMap !== undefined) return this.rustGroupMapArgText(arg, groupMap, identation);
             const venueStr = this.rustVenueStrSlot(params, at); if (venueStr !== undefined) return this.rustVenueStrArgText(arg, venueStr, identation);
             if (at < params.length && this.rustBookSideParam(params[at])) return this.printBookSideArg(arg, identation);
             if (at < params.length && this.rustBookParam(params[at])) return this.printBookParamArg(arg, identation);
@@ -19887,7 +19901,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!isParameterDeclaration(param) || !isIdentifier(param.name)) continue;
             const name = String(param.name.text);
             if (name === 'optional_args') continue;
-            if (param.type === undefined || this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustBookParam(param)) continue;
+            if (param.type === undefined || this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustBookParam(param) || this.rustGroupMapParamType(param) !== undefined) continue;
             const type = this.getCheckedTypeOf(param.type);
             if (type === undefined) continue;
             // A ws order-book parameter is a `Value::Dict` in the port, but its TS class
@@ -29613,6 +29627,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a lent deltas slice is already a reference (`&[Value]: KeyRead`): handed on as it is
         if (this.rustBookDeltasSafeReadUse(node) && this.rustVenueStrListParam(this.rustDeclarationOfIdentifier(node))) return RustTranspiler.rustLentMark(text);
         const call: any = node.parent;
+        // a lent group map slot (handleErrors `headers`) is already `&HashMap`, a `KeyRead` container: pass it uncloned
+        if (call !== undefined && isCallExpression(call) && call.arguments[0] === node && isPropertyAccessExpression(call.expression) && RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(call.expression.name.text)) && this.rustGroupMapParamType(this.rustDeclarationOfIdentifier(node)) === RUST_MAPREF_TYPE) return RustTranspiler.rustLentMark(text);
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
@@ -39688,6 +39704,8 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS: Record<string, number[]> = { 'handleErrors': [ 0 ] };
     // the same for `Str` parameters (printed `Option<&str>`, slot rustDispatch.isSlotOptStr); any name
     private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS: Record<string, number[]> = { 'handleErrors': [ 8 ] };
+    // the same for `Dict` / `NullableDict` parameters (printed as a lent map / an optional lent map); any name
+    private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS: Record<string, Record<number, string>> = { 'handleErrors': { 4: 'Dict', 7: 'NullableDict' } };
 
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
@@ -39705,14 +39723,15 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         const inherent = RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS[name];
         const index = Array.from(method.parameters).indexOf(param);
-        const ostr = inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS[name] ?? []).includes(index);
-        const int = ostr || (inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index));
+        const map = inherent === undefined ? RustTranspiler.RUST_OVERRIDE_GROUP_MAP_PARAMS[name]?.[index] : undefined;
+        const ostr = map === undefined && inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS[name] ?? []).includes(index);
+        const int = map !== undefined || ostr || (inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index));
         const inherentStr = inherent === undefined && !int ? RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name]?.[index] : undefined;
         const pname = int ? String(param.name.text) : inherent ?? inherentStr ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
         if ((inherent !== undefined || inherentStr ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
-        const spelled = `${int ? '' : pname}:${inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string'}`;
+        const spelled = `${int ? '' : pname}:${map ?? (inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string')}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
@@ -39740,6 +39759,34 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustOverrideGroupAgreeByRoot.set(root + '#' + name + '#' + index, agree);
         }
         return agree;
+    }
+
+    /** A `Dict` / `NullableDict` override-group parameter (handleErrors `headers` / `requestHeaders`): a lent map /
+     *  an optional lent map when every declaration spells it alike; the body reads it through `impl KeyRead`. */
+    rustGroupMapParamType(param: any): string | undefined {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || !isMethodDeclaration(method) || !isIdentifier(method.name)) return undefined;
+        const spelled = RustTranspiler.RUST_OVERRIDE_GROUP_MAP_PARAMS[String(method.name.text)]?.[Array.from(method.parameters).indexOf(param)];
+        if (spelled === undefined || this.rustLocalIsReassigned(param, String(param.name.text))) return undefined;
+        if (!this.rustOverrideGroupParam(method, param, String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return undefined;
+        return spelled === 'Dict' ? RUST_MAPREF_TYPE : RUST_OPTMAPREF_TYPE;
+    }
+
+    /** Argument text for a group map slot: `{}` / `undefined` natively, a held dict local lent, any other value viewed once. */
+    rustGroupMapArgText(arg: any, type: string, identation: number): string {
+        const inner: any = this.unwrapParens(arg);
+        const opt = type === RUST_OPTMAPREF_TYPE;
+        if (opt && (inner.kind === SyntaxKind.UndefinedKeyword || (isIdentifier(inner) && inner.text === 'undefined') || this.literalKindOfNode(inner) === 'null')) return 'None';
+        if (isObjectLiteralExpression(inner) && inner.properties.length === 0) return opt ? 'Some(&indexmap::IndexMap::new())' : '&indexmap::IndexMap::new()';
+        // the held `Dict` (an `Arc` of the map) derefs to the map: print its bare name, never its box
+        if (!opt && this.rustNeverNullDictLocalArg(inner)) return `&${super.transformIdentifier(inner, this.ReservedKeywordsReplacements[inner.text] ?? inner.text)}`;
+        const text = this.printNode(arg, identation).trim();
+        return opt ? `(${text}).as_map()` : `(${text}).as_map().unwrap_or(&Default::default())`;
+    }
+
+    /** The group map type of the callee parameter at `at`. */
+    rustGroupMapSlot(params: any[] | undefined, at: number): string | undefined {
+        return params !== undefined && at < params.length ? this.rustGroupMapParamType(params[at]) : undefined;
     }
 
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
