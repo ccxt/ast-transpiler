@@ -48503,17 +48503,23 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
     const key = this.printNode (keyNode, 0).trim ();
     const isLiteral = (keyNode.kind === SyntaxKind.StringLiteral) && /^"[\w.-]*"$/.test (key);
     const pointerKey = h46g15NilProvenPointerKey (this, keyNode, key);
-    if (!isLiteral && !pointerKey && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
+    // a `*string` key reads the string it points at; an unproven pointer runs the read under a nil test (nil key: nil map)
+    const ptrKey = !isLiteral && (keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && (this.goDeclaredTypeOfIdentifier (keyNode) === '*string');
+    if (!isLiteral && !pointerKey && !ptrKey && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
         return undefined;
     }
-    const index = pointerKey ? '*' + key : key;
     const name = declaration.name.text;
     // SafeDictMap is MapTyped of the SafeDict read: with no default it answers what SafeMapTyped does
     const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.(Options|Balance), (.*)\)$/.exec (printed);
     if ((match === null) || (match[3] !== name) || (match[6] !== key)) {
         return undefined;
     }
-    return match[1] + match[2] + 'var ' + name + ', _ = this.' + match[5] + '[' + index + '].(map[string]any)';
+    if (!pointerKey && ptrKey && !this.goIsNilGuardedStringPointerKey (keyNode)) {
+        const ind = match[2];
+        return match[1] + ind + 'var ' + name + ' map[string]any\n' + ind + 'if ' + key + ' != nil {\n'
+            + ind + '\t' + name + ', _ = this.' + match[5] + '[*' + key + '].(map[string]any)\n' + ind + '}';
+    }
+    return match[1] + match[2] + 'var ' + name + ', _ = this.' + match[5] + '[' + ((pointerKey || ptrKey) ? '*' : '') + key + '].(map[string]any)';
 };
 const printVariableDeclarationListH27a06 = GoTranspiler.prototype.printVariableDeclarationList;
 GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
