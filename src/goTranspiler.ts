@@ -46091,7 +46091,9 @@ function h26g09MixedStrReturn (goTranspiler, node, allowed) {
             return undefined;
         }
     }
-    if ((values.length === 0) || !goGeneralReturnKeepsAbsence (goTranspiler, node, '*string')) {
+    // a parse*Status/Type/Side family method is typed like its pure SafeString siblings: a nil path stays a nil *string
+    const familyMethod = (values.length > 0) && CCXT_GO_FAMILY_METHOD.test (node.name?.text ?? '');
+    if (!familyMethod && ((values.length === 0) || !goGeneralReturnKeepsAbsence (goTranspiler, node, '*string'))) {
         return undefined;
     }
     values.forEach ((r) => H26G09_ADDRESSED_RETURNS.add (r));
