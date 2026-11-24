@@ -41555,6 +41555,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         const name = String(method.name.text);
+        if (this.rustWsRoutedHandler(method)) return this.rustRoutedMessageDictParam(method, param);
         if (!this.rustVenueOnlyMethod(method, name)) return false;
         const handler = this.rustWsHandlerMessageSlot(method, param);
         // an async pro method reached only through `this.spawn` / `this.delay` by name: its by-name arm lends the map
@@ -41584,6 +41585,20 @@ export class RustTranspiler extends BaseTranspiler {
         const boxedLend = (a: any) => { const d: any = this.rustDeclarationOfIdentifier(a); return d?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(d); };
         if (calls.some((call: any) => this.rustTableDictLocalArg(call.arguments[at])) && calls.some((call: any) => boxedLend(call.arguments[at]))) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
+    }
+
+    /** A `handleMessage` override reached only by the base routeMessage (its by-name arm lends the frame's map, an
+     *  empty map for a non-dict, as the shadow reads it): the frame is a borrowed dict when every use is admitted. */
+    rustRoutedMessageDictParam(method: any, param: any): boolean {
+        if (!this.rustWsHandlerMessageSlot(method, param) || this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+        if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamIsLentDict(param) || this.rustParamPrintsMap(param) || this.rustParamReadsByReference(param)) return false;
+        return this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, true) !== undefined;
+    }
+
+    /** The identifier names the `message` parameter of a routed `handleMessage` override. */
+    rustRoutedFrameUse(id: any): boolean {
+        const own: any = this.rustDeclarationOfIdentifier(id);
+        return own?.kind === SyntaxKind.Parameter && isMethodDeclaration(own.parent) && own.name !== id && own.parent.parameters[1] === own && this.rustWsRoutedHandler(own.parent);
     }
 
     /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
@@ -42060,6 +42075,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictWholeUse(id: any): boolean {
         const up: any = id?.parent;
         if (up === undefined) return false;
+        // a routed frame handed to the by-name dispatch `method.call (this, client, message)`: the slice takes a box
+        if (this.rustWsDispatchCallArg(id) && this.rustRoutedFrameUse(id)) return true;
         if (isReturnStatement(up) && up.expression === id) {
             let fn: any = up.parent;
             while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
@@ -42119,6 +42136,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
     rustVenueDictValueParam(param: any): boolean {
         if (this.rustVenueDictValuePending.has(param) || !isIdentifier(param?.name) || param.parent?.body === undefined) return false;
+        // a routed frame always takes the handle: its by-name arm lends the dict
+        if (isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsRoutedHandler(param.parent)) return true;
         const name = String(param.name.text);
         // a handed-whole or returned message takes the handle only in a ws handler
         const handler = isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsHandlerMessageSlot(param.parent, param);
