@@ -39907,11 +39907,11 @@ export class RustTranspiler extends BaseTranspiler {
         'signEvmTransaction': [ '', 'privateKey' ],
         'calculateFee': [ 'symbol', '', 'side' ],
         'createSubAccount': [ 'name' ],
+        'fetchTransactionFee': [ 'code' ],
     };
     // the same for `number` parameters (printed `f64`): method -> parameter names by index
     private static readonly RUST_INHERENT_GROUP_NUM_PARAMS: Record<string, string[]> = {
         'calculateFee': [ '', '', '', 'amount', 'price' ],
-        'fetchTransactionFee': [ 'code' ],
     };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
