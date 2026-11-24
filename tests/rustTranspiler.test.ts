@@ -27650,6 +27650,23 @@ describe('rust typed cancelAllOrdersAfter: Option<i64> timeout, Option<Dict> ret
     });
 });
 
+describe('rust typed fetchTradingLimits: Option<Dict> return', () => {
+    const src = "import Exchange from './base/Exchange.js';\nimport type { Dict, Strings } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchTradingLimits (symbols: Strings = undefined, params: Dict = {}): Promise<Dict> {\n        const result: Dict = {};\n        return result;\n    }\n    async other (symbols: Strings = undefined, params: Dict = {}): Promise<Dict> {\n        const result: Dict = {};\n        return result;\n    }\n}\n";
+    const root = fs.mkdtempSync (path.join (os.tmpdir (), 'astfx-r27-'));
+    const file = path.join (root, 'ts/src/venue.ts');
+    fs.mkdirSync (path.dirname (file), { recursive: true });
+    fs.writeFileSync (file, src);
+    afterAll (() => fs.rmSync (root, { recursive: true, force: true }));
+    const emit = (names: string[]) => new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': names, 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (file).content;
+    test('a listed fetchTradingLimits prints the typed signature', () => {
+        expect (emit ([ 'fetchTradingLimits' ])).toMatch (/fn fetchTradingLimits\(&self, symbols: Option<Vec<String>>, params: impl Into<crate::Params> \+ Send\) -> crate::Result<Option<crate::value::Dict>>/);
+    });
+    test('negative: unlisted, it keeps the Value signature; other methods stay untyped', () => {
+        expect (emit ([])).not.toContain ('Option<crate::value::Dict>>');
+        expect (emit ([ 'fetchTradingLimits' ])).not.toMatch (/fn other\([^\n]*crate::Result</);
+    });
+});
+
 describe ('rust borrowed venue dict parameter stored whole', () => {
     const fx: Record<string, string> = {
         'ts/src/base/Exchange.ts': 'export interface Dict { [key: string]: any }\nexport default class Exchange {\n    safeString (x: any, k: any, d: any = undefined): any { return x; }\n    safeDict (x: any, k: any, d: any = undefined): any { return x; }\n}\n',

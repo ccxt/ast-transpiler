@@ -15850,6 +15850,8 @@ export class RustTranspiler extends BaseTranspiler {
         setMarginMode: 'Option<crate::value::Dict>',
         // every body answers the endpoint's dict (`None` when the endpoint answered no dict)
         cancelAllOrdersAfter: 'Option<crate::value::Dict>',
+        // TS `Promise<Dict>`: the limits keyed by symbol (`None` when a body answered no dict)
+        fetchTradingLimits: 'Option<crate::value::Dict>',
         fetchMarginMode: 'crate::types::MarginMode',
         fetchMarginModes: 'crate::types::MarginModes',
         addMargin: 'crate::types::MarginModification',
