@@ -16239,6 +16239,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (absent && p.rustType === 'bool') return declParams[i]?.initializer?.kind === SyntaxKind.TrueKeyword ? 'true' : 'false';
             if (absent) return p.rustType.startsWith('impl') ? 'Value::Null' : 'None';
             const scalarArg = this.rustScalarTypedArgText(args[i], p.rustType); if (scalarArg !== undefined) return scalarArg;
+            if (p.rustType === 'f64' && isIdentifier(args[i]) && this.rustVenueF64ParamUnbound(this.rustDeclaredNode(args[i]))) return RustTranspiler.rustLentMark(super.printIdentifier(args[i]));
             // ral-68b: an `Int` nil local (`Option<i64>`) in an `Option<i64>` slot passes as itself
             if (p.rustType === 'Option<i64>' && isIdentifier(args[i]) && this.rustNilLocalOfIdentifier(args[i])?.kind === 'int') return RustTranspiler.rustLentMark(super.printIdentifier(args[i]));
             if (p.rustType === 'bool') {
@@ -23002,6 +23003,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OWN_RECORD_RETURNS: Set<string> = new Set([
         'MarginModification',
         'Order[]',
+        'TransferEntry',
     ]);
 
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined {
@@ -23020,10 +23022,13 @@ export class RustTranspiler extends BaseTranspiler {
                 returns++;
                 const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
                 if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
+                // a method of a parent venue file: the Rust struct derefs to the base exchange, whose stub keeps `Value`
+                if (v !== undefined && this.rustOtherVenueCall(v, node)) ok = false;
             }
             n.forEachChild(visit);
         };
         node.body.forEachChild(visit);
+        if (ok && returns > 0 && this.rustCalledFromOtherVenueFile(node)) ok = false;
         return ok && returns > 0 ? kind.kind : undefined;
     }
 
@@ -23248,6 +23253,36 @@ export class RustTranspiler extends BaseTranspiler {
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
         return box[1] === 'Map' ? `std::sync::Arc::new(${inner})` : inner;
+    }
+
+    /** A venue method another venue source calls as `this.m (..)`: the child struct reaches the base stub, which keeps `Value`. */
+    rustCalledFromOtherVenueFile(fn: any): boolean {
+        const cls: any = findAncestor(fn, isClassDeclaration);
+        if (!isIdentifier(fn?.name) || cls?.name === undefined) return false;
+        const file = String(fn.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
+        const m = file.match(/^(.*\/ts\/src)\/[^/]+\.ts$/);
+        if (m === null) return false;
+        const child = new RegExp('\\bextends\\s+' + String(cls.name.text) + '\\b');
+        const call = new RegExp('\\bthis\\.' + String(fn.name.text) + '\\s*\\(');
+        let entries: string[] = [];
+        try {
+            entries = fs.readdirSync(m[1]).filter(isRustTsIndexSource);
+        } catch (e) {
+            return false;
+        }
+        return entries.some((f: string) => {
+            const text = `${m[1]}/${f}` === file ? '' : (readRustTsIndexSource(`${m[1]}/${f}`) ?? '');
+            return child.test(text) && call.test(text);
+        });
+    }
+
+    /** `[await] this.m (..)` whose declaration lives in another venue file than `fn` (an inherited venue method). */
+    rustOtherVenueCall(exp: any, fn: any): boolean {
+        let call: any = this.unwrapParens(exp);
+        if (call?.kind === SyntaxKind.AwaitExpression) call = this.unwrapParens(call.expression);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const file = String(this.rustScalarCallee(call)?.getSourceFile?.()?.fileName ?? '');
+        return file !== '' && !RustTranspiler.RUST_BASE_TIER_FILE.test(file) && file !== String(fn.getSourceFile?.()?.fileName ?? '');
     }
 
     /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
@@ -36958,7 +36993,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string {
         const lent = Array.from(node.parameters ?? []).filter((p: any) => this.rustParamIsLentDict(p) || this.rustParamIsLentList(p) || this.rustParamIsLentResponse(p) || this.rustParamIsLentVenue(p) || this.rustSafeDictKeyParam(p) || this.rustLentSlotParam(p) || this.rustPriceSlotParam(p)
-            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p) && !this.rustGroupIntParamUnbound(p) && this.rustParamIsRead(node, p)));
+            || (this.rustVenueStrParamType(p) !== undefined && !this.rustVenueStrParamUnbound(p) && !this.rustGroupIntParamUnbound(p) && !this.rustVenueF64ParamUnbound(p) && this.rustParamIsRead(node, p)));
         return lent.filter((p: any) => !this.rustVenueDictParam(p)).map((p: any) => {
             const name = this.printNode(p.name, 0);
             return `${this.getIden(identation + 2)}let mut ${name}: Value = ${name}.into();\n`;
@@ -40312,6 +40347,13 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str');
     }
 
+    /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
+    rustVenueF64ParamUnbound(param: any): boolean {
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || this.rustVenueStrParamType(param) !== 'f64') return false;
+        const uses = this.rustScopeNameNodes(param.parent, String(param.name.text)).filter((n: any) => n !== param.name && this.rustDeclaredNode(n) === param);
+        return uses.length > 0 && uses.every((n: any) => isCallExpression(n.parent) && n.parent.expression !== n && this.rustScalarTypedParamType(n.parent, Array.from(n.parent.arguments).indexOf(n)) === 'f64');
+    }
+
     /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
      *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
     rustGroupIntParamUnbound(param: any): boolean {
@@ -40569,6 +40611,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (callee !== undefined && isPropertyAccessExpression(callee) && callee.expression.kind === SyntaxKind.ThisKeyword
                 && (callee.name.text === 'numberToString' || callee.name.text === 'parseToInt') && this.rustCalleeIsRuntimeBase(up)) continue;
             if (this.rustVenueNumParam(up, at, param)) continue;
+            // a whole argument of a typed unified call whose slot is `f64`
+            if (isCallExpression(up) && up.expression !== at && this.rustScalarTypedParamType(up, Array.from(up.arguments).indexOf(at)) === 'f64') continue;
             return false;
         }
         return true;

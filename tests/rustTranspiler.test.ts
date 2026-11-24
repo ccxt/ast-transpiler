@@ -7451,7 +7451,7 @@ describe('rust typed unified-method signatures', () => {
     });
 
     test('literal arguments of a typed call print in the native parameter type', () => {
-        expect(output).toContain('self.create_order(symbol.as_str().unwrap_or_default(), "market", "buy", cost.as_f64().unwrap_or_default(), None, ');
+        expect(output).toContain('self.create_order(symbol.as_str().unwrap_or_default(), "market", "buy", cost, None, ');
     });
 
     test('a Promise.all element call to a typed method boxes the result', () => {
