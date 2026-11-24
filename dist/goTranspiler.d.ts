@@ -136,6 +136,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.FilterEventsByTags': string;
     'this.FilterEventsBySearchIn': string;
     'this.OrderbookChecksumMessage': string;
+    'this.DecodeProtoMsg': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -2649,7 +2650,7 @@ export interface GoTranspiler {
     h30a02WrittenThroughElement(declaration: any): boolean;
 }
 export interface GoTranspiler {
-    h30a03Receiver(container: any, read: any): boolean;
+    h30a03Receiver(container: any, read: any, call?: any): boolean;
     h30a03Site(call: any, name: string, identation: number, printed: string, prefix: string, declaration?: any): string | undefined;
     h30a03DeclRead(node: any, identation: number, printed: string): string | undefined;
     h30a03AssignRead(node: any, identation: number, printed: string): string | undefined;

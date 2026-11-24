@@ -612,6 +612,30 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMethodReferencedAsValue(method: any): boolean;
     private rustValueReferencedMethods;
     rustValueReferenceCensus(file: any): Set<string>;
+    private static readonly RUST_EXCHANGE_FIELD_KINDS;
+    static rustIsBaseExchangeFile(name: string): boolean;
+    /** The base `Exchange` / `BaseExchange` class of ts/src/base/Exchange.ts (or a union with undefined). */
+    rustIsBaseExchangeClassType(type: Type | undefined): boolean;
+    /** A parameter of a base method annotated as the base exchange class whose every use is a read of a known struct field. */
+    rustExchangeParam(param: any): boolean;
+    /** `p.f` / `p['f']` on a base-exchange parameter: the receiver text and the field kind, else undefined. */
+    rustExchangeParamFieldOf(node: any): {
+        field: string;
+        kind: string;
+        receiver: string;
+    } | undefined;
+    /** The field info when `node` reads a field of a parameter printed as `&crate::exchange::Exchange`. */
+    rustExchangeParamRead(node: any): {
+        field: string;
+        kind: string;
+        receiver: string;
+    } | undefined;
+    /** A value read of a base-exchange parameter field: the struct field boxed once (a dict / list shares its handle). */
+    printExchangeParamFieldRead(node: any): string | undefined;
+    /** `p.options[k]` on a base-exchange parameter: the dict entry by the key's text, `Null` when missing. */
+    printExchangeParamDictEntry(node: any): string | undefined;
+    /** `p.f === undefined` and `this.f = p.f` on a base-exchange parameter field: the native test / copy. */
+    printExchangeParamFieldOp(node: any): string | undefined;
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param: any): string;
     rustBoolParamUseAccepted(node: any): boolean;
@@ -1026,6 +1050,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParseNumberNumLocalInit(node: Node): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
+    rustTypedOwnerLength(node: any): string | undefined;
     /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
      *  source, so the read prints the same native `len()` (or `get_array_length`) as a list receiver, an `Int` every time. */
     rust67bCastListLengthRecv(recv: any): boolean;
@@ -1437,6 +1462,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `rustLocalLastUse`, also admitting earlier reads in the same statement that end before the hand-off: the
      *  condition of a ternary whose branch holds the use, and the target of `x = f(.., x, ..)` (written after). */
     rustOwnedLastUse(node: any, declaration: any): boolean;
+    /** A bare object-literal value moves when no read runs after it: inside a `return` (which leaves the function, a loop
+     *  too), or when every later read sits in the other arm of an enclosing `if`; never under a `try` or a closure. */
+    rustReturnedLiteralValueMoves(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
     rustWsSettleCall(call: any): boolean;
     /** ral-73c E1: `const e = new XError (msg)` (a ccxt error class the printer routes to `crate::exchange_errors::<x>(msg)`,
@@ -2464,6 +2492,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedResultElemKind(init: any): 'vec' | 'map' | 'map2' | undefined;
     /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
     rustTypedResultElemUse(n: any, elem: 'vec' | 'map' | 'map2'): boolean;
+    /** `n` is the sole argument of `Object.keys (n)`. */
+    rustTypedResultKeysUse(n: any): boolean;
+    /** `Object.keys (r)` on a typed keyed result local (`HashMap<String, T>`): its own keys, in the order `into_raw` listed them. */
+    printTypedResultKeys(node: any): string | undefined;
     /** ral-65k: the checker types `k` as plain `string` (no `undefined` / `null` member). */
     rust65kPlainStringKey(k: any): boolean;
     /** `x` is read only: not written, deleted, updated or called. */
@@ -3387,6 +3419,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBalancedText(text: string): boolean;
     /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
     rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    /** A venue method another venue source calls as `this.m (..)`: the child struct reaches the base stub, which keeps `Value`. */
+    rustCalledFromOtherVenueFile(fn: any): boolean;
+    /** `[await] this.m (..)` whose declaration lives in another venue file than `fn` (an inherited venue method). */
+    rustOtherVenueCall(exp: any, fn: any): boolean;
+    /** `this.filterBy*SinceLimit (..)` (optionally `as T[]`) of the base, printed as the bare call. */
+    rustBaseListFilterOperand(exp: any, printed: string): boolean;
     /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
     rustOwnRecordParserReturn(exp: any, fn: any): boolean;
     /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
@@ -4183,6 +4221,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
      *  as `safe_dict_o` beside `None`, and the 67g typed row read as the row's own map (`None` out of range / non-dict). */
     rustOptDictNativeInit(init: any, printed: string): string | undefined;
+    private static readonly RUST_RECORD_MAP_TYPES;
+    /** `this.safeDict (r, k)` with no default, `r` (printed `name`) a const local of a typed call whose result is a record map. */
+    rustRecordMapLocalRead(init: any, name: string): boolean;
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
     printOptContainerWrite(left: any, right: any, identation?: number): string | undefined;
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
@@ -5149,6 +5190,21 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  key), every hop below and the write keep their helpers (`get_value_mut` / `add_element_to_object`, so a `Null` /
      *  non-map inner is skipped and tagged inner maps keep their routes; value.rs nested_slot_insert_tests). */
     printSlotNestedInsert(left: any, right: any, valueText: string): string | undefined;
+    private rustHeadSeedCache;
+    private rustHeadSeedGuards;
+    private rustHeadSeedParams;
+    rustHeadSeedParam(param: any): boolean;
+    rustHeadSeedOf(declaration: any): {
+        param: any;
+        guard: any;
+    } | undefined;
+    rustHeadSeedUncached(declaration: any): {
+        param: any;
+        guard: any;
+    } | undefined;
+    /** The literal key of `x['k'] = v` (a statement whose value does not read `x`), else undefined. */
+    rustHeadSeedKeyWrite(access: any, x: any): string | undefined;
+    printHeadSeedKeyWrite(left: any, right: any): string | undefined;
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
     printUntilHeadKeyWrite(left: any, right: any, valueText: string): string | undefined;
     private rustLentListParamDecisions;
@@ -5726,6 +5782,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrUnbound;
     rustVenueStrParamUnbound(param: any): boolean;
     rustVenueStrParamUnboundUncached(param: any): boolean;
+    /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
+    rustVenueF64ParamUnbound(param: any): boolean;
     /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
      *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
     rustGroupIntParamUnbound(param: any): boolean;
@@ -5772,6 +5830,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** An `f64` rebinding turns an integer argument into a `Float`: admit it only when every body read is blind to
      *  that variant (a null / truthiness test, an ordered comparison, or `numberToString` / `parseToInt`). */
     rustVenueFloatUsesStayInside(method: any, param: any): boolean;
+    /** Every in-file caller passes its own unwritten typed `number` / `Num` parameter by name: the argument already is
+     *  a `Float` (or `Null`), so an `f64` rebinding keeps every variant and any body read stays as it was. */
+    rustVenueFloatArgsAllFloat(method: any, param: any): boolean;
     rustVenueArithmeticArg(arg: any): boolean;
     /** `!x` over a simple operand: a `bool` slot reads it once as a native negation. */
     rustVenueNegatedArg(arg: any): boolean;
@@ -5931,6 +5992,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
     rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     rustVenueDictParamUncached(param: any): boolean;
+    /** A `handleMessage` override reached only by the base routeMessage (its by-name arm lends the frame's map, an
+     *  empty map for a non-dict, as the shadow reads it): the frame is a borrowed dict when every use is admitted. */
+    rustRoutedMessageDictParam(method: any, param: any): boolean;
+    /** The identifier names the `message` parameter of a routed `handleMessage` override. */
+    rustRoutedFrameUse(id: any): boolean;
     /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
      *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
     rustSpawnOnlyTarget(method: any): boolean;

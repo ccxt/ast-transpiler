@@ -401,6 +401,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaPrintedNumberKind(node: any, depth?: number): any;
     javaOperandPrintsPrimitiveNumber(node: any): boolean;
     javaDeclaredNumericFamily(expression: any): string | undefined;
+    javaBindingElementBoxOf(expression: any): string | undefined;
     javaIntegerLiteralKind(node: any): "int" | "long";
     isJavaPrimitiveForCounter(node: any): boolean;
     javaNonNullableNumberType(node: any): boolean;
