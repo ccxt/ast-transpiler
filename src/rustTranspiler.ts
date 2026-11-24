@@ -2382,6 +2382,7 @@ export class RustTranspiler extends BaseTranspiler {
         const { left, right } = node;
         const op = node.operatorToken.kind;
         const isAssign = op === SyntaxKind.EqualsToken;
+        const seedWrite = isAssign ? this.printHeadSeedKeyWrite(left, right) : undefined; if (seedWrite !== undefined) return seedWrite;
         const preciseWrite = isAssign ? this.printRustPreciseDecimalsWrite(left, right) : undefined; if (preciseWrite !== undefined) return preciseWrite;
         // ral-56w: the split statement of a watched cache local declares the fresh list local (rustWsCacheListSplit)
         if (isAssign && isIdentifier(left) && this.rustWsCacheUses.get(left) === 'split') {
@@ -2612,6 +2613,8 @@ export class RustTranspiler extends BaseTranspiler {
         const handleDecl = this.printClientHandleDeclaration(node, identation); if (handleDecl !== undefined) return handleDecl;
         const declaration = node.declarations[0];
         const indent = this.getIden(identation);
+        const headSeed = node.declarations.length === 1 ? this.rustHeadSeedOf(declaration) : undefined;
+        if (headSeed !== undefined) return `${indent}let mut ${this.printNode(declaration.name, 0)}: crate::value::Dict = std::sync::Arc::new(crate::value::ExtendHead::into_head(${this.printNode(headSeed.param.name, 0)}))`;
         const bookDecl = node.declarations.length === 1 && declaration?.name.kind === SyntaxKind.Identifier ? this.printWsBookLocalDeclaration(declaration, this.printNode(declaration.name, 0), indent) : undefined; if (bookDecl !== undefined) return bookDecl;
         if (declaration?.name.kind === SyntaxKind.ArrayBindingPattern) {
             // a skipped slot (`const [ , x ] = ..`) is an OmittedExpression with no name: it binds nothing
@@ -4491,6 +4494,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
         if (this.rustExchangeParam(param)) return '&crate::exchange::Exchange';
+        if (this.rustHeadSeedParam(param)) return 'impl crate::value::ExtendHead';
         const groupMap = this.rustGroupMapParamType(param); if (groupMap !== undefined) return groupMap;
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
         if (this.rustListGroupParam(param)) return 'crate::value::List';
@@ -15776,6 +15780,7 @@ export class RustTranspiler extends BaseTranspiler {
         'Option<crate::value::Dict>': 'optdict', 'Option<crate::value::List>': 'optlist', 'Option<&crate::types::Market>': 'optmarket',
         'Option<&crate::types::Currency>': 'optcurrency', 'crate::pro::order_book::Side': 'side', 'ccxt::pro::order_book::Side': 'side', '&[crate::Value]': 'vlist',
         'Vec<crate::value::Dict>': 'dictrows',
+        'impl crate::value::ExtendHead': 'value',
         '&indexmap::IndexMap<String, Value>': 'mapref', 'Option<&indexmap::IndexMap<String, Value>>': 'optmapref', '&crate::pro::ws_client::ClientHandle': 'client',
         '&crate::value::Dict': 'dictref',
         '&mut Option<crate::pro::order_book::Book>': 'book', '&mut Option<ccxt::pro::order_book::Book>': 'book',
@@ -22080,6 +22085,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printIfStatement(node, identation) {
+        if (this.rustHeadSeedGuards.has(node)) return '';
         const elseStatement = node.elseStatement;
         const ifBody = this.printBlock(node.thenStatement, identation, elseStatement !== undefined);
         const head = node.parent.kind === SyntaxKind.IfStatement ? 'else if ' : `${this.getIden(identation)}if `;
@@ -36057,6 +36063,101 @@ export class RustTranspiler extends BaseTranspiler {
         for (const k of keys.slice(1, -1)) acc = `get_value_mut(${acc}, ${key(k)})`;
         const out = `add_element_to_object(${acc}, ${key(keys[keys.length - 1])}, ${valueText.trim()})`;
         return out.length + 36 > 400 ? undefined : out;
+    }
+
+    // ── head-seeded map locals (rustHeadSeedOf) ──
+    // `let x: Dict = p; if (p === undefined) { x = {}; }` on a base `p: Dict` parameter used nowhere else: `p` takes
+    // `impl ExtendHead` and `x` is the map `into_head` copies (Null and a non-map give `{}`, as every boxed read saw them).
+    // `x` may only be read by base `safe*` readers, written at literal keys, and be the head of the returned `extend`.
+    private rustHeadSeedCache = new WeakMap<any, { param: any, guard: any } | null>();
+    private rustHeadSeedGuards = new WeakSet<any>();
+    private rustHeadSeedParams = new WeakSet<any>();
+
+    rustHeadSeedParam(param: any): boolean {
+        const fn: any = param?.parent;
+        if (fn?.body === undefined || this.rustHeadSeedParams.has(param)) return this.rustHeadSeedParams.has(param);
+        for (const st of fn.body.statements ?? []) if (st.kind === SyntaxKind.VariableStatement) this.rustHeadSeedOf(st.declarationList.declarations[0]);
+        return this.rustHeadSeedParams.has(param);
+    }
+
+    rustHeadSeedOf(declaration: any): { param: any, guard: any } | undefined {
+        if (!this.rustHeadSeedCache.has(declaration)) {
+            let found: { param: any, guard: any } | undefined;
+            try {
+                found = this.rustHeadSeedUncached(declaration);
+            } catch (e) {
+                found = undefined;
+            }
+            this.rustHeadSeedCache.set(declaration, found ?? null);
+            if (found !== undefined) { this.rustHeadSeedGuards.add(found.guard); this.rustHeadSeedParams.add(found.param); }
+        }
+        return this.rustHeadSeedCache.get(declaration) ?? undefined;
+    }
+
+    rustHeadSeedUncached(declaration: any): { param: any, guard: any } | undefined {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || String(declaration.type?.getText() ?? '') !== 'Dict') return undefined;
+        const list: any = declaration.parent, statement: any = list?.parent;
+        if (list?.declarations?.length !== 1 || (list.flags & NodeFlags.Const) !== 0 || statement?.kind !== SyntaxKind.VariableStatement || !isBlock(statement.parent)) return undefined;
+        const init: any = declaration.initializer;
+        if (init === undefined || !isIdentifier(init)) return undefined;
+        const param: any = this.rustDeclaredNode(init);
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || String(param.type?.getText() ?? '') !== 'Dict' || param.initializer !== undefined || param.questionToken !== undefined) return undefined;
+        const fn: any = param.parent;
+        if (!isMethodDeclaration(fn) || fn.body !== statement.parent || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile().fileName)) || this.rustTestTierSource(param)) return undefined;
+        const x = String(declaration.name.text), p = String(param.name.text);
+        const statements: any[] = Array.from(fn.body.statements);
+        const guard: any = statements[statements.indexOf(statement) + 1];
+        if (guard === undefined || !isIfStatement(guard) || guard.elseStatement !== undefined || !isBlock(guard.thenStatement) || guard.thenStatement.statements.length !== 1) return undefined;
+        const test: any = guard.expression;
+        if (!isBinaryExpression(test) || test.operatorToken.kind !== SyntaxKind.EqualsEqualsEqualsToken || !isIdentifier(test.left) || test.left.text !== p
+            || !isIdentifier(test.right) || test.right.text !== 'undefined') return undefined;
+        const reset: any = guard.thenStatement.statements[0].expression;
+        if (reset === undefined || !isBinaryExpression(reset) || reset.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(reset.left) || reset.left.text !== x
+            || !isObjectLiteralExpression(reset.right) || reset.right.properties.length !== 0) return undefined;
+        const ids = (name: string): any[] => {
+            const out: any[] = [];
+            const walk = (n: any): void => {
+                if (isIdentifier(n) && n.text === name && !(isPropertyAccessExpression(n.parent) && n.parent.name === n) && !(isPropertyAssignment(n.parent) && n.parent.name === n)) out.push(n);
+                n.forEachChild(walk);
+            };
+            walk(fn);
+            return out;
+        };
+        const pUses = ids(p);
+        if (pUses.length !== 3 || !pUses.includes(param.name) || !pUses.includes(init) || !pUses.includes(test.left)) return undefined;
+        const ok = ids(x).every((n: any) => {
+            if (n === declaration.name || n === reset.left) return true;
+            const up: any = n.parent;
+            if (isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && up.expression.expression.kind === SyntaxKind.ThisKeyword) {
+                const m = String(up.expression.name.text);
+                if (m === 'extend') return isReturnStatement(up.parent) && this.rustCalleeIsRuntimeBase(up);
+                return m.startsWith('safe') && this.rustCalleeIsRuntimeBase(up);
+            }
+            return this.rustHeadSeedKeyWrite(up, n) !== undefined;
+        });
+        return ok ? { param, guard } : undefined;
+    }
+
+    /** The literal key of `x['k'] = v` (a statement whose value does not read `x`), else undefined. */
+    rustHeadSeedKeyWrite(access: any, x: any): string | undefined {
+        if (!isElementAccessExpression(access) || access.expression !== x || !isStringLiteral(access.argumentExpression)) return undefined;
+        const key = String(access.argumentExpression.text);
+        const write: any = access.parent;
+        if (key.startsWith('__') || !isBinaryExpression(write) || write.left !== access || write.operatorToken.kind !== SyntaxKind.EqualsToken || write.parent?.kind !== SyntaxKind.ExpressionStatement) return undefined;
+        const reads = (n: any): boolean => (isIdentifier(n) && n.text === x.text) || (n.forEachChild(reads) ?? false);
+        return reads(write.right) ? undefined : key;
+    }
+
+    printHeadSeedKeyWrite(left: any, right: any): string | undefined {
+        if (!isElementAccessExpression(left) || !isIdentifier(left.expression)) return undefined;
+        const declaration: any = this.rustDeclaredNode(left.expression);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || this.rustHeadSeedOf(declaration) === undefined) return undefined;
+        const key = this.rustHeadSeedKeyWrite(left, left.expression);
+        if (key === undefined) return undefined;
+        const valueText = this.printNode(right, 0);
+        const value = this.rustNodeIsBoolExpression(right) && this.literalKindOfNode(this.unwrapParens(right)) !== 'boolean' ? `Value::Bool(${valueText})` : valueText.trim();
+        const name = super.transformIdentifier(left.expression, this.ReservedKeywordsReplacements[left.expression.text] ?? left.expression.text);
+        return `std::sync::Arc::make_mut(&mut ${name}).insert(${this.quotedStringLiteral(key)}.into(), ${RustTranspiler.cloneIfBareLocal(value)})`;
     }
 
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
