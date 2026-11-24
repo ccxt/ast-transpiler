@@ -41492,6 +41492,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (handler && this.rustWsHandlerCalledElsewhere(method, name)) return false;
         // syntactic test first: a typed-local decision is asked only when every argument could lend
         if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
+        // a table-proven local lends only beside callers that need no map view of a boxed slot
+        const boxedLend = (a: any) => { const d: any = this.rustDeclarationOfIdentifier(a); return d?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(d); };
+        if (calls.some((call: any) => this.rustTableDictLocalArg(call.arguments[at])) && calls.some((call: any) => boxedLend(call.arguments[at]))) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
     }
 
@@ -41775,6 +41778,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        if (declaration?.kind !== SyntaxKind.Parameter && this.rustTableDictLocalArg(arg)) return true;
         // a literal local printed as a plain map is lent as `&x` to an async slot only merged by `this.extend`
         if (declaration?.kind !== SyntaxKind.Parameter) return this.rustNeverNullDictLocalArg(arg) || (declaration?.name !== arg && this.rustExtendOnlySlotOf(arg) && this.rustVenueDictLiteralLocalArg(declaration));
         if (declaration.name === arg) return false;
@@ -41797,6 +41801,15 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictLiteralLocalArg(declaration: any): boolean {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || !isIdentifier(declaration.name) || !isObjectLiteralExpression(this.rustSkipWrappers(declaration.initializer))) return false;
         return !this.rustLocalIsReassigned(declaration, String(declaration.name.text)) && !this.rustNestedDictLocalIsTyped(declaration) && this.rustDictLocalIsTyped(declaration);
+    }
+
+    /** A never-reassigned reader-produced local the declared-Dict locals table proves a map: it prints the shared handle. */
+    rustTableDictLocalArg(arg: any): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name === arg || !isCallExpression(this.rustSkipWrappers(declaration.initializer))) return false;
+        if (this.rustNeverNullDictLocalArg(arg) || this.rustLocalIsReassigned(declaration, String(arg.text)) || this.rustDeclaredLocalTypeResolver(arg) !== 'dict') return false;
+        // the local must print as the shared map: a local the printer keeps boxed (`let x: Value`) cannot be lent
+        return this.rustBorrowedPending.has(declaration) || this.rustBorrowedLocalKind(declaration) === 'dict';
     }
 
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
