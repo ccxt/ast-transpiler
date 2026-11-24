@@ -222,7 +222,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
     | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'mutclient' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
+export type RustDispatchReturnKind = 'optlist' | 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -236,7 +236,7 @@ export interface RustMethodSignature {
 const RUST_BOOK_META_KEYS = new Set<string>([ 'timestamp', 'datetime', 'nonce', 'symbol', 'checksum', 'cache' ]);
 const RUST_DISPATCH_TYPED_KINDS = new Set<string>([ 'str', 'optstr', 'f64', 'optf64', 'opti64', 'i64', 'optstrvec', 'strvecvec', 'orderreqs', 'params', 'flag', 'dict', 'list', 'optdict', 'optlist', 'optmarket', 'optcurrency', 'mapref', 'dictref', 'optmapref' ]);
 // a native return a by-name arm boxes back to `Value`
-const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
+const RUST_DISPATCH_NATIVE_RETURNS = new Set<string>([ 'optlist', 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct', 'int', 'string', 'bool', 'dict', 'list', 'optdict', 'struct', 'dictpair' ]);
 
 // the native returns of the typed-return base methods, boxed back with `Value::from` in each arm they had as `-> Value`
 const RUST_DISPATCH_KEPT_RETURNS = new Set<string>([ 'oint', 'keptostr', 'keptint', 'keptstr', 'keptbool', 'keptobool', 'keptstruct' ]);
@@ -382,6 +382,7 @@ export const rustDispatch = {
         case 'dict': return `crate::Value::Dict(${call})`;
         case 'list': return `crate::Value::Arr(${call})`;
         case 'optdict': return `${call}.map_or(crate::Value::Null, crate::Value::Dict)`;
+        case 'optlist': return `${call}.map_or(crate::Value::Null, crate::Value::Arr)`;
         case 'dictpair': return `crate::Value::from(${call})`;
         default: return call;
         }
@@ -2583,6 +2584,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustOwnContainerUnwrap(init: any, text: string): string {
         const node: any = this.rustSkipWrappers(init);
         if (node === undefined || typeof text !== 'string') return text;
+        const olist = this.rustOlistCallText(node);
+        if (olist !== undefined) { const obox = `${olist}.map_or(Value::Null, Value::Arr)`; return text.split(`${obox}.into_list()`).join(`${olist}.unwrap_or_default()`).split(`${obox}.into_opt_list()`).join(olist); }
         const kind = this.rustOwnContainerCallKind(node.kind === SyntaxKind.AwaitExpression ? node.expression : node);
         if (kind === undefined) return text;
         const bare = this.rustOwnContainerBareText(node);
@@ -5399,6 +5402,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_SCALAR_TYPES: { [kind: string]: string } = {
         ostr: 'Option<String>', oint: 'Option<i64>', onum: 'Option<f64>', obool: 'Option<bool>', str: 'String', int: 'i64', num: 'f64', bool: 'bool',
         odict: 'Option<crate::value::Dict>', dict: 'crate::value::Dict',
+        olist: 'Option<crate::value::List>',
     };
 
     private rustScalarDecisions = new Map<any, string | null>();
@@ -6657,6 +6661,8 @@ export class RustTranspiler extends BaseTranspiler {
         feeToPrecision: [ 'Str|string', 'ostr' ], currencyToPrecision: [ 'Str|string', 'ostr' ],
         // a map or undefined on every path (`-> Option<Dict>`); a `Value` slot boxes it once, never a scalar local
         safeDictN: [ 'Dictionary<any> | undefined', 'odict' ],
+        // a list or undefined on every path (`-> Option<List>`); a `Value` slot boxes it once
+        safeListN: [ 'any[] | undefined', 'olist' ],
         // a venue parser declared `NullableDict`: its parsed order map, or undefined on the early returns
         parseWsOrderUpdate: [ 'NullableDict', 'odict' ],
         // a pro lookup declared `NullableDict`: the matching subscription map, else undefined
@@ -6706,7 +6712,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
     rustBaseTypedReturnKind(expr): string | undefined {
         const kind = this.rustBaseTypedReturnKindAll(expr);
-        return kind === 'odict' || kind === 'dict' ? undefined : kind;
+        return kind === 'odict' || kind === 'dict' || kind === 'olist' ? undefined : kind;
     }
 
     /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
@@ -6869,6 +6875,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === undefined) return undefined;
         const text = this.rustBaseTypedBareText(node);
         if (kind === 'odict') return `${text}.map_or(Value::Null, Value::Dict)`;
+        if (kind === 'olist') return `${text}.map_or(Value::Null, Value::Arr)`;
         if (kind === 'dict') return `Value::Dict(${text})`;
         return kind === 'ostr' ? `Value::from(${text})` : this.rustScalarBoxText(kind, text, node);
     }
@@ -6883,6 +6890,12 @@ export class RustTranspiler extends BaseTranspiler {
     rustOdictDefaultText(expr): string | undefined {
         const text = this.rustOdictCallText(expr);
         return text === undefined ? undefined : `${text}.unwrap_or_default()`;
+    }
+
+    /** The bare `Option<List>` call text of an `olist` table call (safeListN), else undefined. */
+    rustOlistCallText(expr): string | undefined {
+        const node: any = this.rustSkipWrappers(expr);
+        return node !== undefined && this.rustBaseTypedReturnKindAll(node) === 'olist' ? this.rustBaseTypedBareText(node) : undefined;
     }
 
     /** `return x` of an `-> Option<Dict>` method: the map a `Value` holds is moved out, anything else is `None`. */
@@ -6906,6 +6919,7 @@ export class RustTranspiler extends BaseTranspiler {
         const inner: any = this.unwrapParens(exp);
         if (this.literalKindOfNode(inner) === 'null') return kind.startsWith('o') ? 'None' : undefined;
         if (kind === 'odict') return this.rustOdictReturnText(exp);
+        if (kind === 'olist') return this.rustOlistCallText(exp) ?? `if let Value::Arr(__l) = ${this.printNode(exp, 0).trim()} { Some(__l) } else { None }`;
         if (kind === 'dict') return this.rustDictReturnText(exp);
         const local = isIdentifier(inner) ? this.rustScalarLocalOf(inner)?.kind : undefined;
         if (local === kind) return super.printIdentifier(inner);
@@ -15862,7 +15876,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustRecordSignature(node: any, name: string, params: Array<{ name: string, rustType: string }>, returnType: string): void {
         let ret: RustDispatchReturnKind = RustTranspiler.RUST_DISPATCH_RETURN_KINDS[returnType] ?? (returnType.startsWith('crate::Result<') ? 'typed' : 'other');
         // a base method of the typed-return table keeps its by-name arm: `Option<i64>` / `Option<String>` box once inside it
-        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr', 'bool': 'keptbool', 'Option<bool>': 'keptobool' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
+        if (this.rustMethodTypedReturnKind(node) !== undefined) ret = ({ 'Option<i64>': 'oint', 'Option<String>': 'keptostr', 'i64': 'keptint', 'String': 'keptstr', 'bool': 'keptbool', 'Option<bool>': 'keptobool', 'Option<crate::value::List>': 'optlist' } as Record<string, RustDispatchReturnKind>)[returnType] ?? ret;
         // ral-fb: a base method printing `Option<String>` (safeCurrencyCode and its overrides) keeps its `-> Value` arms the same way
         if (ret === 'ostr' && this.rustBaseNativeStrMethod(node)) ret = 'keptostr';
         // mh1: a venue method that printed `-> Value` (with a by-name arm) until its `: Str` return was spelled keeps that arm
@@ -35429,7 +35443,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `${indent}let (mut ${varName}, ${varName}__map): (Option<crate::value::List>, Option<crate::value::Dict>) = (match ${this.printNode(declaration.initializer, 0).trim()} { Value::Arr(__l) => (Some(__l), None), __v => (None, __v.into_opt_dict()) })`;
         }
         // a no-default list read of the ws-handler view lands in the Option straight (same Some/None as into_opt_list)
-        const viewList = this.rustProHandlerOptListRead(declaration.initializer);
+        const viewList = this.rustProHandlerOptListRead(declaration.initializer) ?? this.rustOlistCallText(declaration.initializer);
         if (viewList !== undefined) return `${indent}let mut ${varName}: Option<crate::value::List> = ${viewList}`;
         const seed = this.printNode(declaration.initializer, 0).trim();
         // ral-80c R1: the parameter's box is copied once (a handle bump) unless the alias is its last reader
@@ -35452,7 +35466,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printOptListWrite(left: any, right: any): string | undefined {
         if (this.rustOptListOf(left) === undefined) return undefined;
-        return `${this.rustOptListName(left)} = ${this.rustOptListLiteralSome(right) ?? `${this.printNode(right, 0).trim()}.into_opt_list()`}`;
+        return `${this.rustOptListName(left)} = ${this.rustOptListLiteralSome(right) ?? this.rustOlistCallText(right) ?? `${this.printNode(right, 0).trim()}.into_opt_list()`}`;
     }
 
     printOptListNullTest(left: any, right: any, op: any): string | undefined {
