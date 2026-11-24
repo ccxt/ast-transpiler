@@ -41725,11 +41725,30 @@ GoTranspiler.prototype.printBinaryExpression = function (node, identation) {
 
 // Venue `string[]` producers whose every return is `this.safeList (t, k, [ .. ])` never answer nil:
 // the signature prints []any and the return prints SafeListSlice.
-function goTypedVenueDefaultedSafeListReturn (node): boolean {
+function goTypedVenueDefaultedSafeListReturn (node, goTranspiler = undefined): boolean {
     const e = goTypedVenueUnparen (node);
     return (e?.kind === SyntaxKind.CallExpression) && (e.arguments.length === 3) && (e.expression?.kind === SyntaxKind.PropertyAccessExpression)
         && (e.expression.expression?.kind === SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'safeList')
-        && (goTypedVenueUnparen (e.arguments[2])?.kind === SyntaxKind.ArrayLiteralExpression);
+        && ((goTypedVenueUnparen (e.arguments[2])?.kind === SyntaxKind.ArrayLiteralExpression) || goTypedVenueListLiteralLocal (goTranspiler, e.arguments[2]));
+}
+// a default that is a `const` local the printer declares []any with only list literals written into it (never nil)
+function goTypedVenueListLiteralLocal (goTranspiler, node): boolean {
+    const id = goTypedVenueUnparen (node);
+    if ((goTranspiler === undefined) || (id?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const declaration: any = goTranspiler.goDeclarationOfIdentifier (id);
+    const list: any = declaration?.parent;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (list?.kind !== SyntaxKind.VariableDeclarationList) || ((list.flags & NodeFlags.Const) === 0)
+        || (goTranspiler.goDeclaredTypeOfIdentifier (id) !== GO_SAFE_LIST_LOCAL_TYPE)) {
+        return false;
+    }
+    const isList = (e): boolean => {
+        const u = goTypedVenueUnparen (e);
+        return (u?.kind === SyntaxKind.ArrayLiteralExpression)
+            || ((u?.kind === SyntaxKind.ConditionalExpression) && isList (u.whenTrue) && isList (u.whenFalse));
+    };
+    return isList (declaration.initializer);
 }
 function goTypedVenueStringListProducer (goTranspiler, node): boolean {
     const annotation = node?.type?.getText ()?.replace (/\s+/g, '');
@@ -41747,13 +41766,22 @@ function goTypedVenueStringListProducer (goTranspiler, node): boolean {
         return false;
     }
     const returns = collectReturnStatements (node.body);
-    return (returns.length > 0) && returns.every ((r) => goTypedVenueDefaultedSafeListReturn (r.expression));
+    return (returns.length > 0) && returns.every ((r) => goTypedVenueDefaultedSafeListReturn (r.expression, goTranspiler));
 }
 const printReturnStatementBaseTypedVenue = GoTranspiler.prototype.printReturnStatement;
 GoTranspiler.prototype.printReturnStatement = function (node, identation) {
     const fn = this.goEnclosingFunction (node);
-    if ((fn !== undefined) && goTypedVenueDefaultedSafeListReturn (node.expression) && goTypedVenueStringListProducer (this, fn)) {
-        const args = goTypedVenueUnparen (node.expression).arguments.map ((a) => this.printNode (a, 0).trim ());
+    if ((fn !== undefined) && goTypedVenueDefaultedSafeListReturn (node.expression, this) && goTypedVenueStringListProducer (this, fn)) {
+        const call: any = goTypedVenueUnparen (node.expression);
+        const args = call.arguments.map ((a) => this.printNode (a, 0).trim ());
+        const container: any = goTypedVenueUnparen (call.arguments[0]);
+        // a typed map member with a never-nil list local default: the comma-ok read answers what SafeList does
+        if (goTypedVenueListLiteralLocal (this, call.arguments[2]) && (call.arguments[1]?.kind === SyntaxKind.StringLiteral)
+            && (container?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier (container) === GO_SAFE_DICT_LOCAL_TYPE)) {
+            const ind = this.getIden (identation);
+            return this.printNodeCommentsIfAny (node, identation, ind + 'if list, ok := ' + args[0] + '[' + args[1] + '].([]any); ok {\n'
+                + this.getIden (identation + 1) + 'return list\n' + ind + '}\n' + ind + 'return ' + args[2]);
+        }
         return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return this.SafeListSlice(' + args.join (', ') + ')');
     }
     return printReturnStatementBaseTypedVenue.call (this, node, identation);
