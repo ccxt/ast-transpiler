@@ -16788,9 +16788,62 @@ export class RustTranspiler extends BaseTranspiler {
         return first !== undefined && first !== param && this.rustBookSideGroupParam(first);
     }
 
+    // Prediction override groups (PredictionExchange base + every ts/src/prediction override) whose required `string[]`
+    // slot is a lent `&[crate::Value]` when every declaration spells it `<name>: string[]` (by-name arms decode once).
+    private static readonly RUST_STRLIST_GROUP_PARAMS: Record<string, string[]> = { 'fetchOutcomes': [ 'outcomeSymbols' ],
+    };
+
+    rustStrListGroupParam(param: any): boolean {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isIdentifier(param.name) || !isClassDeclaration(method.parent)) return false;
+        const name = String(method.name.text);
+        const index = Array.from(method.parameters).indexOf(param);
+        const pname = RustTranspiler.RUST_STRLIST_GROUP_PARAMS[name]?.[index];
+        if (!pname || String(param.name.text) !== pname || param.initializer !== undefined || param.questionToken !== undefined || param.dotDotDotToken !== undefined) return false;
+        if (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'string[]' || this.rustLocalIsReassigned(param, pname)) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.indexOf('ts/src/');
+        if (at < 0 || !/(?:^|\/)ts\/src\/(?:prediction\/[^/]+|base\/PredictionExchange)\.ts$/.test(file)) return false;
+        const root = file.slice(0, at) + 'ts/src';
+        const key = root + '#strlist#' + name + '#' + index;
+        let agree = this.rustOverrideGroupAgreeByRoot.get(key);
+        if (agree === undefined) {
+            agree = true;
+            let seen = 0;
+            const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^)]*)`, 'gm');
+            for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+                let entries: string[] = [];
+                try {
+                    entries = fs.readdirSync(root + dir).filter((f) => isRustTsIndexSource(f) && (dir !== '/base' || f === 'Exchange.ts' || f === 'PredictionExchange.ts'));
+                } catch (e) {
+                    continue;
+                }
+                for (const f of entries) {
+                    for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
+                        seen++;
+                        if ((m[1].split(',')[index] ?? '').replace(/\s+/g, '') !== `${pname}:string[]`) agree = false;
+                    }
+                }
+            }
+            agree = agree && seen > 0;
+            this.rustOverrideGroupAgreeByRoot.set(key, agree);
+        }
+        return agree;
+    }
+
+    /** `this.safeString (xs, i[, default])` on a lent string-list group slot: the reader takes the slice (`impl KeyRead`). */
+    rustStrListGroupSafeReadUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== id || call.arguments.length < 2 || call.arguments.length > 3 || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(call.expression.name.text) !== 'safeString') return false;
+        const decl: any = this.rustDeclarationOfIdentifier(id);
+        return decl !== undefined && this.rustStrListGroupParam(decl) && this.isRustValueIndexKey(call.arguments[1]);
+    }
+
     /** `this.safeValue / safeList (deltas, i)` on a lent deltas list: the reader takes the slice (`impl KeyRead`). */
     rustBookDeltasSafeReadUse(id: any): boolean {
         const call: any = id?.parent;
+        if (this.rustStrListGroupSafeReadUse(id)) return true;
         if (!isCallExpression(call) || call.arguments[0] !== id || call.arguments.length !== 2 || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (![ 'safeValue', 'safeList' ].includes(String(call.expression.name.text))) return false;
         const decl: any = this.rustDeclarationOfIdentifier(id);
@@ -41257,6 +41310,11 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueStrListParam(param: any): boolean {
         if (param?.kind !== SyntaxKind.Parameter) return false;
         let decision = this.rustVenueStrListDecisions.get(param);
+        if (decision === undefined && this.rustStrListGroupParam(param)) {
+            this.rustVenueStrListDecisions.set(param, false); // re-entrancy guard
+            decision = this.rustParamShadowUseCensus(param.parent, param, RUST_PARAM_SHADOWS.LIST, false, true) !== undefined;
+            this.rustVenueStrListDecisions.set(param, decision);
+        }
         if (decision === undefined && this.rustBookDeltasParam(param)) {
             this.rustVenueStrListDecisions.set(param, false); // re-entrancy guard
             // a group member must type with the base and every override: a use outside the list reads fails loudly
