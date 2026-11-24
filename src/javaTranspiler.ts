@@ -6665,8 +6665,9 @@ export class JavaTranspiler extends BaseTranspiler {
         // is unboxed by the operator (numeric compare, exactly the helper's toLong/toDouble
         // path) and a boxed declaration is null-tested first, which the helper answers false.
         if (leftBox !== undefined || rightBox !== undefined) {
-            const leftOk = leftBox !== undefined || this.javaOperandPrintsPrimitiveNumber(node.left);
-            const rightOk = rightBox !== undefined || this.javaOperandPrintsPrimitiveNumber(node.right);
+            // a widened native `+` of integral operands prints a primitive long as well
+            const leftOk = leftBox !== undefined || this.javaOperandPrintsPrimitiveNumber(node.left) || this.javaNestedAddKind(node.left) === 'long';
+            const rightOk = rightBox !== undefined || this.javaOperandPrintsPrimitiveNumber(node.right) || this.javaNestedAddKind(node.right) === 'long';
             if (leftOk && rightOk) {
                 const boxes: string[] = [];
                 if (leftBox !== undefined && JAVA_BOXED_NUMERIC_TYPES.has(leftBox)) {
@@ -7318,8 +7319,20 @@ export class JavaTranspiler extends BaseTranspiler {
     // `int`/`long`/`double` primitive), undefined when nothing was declared or the declared
     // type is not numeric
     javaDeclaredNumericFamily(expression): string | undefined {
-        const type = this.javaDeclaredTypeOf(expression)?.trim();
+        const type = this.javaDeclaredTypeOf(expression)?.trim() ?? this.javaBindingElementBoxOf(expression);
         return type !== undefined && JAVA_DECLARED_NUMERIC_TYPES.has(type) ? type : undefined;
+    }
+
+    // a destructured element whose printed line declares a numeric box (`Long n = (Long) ...get(0)`)
+    javaBindingElementBoxOf(expression): string | undefined {
+        if (expression === undefined || !isIdentifier(expression) || typeof this.javaBindingElementTypeResolver !== 'function') {
+            return undefined;
+        }
+        const element: any = this.javaTry(() => this.getChecker().getSymbolAtLocation(expression)?.valueDeclaration?.resolve());
+        if (element?.kind !== SyntaxKind.BindingElement || (element.name as any)?.text !== expression.text) {
+            return undefined;
+        }
+        return this.javaTry(() => this.javaBindingElementTypeResolver(element));
     }
 
     // helper removal: native emission when the checker proves the printed
