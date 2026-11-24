@@ -14114,6 +14114,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parsePredictionTrade': [ 0 ],
     // every tree caller passes a `{}`-defaulted safeDict row, an extend copy or a typed map
     'parsePredictionPosition': [ 0 ],
+    // every tree caller passes a map local, an object literal or a `{}`-defaulted safeDict row
+    'parsePredictionTicker': [ 0 ],
     // every tree caller passes an extend copy of the row
     'parseLastPrice': [ 0 ],
     // ticker rows: every caller passes a map row (element reads go through a {}-defaulted safeDict)
