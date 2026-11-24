@@ -798,6 +798,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAssertedStringDeref(node: any): boolean;
     goDerefableStringOperand(node: any): boolean;
     goNumberToStringOfProvenNumber(node: any): boolean;
+    goNumberToStringOfNonNilModulo(node: any): boolean;
     goIso8601OfCurrentTime(node: any): boolean;
     goBaseThisCall(node: any, name: string, arity: number): boolean;
     goConstLocalInitializer(node: any): any;

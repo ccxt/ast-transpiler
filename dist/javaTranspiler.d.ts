@@ -414,6 +414,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaOperandIsNonNullNumber(node: any): boolean;
     javaNativeArithmeticKind(node: any, allowDeclaredLocals?: boolean): string | undefined;
     javaProductFeedsDivide(node: any, leftKind: any, rightKind: any): boolean;
+    printNumSinkDoubleProduct(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    javaProductFeedsNumSink(node: any): boolean;
     javaLiteralFractionalProduct(left: any, right: any): boolean;
     javaNativeArithmeticPairKind(isPlus: any, isMultiply: any, isDivide: any, leftKind: any, rightKind: any): string | undefined;
     javaNestedAddKind(node: any): string | undefined;

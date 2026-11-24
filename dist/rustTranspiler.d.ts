@@ -2492,6 +2492,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A required list parameter (`deltas: any[]`) of a side-group method (handleDeltas, base and every pro override):
      *  a lent `&[crate::Value]` like the other list slots; callers lend their list, the by-name arm reads Null as empty. */
     rustBookDeltasParam(param: any): boolean;
+    private static readonly RUST_STRLIST_GROUP_PARAMS;
+    rustStrListGroupParam(param: any): boolean;
+    /** `this.safeString (xs, i[, default])` on a lent string-list group slot: the reader takes the slice (`impl KeyRead`). */
+    rustStrListGroupSafeReadUse(id: any): boolean;
     /** `this.safeValue / safeList (deltas, i)` on a lent deltas list: the reader takes the slice (`impl KeyRead`). */
     rustBookDeltasSafeReadUse(id: any): boolean;
     /** Every use of the parameter is a side operation statement, a `length` read, a level read or a side-slot hand-on. */
@@ -2917,6 +2921,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A param read by `Object.keys/values` whose `x[k]` / `k in x` key is a local: the local's own typing
      *  depends on the box, so the parameter keeps it. */
     private rustShadowEnumKeysLocal;
+    /** `k` is `const k = keys[i]` with `const keys = Object.keys (p)` on the same parameter `p`: a key the map holds. */
+    private rustParamOwnKeysElementKey;
     /** One reference of a shadow candidate: true only for a read the shadow can
      *  print exactly (same proofs the emitted forms re-check). */
     private rustParamUseIsRead;
@@ -5676,6 +5682,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS;
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private static readonly RUST_INHERENT_GROUP_STR_PARAMS;
+    private static readonly RUST_INHERENT_GROUP_NUM_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     private static readonly RUST_INHERENT_GROUP_LIST_PARAMS;
     rustListGroupParam(param: any): boolean;
@@ -5932,6 +5939,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
+    /** Every `this.<handler> (..)` and every `f.call (this, ..)` that may reach the handler passes all its parameters
+     *  (a short `.call` is ruled out only when `f` is read from a local table literal not naming the handler). */
+    rustWsHandlerExtrasPassed(method: any): boolean;
     /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
     rustParamNeverNamed(method: any, param: any): boolean;
     /** A local whose initializer and every reassignment is a fresh map or `this.safeDict (r, k [, fresh])` with `r` a
@@ -5964,6 +5974,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustExtendOnlySlotOf(arg: any): boolean;
     /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
     rustVenueDictLiteralLocalArg(declaration: any): boolean;
+    /** A never-reassigned reader-produced local the declared-Dict locals table proves a map: it prints the shared handle. */
+    rustTableDictLocalArg(arg: any): boolean;
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
     rustVenueDictValueUse(id: any): boolean;
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
