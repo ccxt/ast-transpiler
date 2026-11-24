@@ -594,6 +594,7 @@ export class RustTranspiler extends BaseTranspiler {
             return `Value::Int(crate::runtime::${name})`;
         }
         if (this.rustGroupIntParamUnboundRead(node)) return `Value::from(${name})`;
+        if (this.rustListGroupParamBoxedUse(node)) return `Value::from(&${name})`;
         return this.rustOwnedUseMark(node, this.printRustBytesLocalRead(node) ?? this.printWsBookLocalUse(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotConcat(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node));
     }
 
@@ -4383,6 +4384,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustParamType(param): string {
         const groupMap = this.rustGroupMapParamType(param); if (groupMap !== undefined) return groupMap;
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
+        if (this.rustListGroupParam(param)) return 'crate::value::List';
         if (this.rustWsHandleParam(param)) return `&${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
         if (this.rustMarketSlotParam(param)) return 'Option<&crate::types::Market>';
         if (this.rustCurrencySlotParam(param)) return 'Option<&crate::types::Currency>';
@@ -19846,6 +19848,8 @@ export class RustTranspiler extends BaseTranspiler {
             const empty = `__${shadow.name}_empty`;
             // a lent string-list parameter is the slice itself: its reads need no binding
             if (this.rustVenueStrListParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
+            // a typed list group slot is viewed as the slice it holds
+            if (this.rustListGroupParam(shadow.declaration)) { lines.push(`${idn}let ${shadow.name}: &[Value] = &${shadow.name};`); continue; }
             if (this.rustVenueDictParam(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             if (this.rustParamsDictSlot(shadow.declaration)) { this.rustParamShadowEmittedSet().add(fn); continue; }
             // a typed request-row list parameter is already bound as `Vec<Dict>`: no slice shadow
@@ -39751,6 +39755,57 @@ export class RustTranspiler extends BaseTranspiler {
     };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
+
+    // List-typed override group parameters reached by name only (no trait slot): method -> parameter names by index,
+    // printed `crate::value::List` when every declaration spells it `<name>: List`; other uses box the shared list
+    private static readonly RUST_INHERENT_GROUP_LIST_PARAMS: Record<string, string[]> = { 'handleListMessage': [ '', 'message' ],
+    };
+
+    rustListGroupParam(param: any): boolean {
+        const method: any = param?.parent;
+        if (param?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isIdentifier(param.name)) return false;
+        const name = String(method.name.text);
+        const index = Array.from(method.parameters).indexOf(param);
+        const pname = RustTranspiler.RUST_INHERENT_GROUP_LIST_PARAMS[name]?.[index];
+        if (!pname || String(param.name.text) !== pname || param.initializer !== undefined || param.questionToken !== undefined) return false;
+        if (String(param.type?.getText?.() ?? '') !== 'List' || this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {})) return false;
+        if (this.rustLocalIsReassigned(param, pname)) return false;
+        const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        const at = file.indexOf('ts/src/');
+        if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
+        const root = file.slice(0, at) + 'ts/src';
+        const key = root + '#list#' + name + '#' + index;
+        let agree = this.rustOverrideGroupAgreeByRoot.get(key);
+        if (agree === undefined) {
+            agree = true;
+            let seen = 0;
+            const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^)]*)`, 'gm');
+            for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+                let entries: string[] = [];
+                try {
+                    entries = fs.readdirSync(root + dir).filter((f) => isRustTsIndexSource(f) && (dir !== '/base' || f === 'Exchange.ts' || f === 'PredictionExchange.ts'));
+                } catch (e) {
+                    continue;
+                }
+                for (const f of entries) {
+                    for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? '').matchAll(header)) {
+                        seen++;
+                        if ((m[1].split(',')[index] ?? '').replace(/\s+/g, '') !== `${pname}:List`) agree = false;
+                    }
+                }
+            }
+            agree = agree && seen > 0;
+            this.rustOverrideGroupAgreeByRoot.set(key, agree);
+        }
+        return agree;
+    }
+
+    /** A use of a list group slot outside its slice view: the shared list boxed by reference (no copy). */
+    rustListGroupParamBoxedUse(node: any): boolean {
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration === undefined || !isParameterDeclaration(declaration) || declaration.name === node || node.parent === declaration) return false;
+        return this.rustListGroupParam(declaration) && this.rustParamShadowOf(node) === undefined;
+    }
 
     /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
