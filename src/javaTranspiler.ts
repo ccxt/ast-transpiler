@@ -2134,6 +2134,34 @@ export class JavaTranspiler extends BaseTranspiler {
         }
     }
 
+    // a venue method's `x: Dict | undefined = undefined` slot its body never reads: every in-file call
+    // (direct or `.call (this, ..)`) leaves it undefined or passes an object literal, so a Map slot holds it
+    javaVenueOptionalDictUnionParameter(node, method): boolean {
+        const file = node.getSourceFile();
+        const name = (node.name as any)?.text;
+        const methodName = (method.name as any)?.text;
+        if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(file.fileName.replace(/\\/g, '/'))
+            || node.type?.kind !== SyntaxKind.UnionType || !this.h30J04DictTypeNode(node.type)
+            || !this.javaIsUndefinedLiteral(node.initializer) || name === undefined || methodName === undefined) {
+            return false;
+        }
+        const index = method.parameters.indexOf(node);
+        if (this.javaTreeSome(method.body, (n) => (isIdentifier(n) && n.text === name) || undefined)) {
+            return false;
+        }
+        const fits = (a) => a === undefined || this.javaIsUndefinedLiteral(a) || isObjectLiteralExpression(a);
+        return !this.javaTreeSome(file, (n) => {
+            if (!isCallExpression(n) || !isPropertyAccessExpression(n.expression)) {
+                return undefined;
+            }
+            const callee = n.expression.name.text;
+            if (callee === methodName) {
+                return !fits(n.arguments[index]) || undefined;
+            }
+            return (callee === 'call' && n.arguments[0]?.kind === SyntaxKind.ThisKeyword && !fits(n.arguments[index + 1])) || undefined;
+        });
+    }
+
     // the annotation proof for an optional parameter (no initializer bail)
     javaOptionalParameterTypeOf(node): string | undefined {
         if (node === undefined || !isParameterDeclaration(node) || node.dotDotDotToken !== undefined) {
@@ -2154,6 +2182,9 @@ export class JavaTranspiler extends BaseTranspiler {
         // override carries the base contract, so it prints that type (Java overrides are invariant)
         if (node.type === undefined) {
             return this.javaInheritedOptionalParameterType(node);
+        }
+        if (this.javaVenueOptionalDictUnionParameter(node, method)) {
+            return JAVA_NATIVE_DICT_PARAMETER_TYPE;
         }
         if (name === 'Strings' || this.javaIsStringArrayType(checker, type)) {
             const listName = (JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has((node.name as any)?.text)
