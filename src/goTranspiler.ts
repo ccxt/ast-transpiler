@@ -1281,6 +1281,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.FilterEventsBySearchIn': '[]any',
     // exchange_generated.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
     'this.OrderbookChecksumMessage': 'string',
+    // exchange.go: DecodeProtoMsg returns the decoded wrapper as map[string]any (ts `: Dict`); a bad frame panics
+    'this.DecodeProtoMsg': 'map[string]any',
 };
 
 // ---------------------------------------------------------------------------
