@@ -220,7 +220,7 @@ function rustScopeNameTable(index: RustScopeIndex): Map<string, number[]> {
 
 // A by-name dispatch parameter kind (one conversion each) and return kind, from the printer's type decisions.
 export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64'
-    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'other';
+    | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'mutclient' | 'other';
 // `ostr` .. `struct` are the native returns of sync methods; each boxes back to `Value` once, inside the arm
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
@@ -299,6 +299,8 @@ export const rustDispatch = {
         case 'dictrows': return `crate::value::dict_rows(std::sync::Arc::new(args.get(${i}).and_then(crate::Value::as_array).cloned().unwrap_or_default()))`;
         // a ws client handle slot: the arm builds the handle from the boxed client once
         case 'client': return `&crate::pro::ws_client::ClientHandle::from_value(args.get(${i}).unwrap_or(&crate::Value::Null))`;
+        // a handle slot that writes its subscriptions: the arm lends a mutable handle built the same way
+        case 'mutclient': return `&mut crate::pro::ws_client::ClientHandle::from_value(args.get(${i}).unwrap_or(&crate::Value::Null))`;
         default: return arg;
         }
     },
@@ -323,6 +325,7 @@ export const rustDispatch = {
         case 'optmapref': return rustDispatch.arg(kind, i);
         case 'client': return rustDispatch.arg(kind, i);
         case 'dictref': return rustDispatch.arg(kind, i);
+        case 'mutclient': return rustDispatch.arg(kind, i);
         default: return undefined;
         }
     },
@@ -4500,7 +4503,7 @@ export class RustTranspiler extends BaseTranspiler {
         const groupMap = this.rustGroupMapParamType(param); if (groupMap !== undefined) return groupMap;
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
         if (this.rustListGroupParam(param)) return 'crate::value::List';
-        if (this.rustWsHandleParam(param)) return `&${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
+        if (this.rustWsHandleParam(param)) return `&${this.rustWsHandleParamMut.has(param) ? 'mut ' : ''}${RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
         if (this.rustMarketSlotParam(param)) return 'Option<&crate::types::Market>';
         if (this.rustCurrencySlotParam(param)) return 'Option<&crate::types::Currency>';
         if (this.rustParamPrintsBool(param)) return 'bool';
@@ -15843,6 +15846,7 @@ export class RustTranspiler extends BaseTranspiler {
         'impl crate::value::ExtendHead': 'value',
         '&indexmap::IndexMap<String, Value>': 'mapref', 'Option<&indexmap::IndexMap<String, Value>>': 'optmapref', '&crate::pro::ws_client::ClientHandle': 'client',
         '&crate::value::Dict': 'dictref',
+        '&mut crate::pro::ws_client::ClientHandle': 'mutclient',
         '&mut Option<crate::pro::order_book::Book>': 'book', '&mut Option<ccxt::pro::order_book::Book>': 'book',
     };
 
@@ -43399,6 +43403,8 @@ export class RustTranspiler extends BaseTranspiler {
     // (a handler table entry, never a direct call) whose `client` is used only for handle field reads and
     // resolve / reject / send / future / reusableFuture calls; the dispatch arm builds the handle from the boxed client.
     private rustWsHandleParamCache = new WeakMap<Node, boolean>();
+    private rustWsHandleParamWriters = new WeakSet<Node>();
+    private rustWsHandleParamMut = new WeakSet<Node>();
     rustWsHandleParam(param: any): boolean {
         if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.name.text !== 'client') return false;
         const cached = this.rustWsHandleParamCache.get(param); if (cached !== undefined) return cached;
@@ -43412,6 +43418,8 @@ export class RustTranspiler extends BaseTranspiler {
             for (const q of next) if (!seen.has(q)) { seen.add(q); queue.push(q); }
         }
         for (const p of seen) this.rustWsHandleParamCache.set(p, ok);
+        // a group with a subscriptions writer takes the mutable handle in every member (a hand-off lends it on)
+        if (ok && [ ...seen ].some((p) => this.rustWsHandleParamWriters.has(p))) for (const p of seen) this.rustWsHandleParamMut.add(p);
         return ok;
     }
     /** The `client` params linked to `param` by a direct `this.h (.., client, ..)` hand-off (either way), or undefined when it
@@ -43469,8 +43477,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustClientHandleClassType(this.getCheckedTypeOf(param.name))) return false;
         const routed = this.rustWsRoutedHandler(method);
         const nodes: any[] = this.rustScopeNameNodes(method, 'client');
+        const subWrite = (p: any): boolean => !routed && this.rustWsHandleSubscriptionStatement(p);
+        const writeLines = nodes.filter((n: any) => n.kind === SyntaxKind.Identifier && subWrite(n.parent)).map((n: any) => this.rustClientHandleLine(n));
+        const firstWrite = writeLines.length > 0 ? Math.min(...writeLines) : Infinity;
+        if (writeLines.length > 0) this.rustWsHandleParamWriters.add(param);
         return nodes.every((n: any) => {
             if (n === param.name || n === param) return true;
+            if (n.kind === SyntaxKind.Identifier && subWrite(n.parent)) return true;
+            // a subscriptions read at or after a write keeps the box (the snapshot is not re-read here)
+            if (n.kind === SyntaxKind.Identifier && isPropertyAccessExpression(n.parent) && n.parent.expression === n && String(n.parent.name.text) === 'subscriptions'
+                && this.rustClientHandleLine(n) >= firstWrite) return false;
             if (n.kind !== SyntaxKind.Identifier) return false;
             const p: any = n.parent;
             if (p === undefined) return false;
@@ -43499,6 +43515,16 @@ export class RustTranspiler extends BaseTranspiler {
             }
             return true;
         });
+    }
+    /** `client.subscriptions[k] = v` / `delete client.subscriptions[k]` as a whole statement (`p` is `client.subscriptions`):
+     *  printed through the handle's `add_subscription` / `remove_subscription`. */
+    rustWsHandleSubscriptionStatement(p: any): boolean {
+        if (!isPropertyAccessExpression(p) || String(p.name.text) !== 'subscriptions') return false;
+        const access: any = p.parent;
+        if (!isElementAccessExpression(access) || access.expression !== p) return false;
+        const up: any = access.parent;
+        if (isDeleteExpression(up)) return up.parent?.kind === SyntaxKind.ExpressionStatement;
+        return isBinaryExpression(up) && up.left === access && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement;
     }
     /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
      *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */

@@ -8827,9 +8827,9 @@ describe('rust ws client handle', () => {
         expect(out).toContain('(client).futures.clone()');
     });
     test('a client parameter binds the handle once and reads through it', () => {
-        expect(out).toMatch(/let mut __ch = crate::pro::ws_client::ClientHandle::from_value\(&client\);\n\s*if \(__ch\.has_subscription\(&messageHash\)\) \{/);
-        expect(out).toContain('__ch.remove_subscription(&messageHash)');
-        expect(out).toContain('if (__ch.has_future(&messageHash)) {');
+        expect(out).toMatch(/fn handleUnsub\(&self, client: &mut crate::pro::ws_client::ClientHandle, messageHash: Value\) \{\n\s*if \(client\.has_subscription\(&messageHash\)\) \{/);
+        expect(out).toContain('client.remove_subscription(&messageHash)');
+        expect(out).toContain('if (client.has_future(&messageHash)) {');
     });
     test('a handle field used as a method receiver is read in place', () => {
         expect(out).toContain('(client).url.as_str().unwrap_or("").contains("spot")');

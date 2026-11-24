@@ -113,8 +113,9 @@ describe('rust ws handler client handle param', () => {
     test('a handler that hands client on whole keeps the boxed client', () => {
         expect(header('handleHanded')).not.toContain('ClientHandle');
     });
-    test('a handler that writes a handle field keeps the boxed client', () => {
-        expect(header('handleWrites')).not.toContain('ClientHandle');
+    test('a handler that writes a subscriptions entry takes the mutable handle and writes through it', () => {
+        expect(header('handleWrites')).toContain('client: &mut crate::pro::ws_client::ClientHandle');
+        expect(body('handleWrites', 'handleCalled')).toContain('client.add_subscription(');
     });
     test('a handler with a direct call site keeps the boxed client', () => {
         expect(header('handleCalled')).not.toContain('ClientHandle');
