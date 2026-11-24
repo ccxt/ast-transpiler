@@ -56994,6 +56994,9 @@ GoTranspiler.prototype.h30a03Receiver = function (container, read, call?) {
     if (this.h28a03JoinedEndpointLocal(container)) {
         return true;
     }
+    if (this.h27a11JsonContainer(container)) {
+        return true;                    // a ws frame (or read-only cut of one): decoded JSON, never written
+    }
     const source: any = this.goAnyBoxLocalDeclaration(container);
     const seed: any = this.goUnwrapParenthesizedNode(source?.initializer);
     if (seed?.kind === SyntaxKind.AwaitExpression) {
