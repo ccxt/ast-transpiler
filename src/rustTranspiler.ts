@@ -22669,7 +22669,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printSliceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return this.rustStrLocalSliceText(node) ?? this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null', this.rust44bSliceBounds(node));
+        return this.rustStrParamTailSliceValue(node) ?? this.rustStrLocalSliceText(node) ?? this.printNativeStringSlice(node, name) ?? this.looseSlice(name, parsedArg, parsedArg2 ?? 'Value::Null', this.rust44bSliceBounds(node));
     }
 
     /** ral-44b: `n` is a bound (argument 0 or 1) of `recv.slice(..)` whose receiver is no typed string local (looseSlice prints
@@ -40139,7 +40139,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (optional && args[at] === undefined) continue;
             const argType: any = args[at] === undefined ? undefined : this.typeOfNodeIfAny(args[at]);
             if ((argType === undefined || (argType.flags & (TypeFlags.Any | TypeFlags.Unknown)) !== 0) && !this.rustWsUrlReadIdent(args[at])) return undefined;
-            if (!this.rustVenueStrSimpleArg(args[at]) && !(rustType === 'bool' && this.rustVenueNegatedArg(args[at])) && !(rustType.includes('str') && !RustTranspiler.RUST_HELD_ORDER_REQUEST.test(String(method.name.text)) && this.rustVenueStrCastOperand(args[at]) !== undefined)) return undefined;
+            if (!this.rustVenueStrSimpleArg(args[at]) && !(rustType === '&str' && this.rustStrTailSliceRecv(args[at]) !== undefined) && !(rustType === 'bool' && this.rustVenueNegatedArg(args[at])) && !(rustType.includes('str') && !RustTranspiler.RUST_HELD_ORDER_REQUEST.test(String(method.name.text)) && this.rustVenueStrCastOperand(args[at]) !== undefined)) return undefined;
             if (!this.rustVenueScalarArgExact(args[at], rustType)) return undefined;
             // an arithmetic operand in the same call prints a long numeric match: keep its line short
             if (!rustType.includes('str') && args.some((a: any) => this.rustVenueArithmeticArg(a))) return undefined;
@@ -40581,7 +40581,32 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustVenueStrParamType(param) !== '&str') return false;
         if (this.rustSpawnKeyParam(param.parent, param)) return true;
         // ral-64x: also a whole argument of a venue call whose parameter there prints `&str` (lent as it came in)
-        return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str');
+        return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str')
+            || this.rustStrParamTailSliceOnly(param);
+    }
+
+    /** A `&str` parameter never written whose every read is the receiver of `x.slice (n)` with one integer literal bound. */
+    rustStrParamTailSliceOnly(param: any): boolean {
+        if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text)) as any[]) {
+            if (n === param.name || n === param || n.parent === param) continue;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param) return false;
+            const access: any = n.parent;
+            if (!isPropertyAccessExpression(access) || access.expression !== n || !isCallExpression(access.parent) || access.parent.expression !== access) return false;
+            if (this.rustStrTailSliceRecv(access.parent) !== n) return false;
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    /** `x.slice (n)` on an unbound `&str` parameter: the runtime's char slice read from the borrow, boxed once. */
+    rustStrParamTailSliceValue(node: any): string | undefined {
+        const recv: any = this.rustStrTailSliceRecv(node);
+        if (recv === undefined || !this.rustVenueStrParamUnboundRead(recv)) return undefined;
+        const s = super.printIdentifier(recv);
+        const n = this.rustSliceLiteralBound(this.unwrapParens(node).arguments[0]);
+        return `Value::from(${s}.chars().skip(${n >= 0 ? `${n}` : `${s}.chars().count().saturating_sub(${-n})`}).collect::<String>())`;
     }
 
     /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
@@ -40744,6 +40769,31 @@ export class RustTranspiler extends BaseTranspiler {
                 || (isPropertyAccessExpression(this.unwrapParens(a)) && this.unwrapParens(a).expression.kind === SyntaxKind.ThisKeyword));
     }
 
+    /** `x.slice (n)` with one integer literal bound on an identifier the checker types `string`: its receiver. */
+    rustStrTailSliceRecv(arg: any): any {
+        const call: any = this.unwrapParens(arg);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.name.text !== 'slice') return undefined;
+        const recv: any = this.unwrapParens(call.expression.expression);
+        if (!isIdentifier(recv) || call.arguments.length !== 1 || this.rustSliceLiteralBound(call.arguments[0]) === undefined) return undefined;
+        const type: any = this.typeOfNodeIfAny(recv);
+        return type !== undefined && (type.flags & TypeFlags.String) !== 0 ? recv : undefined;
+    }
+
+    /** `&str` argument text of `x.slice (n)` on a `&str` parameter or a `String` local: the chars past the clamped start. */
+    rustStrTailSliceText(arg: any): string | undefined {
+        const recv: any = this.rustStrTailSliceRecv(arg);
+        if (recv === undefined) return undefined;
+        // a borrowed `&str` parameter prints `Some(x)` as a string receiver; a `String` local is lent
+        const printed = this.printNode(recv, 0).trim();
+        const lent = /^Some\(([A-Za-z_]\w*)\)$/.exec(printed);
+        const s = this.rustVenueStrParamUnboundRead(recv) ? super.printIdentifier(recv) : lent !== null ? lent[1] : this.rustScalarLocalOf(recv)?.kind === 'str' ? `${printed}.as_str()`
+            : this.rustOptParamKind(recv) === 'str' && /^[A-Za-z_]\w*$/.test(printed) ? `${printed}.as_str().unwrap_or_default()` : undefined;
+        if (s === undefined) return undefined;
+        const n = this.rustSliceLiteralBound(this.unwrapParens(arg).arguments[0]);
+        const skip = n >= 0 ? `${n}` : `${s}.chars().count().saturating_sub(${-n})`;
+        return `${s}.chars().skip(${skip}).collect::<String>().as_str()`;
+    }
+
     /** Order request builders whose amount / price slots stay as they are (held). */
     private static readonly RUST_HELD_ORDER_REQUEST = /^(?:create|edit)Orders?Request$/;
 
@@ -40779,6 +40829,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (local !== undefined) return local;
         const inner: any = this.unwrapParens(arg);
         if (type !== '&str' && type !== 'Option<&str>') return this.rustVenueScalarArgText(arg, type, identation);
+        const tail = type === '&str' ? this.rustStrTailSliceText(inner) : undefined;
+        if (tail !== undefined) return tail;
         // ral-64x: an unbound `&str` venue parameter is lent as the borrow it is
         if (isIdentifier(inner) && this.rustVenueStrParamUnboundRead(inner)) return type === '&str' ? RustTranspiler.rustLentMark(super.printIdentifier(inner)) : `Some(${super.printIdentifier(inner)})`;
         // ral-ve: an `Option<String>` ws url local lends its text
