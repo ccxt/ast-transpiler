@@ -2579,6 +2579,8 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustOwnContainerCallKind(node.kind === SyntaxKind.AwaitExpression ? node.expression : node);
         if (kind === undefined) return text;
         const bare = this.rustOwnContainerBareText(node);
+        // an optional map: `.into_dict()` (Null -> empty map) is the `None` -> empty map unwrap, `.into_opt_dict()` the call itself
+        if (kind === 'odict') { const obox = `${bare}.map_or(Value::Null, Value::Dict)`; return text.split(`${obox}.into_dict()`).join(`${bare}.unwrap_or_default()`).split(`${obox}.into_opt_dict()`).join(bare); }
         const box = `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${bare})`;
         const native = kind === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
         return text.split(`${box}.into_${kind}()`).join(bare).split(`${box}.into_opt_${kind}()`).join(`Some(${bare})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare}`)
@@ -17727,7 +17729,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNativeStrReturnKind(node) === 'str') {
             return 'Option<String>';
         }
-        const container = this.rustOwnContainerReturn(node); if (container !== undefined) return container === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
+        const container = this.rustOwnContainerReturn(node); if (container !== undefined) return container === 'odict' ? 'Option<crate::value::Dict>' : container === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
         if (this.rustAsyncNoValueMethod(node)) return '';
         try {
             const checker = this.getChecker();
@@ -22127,6 +22129,7 @@ export class RustTranspiler extends BaseTranspiler {
         const typedCall = isCallExpression(node.expression) ? this.printTypedUnifiedCall(node.expression) : undefined;
         if (typedCall !== undefined) return typedCall;
         const containerKind = this.rustOwnContainerCallKind(node.expression);
+        if (containerKind === 'odict' && !this.rustOwnContainerBare.has(node)) return `${this.rustOwnContainerBareText(node.expression)}.await.map_or(Value::Null, Value::Dict)`;
         if (containerKind !== undefined && !this.rustOwnContainerBare.has(node)) return `${containerKind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node.expression)}.await)`;
         const outcomeBox = this.printOptOutcomeAwaitBox(node, identation); if (outcomeBox !== undefined) return outcomeBox;
         // a local in a method that inlines a value-position spawn holds the spawn's resolved result
@@ -22792,10 +22795,10 @@ export class RustTranspiler extends BaseTranspiler {
     // ── own container returns: a venue method declared `Dict` / `List` returns `Dict` / `List` ──
     // Fires when the method is venue-private (rustVenueContainerReturnKind, never null) and every `return` operand is
     // statically a map / list (no `any`), so the native result is exactly the map / list the boxed `Value` held.
-    private rustOwnContainerDecisions = new WeakMap<any, 'dict' | 'list' | null>();
+    private rustOwnContainerDecisions = new WeakMap<any, 'dict' | 'list' | 'odict' | null>();
     private rustOwnContainerBare = new Set<any>();
 
-    rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined {
+    rustOwnContainerReturn(node: any): 'dict' | 'list' | 'odict' | undefined {
         if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || !isIdentifier(node.name)) return undefined;
         let d = this.rustOwnContainerDecisions.get(node);
         if (d === undefined) {
@@ -22815,10 +22818,11 @@ export class RustTranspiler extends BaseTranspiler {
         'MarginModification',
     ]);
 
-    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined {
+    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined {
         if (this.checkerOrUndefined() === undefined) return undefined;
         const baseList = this.rustBaseStringListReturn(node); if (baseList !== undefined) return baseList;
         const kind = this.rustVenueContainerDecisionOf(node);
+        if (kind !== undefined && kind.nullable && kind.kind === 'dict') return this.rustOwnOptDictReturn(node);
         const declared = String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
         if (kind === undefined || kind.nullable || !(/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared) || RustTranspiler.RUST_OWN_RECORD_RETURNS.has(declared))) return undefined;
         const checker = this.getChecker();
@@ -22835,6 +22839,43 @@ export class RustTranspiler extends BaseTranspiler {
         };
         node.body.forEachChild(visit);
         return ok && returns > 0 ? kind.kind : undefined;
+    }
+
+    /** A venue method declared `NullableDict` whose every return is undefined, an optional map local or a no-default
+     *  `safeDict` read: it returns `Option<Dict>` (None exactly where the boxed answer was Null). */
+    rustOwnOptDictReturn(node: any): 'odict' | undefined {
+        if (this.rustMethodTypedReturnKind(node) !== undefined || String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1') !== 'NullableDict') return undefined;
+        let returns = 0;
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok || (n !== node.body && isFunctionLike(n))) return;
+            if (isReturnStatement(n)) {
+                returns++;
+                if (n.expression === undefined || this.rustOwnOptDictOperand(n.expression) === undefined) ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        node.body.forEachChild(visit);
+        // the body may not fall off its end (no `None` tail is printed): its last statement returns or throws
+        const last: any = node.body.statements[node.body.statements.length - 1];
+        return ok && returns > 0 && last !== undefined && (isReturnStatement(last) || isThrowStatement(last)) ? 'odict' : undefined;
+    }
+
+    /** The `Option<Dict>` text of a return operand of an `rustOwnOptDictReturn` method, else undefined. */
+    rustOwnOptDictOperand(exp: any): string | undefined {
+        const v: any = this.unwrapParens(exp);
+        if (v === undefined) return undefined;
+        if (this.literalKindOfNode(v) === 'null') return 'None';
+        if (isIdentifier(v)) {
+            const local = this.rustOptContainerOf(v);
+            return local !== undefined && local.kind === 'dict' ? super.transformIdentifier(v, this.ReservedKeywordsReplacements[v.text] ?? v.text) : undefined;
+        }
+        if (!isCallExpression(v) || !isPropertyAccessExpression(v.expression) || v.expression.expression.kind !== SyntaxKind.ThisKeyword || String(v.expression.name.text) !== 'safeDict') return undefined;
+        if (v.arguments.length !== 2 || !isStringLiteral(v.arguments[1]) || !this.rustCalleeIsRuntimeBase(v)) return undefined;
+        // the receiver is a field of the exchange (`this.options`): the typed reader borrows it
+        const recv: any = this.unwrapParens(v.arguments[0]);
+        if (!isPropertyAccessExpression(recv) || recv.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(recv.name)) return undefined;
+        return `self.safe_dict_k_o(&${this.printNode(recv, 0).trim()}, ${JSON.stringify(v.arguments[1].text)})`;
     }
 
     /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
@@ -22892,7 +22933,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** `[await] this.m (..)` of an own-container method: its kind. */
-    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined {
+    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | 'odict' | undefined {
         const call: any = this.unwrapParens(expr);
         const twin = this.rustFilterTwinKind(call); if (twin !== undefined) return twin;
         if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
@@ -22977,6 +23018,7 @@ export class RustTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(up.parent)) up = up.parent;
         if (up.parent?.kind === SyntaxKind.AwaitExpression) return undefined;
         const kind = this.rustOwnContainerCallKind(node);
+        if (kind === 'odict') return `${this.rustOwnContainerBareText(node)}.map_or(Value::Null, Value::Dict)`;
         return kind === undefined ? undefined : `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node)})`;
     }
 
@@ -23086,6 +23128,7 @@ export class RustTranspiler extends BaseTranspiler {
     /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
     printOwnContainerReturn(fn: any, exp: any): string | undefined {
         const kind = this.rustOwnContainerReturn(fn);
+        if (kind === 'odict') return this.rustOwnOptDictOperand(exp);
         return kind === undefined ? undefined : this.rustOwnContainerPayload(exp, kind);
     }
 
