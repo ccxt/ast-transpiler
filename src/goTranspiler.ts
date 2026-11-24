@@ -9508,7 +9508,27 @@ function ccxtGoProducerUnboxValue (goTranspiler, declaration, identation, family
     if ((family === 'map') && (CCXT_GO_HELPER_RETURN_TYPES['this.' + callee.name.text.charAt (0).toUpperCase () + callee.name.text.slice (1)] === 'map[string]any')) {
         return printed;
     }
+    // a callee whose Go signature already returns []any (base + every override, or this class's one method): ArrayTyped is the identity
+    if ((family === 'list') && ccxtGoProducerReturnsGoList (goTranspiler, declaration.initializer, printed)) {
+        return printed;
+    }
     return ((family === 'map') ? 'MapTyped(' : 'ArrayTyped(') + printed + ')';
+}
+
+function ccxtGoProducerReturnsGoList (goTranspiler, call, printed) {
+    const name = String (call.expression.name.text);
+    const goName = name.charAt (0).toUpperCase () + name.slice (1);
+    if (!printed.startsWith ('this.' + goName + '(') || !printed.endsWith (')') || !goTranspiler.isWholePrintedCall (printed, printed.indexOf ('('))) {
+        return false;
+    }
+    if (goTranspiler.generatedListCallees?.has?.(goName) === true) {
+        return true;
+    }
+    const own = ccxtGoAsyncListClassMember (enclosingClassDeclaration (call), name);
+    if ((own === undefined) || goTranspiler.isAsyncFunction (own)) {
+        return false;
+    }
+    return /\) \[\]any\s*$/.test (goTranspiler.printMethodDefinition (own, 0).split ('\n').pop ());
 }
 
 // chain the four safeDict/safeList unbox hooks: the shipped answer decides first, so a site it already types
