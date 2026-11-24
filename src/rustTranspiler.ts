@@ -23352,6 +23352,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (read !== undefined) return read;
         // the runtime `extend` builds a fresh map on every input, so its typed twin answers the same map
         if (kind === 'dict' && this.rustRuntimeExtendCall(exp) && printed.startsWith('self.extend(') && printed.endsWith(')') && this.rustBalancedText(printed.slice('self.extend('.length, -1))) return 'self.extend_t(' + printed.slice('self.extend('.length);
+        // a list local that already prints as `crate::value::List` hands on its own handle
+        const listLocal: any = kind === 'list' && isIdentifier(this.unwrapParens(exp)) ? this.rustDeclaredNode(this.unwrapParens(exp)) : undefined;
+        if (listLocal !== undefined && isVariableDeclaration(listLocal) && /^[A-Za-z_]\w*$/.test(printed) && (this as any).rustP21TypedListLocal(listLocal)) return printed;
         // a local the source declares `Dict` that still prints as a `Value`: the method's one conversion replaces each caller's
         const local: any = kind === 'dict' && isIdentifier(this.unwrapParens(exp)) ? this.rustDeclaredNode(this.unwrapParens(exp)) : undefined;
         // a `Dict` parameter that already takes the dict handle hands on that same map
