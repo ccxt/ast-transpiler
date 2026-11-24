@@ -57100,7 +57100,8 @@ GoTranspiler.prototype.h30a03Site = function (call, name: string, identation: nu
     const forms = (accessor === 'safeList')
         ? [ `this.SafeListSlice${tail}`, `SafeListTypedDefault${tail}`, `ListTyped(this.SafeList${tail})`, `ArrayTyped(this.SafeList${tail})` ]
         : [ `this.SafeDictMap${tail}`, `MapTyped(this.SafeDict${tail})` ];
-    const lead = /^\n*/.exec(printed)[0];
+    // whole leading comment lines (a response sample above the statement) stay in front of the native read
+    const lead = /^(?:\n|[ \t]*\/\/[^\n]*\n)*/.exec(printed)[0];
     const body = printed.substring(lead.length).replace(/;?\s*$/, '');
     const head = prefix.replace('%T', goType);
     if (!forms.some((form) => body === `${iden}${head}${form}`)) {
