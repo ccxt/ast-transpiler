@@ -14061,6 +14061,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseTicker': [ 0 ],
     // its one base caller passes the awaited snapshot map; every override reads the book with safeInteger
     'getCacheIndex': [ 0 ],
+    // its one base loop passes an extend copy of the row
+    'parseLongShortRatio': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
