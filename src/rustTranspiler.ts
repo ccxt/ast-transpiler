@@ -18525,6 +18525,9 @@ export class RustTranspiler extends BaseTranspiler {
             expression.expression.kind === SyntaxKind.ThisKeyword &&
             expression.name.text === 'json' && node.arguments.length === 1) {
             const argText = this.printNode(node.arguments[0], 0).trim();
+            // a borrowed `&crate::value::Dict` venue parameter is lent as is
+            const jsonDecl: any = isIdentifier(node.arguments[0]) ? this.rustDeclarationOfIdentifier(node.arguments[0]) : undefined;
+            if (jsonDecl?.kind === SyntaxKind.Parameter && jsonDecl.name !== node.arguments[0] && this.rustVenueDictParam(jsonDecl)) return `json_stringify(${argText})`;
             if (!argText.includes('self.')) {
                 const withoutClone = argText.replace(/\.clone\(\)$/, '');
                 return `json_stringify(${this.ensureRef(withoutClone)})`;
@@ -19977,7 +19980,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -25377,6 +25380,24 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = node?.parent;
         return isIdentifier(node) && isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === node
             && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'json';
+    }
+
+    /** A `this.json (x)` operand inside a method that returns no value and is reached only by name (a ws ack handler):
+     *  it lends the dict handle. A direct caller may hold the message boxed, so it keeps the slot as it is. */
+    rustVoidHandlerJsonOperand(node: any): boolean {
+        if (!this.rustIsJsonOperand(node)) return false;
+        let fn: any = node.parent;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        if (fn === undefined || !isMethodDeclaration(fn) || fn.body === undefined || (fn.type !== undefined && fn.type.kind !== SyntaxKind.VoidKeyword)) return false;
+        if (!this.rustMethodReferencedAsValue(fn) || this.rustVenueStrCallSites(fn).length > 0) return false;
+        let valued = false;
+        const visit = (n: any): void => {
+            if (valued || isFunctionLike(n)) return;
+            if (isReturnStatement(n) && n.expression !== undefined) valued = true;
+            n.forEachChild(visit);
+        };
+        fn.body.forEachChild(visit);
+        return !valued;
     }
 
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
@@ -41929,7 +41950,7 @@ export class RustTranspiler extends BaseTranspiler {
         let found = false;
         const visit = (n: any) => {
             if (found) return;
-            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
+            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || this.rustVoidHandlerJsonOperand(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
             n.forEachChild(visit);
         };
         this.rustVenueDictValuePending.add(param);
