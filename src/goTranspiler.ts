@@ -4217,6 +4217,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
             result = undefined;
         }
         result = result ?? h22g05IntPtrReturn (goTranspiler, node, allowed);
+        result = result ?? g34ParseToIntPtrReturn (goTranspiler, node, allowed);
         result = result ?? h26g09MixedStrReturn (goTranspiler, node, allowed);
         result = result ?? h30g05PtrConcatStrReturn (goTranspiler, node, allowed);
         result = result ?? h40g15IntReturnPaths (goTranspiler, node, allowed);
@@ -60028,6 +60029,92 @@ function h40g15IntReturnPaths (goTranspiler, node, allowed): string | undefined 
     return 'int64';
 }
 // ===== h40-g15 (end) =====
+// ===== g34: a parse* `Int` method whose returns are undefined, a *int64 value or `this.parseToInt (..)` prints *int64 =====
+// parseToInt answers a plain int64 (never nil): that return prints `retIntVal := v; return &retIntVal`.
+const G34_PARSE_TO_INT_RETURNS = new WeakSet<object> ();
+function g34ParseToIntCall (e): boolean {
+    return (e?.kind === ts.SyntaxKind.CallExpression) && (e.arguments.length === 1) && (e.expression?.kind === ts.SyntaxKind.PropertyAccessExpression)
+        && (e.expression.expression?.kind === ts.SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'parseToInt');
+}
+function g34ParseToIntPtrReturn (goTranspiler, node, allowed): string | undefined {
+    if ((allowed.length !== 1) || (allowed[0] !== '*int64') || (node.type?.getText () !== 'Int') || node.body.getText ().includes ('retIntVal')) {
+        return undefined;
+    }
+    const returns = collectReturnStatements (node.body);
+    const converted = [];
+    for (const r of returns) {
+        for (let up = r.parent; (up !== undefined) && (up !== node.body); up = up.parent) {
+            if (up.kind === ts.SyntaxKind.TryStatement) {
+                return undefined;
+            }
+        }
+        const e = ccxtGoUnwrapParens (r.expression);
+        if (e === undefined) {
+            return undefined;
+        }
+        if (g34ParseToIntCall (e)) {
+            converted.push (r);
+        } else if (!isAbsentExpression (e) && (ccxtGoReturnExpressionType (goTranspiler, e) !== '*int64')) {
+            return undefined;
+        }
+    }
+    if (converted.length === 0) {
+        return undefined;
+    }
+    converted.forEach ((r) => G34_PARSE_TO_INT_RETURNS.add (r));
+    return '*int64';
+}
+// `const x = this.m (..)` over a method this rule typed: the local takes the method's *int64
+function g34ParseToIntLocalType (goTranspiler, initializer, printedValue: string): string | undefined {
+    const call = ccxtGoUnwrapParens (initializer);
+    const callee = (call?.kind === ts.SyntaxKind.CallExpression) ? call.expression : undefined;
+    const declaration = initializer?.parent;
+    if ((callee?.kind !== ts.SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== ts.SyntaxKind.ThisKeyword)
+        || (declaration?.kind !== ts.SyntaxKind.VariableDeclaration) || (declaration.initializer !== initializer)
+        || (declaration.name?.kind !== ts.SyntaxKind.Identifier) || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0)) {
+        return undefined;
+    }
+    const name = callee.name.text;
+    const method = findClassMethod (enclosingClassDeclaration (initializer), name);
+    const value = String (printedValue ?? '').trim ();
+    if ((method === undefined) || !value.startsWith ('this.' + name.charAt (0).toUpperCase () + name.slice (1) + '(')
+        || (ccxtGoAnnotatedMethodReturnType (goTranspiler, method) !== '*int64')
+        || !collectReturnStatements (method.body).some ((r) => G34_PARSE_TO_INT_RETURNS.has (r))) {
+        return undefined;
+    }
+    return '*int64';
+}
+{
+    const typeOfInitializerG34 = GoTranspiler.prototype.goTypeOfInitializer;
+    GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string): string | undefined {
+        return typeOfInitializerG34.call (this, initializer, printedValue) ?? g34ParseToIntLocalType (this, initializer, printedValue);
+    };
+    // the parse* pointer-local veto keeps a box for nil tests; a local of a method this rule typed holds the same *int64
+    const localTypeG34 = GoTranspiler.prototype.getGoLocalType;
+    GoTranspiler.prototype.getGoLocalType = function (declaration, parsedValue: string) {
+        const known = localTypeG34.call (this, declaration, parsedValue);
+        if ((known === 'any') && (declaration?.kind === ts.SyntaxKind.VariableDeclaration) && (declaration.initializer !== undefined)
+            && (g34ParseToIntLocalType (this, declaration.initializer, parsedValue) === '*int64')) {
+            const scope = this.goEnclosingFunction (declaration);
+            if ((scope !== undefined) && this.goLocalIsSafeToType (scope, declaration, declaration.name.text, '*int64')) {
+                return '*int64';
+            }
+        }
+        return known;
+    };
+}
+{
+    const printReturnG34 = GoTranspiler.prototype.printReturnStatement;
+    GoTranspiler.prototype.printReturnStatement = function (node, identation) {
+        if (!G34_PARSE_TO_INT_RETURNS.has (node)) {
+            return printReturnG34.call (this, node, identation);
+        }
+        const iden = this.getIden (identation);
+        const value = this.printNode (ccxtGoUnwrapParens (node.expression), 0).trim ();
+        return this.printNodeCommentsIfAny (node, identation, iden + 'retIntVal := ' + value + '\n' + iden + 'return &retIntVal');
+    };
+}
+// ===== g34 (end) =====
 // ===== H40-G22: nil test of a safeDict read of the typed Options map (begin) =====
 // `if (this.safeDict (this.options, 'k') === undefined)` prints the comma-ok read in the if header: a missing key,
 // nil, "" or a non-map value is a nil map there exactly as SafeDictMap answers (same ground as h27-A06).
