@@ -6546,6 +6546,8 @@ export class RustTranspiler extends BaseTranspiler {
         describe: [ 'Dict', 'dict' ],
         // the error hook: `undefined` (go on to the status table) or `true` (handled) on every path (`-> Option<bool>`)
         handleErrors: [ 'Bool', 'obool' ],
+        // prediction EVM signer: the signed raw tx hex on every path (the base throws)
+        signEvmTransaction: [ 'string', 'str' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -39747,7 +39749,9 @@ export class RustTranspiler extends BaseTranspiler {
     // the same for `Str` parameters (printed `Option<&str>`, slot rustDispatch.isSlotOptStr); any name
     private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS: Record<string, number[]> = { 'handleErrors': [ 8 ] };
     // the same for `Dict` / `NullableDict` parameters (printed as a lent map / an optional lent map); any name
-    private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS: Record<string, Record<number, string>> = { 'handleErrors': { 4: 'Dict', 7: 'NullableDict' } };
+    private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS: Record<string, Record<number, string>> = { 'handleErrors': { 4: 'Dict', 7: 'NullableDict' },
+        'signEvmTransaction': { 0: 'Dict' },
+    };
 
     // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
     // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
@@ -39824,7 +39828,9 @@ export class RustTranspiler extends BaseTranspiler {
         const pname = int ? String(param.name.text) : inherent ?? inherentStr ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
-        if ((inherent !== undefined || inherentStr ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
+        // a map entry of an inherent group (no trait slot, dispatched by name) types like its string entries
+        const inherentMap = map !== undefined && RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name] !== undefined;
+        if ((inherent !== undefined || inherentStr || inherentMap ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
         const spelled = `${int ? '' : pname}:${map ?? (inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string')}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
@@ -39874,6 +39880,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isObjectLiteralExpression(inner) && inner.properties.length === 0) return opt ? 'Some(&indexmap::IndexMap::new())' : '&indexmap::IndexMap::new()';
         // the held `Dict` (an `Arc` of the map) derefs to the map: print its bare name, never its box
         if (!opt && this.rustNeverNullDictLocalArg(inner)) return `&${super.transformIdentifier(inner, this.ReservedKeywordsReplacements[inner.text] ?? inner.text)}`;
+        // a typed map bearer (`let tx: IndexMap = {..}`) is lent as it is: only its last use may move, and a borrow never does
+        if (isIdentifier(inner) && this.rustDictBearerDeclaration(inner) !== undefined && this.rustNestedDictBearerDeclaration(inner) === undefined) { const id = super.transformIdentifier(inner, this.ReservedKeywordsReplacements[inner.text] ?? inner.text); return opt ? `Some(&${id})` : `&${id}`; }
         const text = this.printNode(arg, identation).trim();
         return opt ? `(${text}).as_map()` : `(${text}).as_map().unwrap_or(&Default::default())`;
     }

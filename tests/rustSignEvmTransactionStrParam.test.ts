@@ -19,7 +19,7 @@ const mk = (tag: string, venueHead: string, baseHead: string = SE) => {
 describe ('signEvmTransaction privateKey (string in every declaration) prints &str', () => {
     test ('every declaration spells it string: the override takes privateKey: &str', () => {
         const venue = mk ('ok', SE);
-        expect (venue).toMatch (/fn signEvmTransaction\(&(mut )?self, (mut )?tx: Value, privateKey: &str\)/);
+        expect (venue).toMatch (/fn signEvmTransaction\(&(mut )?self, (mut )?tx: (Value|&indexmap::IndexMap<String, Value>), privateKey: &str\)/);
     });
     test ('negative: the base spelling it differently keeps privateKey Value', () => {
         const venue = mk ('no', SE, SE.replace ('privateKey: string', 'privateKey: any'));
