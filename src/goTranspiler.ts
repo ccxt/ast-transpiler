@@ -14063,6 +14063,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'getCacheIndex': [ 0 ],
     // its one base loop passes an extend copy of the row
     'parseLongShortRatio': [ 0 ],
+    // both tree callers pass a `{}`-defaulted safeDict row; every override reads the row as a map
+    'parseIsolatedBorrowRate': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
