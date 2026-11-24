@@ -61834,3 +61834,51 @@ function h48g01ReturnedStringAddress (goTranspiler, e, type) {
     return '&' + text;
 }
 // ===== end H48-G01 returned string slot
+// ===== H48-G41
+// a `const` bound inside a nested block is visible only in that block: its uses are scanned there, so a
+// same-named local of a sibling block (`const response` in each arm) no longer blocks the read-only proof
+{
+    const bindingIsReadOnlyH48g41 = GoTranspiler.prototype.goJsonOriginBindingIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginBindingIsReadOnly = function (declaration, readOnlyUse: (n: any, name: string) => boolean): boolean {
+        if (bindingIsReadOnlyH48g41.call(this, declaration, readOnlyUse)) {
+            return true;
+        }
+        const list: any = declaration?.parent;
+        const block: any = list?.parent?.parent;
+        // only a `const`: a rebound `let` endpoint receiver is printed `x := rN.Raw` (any), not a map
+        const blockScoped = (list?.kind === SyntaxKind.VariableDeclarationList) && ((list.flags & NodeFlags.Const) !== 0);
+        if (!blockScoped || (declaration.name?.kind !== SyntaxKind.Identifier) || (list.parent?.kind !== SyntaxKind.FirstStatement)
+            || (block?.kind !== SyntaxKind.Block) || (block.parent?.kind !== SyntaxKind.IfStatement) || (this.goEnclosingFunction(block) === undefined)) {
+            return false;
+        }
+        const name: string = declaration.name.text;
+        return !this.hasNodeWhere(block, (n: any) => {
+            if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter)
+                && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+                return true;
+            }
+            return (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && !readOnlyUse(n, name)
+                && !h48g41AssignedDictRead(this, n, name);
+        });
+    };
+}
+// in such a block, `x = this.safeDict (R, 'lit', {})` as a whole statement only reads one member of R
+function h48g41AssignedDictRead (go: any, node: any, name: string): boolean {
+    const call: any = node.parent;
+    const assign: any = call?.parent;
+    const callee: any = call?.expression;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 3) && (call.arguments[0] === node)
+        && (call.arguments[1]?.kind === SyntaxKind.StringLiteral) && (call.arguments[2]?.kind === SyntaxKind.ObjectLiteralExpression)
+        && (call.arguments[2].properties.length === 0) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'safeDict')
+        && (assign?.kind === SyntaxKind.BinaryExpression) && (assign.right === call) && (assign.operatorToken?.kind === SyntaxKind.EqualsToken)
+        && (assign.left?.kind === SyntaxKind.Identifier) && (assign.left.text !== name) && (assign.parent?.kind === SyntaxKind.ExpressionStatement)
+        && !go.goWritesOrRebindsName(node, name, []) && !h48g41WrittenThrough(go, assign.left);
+}
+// the assigned local aliases a member of R: nothing may write a key into it
+function h48g41WrittenThrough (go: any, target: any): boolean {
+    const scope: any = go.goEnclosingFunction(target);
+    return (scope === undefined) || go.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === target.text)
+        && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && go.h27a04WrittenThrough(n.parent));
+}
+// ===== end H48-G41
