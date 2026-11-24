@@ -2439,7 +2439,7 @@ export class JavaTranspiler extends BaseTranspiler {
         if (venueList !== undefined) {
             return venueList;
         }
-        const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type);
+        const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type, node);
         if (unifiedInt !== undefined) {
             return unifiedInt;
         }
@@ -2573,13 +2573,15 @@ export class JavaTranspiler extends BaseTranspiler {
 
     // a fixed `int` / `Int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
     // a plain `number` amount / cost of the unified money methods `Double`; every override shares the annotation
-    javaUnifiedIntParameterType(name, symbol, method, type): string | undefined {
+    javaUnifiedIntParameterType(name, symbol, method, type, node?): string | undefined {
         const methodName = String((method.name as any)?.text);
+        // a required `Int` slot (no default, not optional) of a sync method holds the same Long box
+        const requiredInt = name === 'Int' && node !== undefined && node.initializer === undefined && node.questionToken === undefined;
         const venueNumberSlot = JAVA_VENUE_NUMBER_PARAMETER_METHODS.has(methodName);
         const numberSlot = name === undefined && (type.flags & TypeFlags.Number) !== 0
             && (JAVA_UNIFIED_NUMBER_PARAMETER_METHODS.has(methodName) || venueNumberSlot);
         // the `int` slot holds for sync methods too (handleErrors `code`): the root declaration decides
-        if ((name !== 'int' && name !== 'Int' && !numberSlot) || !isIdentifier(method.name) || ((numberSlot || name === 'Int') && !this.isAsyncFunction(method))) {
+        if ((name !== 'int' && name !== 'Int' && !numberSlot) || !isIdentifier(method.name) || ((numberSlot || (name === 'Int' && !requiredInt)) && !this.isAsyncFunction(method))) {
             return undefined;
         }
         // the named money methods share one typed surface even where a prediction venue declares one alone
