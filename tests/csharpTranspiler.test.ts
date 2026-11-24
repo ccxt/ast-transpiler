@@ -6478,6 +6478,21 @@ describe ('csharp base dictionary views', () => {
             expect(numeric).toContain('getValue(this.currencies, code)');
         });
 
+        test('a const seeded from urls[\'api\'] is the urlsApi view, so its literal reads are native', () => {
+            const out = printed('        const baseUrls = this.urls[\'api\'] as Dict;\n        const u = this.safeString (baseUrls, code, baseUrls[\'gamma\']);\n        return u;');
+            expect(out).toContain('IDictionary<string, object> baseUrls = this.urlsApi;');
+            expect(out).not.toContain('getValue(baseUrls');
+        });
+
+        test('a let local, another key and a write keep the boxed read', () => {
+            const mutable = printed('        let baseUrls = this.urls[\'api\'];\n        baseUrls = code;\n        return baseUrls;');
+            expect(mutable).not.toContain('baseUrls = this.urlsApi;');
+            const other = printed('        const t = this.urls[\'test\'];\n        return t[\'ws\'];');
+            expect(other).not.toContain('urlsApi');
+            const write = printed('        this.urls[\'api\'] = this.urls[\'test\'];');
+            expect(write).not.toContain('urlsApi');
+        });
+
         test('a write target and a delete are never rewritten to the view', () => {
             const out = printed('        this.currencies[\'BTC\'] = code;\n        delete this.currencies[\'ETH\'];');
             expect(out).not.toContain('currenciesDict');

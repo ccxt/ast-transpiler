@@ -4209,6 +4209,23 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpGuardedRead(`${target} != null && ${printedKey} != null && `, target, keyText);
     }
 
+    // `const x = this.<member>['k']` (an `as` assertion allowed) where `this.<member>['k']` has a typed IDictionary view
+    // (csharpBaseDictionaryView: urls['api'] -> urlsApi): the local is seeded from the view and declared its type
+    csharpMemberViewSeed(node): string | undefined {
+        const entry = this.csharpUnwrapAssertion(node);
+        let top = entry;
+        while (top?.parent?.kind === SyntaxKind.ParenthesizedExpression || top?.parent?.kind === SyntaxKind.AsExpression) {
+            top = top.parent;
+        }
+        const declaration = top?.parent;
+        if (entry?.kind !== SyntaxKind.ElementAccessExpression || declaration === undefined || !isVariableDeclaration(declaration)
+            || declaration.initializer?.pos !== top.pos || declaration.initializer?.end !== top.end
+            || ((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0) {
+            return undefined;
+        }
+        return this.csharpBaseDictionaryView(entry);
+    }
+
     // `this.<member>['k1']['k2']['k3']` over a member whose hand-written class declares a typed view of `['k1']` entries that are themselves dictionaries (urls['api'] ->
     // urlsApiSections): the section read becomes the view's two indexers, carrying the helper's missing-key tests. The view is re-derived by the refresh method after every write
     // of the member (csharpMemberRefresh)
@@ -9229,6 +9246,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // `key in recv` guard, or a receiver local built by a literal that declares the key, or a receiver the declared table proves is a dictionary (the native form then keeps the helper's null-for-a-
     // missing-key result). every other read keeps the helper. the single element-access override, gates strongest (declaration-type) proof first:
     printElementAccessExpression(node, identation) {
+        const viewSeed = this.csharpMemberViewSeed(node); // a const local seeded from a declared typed view
+        if (viewSeed !== undefined) {
+            return viewSeed;
+        }
         const declaredMember = this.csharpDeclaredDictMemberElementRead(node); // declared dictionary member read
         if (declaredMember !== undefined) {
             return declaredMember;
@@ -10518,6 +10539,9 @@ export class CSharpTranspiler extends BaseTranspiler {
     // the concrete C# type the initializer already produces, or undefined when the
     // printer cannot name it (this.safeString, getValue, add, parseInt, ... return object)
     csharpTypeOfInitializer(initializer): string | undefined {
+        if (this.csharpMemberViewSeed(initializer) !== undefined) {
+            return 'IDictionary<string, object>';
+        }
         switch (initializer?.kind) {
         case SyntaxKind.StringLiteral:
         case SyntaxKind.NoSubstitutionTemplateLiteral:
