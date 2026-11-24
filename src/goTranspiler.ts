@@ -61922,3 +61922,21 @@ function h48g41WrittenThrough (go: any, target: any): boolean {
         && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && go.h27a04WrittenThrough(n.parent));
 }
 // ===== end H48-G41
+// ===== H49-G38
+// `this.safeList (this.safeDict (R, 'k', {}), 'k2', ..)`: the inner read only reads R and hands its member to another
+// reader, so it counts as a read-only use of R for the JSON-origin proof
+{
+    const h49g38UpstreamUse = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string): boolean {
+        if (h49g38UpstreamUse.call(this, node, name)) {
+            return true;
+        }
+        const inner: any = node?.parent;
+        const outer: any = inner?.parent;
+        const thisCall = (c: any, names: string[]): boolean => (c?.kind === SyntaxKind.CallExpression) && (c.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (c.expression.expression?.kind === SyntaxKind.ThisKeyword) && names.includes(c.expression.name?.text) && (c.arguments[1]?.kind === SyntaxKind.StringLiteral);
+        return !this.goWritesOrRebindsName(node, name, []) && thisCall(inner, [ 'safeDict' ]) && (inner.arguments[0] === node)
+            && thisCall(outer, [ 'safeList', 'safeDict' ]) && (outer.arguments[0] === inner);
+    };
+}
+// ===== end H49-G38
