@@ -29197,7 +29197,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (RustTranspiler.RUST_HANDED_DICT_EXTEND.has(callee) || RustTranspiler.RUST_HANDED_DICT_OMIT.has(callee)) return false;
         // uc: a venue method building its map on every path (a REST `handleRouteAndParams` reached from ws) boxes there too
         if (this.rustTypedParamsSlot(up, at)) return literalDict || RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === 'dict'
-            || (RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === undefined && this.rustBuiltReturnSourceKind(init) === 'dict');
+            || (RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === undefined && this.rustBuiltReturnSourceKind(init) === 'dict')
+            // a same-class venue method declared to answer a never-null `Dict` (ral-yc) boxes into the params slot the same way
+            || (this.rustVenueContainerReturnKind(init)?.kind === 'dict' && this.rustVenueContainerReturnKind(init)?.nullable === false);
         return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
     }
 
