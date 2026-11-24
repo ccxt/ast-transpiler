@@ -48438,6 +48438,14 @@ GoTranspiler.prototype.goTypedMapReceiverStaysPlain = function (container): bool
         return false;
     });
 };
+// ===== h46-G15 =====
+// a `*string` key that a dominating nil test proves non-nil (never rebound): SafeDict derefs it, so the
+// comma-ok read of `m[*k]` answers the same; an unguarded pointer key keeps the helper (nil key reads nil)
+function h46g15NilProvenPointerKey (go: any, keyNode: any, key: string): boolean {
+    return (keyNode?.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && (go.goDeclaredTypeOfIdentifier (keyNode) === '*string')
+        && (go.goProvenPointerKeyMapIndex (keyNode, 'm', key) !== undefined);
+}
+// ===== end h46-G15 =====
 // ===== h27-A06 =====
 // `const x = this.safeDict (this.options, k)` (or `this.balance`) with k a Go string prints the comma-ok read
 // of the typed map: every Options writer stores JSON-shaped values (no *sync.Map, no pointer box), so a missing
@@ -48459,16 +48467,18 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
     const keyNode = call.arguments[1];
     const key = this.printNode (keyNode, 0).trim ();
     const isLiteral = (keyNode.kind === SyntaxKind.StringLiteral) && /^"[\w.-]*"$/.test (key);
-    if (!isLiteral && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
+    const pointerKey = h46g15NilProvenPointerKey (this, keyNode, key);
+    if (!isLiteral && !pointerKey && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
         return undefined;
     }
+    const index = pointerKey ? '*' + key : key;
     const name = declaration.name.text;
     // SafeDictMap is MapTyped of the SafeDict read: with no default it answers what SafeMapTyped does
     const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.(Options|Balance), (.*)\)$/.exec (printed);
     if ((match === null) || (match[3] !== name) || (match[6] !== key)) {
         return undefined;
     }
-    return match[1] + match[2] + 'var ' + name + ', _ = this.' + match[5] + '[' + key + '].(map[string]any)';
+    return match[1] + match[2] + 'var ' + name + ', _ = this.' + match[5] + '[' + index + '].(map[string]any)';
 };
 const printVariableDeclarationListH27a06 = GoTranspiler.prototype.printVariableDeclarationList;
 GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
@@ -51043,16 +51053,18 @@ GoTranspiler.prototype.h28a06OptionsDefaultedDictRead = function (node, printed)
     const keyNode = call.arguments[1];
     const key = this.printNode (keyNode, 0).trim ();
     const isLiteral = (keyNode.kind === SyntaxKind.StringLiteral) && /^"[\w.-]*"$/.test (key);
-    if (!isLiteral && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
+    const pointerKey = h46g15NilProvenPointerKey (this, keyNode, key);
+    if (!isLiteral && !pointerKey && !((keyNode.kind === SyntaxKind.Identifier) && /^\w+$/.test (key) && this.goKeyIsString (keyNode, key))) {
         return undefined;
     }
+    const index = pointerKey ? '*' + key : key;
     const name = declaration.name.text;
     const kept = /^(\n*)(\t*)var (\w+) map\[string\]any = this\.SafeDictMap\(this\.(Options|Balance), (.*), map\[string\]any\{\}\)$/.exec (printed);
     if ((kept === null) || (kept[3] !== name) || (kept[5] !== key)) {
         return undefined;
     }
     const ind = kept[2];
-    return kept[1] + ind + 'var ' + name + ' map[string]any\n' + ind + name + ', _ = this.' + kept[4] + '[' + key + '].(map[string]any)\n'
+    return kept[1] + ind + 'var ' + name + ' map[string]any\n' + ind + name + ', _ = this.' + kept[4] + '[' + index + '].(map[string]any)\n'
         + ind + 'if ' + name + ' == nil {\n' + ind + '\t' + name + ' = map[string]any{}\n' + ind + '}';
 };
 const printVariableDeclarationListH28a06 = GoTranspiler.prototype.printVariableDeclarationList;
