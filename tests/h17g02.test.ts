@@ -17,13 +17,13 @@ describe('go guarded list read inside a SafeStringPtr / MapTyped declaration pri
         return inst.transpileGoByPath(file).content;
     };
     const lists = "        const hashes: string[] = this.safeList (trade, 'h', []);\n        const rows = this.safeList (trade, 'r', []);\n";
-    test('a *string declaration from a list element keeps the wrap on the read', () => {
+    test('a *string declaration from a string[] list element reads the string comma-ok', () => {
         const out = run(lists + "        let last = undefined;\n        for (let j = 0; j < rows.length; j++) {\n            const h = hashes[j];\n            last = h;\n        }\n        const first: Dict = rows[0];\n        return [ last, first ];\n");
-        expect(out).toContain('\t\tvar h *string = nil\n\t\tif j >= 0 && j < len(hashes) {\n\t\t\th = SafeStringPtr(hashes[j])\n\t\t}\n');
+        expect(out).toContain('\t\tvar h *string = nil\n\t\tif j >= 0 && j < len(hashes) {\n\t\t\tif s, ok := hashes[j].(string); ok {\n\t\t\t\th = &s\n\t\t\t}\n\t\t}\n');
     });
     test('an out-of-range read keeps the nil answer a consumer tests', () => {
         const out = run(lists + "        const h = hashes[3];\n        if (h === undefined) {\n            return 'none';\n        }\n        return h;\n");
-        expect(out).toContain('\tvar h *string = nil\n\tif 3 >= 0 && 3 < len(hashes) {\n\t\th = SafeStringPtr(hashes[3])\n\t}\n');
+        expect(out).toContain('\tvar h *string = nil\n\tif 3 >= 0 && 3 < len(hashes) {\n\t\tif s, ok := hashes[3].(string); ok {\n\t\t\th = &s\n\t\t}\n\t}\n');
         expect(out).toContain('h == nil');
     });
     test('a list written with other values keeps the closure', () => {

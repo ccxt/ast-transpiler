@@ -44194,6 +44194,14 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | un
 // scalar box, so the guard prints as statements with the wrap on the read
 // (`var x T = nil` then `if k >= 0 && k < len(l) { x = W(l[k]) }`): same nil answer, no closure, no `any` local.
 const GO_GUARDED_WRAPPED_HEAD = /^[ \t]*var (\w+) (\*string|map\[string\]any) = ((?:ccxt\.)?(?:SafeStringPtr|MapTyped))\(/;
+// a `const xs: string[] = this.safeList (..)` local never written: its elements are JSON values (no scalar pointer), so
+// the comma-ok string read is what SafeStringPtr answers (the string, else nil); `s` is fresh per read
+function h46g39StringElementList (goTranspiler, head, read): boolean {
+    const declaration: any = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(read.expression)?.valueDeclaration?.resolve?.();
+    const t: any = declaration?.type;
+    return (head[2] === '*string') && (head[1] !== 's') && (read.expression.text !== 's') && (t?.kind === SyntaxKind.ArrayType)
+        && (t.elementType?.kind === SyntaxKind.StringKeyword) && goGuardedListReadSafeListLocal(goTranspiler, read.expression);
+}
 function installGoGuardedWrappedRead (goTranspiler) {
     if (!goInstallOnce(goTranspiler, '__goGuardedWrappedReadInstalled', 'printVariableDeclarationList')) {
         return;
@@ -44218,6 +44226,10 @@ function installGoGuardedWrappedRead (goTranspiler) {
             return printed;
         }
         const iden = this.getIden(identation);
+        if (h46g39StringElementList(this, head, read)) {
+            const typed = `if s, ok := ${m[2]}[${m[1]}].(string); ok {\n${this.getIden(identation + 2)}${head[1]} = &s\n${this.getIden(identation + 1)}}`;
+            return `${iden}var ${head[1]} ${head[2]} = nil\n${goGuardedListReadIf(this, typed, m.slice(1), identation)}`;
+        }
         return `${iden}var ${head[1]} ${head[2]} = nil\n${goGuardedListReadIf(this, `${head[1]} = ${head[3]}(${m[2]}[${m[1]}])`, m.slice(1), identation)}`;
     };
 }
