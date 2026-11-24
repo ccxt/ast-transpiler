@@ -428,6 +428,8 @@ const JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS = new Set<string>(['editOrder', 'ed
     'createMarketOrder', 'createPostOnlyOrder', 'createReduceOnlyOrder', 'createStopOrder', 'createTrailingAmountOrder',
     'createTrailingPercentOrder', 'createMarketOrderWs', 'createPostOnlyOrderWs', 'createReduceOnlyOrderWs', 'createStopOrderWs',
     'createTrailingAmountOrderWs', 'createTrailingPercentOrderWs']);
+// unified trailing-percent order methods whose defaulted `trailingPercent: Num = undefined` prints `Double`
+const JAVA_UNIFIED_TRAILING_PERCENT_METHODS = new Set<string>(['createTrailingPercentOrder']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 
@@ -2163,6 +2165,10 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (name === 'Num' && ['amount', 'price'].includes((node.name as any)?.text) && this.isAsyncFunction(method)
             && JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS.has(String((method.name as any)?.text))) {
+            return 'Double';
+        }
+        if (name === 'Num' && (node.name as any)?.text === 'trailingPercent' && this.isAsyncFunction(method)
+            && JAVA_UNIFIED_TRAILING_PERCENT_METHODS.has(String((method.name as any)?.text))) {
             return 'Double';
         }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
