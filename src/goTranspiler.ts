@@ -11537,7 +11537,8 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
     }
     const slot = (e, type, wrap) => ccxtGoVenueSlotText (goTranspiler, e, type, wrap);
     const last = expr.elements.length - 1;
-    const first = (e) => ((pair.type === 'int64') ? ccxtGoVenueIntSlot (e, goTranspiler.printNode (e, 0).trim ()) : slot (e, pair.type, pair.first));
+    const first = (e) => ((pair.type === 'int64') ? ccxtGoVenueIntSlot (e, goTranspiler.printNode (e, 0).trim ())
+        : (h48g01ReturnedStringAddress (goTranspiler, e, pair.type) ?? slot (e, pair.type, pair.first)));
     return m[1] + expr.elements.map ((e, i) => ((i < last) ? first (e) : slot (e, 'map[string]any', 'MapTyped'))).join (', ') + m[3];
 }
 
@@ -61715,3 +61716,63 @@ function h48g30PushedRowList (goTranspiler: GoTranspiler, list, depth: number): 
     };
 }
 // ===== H48-G30 (end) =====
+// ===== H47-G06
+// `const x: string = (p !== undefined) ? p : 'lit'` with p slot 0 of a `*string` pair destructure: the arm is that
+// pointer, so the join derefs it under the condition's nil test (only for a declared `string` owner)
+const h47g06UpstreamArmType = GoTranspiler.prototype.goTernaryJoinArmType;
+GoTranspiler.prototype.goTernaryJoinArmType = function (node) {
+    const known = h47g06UpstreamArmType.call(this, node);
+    const arm: any = this.goUnwrapParenthesizedNode(node);
+    if ((known !== undefined) || (arm?.kind !== SyntaxKind.Identifier)) {
+        return known;
+    }
+    let ternary: any = node?.parent;
+    while (ternary?.kind === SyntaxKind.ParenthesizedExpression) {
+        ternary = ternary.parent;
+    }
+    const owner: any = (ternary?.kind === SyntaxKind.ConditionalExpression) ? goTernaryJoinOwner(ternary) : undefined;
+    if (owner?.type?.kind !== SyntaxKind.StringKeyword) {
+        return undefined;
+    }
+    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arm)?.valueDeclaration?.resolve?.();
+    const pattern: any = (decl?.kind === SyntaxKind.BindingElement) ? decl.parent : undefined;
+    if ((pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements[0] !== decl)
+        || (pattern.parent?.kind !== SyntaxKind.VariableDeclaration)) {
+        return undefined;
+    }
+    return (ccxtGoPairSlot0(this, pattern.parent.initializer) === '*string') ? '*string' : undefined;
+};
+// ===== end H47-G06
+// ===== H48-G01
+// `x !== undefined` on slot 0 of a `x, p := pair (..)` binding whose slot 0 is `*string`: x is that pointer
+const h48g01UpstreamInlineEquality = GoTranspiler.prototype.printInlineEquality;
+GoTranspiler.prototype.printInlineEquality = function (left, right, leftText: string, rightText: string, isEq: boolean) {
+    const l: any = this.goUnwrapParenthesizedNode(left);
+    const r: any = this.goUnwrapParenthesizedNode(right);
+    const nil = (r?.kind === SyntaxKind.NullKeyword) || ((r?.kind === SyntaxKind.Identifier) && (r.text === 'undefined'));
+    if (nil && (l?.kind === SyntaxKind.Identifier) && (l.text !== 'undefined') && /^\w+$/.test(leftText.trim())
+        && (this.goDeclaredTypeOfIdentifier(l) === undefined) && (goTernaryStrPtrArmType(this, l) === '*string')) {
+        return isEq ? `(${leftText.trim()} == nil)` : `(${leftText.trim()} != nil)`;
+    }
+    return h48g01UpstreamInlineEquality.call(this, left, right, leftText, rightText, isEq);
+};
+// ===== end H48-G01
+// ===== H48-G01 returned string slot
+// a returned `*string` tuple slot holding a function-local Go `string` no closure sees: nothing writes the local
+// after the return, so its address is the same non-nil string SafeStringPtr would copy
+function h48g01ReturnedStringAddress (goTranspiler, e, type) {
+    if ((type !== '*string') || (e?.kind !== ts.SyntaxKind.Identifier) || (goTranspiler.goDeclaredTypeOfIdentifier?.(e) !== 'string')) {
+        return undefined;
+    }
+    const text = String (goTranspiler.printNode (e, 0)).trim ();
+    const decl = ccxtGoPairHolderDeclaration (goTranspiler, e);
+    const scope = goTranspiler.goEnclosingFunction?.(e);
+    if (!/^[A-Za-z_]\w*$/.test (text) || (decl?.kind !== ts.SyntaxKind.VariableDeclaration) || (scope === undefined)
+        || (goTranspiler.goEnclosingFunction (decl) !== scope)
+        || goTranspiler.hasNodeWhere (scope, (n) => ts.isFunctionLike (n) && (n !== scope)
+            && goTranspiler.hasNodeWhere (n, (x) => isIdentifierNamed (x, e.text)))) {
+        return undefined;
+    }
+    return '&' + text;
+}
+// ===== end H48-G01 returned string slot
