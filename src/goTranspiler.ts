@@ -12996,9 +12996,10 @@ function goSiblingLiteralStringLocal (argText: string, fileText: string, at: num
 
 // the method is reached only through plain `this.<name> (..)` calls: no file of the tree quotes the name
 // (dispatch by string), and in the files of the class's own lineage every code mention is a call or the declaration
-function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass) {
+function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass, runnerRefs = false) {
     const anyRef = new RegExp ('(?<![\\w$])' + name + '(?![\\w$])', 'g');
-    const direct = new RegExp ('\\bthis\\s*\\.\\s*' + name + '\\s*\\(', 'g');
+    // with runnerRefs, `this.spawn (this.<name>, ..)` / `this.delay (t, this.<name>, ..)` also count as calls
+    const direct = new RegExp ('\\bthis\\s*\\.\\s*' + name + '\\s*\\(' + (runnerRefs ? '|\\bthis\\s*\\.\\s*(?:spawn\\s*\\(|delay\\s*\\([\\w$.\\s]*,)\\s*this\\s*\\.\\s*' + name + '\\s*[,)]' : ''), 'g');
     const declared = new RegExp ('^ {4}(?:(?:async|public|private|protected|override) )*' + name + ' \\(', 'gm');
     if (goNameInTestFixtures (tree, name)) {
         return false; // the static/ws test runners dispatch fixture method names by string
@@ -42383,10 +42384,21 @@ GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, inde
     let pointers = 0;
     for (const site of sites) {
         const arg = site.arguments?.[index];
-        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (site.runner !== undefined)) {
+        // a spawn/delay runner hands its argument to CallDynamically, which needs the `*string` itself
+        const runner = (site.runner === undefined) ? undefined : this.goThisCallName(site.runner);
+        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || ((runner !== undefined) && (runner !== 'spawn') && (runner !== 'delay'))) {
             return answer;
         }
+        // the method re-arming itself with its own never-written parameter passes whatever that slot holds
+        if ((runner !== undefined) && (arg.kind === SyntaxKind.Identifier) && (arg.text === param.name.text)
+            && (this.goEnclosingFunction(site.runner) === fn) && !goNumPtrParamIsWritten(fn.body, param.name.text)
+            && !new RegExp('\\b(?:let|const|var)\\s+' + param.name.text + '\\b').test(fn.body.getText())) {
+            continue;
+        }
         const printed = this.goPrintedArgType(arg);
+        if ((runner !== undefined) && (printed !== '*string')) {
+            return answer;
+        }
         if (printed === '*string') {
             pointers++;
         } else if ((printed !== 'string') || (ccxtGoStringParamAddress(this, arg) === undefined)) {
@@ -42404,7 +42416,7 @@ GoTranspiler.prototype.goRequiredParameterNativeType = function (fn, param, inde
     }
     // a quoted name or a method reference anywhere in the lineage can reach the method with a box
     if ((pointers === 0) || !this.goLocalIsSafeToType(fn.body, param, param.name.text, '*string')
-        || ((tree !== undefined) && !goStringPtrParamOnlyDirectCalls(this, tree, fn.name.text, this.goEnclosingClassName(fn)))) {
+        || ((tree !== undefined) && !goStringPtrParamOnlyDirectCalls(this, tree, fn.name.text, this.goEnclosingClassName(fn), true))) {
         return answer;
     }
     return '*string';
