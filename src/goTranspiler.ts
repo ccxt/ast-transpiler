@@ -25427,7 +25427,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const tableSlot = (((goType === '[]string') || (goType === '[][]string')) && this.goIsUnifiedSliceParameter(name, index)) || this.goAnnotatedStringSliceSlot(fn, index, goType);
             const argType = tableSlot ? this.goSliceArgumentType(arg, goType) : this.goPrintedArgType(arg);
             if ((argType !== goType)
-                && !((goType === 'string') && (call.runner === undefined) && this.goNilProvenStringPtrArg(arg))) {
+                && !((goType === 'string') && (call.runner === undefined) && this.goNilProvenStringPtrArg(arg))
+                // a `{}`-defaulted safeDict argument is never nil and always a map: a map slot prints it through goDictParamCallArgs
+                && !((goType === GO_BASE_DICT_PARAM_TYPE) && (call.runner === undefined) && goDictParamSafeDictArg(this, arg))) {
                 return false;
             }
         }
@@ -59522,6 +59524,9 @@ function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
         // only argument 0 of a `this.m (..)` call: nothing of the statement runs before the read
         if ((p.kind === SyntaxKind.CallExpression) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
             && (p.expression.expression?.kind === SyntaxKind.ThisKeyword)) { continue; }
+        // a later argument of a `this.m (..)` call whose earlier arguments are plain names or literals (they run nothing)
+        if ((p.kind === SyntaxKind.CallExpression) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (p.arguments.indexOf(child) > 0) && h37p01PlainLeadArgs(p, p.arguments.indexOf(child))) { continue; }
         // the pushed value of `xs.push (..)` and the right side of `x = ..` / `x[k] = ..` (plain names only)
         if ((p.kind === SyntaxKind.CallExpression) && (p.arguments.length === 1) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
             && (p.expression.name?.text === 'push') && (p.expression.expression?.kind === SyntaxKind.Identifier) && (p.parent === statement)) { continue; }
@@ -59532,6 +59537,9 @@ function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
     }
     return true;
 }
+function h37p01PlainLeadArgs (call: any, index: number): boolean {
+    return call.arguments.slice(0, index).every((a: any) => [ SyntaxKind.Identifier, SyntaxKind.StringLiteral, SyntaxKind.NumericLiteral ].includes(a.kind));
+}
 function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, identation: number): string {
     if ((typeof printed !== 'string') || !printed.includes('this.SafeDictMap(')) { return printed; }
     const root: any = (statement.kind === SyntaxKind.VariableStatement) ? statement.declarationList : statement.expression;
@@ -59541,6 +59549,11 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
         if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression.expression?.kind === SyntaxKind.ThisKeyword)
             && (n.arguments.length > 0) && ((goDictParamSafeDictArg(go, n.arguments[0]) && goDictParamCallTakesMap(go, n, 0)) || goDictParamTabledSafeDictArg(go, n, n.arguments[0]))) {
             found.push(n.arguments[0]);
+        }
+        if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
+            for (let i = 1; i < n.arguments.length; i++) {
+                if (h37p01PlainLeadArgs(n, i) && goDictParamSafeDictArg(go, n.arguments[i]) && goDictParamCallTakesMap(go, n, i)) { found.push(n.arguments[i]); }
+            }
         }
         return false;
     };
