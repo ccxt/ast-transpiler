@@ -28690,6 +28690,9 @@ export class RustTranspiler extends BaseTranspiler {
             const o = `self.safe_dict_o(${tern[2]})`;
             return printed.includes('{ Value::Null } else') ? `(if ${tern[1]} { None } else { ${o} })` : `(if ${tern[1]} { ${o} } else { None })`;
         }
+        // a keyed row of a typed record-map local (`Tickers`, `FundingRates`, ..): the record's own map, read by the key's text
+        const recordRow = /^self\.safe(?:_d|D)ict\(crate::types::IntoRaw::into_raw\((\w+)(?:\.clone\(\))?\), (.+), &\[\]\)$/.exec(printed);
+        if (recordRow !== null && this.rustRecordMapLocalRead(init, recordRow[1])) return `${this.rustTypesPath(init)}::RecordRows::row_dict(&${recordRow[1]}, ${recordRow[2].replace(/^\u0004?(\w+)(?:\.clone\(\))?$/, '&$1')})`;
         // a map row `xs[i]` of a typed list: the base `safe_dict_o` reader (the element's map, `None` out of range / non-map)
         const listRow = /^crate::value::KeyRead::read\(&&(\w+), &Value::Int\((\w+)\)\)$/.exec(printed);
         if (listRow !== null && isElementAccessExpression(init) && this.rustDictElementSource(init)) return `self.safe_dict_o(&${listRow[1]}, Value::Int(${listRow[2]}))`;
@@ -28699,6 +28702,19 @@ export class RustTranspiler extends BaseTranspiler {
         const row = /^\(match (\w+\.get\([\w ]+\)) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => Value::Null \}\)$/.exec(printed);
         if (row !== null && isCallExpression(init)) return `(match ${row[1]} { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None })`;
         return undefined;
+    }
+
+    private static readonly RUST_RECORD_MAP_TYPES = new Set([ 'Tickers', 'FundingRates', 'OpenInterests', 'Leverages', 'MarginModes',
+        'TradingFees', 'CrossBorrowRates', 'IsolatedBorrowRates', 'Currencies', 'OrderBooks', 'LastPrices', 'DepositWithdrawFees',
+        'AllGreeks', 'OptionChain', 'DepositAddresses' ]);
+
+    /** `this.safeDict (r, k)` with no default, `r` (printed `name`) a const local of a typed call whose result is a record map. */
+    rustRecordMapLocalRead(init: any, name: string): boolean {
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) !== 'safeDict' || init.arguments.length !== 2) return false;
+        const recv: any = this.rustSkipWrappers(init.arguments[0]);
+        const declaration = isIdentifier(recv) ? this.rustCallLocalOf(recv) : undefined;
+        const ret = declaration === undefined ? undefined : /^crate::types::(\w+)$/.exec(this.rustTypedCallResultType(declaration.initializer) ?? '');
+        return ret !== null && ret !== undefined && RustTranspiler.RUST_RECORD_MAP_TYPES.has(ret[1]) && String(recv.text) === name;
     }
 
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
