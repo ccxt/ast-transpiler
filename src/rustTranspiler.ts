@@ -19977,7 +19977,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -41232,18 +41232,27 @@ export class RustTranspiler extends BaseTranspiler {
     // shadow read (rustParamShadowUseCensus) prints `&indexmap::IndexMap<String, Value>`; every caller lends a plain
     // dict local (`&x`) or its own borrowed slot; by-name arms lend the boxed map (an empty map for Null, as the shadow).
     private rustVenueDictDecisions = new WeakMap<any, boolean>();
+    private rustVenueDictPending = new Set<any>();
+    private rustVenueDictGuardHits = 0;
 
     rustVenueDictParam(param: any): boolean {
         if (param?.kind !== SyntaxKind.Parameter) return false;
         let decision = this.rustVenueDictDecisions.get(param);
         if (decision === undefined) {
             this.rustVenueDictDecisions.set(param, false); // re-entrancy guard
+            this.rustVenueDictPending.add(param);
+            const hits = this.rustVenueDictGuardHits;
             try {
                 decision = this.rustVenueDictParamUncached(param);
             } catch (e) {
                 decision = false;
             }
-            this.rustVenueDictDecisions.set(param, decision);
+            this.rustVenueDictPending.delete(param);
+            // an inner decision that met a pending guard is asked again later, when the outer one is settled
+            if (this.rustVenueDictPending.size > 0 && this.rustVenueDictGuardHits !== hits) this.rustVenueDictDecisions.delete(param);
+            else this.rustVenueDictDecisions.set(param, decision);
+        } else if (this.rustVenueDictPending.has(param)) {
+            this.rustVenueDictGuardHits++;
         }
         return decision;
     }
@@ -41813,6 +41822,16 @@ export class RustTranspiler extends BaseTranspiler {
         return `Value::from(${text})`;
     }
 
+    /** An argument landing in another venue method's borrowed-map slot (`this.handleBidAsk (client, message)`): the
+     *  borrowed map is passed on as is. A slot that takes the dict handle cannot take a map view. */
+    rustVenueDictLentSlotUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === id || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const at = Array.from(call.arguments).indexOf(id);
+        const slot: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
+        return slot !== undefined && slot !== this.rustDeclarationOfIdentifier(id) && this.rustVenueDictParam(slot) && !this.rustVenueDictValueParam(slot);
+    }
+
     /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
     printVenueDictReaderArg(node: any, text: string): string | undefined {
         if (!isIdentifier(node) || !this.rustVenueDictReaderUse(node)) return undefined;
@@ -41889,19 +41908,36 @@ export class RustTranspiler extends BaseTranspiler {
         return param !== undefined && this.rustVenueDictValueParam(param);
     }
 
+    private rustVenueDictValuePending = new Set<any>();
+
+    /** Lent on to a sibling's borrowed slot that takes the dict handle: the handle is passed on as is. */
+    rustVenueDictLentHandleUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (call === undefined || !isCallExpression(call) || call.expression === id || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const own: any = this.rustDeclarationOfIdentifier(id);
+        if (own?.kind !== SyntaxKind.Parameter || !isMethodDeclaration(own.parent) || !this.rustWsHandlerMessageSlot(own.parent, own)) return false;
+        const slot: any = this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(id)];
+        return slot !== undefined && slot !== own && !this.rustVenueDictValuePending.has(slot) && this.rustVenueDictParam(slot) && this.rustVenueDictValueParam(slot);
+    }
+
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
     rustVenueDictValueParam(param: any): boolean {
-        if (!isIdentifier(param?.name) || param.parent?.body === undefined) return false;
+        if (this.rustVenueDictValuePending.has(param) || !isIdentifier(param?.name) || param.parent?.body === undefined) return false;
         const name = String(param.name.text);
         // a handed-whole or returned message takes the handle only in a ws handler
         const handler = isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsHandlerMessageSlot(param.parent, param);
         let found = false;
         const visit = (n: any) => {
             if (found) return;
-            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
+            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
             n.forEachChild(visit);
         };
-        param.parent.body.forEachChild(visit);
+        this.rustVenueDictValuePending.add(param);
+        try {
+            param.parent.body.forEachChild(visit);
+        } finally {
+            this.rustVenueDictValuePending.delete(param);
+        }
         return found;
     }
 
@@ -41929,7 +41965,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration)) {
             return `${text}.as_map().unwrap_or(&Default::default())`;
         }
-        return declaration?.kind === SyntaxKind.Parameter ? text : `&${text}`;
+        // the caller's own borrowed slot is passed as is (a reference, never cloned)
+        if (declaration?.kind === SyntaxKind.Parameter) return this.rustVenueDictParam(declaration) ? RustTranspiler.rustLentMark(text) : text;
+        return `&${text}`;
     }
 
     /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
