@@ -41317,7 +41317,8 @@ export class RustTranspiler extends BaseTranspiler {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
-                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text)))
+                        || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text))
+                        || this.rustOwnStateRowLocal(decl, String(root.text)))
                         || this.rustLocalHoldsFreshBook(decl, init);
                     if (!fresh || root !== n.left.expression) aliasWrite = true;
                 }
@@ -41339,6 +41340,35 @@ export class RustTranspiler extends BaseTranspiler {
         };
         method.body?.forEachChild(visit);
         return !named;
+    }
+
+    /** A local whose initializer and every reassignment is a fresh map or `this.safeDict (r, k [, fresh])` with `r` a
+     *  `this.` member or such a local (derive `account = this.safeDict (subBalance, code)`): never a row of the message. */
+    rustOwnStateRowLocal(decl: any, name: string, depth = 0): boolean {
+        if (depth > 3 || decl === undefined || !isVariableDeclaration(decl) || decl.initializer === undefined) return false;
+        let scope: any = decl;
+        while (scope !== undefined && !isFunctionLike(scope)) scope = scope.parent;
+        if (scope === undefined) return false;
+        const values: any[] = [ decl.initializer ];
+        for (const id of this.rustScopeNameNodes(scope, name) as any[]) {
+            const p: any = id.parent;
+            if (p !== undefined && isBinaryExpression(p) && p.left === id && p.operatorToken.kind >= SyntaxKind.FirstAssignment && p.operatorToken.kind <= SyntaxKind.LastAssignment) {
+                if (p.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+                values.push(p.right);
+            }
+        }
+        return values.every((v: any) => {
+            const e: any = this.unwrapParens(v);
+            if (isObjectLiteralExpression(e) && e.properties.length === 0 || this.rustCallReturnsFreshLiteral(e)) return true;
+            if (this.rustReadOffThisMember(e)) return true;
+            if (!isCallExpression(e) || !isPropertyAccessExpression(e.expression) || e.expression.expression.kind !== SyntaxKind.ThisKeyword || String(e.expression.name.text) !== 'safeDict' || e.arguments.length < 2) return false;
+            const dflt: any = e.arguments[2] === undefined ? undefined : this.unwrapParens(e.arguments[2]);
+            if (dflt !== undefined && !(isObjectLiteralExpression(dflt) && dflt.properties.length === 0) && !this.rustCallReturnsFreshLiteral(dflt)) return false;
+            const recv: any = this.unwrapParens(e.arguments[0]);
+            if (!isIdentifier(recv)) return false;
+            const rd: any = this.rustDeclarationOfIdentifier(recv);
+            return rd !== decl && this.rustOwnStateRowLocal(rd, String(recv.text), depth + 1);
+        });
     }
 
     /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
