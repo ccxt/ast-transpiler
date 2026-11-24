@@ -43866,6 +43866,9 @@ export class RustTranspiler extends BaseTranspiler {
         }
         const parent: any = n.parent;
         if (isPropertyAccessExpression(parent) && parent.expression === n && String(parent.name.text) === 'length') continue;
+        // `(rows as List).length` reads the same length
+        const cast: any = isAsExpression(parent) && parent.expression === n && isParenthesizedExpression(parent.parent) ? parent.parent.parent : undefined;
+        if (cast !== undefined && isPropertyAccessExpression(cast) && String(cast.name.text) === 'length') continue;
         if (this.rustP21RowRead(parent, n) === undefined && this.rustP21ElementRowRead(parent, n) === undefined) return false;
         rows++;
     }
