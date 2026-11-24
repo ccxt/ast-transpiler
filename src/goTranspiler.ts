@@ -11535,10 +11535,21 @@ function ccxtGoVenuePairReturn (goTranspiler, node, printed, pair) {
     return m[1] + expr.elements.map ((e, i) => ((i < last) ? first (e) : slot (e, 'map[string]any', 'MapTyped'))).join (', ') + m[3];
 }
 
+// `this.<field>` of a BaseExchange field Go declares `string` into a `*string` slot: the field's address is the
+// same non-nil string SafeStringPtr would copy (an empty field stays a pointer to "")
+function ccxtGoStringFieldSlotAddress (goTranspiler, e, type, wrap) {
+    if ((type !== '*string') || (wrap !== 'SafeStringPtr') || (GO_STRING_FIELD_NAMES.indexOf (goTranspiler.goAstFieldGoName (e)) < 0)) {
+        return undefined;
+    }
+    const text = String (goTranspiler.printNode (e, 0)).trim ();
+    return /^this\.[A-Z]\w*$/.test (text) ? '&' + text : undefined;
+}
+
 // one returned slot of a venue tuple: bare when already printed with the slot type, else unwrapped
 function ccxtGoVenueSlotText (goTranspiler, e, type, wrap) {
     {
         const h28a18 = h28a18StringSlotAddress (goTranspiler, e, type, wrap); if (h28a18 !== undefined) { return h28a18; }
+        const fieldAddress = ccxtGoStringFieldSlotAddress (goTranspiler, e, type, wrap); if (fieldAddress !== undefined) { return fieldAddress; }
         const text = goTranspiler.printNode (e, 0).trim ();
         let decl;
         try {
