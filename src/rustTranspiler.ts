@@ -16025,6 +16025,8 @@ export class RustTranspiler extends BaseTranspiler {
         unWatchTickers: 'crate::Value',
         unWatchTrades: 'crate::Value',
         unWatchTradesForSymbols: 'crate::Value',
+        fetchDeposit: 'crate::types::Transaction',
+        fetchWithdrawal: 'crate::types::Transaction',
     };
 
     // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;

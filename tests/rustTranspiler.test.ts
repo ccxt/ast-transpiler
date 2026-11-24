@@ -27750,3 +27750,19 @@ describe('a spawned pro snapshot loader types its futures-key `string` parameter
         expect(out).toMatch(/fn loadWritten\(&(mut )?self, client: [^,]+, (mut )?writtenHash: Value\)/);
     });
 });
+
+describe('rust typed fetchWithdrawal return (venue-private, from its declaration)', () => {
+    const dir = path.join (rustFixtureRoot, 'typed-fetch-withdrawal');
+    fs.mkdirSync (path.join (dir, 'ts/src/base'), { recursive: true });
+    fs.writeFileSync (path.join (dir, 'ts/src/base/Exchange.ts'), "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Transaction { id: Str }\nexport default class Exchange {\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    hold (x: any): any {\n        return x;\n    }\n}\n");
+    fs.writeFileSync (path.join (dir, 'ts/src/venue.ts'), "import Exchange from './base/Exchange.js';\nimport type { Dict, Str, Transaction } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async fetchWithdrawal (id: string, code: Str = undefined, params: Dict = {}): Promise<Transaction> {\n        return this.hold ({ 'id': id });\n    }\n}\n");
+    test('listed: the venue method prints a Transaction return', () => {
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'typedUnified': ['fetchWithdrawal'], 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).toContain('pub fn fetchWithdrawal(&self, id: &str, code: Option<&str>, params: impl Into<crate::Params> + Send) -> crate::Result<crate::types::Transaction>');
+    });
+    test('negative: not listed, the method keeps the Value return', () => {
+        const out = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (dir, 'ts/src/venue.ts')).content;
+        expect(out).not.toContain('crate::types::Transaction>');
+        expect(out).toMatch(/pub fn fetchWithdrawal\(&self, id: &str, code: Option<&str>, optional_args: &\[Value\]\) -> Value/);
+    });
+});
