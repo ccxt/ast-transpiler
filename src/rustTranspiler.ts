@@ -1278,6 +1278,7 @@ export class RustTranspiler extends BaseTranspiler {
     printArrayLength(node, identation, leftExpr = undefined) {
         const p21Length = (this as any).printRustP21Length(node); if (p21Length !== undefined) return p21Length;
         const sideLength = this.printBookSideRead(node); if (sideLength !== undefined) return sideLength;
+        const ownerLength = this.rustTypedOwnerLength(node); if (ownerLength !== undefined) return ownerLength;
         const scalarLength = this.rustScalarLengthText(node, true) ?? this.printOptListLength(node) ?? this.printWsCacheLength(node); if (scalarLength !== undefined) return scalarLength;
         const receiver = leftExpr ?? this.printNode(node.expression, 0);
         if (!this.rustIsOrderBookSide(node.expression) && this.isValueLengthType(this.typeOfNodeIfAny(node.expression))) return this.printNativeLength(node, receiver);
@@ -7343,6 +7344,15 @@ export class RustTranspiler extends BaseTranspiler {
         return this.checkerOrUndefined() !== undefined && this.rustScalarLengthRecv(node) === undefined;
     }
 
+    // The length of a typed owner: a typed cache field (`this.orders`, an `Option<Cache>`) reads its size, and the
+    // delta buffer of a typed book local (`x.cache`, x an `Option<Book>` / `Book`) reads `len()` as typed books do.
+    rustTypedOwnerLength(node: any): string | undefined {
+        const recv: any = this.unwrapParens(node.expression);
+        if (recv === undefined || this.isTestSource(node)) return undefined;
+        if (this.rustWsCacheField(recv)) return `Value::Int(CacheSlot::size(&self.${String(recv.name.text)}))`;
+        if (this.rust66cBookCacheRead(recv) !== undefined) return this.printNativeLength(node, this.printNode(node.expression, 0).trim());
+        return undefined;
+    }
     /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
      *  source, so the read prints the same native `len()` (or `get_array_length`) as a list receiver, an `Int` every time. */
     rust67bCastListLengthRecv(recv): boolean {
