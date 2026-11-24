@@ -69,7 +69,7 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'dictrows' | 'client' | 'dictref' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'other';
 export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
@@ -100,6 +100,8 @@ export declare const rustDispatch: {
     isSlotStr: (arg: string, i: number) => boolean;
     isSlotInt: (arg: string, i: number) => boolean;
     isSlotOptStr: (arg: string, i: number) => boolean;
+    isSlotMapRef: (arg: string, i: number) => boolean;
+    isSlotOptMapRef: (arg: string, i: number) => boolean;
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string) => boolean;
     slotName: (slot: string) => string;
@@ -3308,7 +3310,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printPresenceFlagTest(left: any, right: any, op: any): string | undefined;
     rustCatchBindingIsRead(block: Node, name: string): boolean;
     printTryStatement(node: any, identation: any): string;
+    /** A statement every path of which returns or throws. */
+    rustStatementAlwaysExits(s: any): boolean;
+    printRustBoolReturnTry(node: any, identation: any, read: boolean, caught: boolean): string | undefined;
+    rustLabelledTryBlocks: Set<object>;
+    /** The node sits in a try block printed as `'__try: {`, with no function or nested try in between. */
+    rustInLabelledTry(node: any): boolean;
+    /** Every throw is `throw new K (..)` of a ccxt error class and every call is a `this.safe*` reader, so nothing
+     *  but those throws can panic; no loop exit, nested try, function or bare `throw x`. */
+    rustTryBlockOnlyOwnThrows(block: any): boolean;
     printReturnStatement(node: any, identation: any): string;
+    printReturnStatementPlain(node: any, identation: any): string;
     printBreakStatement(node: any, identation: any): string;
     printContinueStatement(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
@@ -3362,6 +3374,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBalancedText(text: string): boolean;
     /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
     rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
+    rustOwnRecordParserReturn(exp: any, fn: any): boolean;
     /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
     rustUntypedLocalCaller(fn: any): boolean;
     /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
@@ -5649,12 +5663,20 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
     private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS;
     private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS;
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private static readonly RUST_INHERENT_GROUP_STR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
     /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean;
+    /** A `Dict` / `NullableDict` override-group parameter (handleErrors `headers` / `requestHeaders`): a lent map /
+     *  an optional lent map when every declaration spells it alike; the body reads it through `impl KeyRead`. */
+    rustGroupMapParamType(param: any): string | undefined;
+    /** Argument text for a group map slot: `{}` / `undefined` natively, a held dict local lent, any other value viewed once. */
+    rustGroupMapArgText(arg: any, type: string, identation: number): string;
+    /** The group map type of the callee parameter at `at`. */
+    rustGroupMapSlot(params: any[] | undefined, at: number): string | undefined;
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
      *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
     rustBaseOnlyMethod(method: any, file: string): boolean;
@@ -5862,6 +5884,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueStrListParam(param: any): boolean;
     private rustVenueDictDecisions;
     rustVenueDictParam(param: any): boolean;
+    /** `bidAsks: any[]` beside a leading book-side handle (`handleBidAsks (bookSide, bidAsks)`). */
+    rustBookSideListShape(param: any): boolean;
     rustVenueStrListParamUncached(param: any): boolean;
     /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
     rustVenueStrListSlotOf(call: any, arg: any): boolean;
@@ -5884,16 +5908,29 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
     rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     rustVenueDictParamUncached(param: any): boolean;
+    /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
+    rustParamOnlyExtendOperand(method: any, param: any): boolean;
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean;
     /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
     rustParamNeverNamed(method: any, param: any): boolean;
+    /** A local whose initializer and every reassignment is a fresh map or `this.safeDict (r, k [, fresh])` with `r` a
+     *  `this.` member or such a local (derive `account = this.safeDict (subBalance, code)`): never a row of the message. */
+    rustOwnStateRowLocal(decl: any, name: string, depth?: number): boolean;
     /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
     rustReadOffThisMember(init: any): boolean;
+    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
+     *  every `return` is an object literal of primitive-typed values: a key write cannot reach the message. */
+    rustLocalHoldsFreshBook(decl: any, init: any): boolean;
+    /** An expression the checker types as string, number, boolean, null or undefined only (never a shared map or list). */
+    rustPrimitiveValue(e: any): boolean;
     /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
      *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
     rustCallReturnsFreshLiteral(init: any): boolean;
+    /** `this.m (..)` whose every `return` is an object literal (`parseOrderBook`): each call builds a fresh top-level
+     *  map, so a key write into it cannot reach the message. */
+    rustCallReturnsObjectLiteral(init: any): boolean;
     /** `this.m (..)` whose every `return` is `this.r ({ .. })`, where `r` hands back its own first parameter (`safePosition`):
      *  each call builds a fresh top-level map, so a key write into it cannot reach the message. */
     rustCallReturnsFreshRecord(init: any): boolean;
@@ -5909,22 +5946,38 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
      *  the dict handle is shared into the box, no copy. */
     rustVenueDictLentValueUse(id: any): boolean;
+    /** A ws handler's message resolved whole with an explicit hash on its own client (`client.resolve (message, hash)`):
+     *  `resolve` takes `impl Into<Value>`, so the dict handle is shared into the box. */
+    rustClientResolveValueArg(id: any): boolean;
     /** `Value::Dict(Arc::clone(x))` for a rustVenueDictParam handed whole to a lent `impl Into<crate::Value>` slot. */
     printVenueDictLentValue(node: any, text: string): string | undefined;
     /** The container of a base by-reference reader (`this.safeString2 (x, ..)`): it reads the borrowed map as is. */
     rustVenueDictReaderUse(id: any): boolean;
+    /** Handed whole to a `this.` venue method whose slot takes a boxed value: the dict handle is boxed there
+     *  (`Value::from(x)`, the same shared map the box held). */
+    rustVenueDictWholeArgUse(id: any): boolean;
+    /** `Value::from(x)` for a borrowed dict handle handed whole to a boxed slot. */
+    printVenueDictWholeArg(node: any, text: string): string | undefined;
     /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
     printVenueDictReaderArg(node: any, text: string): string | undefined;
+    /** A borrowed rustVenueDictParam handed to the runtime `this.extend`: the head and the operands take the map by reference. */
+    printVenueDictExtendArg(node: any, text: string): string | undefined;
     /** `Value::Map(x.clone())` for a rustVenueDictParam read as an object-literal entry value. */
     printVenueDictValue(node: any, text: string): string | undefined;
+    /** A ws handler's message handed whole to an untyped `Value` slot of `this.m (..)`, or returned: the dict handle boxes as is. */
+    rustVenueDictWholeUse(id: any): boolean;
+    /** `Value::from(x)` (the shared dict handle) for a rustVenueDictParam handed whole to a `Value` slot or returned. */
+    printVenueDictWhole(node: any, text: string): string | undefined;
+    /** A dict-handle parameter as an object-literal entry value at its last use: the box shares the handle. */
+    printVenueDictHandleEntry(node: any, text: string): string | undefined;
+    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+     *  caller parameter cannot lend as a map view. */
+    rustArgSlotTakesDictHandle(arg: any): boolean;
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
     rustVenueDictValueParam(param: any): boolean;
     /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
      *  it lends its map view, an empty map for a non-dict (as the callee's shadow reads answer for Null). */
     rustBoxedDictParamLends(param: any): boolean;
-    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
-     *  caller parameter cannot lend as a map view. */
-    rustArgSlotTakesDictHandle(arg: any): boolean;
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined;
     /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /

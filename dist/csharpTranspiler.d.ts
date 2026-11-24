@@ -214,8 +214,11 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpVenueNumberParamCensus(): Map<Node, string>;
     csharpVenueNumberParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpVenueDictParamsKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
+    csharpVenueDictRowParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpDictParamsRebound(method: any): boolean;
     csharpDictArgumentIsTyped(argument: any): boolean;
+    csharpDictOmitCall(call: any): boolean;
+    csharpDestructuredDictSlotType(element: any): string | undefined;
     csharpProFileCallKinds(method: any, index: number, dict?: boolean): string[] | undefined;
     csharpProConstIntCallLocal(method: any, caller: any, argument: any): string | undefined;
     csharpProDictArgumentKind(method: any, call: any, index: number): string | undefined;
@@ -269,6 +272,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpBaseFieldInExpression(key: any, obj: any): string | undefined;
     csharpNativeModLiteralEquality(left: any, right: any, isEquality: boolean): string | undefined;
     csharpMemberViewRead(node: any): string | undefined;
+    csharpMemberViewSeed(node: any): string | undefined;
     csharpMemberSectionRead(expression: any, argumentExpression: any): string | undefined;
     csharpMemberRefreshStatement(node: any, identation: any): string | undefined;
     printExpressionStatement(node: any, identation: any): string;

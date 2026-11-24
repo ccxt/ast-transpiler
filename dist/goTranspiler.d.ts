@@ -718,6 +718,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     uncalledStringParams: {
         [method: string]: number[];
     };
+    goHandWrittenBaseMethods: string[];
     stringPointerTupleCalls: string[];
     guardedStringTupleCalls: string[];
     siblingStringPassthroughPattern: RegExp | undefined;
@@ -2796,4 +2797,8 @@ export interface GoTranspiler {
 export interface GoTranspiler {
     h42g22EndpointArmsContainer(node: any): boolean;
     h42g22ReaderArgument(node: any): boolean;
+}
+export interface GoTranspiler {
+    h45g36LiteralTable(node: any): boolean;
+    h45g36LiteralTableRead(node: any, printed: string): string | undefined;
 }

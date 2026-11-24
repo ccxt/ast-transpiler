@@ -51,6 +51,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
         handWritten: boolean;
         asyncVoid?: boolean;
         calls: Node[][];
+        foreignCalls?: number;
     } | undefined) | undefined;
     private javaThisCallIndex;
     javaDeclaredLocalTypeResolver: ((declaration: Node) => string | undefined) | undefined;
@@ -155,6 +156,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
     javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
+    javaVenueStringListParameterType(node: any, name: any, method: any, type: any, checker: any): string | undefined;
+    javaOverrideStringListArgument(arg: any): boolean;
     javaOverriddenSyncStringListSlot(name: any, method: any, type: any, checker: any): boolean;
     javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
