@@ -41752,13 +41752,28 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind !== SyntaxKind.Parameter) return this.rustNeverNullDictLocalArg(arg);
+        // a literal local printed as a plain map is lent as `&x` to an async slot only merged by `this.extend`
+        if (declaration?.kind !== SyntaxKind.Parameter) return this.rustNeverNullDictLocalArg(arg) || (declaration?.name !== arg && this.rustExtendOnlySlotOf(arg) && this.rustVenueDictLiteralLocalArg(declaration));
         if (declaration.name === arg) return false;
         if (!this.rustVenueDictParam(declaration)) return this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg);
         // a borrowed map view cannot feed a slot that takes the dict handle
         const call: any = arg.parent;
         const slot: any = isCallExpression(call) ? this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(arg)] : undefined;
         return slot === undefined || !this.rustVenueDictValueParam(slot) || this.rustVenueDictValueParam(declaration);
+    }
+
+    /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
+    rustExtendOnlySlotOf(arg: any): boolean {
+        const call: any = arg.parent;
+        const callee: any = isCallExpression(call) ? this.rustScalarCallee(call) : undefined;
+        const slot: any = callee?.parameters?.[Array.from(call.arguments).indexOf(arg)];
+        return slot !== undefined && this.isAsyncFunction(callee) && !this.rustWsHandlerMessageSlot(callee, slot) && this.rustParamOnlyExtendOperand(callee, slot);
+    }
+
+    /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
+    rustVenueDictLiteralLocalArg(declaration: any): boolean {
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || !isIdentifier(declaration.name) || !isObjectLiteralExpression(this.rustSkipWrappers(declaration.initializer))) return false;
+        return !this.rustLocalIsReassigned(declaration, String(declaration.name.text)) && !this.rustNestedDictLocalIsTyped(declaration) && this.rustDictLocalIsTyped(declaration);
     }
 
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
