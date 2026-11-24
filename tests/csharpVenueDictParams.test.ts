@@ -204,3 +204,44 @@ describe ('csharp venue-private dictionary row parameter', () => {
         expect(a).toContain('optionalRow(object row = null)');
     });
 });
+
+describe ('csharp venue-private params bag followed by defaulted parameters', () => {
+    // a `params = {}` bag with only defaulted parameters after it is typed by the same caller census
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-dict-params-mid');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    omit (a: any, k: any): any { return a; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any, params = {}) { const q = this.extend (params, { 'a': 1 }); return [ this.mid ('s', q), this.mid ('t', {}, true), this.midBoxed (x, true), this.midRequired ('u', q, 1) ]; }\n" +
+            "    mid (s: string, params: Dict = {}, unwatch: boolean = false) { return this.omit (params, 'k'); }\n" +
+            "    midBoxed (params: Dict = {}, unwatch: boolean = false) { return this.omit (params, 'k'); }\n" +
+            "    midRequired (s: string, params: Dict = {}, n: number) { return this.omit (params, 'k'); }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a bag followed by a defaulted flag prints IDictionary', () => {
+        expect(a).toMatch(/mid\(string s, IDictionary<string, object>\? parameters = null, /);
+    });
+
+    test('a boxed argument keeps object', () => {
+        expect(a).toMatch(/midBoxed\(object parameters = null, /);
+    });
+
+    test('a required parameter after the bag keeps object', () => {
+        expect(a).toMatch(/midRequired\(string s, object parameters/);
+    });
+});

@@ -3284,12 +3284,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         return undefined;
     }
 
-    // the trailing `params: Dict = {}` bag of a venue-private method prints `IDictionary<string, object>`
+    // the `params: Dict = {}` bag of a venue-private method (only defaulted parameters after it) prints `IDictionary<string, object>`
     // when no subclass overrides it, the body never rebinds it and every `this.` call passes nothing or a
     // value whose printed C# type is already a dictionary; one boxed argument keeps `object`
     csharpVenueDictParamsKind(method, parameter, index: number, calls: any[]): string | undefined {
         const initializer = parameter.initializer;
-        if ((index !== method.parameters.length - 1) || !isIdentifier(parameter.name) || (parameter.name.text !== 'params')
+        const trailing = Array.from(method.parameters as any).slice(index + 1).every((p: any) => p.initializer !== undefined);
+        if (!trailing || !isIdentifier(parameter.name) || (parameter.name.text !== 'params')
             || (parameter.dotDotDotToken !== undefined) || (initializer === undefined) || !isObjectLiteralExpression(initializer)
             || ((initializer as any).properties.length !== 0) || this.csharpVenueOverriddenMethods.has(method) || this.csharpIsDictParamsBag(parameter)
             || ((parameter.type !== undefined) && (parameter.type.getText().trim() !== 'Dict')) || this.csharpDictParamsRebound(method)) {
