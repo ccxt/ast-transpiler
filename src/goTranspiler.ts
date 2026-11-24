@@ -7368,7 +7368,9 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     if ((endpoint === undefined) && (printed[1] !== exported + 'Async')) {
         return undefined;                       // the printer's suffix logic disagrees: keep the box
     }
-    const goType = (endpoint !== undefined) ? endpoint : CCXT_GO_ASYNC_ELEM_TYPES[printed[1]];
+    // a core whose channel carries `[]map[string]any` (the host's async table) is received as a list of maps
+    const mapRows = (endpoint === undefined) && goTranspiler.asyncMapRowListCallees?.has (exported) ? '[]any' : undefined;
+    const goType = (endpoint !== undefined) ? endpoint : (CCXT_GO_ASYNC_ELEM_TYPES[printed[1]] ?? mapRows);
     if (goType === undefined) {
         return (endpoint === undefined) ? ccxtGoAsyncScalarReceive (goTranspiler, awaitNode, call) : undefined;
     }
