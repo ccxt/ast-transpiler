@@ -41813,7 +41813,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             this.rustVenueDictPending.delete(param);
             // an inner decision that met a pending guard is asked again later, when the outer one is settled
-            if (this.rustVenueDictPending.size > 0 && this.rustVenueDictGuardHits !== hits) this.rustVenueDictDecisions.delete(param);
+            if ((this.rustVenueDictPending.size > 0 || (this as any).rustP21Pending?.size > 0) && this.rustVenueDictGuardHits !== hits) this.rustVenueDictDecisions.delete(param);
             else this.rustVenueDictDecisions.set(param, decision);
         } else if (this.rustVenueDictPending.has(param)) {
             this.rustVenueDictGuardHits++;
@@ -42390,6 +42390,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
         if (declaration?.kind !== SyntaxKind.Parameter && this.rustTableDictLocalArg(arg)) return true;
+        // a row local of a converted `Dict[]` list (`const row = rows[i]`) holds the shared map
+        if (declaration?.kind === SyntaxKind.VariableDeclaration && declaration.name !== arg && this.rustP21RowLocalLends(declaration)) return true;
         // a literal local printed as a plain map is lent as `&x` to an async slot only merged by `this.extend`
         if (declaration?.kind !== SyntaxKind.Parameter) return this.rustNeverNullDictLocalArg(arg) || (declaration?.name !== arg && this.rustExtendOnlySlotOf(arg) && this.rustVenueDictLiteralLocalArg(declaration));
         if (declaration.name === arg) return false;
@@ -42398,6 +42400,19 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = arg.parent;
         const slot: any = isCallExpression(call) ? this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(arg)] : undefined;
         return slot === undefined || !this.rustVenueDictValueParam(slot) || this.rustVenueDictValueParam(declaration);
+    }
+
+    /** `const row = rows[i]` (no annotation, never reassigned) of a `Dict[]` local converted once by `dict_rows`. */
+    rustP21RowLocalLends(declaration: any): boolean {
+        const init: any = declaration.initializer;
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression) || declaration.type !== undefined || !isIdentifier(declaration.name)) return false;
+        if (this.rustOptContainerLocals.has(declaration) || this.rustLocalIsReassigned(declaration, String(declaration.name.text))) return false;
+        const owner: any = this.rustDeclarationOfIdentifier(init.expression);
+        // the list is still deciding: a lend decision waiting on it is asked again once it settles
+        if ((this as any).rustP21Pending?.has(owner)) { this.rustVenueDictGuardHits++; return false; }
+        // the row's own kind is still deciding: asking the list now would cache the list's refusal
+        if (this.rustBorrowedPending.has(declaration)) { this.rustVenueDictGuardHits++; return false; }
+        return (this as any).rustP21DictRowsLocal(owner) && (this as any).rustP21ElementRowRead(init, init.expression) !== undefined;
     }
 
     /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
@@ -44325,7 +44340,8 @@ export class RustTranspiler extends BaseTranspiler {
     let hit = this.rustP21Decisions.get(declaration);
     if (hit === undefined) {
         this.rustP21Decisions.set(declaration, false);
-        try { hit = this.rustP21DictRowsLocalUncached(declaration); } catch (e) { hit = false; }
+        (this.rustP21Pending ??= new Set<any>()).add(declaration);
+        try { hit = this.rustP21DictRowsLocalUncached(declaration); } catch (e) { hit = false; } finally { this.rustP21Pending.delete(declaration); }
         this.rustP21Decisions.set(declaration, hit);
     }
     return hit;
