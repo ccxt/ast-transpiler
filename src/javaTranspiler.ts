@@ -883,7 +883,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // `this.name (..)` call outside `ownFile`. With no consumer installed nothing changes.
     // every Java declaration of a method name as its parameter types, or undefined when unknown (build layer)
     javaDeclarationsOf: ((name: string) => string[][] | undefined) | undefined;
-    javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, asyncVoid?: boolean, calls: Node[][] } | undefined) | undefined;
+    javaRepoMethodUses: ((name: string, ownFile: string) => { declared: number, mentions: number, handWritten: boolean, asyncVoid?: boolean, calls: Node[][], foreignCalls?: number } | undefined) | undefined;
     // every `this.<name> (..)` call expression of a source file, collected once per file
     private javaThisCallIndex = new WeakMap<object, Map<string, any[]>>();
     // The declared Java type of a local is known to the pass that rewrites the declaration
@@ -2474,8 +2474,9 @@ export class JavaTranspiler extends BaseTranspiler {
     // writes it, no ancestor declares the method, the name is declared once and only called as `this.name (..)`,
     // and every caller (at least one) hands a value that prints as a bare List (no checkcast, cannot throw)
     javaBaseListParameterTypeOf(node, method, type, checker): string | undefined {
+        const venueTier = JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'));
         if (typeof this.javaRepoMethodUses !== 'function'
-            || !JAVA_BASE_LIST_PARAMETER_FILES.test(node.getSourceFile().fileName)
+            || (!JAVA_BASE_LIST_PARAMETER_FILES.test(node.getSourceFile().fileName) && !venueTier)
             || !isIdentifier(method.name) || !this.javaIsPrintedMethod(method)
             || !checker.isArrayType(type) || checker.isTupleType(type)) {
             return undefined;
@@ -2491,15 +2492,19 @@ export class JavaTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         const ownFile = node.getSourceFile().fileName;
         const uses = this.javaRepoMethodUses(name, ownFile);
-        if (uses === undefined || uses.declared !== 1 || uses.mentions > 0 || uses.handWritten) {
+        // a venue-private method is typed per declaration: only its own file may call it
+        const declaredOk = venueTier ? uses?.foreignCalls === 0 : uses?.declared === 1;
+        if (uses === undefined || !declaredOk || uses.mentions > 0 || uses.handWritten) {
             return undefined;
         }
         const internal = this.javaThisCallsInFile(node.getSourceFile(), name);
-        if (internal.length + uses.calls.length === 0) {
+        // a venue's own declaration answers only its own file's calls
+        const outside = venueTier ? [] : uses.calls;
+        if (internal.length + outside.length === 0) {
             return undefined;
         }
         const producerDeclared = (producer: string) => this.javaRepoMethodUses?.(producer, ownFile)?.declared === 1;
-        const listOutside = uses.calls.every((args) => args.length > position && !isSpreadElement(args[position])
+        const listOutside = outside.every((args) => args.length > position && !isSpreadElement(args[position])
             && this.javaPrintsListArgument(args[position], producerDeclared));
         const listInside = internal.every((call) => {
             const arg = call.arguments?.[position];
