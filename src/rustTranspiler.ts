@@ -44615,7 +44615,9 @@ export class RustTranspiler extends BaseTranspiler {
     const recv: any = this.rustSkipWrappers(call.arguments[0]);
     // the base config fields `options` / `urls` / `fees` print as plain `Dict` fields, never a ws marker map
     const field = [ 'options', 'urls', 'fees' ].includes(this.rustDictField(recv) ?? '') ? String(recv.name.text) : undefined;
-    if (!file.includes('ts/src/') || (field === undefined && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
+    // a pro local built by `this.indexBy (..)` is a fresh runtime map (`index_by -> Dict`), never a ws marker map
+    const fresh = isIdentifier(recv) && this.rustP22IndexByLocal(recv);
+    if (!file.includes('ts/src/') || (field === undefined && !fresh && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
     if (field === undefined && (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv))) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
     const kind = isIdentifier(key) ? this.rustScalarLocalOf(key)?.kind : undefined;
@@ -44624,6 +44626,12 @@ export class RustTranspiler extends BaseTranspiler {
     const m = `std::sync::Arc::clone(__m)`;
     const r = field !== undefined ? `self.${field}` : (BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     return `(if let Some(Value::Dict(__m)) = ${r}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
+};
+(RustTranspiler.prototype as any).rustP22IndexByLocal = function (this: any, recv: any): boolean {
+    const d: any = this.rustDeclarationOfIdentifier(recv);
+    if (d?.kind !== SyntaxKind.VariableDeclaration || d.name === recv || !isIdentifier(d.name) || !((d.parent?.flags ?? 0) & NodeFlags.Const)) return false;
+    const init: any = this.rustSkipWrappers(d.initializer);
+    return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword && String(init.expression.name.text) === 'indexBy';
 };
 // ===== end h34-H34-P22
 
