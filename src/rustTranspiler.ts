@@ -16272,6 +16272,8 @@ export class RustTranspiler extends BaseTranspiler {
         fetchDeposit: 'crate::types::Transaction',
         fetchWithdrawal: 'crate::types::Transaction',
         enableDemoTrading: '()',
+        // TS `Promise<Dict>` in every override (the base `Promise<{}>`): the endpoint's map, `None` for any other body
+        setPositionMode: 'Option<crate::value::Dict>',
     };
 
     // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;
