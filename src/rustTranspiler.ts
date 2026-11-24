@@ -2229,8 +2229,9 @@ export class RustTranspiler extends BaseTranspiler {
         if ((!isStringLiteral(needle) && !isNoSubstitutionTemplateLiteral(needle)) || needle.text === '') return undefined;
         const literal = this.rustNativeStringLiteralArg(needle);
         const receiver = literal === undefined ? undefined : this.rustNativeStringReceiver(call, this.printNode(call.expression.expression, 0));
-        if (literal === undefined || receiver === undefined || !RUST_PLAIN_PLACE.test(receiver)) return undefined;
-        return `${no ? '!' : ''}${receiver}.as_str().unwrap_or("").contains("${literal}")`;
+        const place = receiver === '((client).url)' ? '(client).url' : receiver;
+        if (literal === undefined || place === undefined || (!RUST_PLAIN_PLACE.test(place) && place !== '(client).url')) return undefined;
+        return `${no ? '!' : ''}${place}.as_str().unwrap_or("").contains("${literal}")`;
     }
 
     // ── native arithmetic (`+ - * /`) ────────────────────────────────────────
@@ -10227,6 +10228,8 @@ export class RustTranspiler extends BaseTranspiler {
         const receiver = isPropertyAccessExpression(node.parent) && node.parent.expression === node;
         // a typed handle parameter reads its url through the accessor (Str or Null, as the boxed `client.url()`)
         if (access.plan.typed && access.plan.kind === 'param' && access.key === 'url' && !access.write && !receiver) return `Value::from(${this.rustClientHandleReceiver(access.plan, false)}.url())`;
+        // a typed handle parameter's url as a string method receiver is the field place `(client).url` (the parens keep ccxt's field pass off it)
+        if (access.plan.typed && access.plan.kind === 'param' && receiver && !access.write) return `${recv}.${access.key}`;
         return access.write || receiver ? `${recv}.${access.key}` : `${recv}.${access.key}.clone()`;
     }
 
@@ -43386,8 +43389,8 @@ export class RustTranspiler extends BaseTranspiler {
             const name = String(p.name.text);
             if (RustTranspiler.RUST_CLIENT_HANDLE_METHODS.has(name)) return isCallExpression(p.parent) && p.parent.expression === p;
             if (!RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(name) || this.isNativeWriteTargetBase(p)) return false;
-            // a field used as a method receiver (`client.url.indexOf (..)`) keeps the in-place read on the boxed client
-            if (isPropertyAccessExpression(p.parent) && p.parent.expression === p) return false;
+            // a field used as a method receiver keeps the in-place read on the boxed client, except `client.url.<string method> (..)`
+            if (isPropertyAccessExpression(p.parent) && p.parent.expression === p && !(name === 'url' && isCallExpression(p.parent.parent) && p.parent.parent.expression === p.parent)) return false;
             let up: any = p.parent;
             while (up !== undefined && (isElementAccessExpression(up) || isParenthesizedExpression(up))) {
                 if (this.isNativeWriteTargetBase(up) || isDeleteExpression(up.parent)) return false;

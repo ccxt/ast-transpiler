@@ -30,6 +30,22 @@ const files: Record<string, string> = {
         "        const isSpot = client.url.indexOf ('spot') >= 0;",
         '        client.resolve (isSpot);',
         '    }',
+        '    handleSpotIf (client: Client, message: Dict) {',
+        "        const isSpot = client.url.indexOf ('spot') > -1;",
+        "        let marketType = 'contract';",
+        '        if (isSpot) {',
+        "            marketType = 'spot';",
+        '        }',
+        '        client.resolve (marketType);',
+        '    }',
+        '    handleSubLen (client: Client, message: Dict) {',
+        "        const n = client.subscriptions.length;",
+        '        client.resolve (n);',
+        '    }',
+        '    handleUrlLen (client: Client, message: Dict) {',
+        "        const n = client.url.length;",
+        '        client.resolve (n);',
+        '    }',
         '    handleWrites (client: Client, message: Dict) {',
         "        client.subscriptions['k'] = message;",
         '    }',
@@ -43,7 +59,7 @@ const files: Record<string, string> = {
         '        client.resolve (message);',
         '    }',
         '    override handleMessage (client: Client, message: Dict) {',
-        "        const methods: Dict = { 'a': this.handleTick, 'b': this.handleHanded, 'u': this.handleUrl, 's': this.handleSpot, 'c': this.handleWrites, 'd': this.handleAsync };",
+        "        const methods: Dict = { 'a': this.handleTick, 'b': this.handleHanded, 'u': this.handleUrl, 's': this.handleSpot, 'i': this.handleSpotIf, 'l': this.handleSubLen, 'm': this.handleUrlLen, 'c': this.handleWrites, 'd': this.handleAsync };",
         "        const method = this.safeValue (methods, 'x');",
         '        method.call (this, client, message);',
         '        this.handleCalled (client, message);',
@@ -80,9 +96,19 @@ describe('rust ws handler client handle param', () => {
         expect(b).toContain('Value::from(client.url())');
         expect(b).not.toContain('url.clone()');
     });
-    test('a handle field used as a method receiver keeps the boxed client and the in-place read', () => {
-        expect(header('handleSpot')).not.toContain('ClientHandle');
-        expect(body('handleSpot', 'handleWrites')).toContain('__ch.url.as_str().unwrap_or("").contains("spot")');
+    test('a url string method call takes the handle and reads the url field in place', () => {
+        expect(header('handleSpot')).toContain('client: &crate::pro::ws_client::ClientHandle');
+        expect(body('handleSpot', 'handleWrites')).toContain('(client).url.as_str().unwrap_or("").contains("spot")');
+    });
+    test('a url indexOf test into a bool local reads the typed url field, not the boxed client', () => {
+        expect(header('handleSpotIf')).toContain('client: &crate::pro::ws_client::ClientHandle');
+        const b = body('handleSpotIf', 'handleSubLen');
+        expect(b).toContain('(client).url.as_str().unwrap_or("").contains("spot")');
+        expect(b).not.toContain('get_value(&client');
+    });
+    test('a handle field used as a receiver of anything but a url method call keeps the boxed client', () => {
+        expect(header('handleSubLen')).not.toContain('ClientHandle');
+        expect(header('handleUrlLen')).not.toContain('ClientHandle');
     });
     test('a handler that hands client on whole keeps the boxed client', () => {
         expect(header('handleHanded')).not.toContain('ClientHandle');
