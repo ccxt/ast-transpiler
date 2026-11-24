@@ -42,7 +42,8 @@ describe('rust Object.keys on a read-only base Dict parameter fed fresh maps', (
 
     test('positive: every caller lends a fresh parse map', () => {
         const out = setup(base(READ), venue('const m = this.parseThings (r); const a = m; return this.pick (a, "x");'));
-        expect(out).toContain(`Value::Array(d${KEYS}`);
+        // the parameter is shadowed (its keys key its own reads), so the shadow map's iterators list them
+        expect(out).toContain('Value::Array(d.keys().cloned().map(Value::from).collect())');
         expect(out).not.toContain('object_keys(&d)');
     });
 

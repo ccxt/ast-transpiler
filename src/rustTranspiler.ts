@@ -14284,6 +14284,8 @@ export class RustTranspiler extends BaseTranspiler {
     rustOkeyKind(receiver: any, read: any): 'map' | 'value' | undefined {
         if (this.isTestSource(receiver) || (this.isWriteBackBindRead(read) && !this.rustOwnedWriteBackPushBind(read) && !this.rustH26r12RebindOnlyBind(read))) return undefined;
         if (this.rustDictBearerDeclaration(receiver) !== undefined || this.rustMapParamDeclaration(receiver) !== undefined) return 'map';
+        // a map-shadowed parameter is already the borrowed map (`&IndexMap` / `&Dict`): read it directly
+        if (this.rustParamShadowOf(receiver)?.kind === RUST_PARAM_SHADOWS.MAP) return 'map';
         if (this.rustReadBearerKind(receiver) !== undefined || this.rustParamShadowOf(receiver) !== undefined || this.rustLentListUse(receiver)
             || this.printOptListElement(receiver, read.argumentExpression) !== undefined) return undefined;
         const field = this.rustDictField(receiver);
@@ -20003,12 +20005,26 @@ export class RustTranspiler extends BaseTranspiler {
                 if (isCallExpression(up) && this.bearerEnumArg(up) !== undefined) enumUse = true;
                 const key: any = isElementAccessExpression(up) && up.expression === node ? up.argumentExpression
                     : isBinaryExpression(up) && up.right === node ? up.left : undefined;
-                if (key !== undefined && isIdentifier(key) && !isParameterDeclaration(this.rustDeclarationOfIdentifier(key) as any)) localKey = true;
+                if (key !== undefined && isIdentifier(key) && !isParameterDeclaration(this.rustDeclarationOfIdentifier(key) as any) && !this.rustParamOwnKeysElementKey(node, key)) localKey = true;
             }
             node.forEachChild(visit);
         };
         (fn as any).body.forEachChild(visit);
         return enumUse && localKey;
+    }
+
+    /** `k` is `const k = keys[i]` with `const keys = Object.keys (p)` on the same parameter `p`: a key the map holds. */
+    private rustParamOwnKeysElementKey(param: any, key: any): boolean {
+        const kd: any = this.rustDeclaredNode(key);
+        const init: any = kd !== undefined && isVariableDeclaration(kd) ? this.unwrapParens(kd.initializer) : undefined;
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return false;
+        const ld: any = this.rustDeclaredNode(init.expression);
+        const call: any = ld !== undefined && isVariableDeclaration(ld) ? this.unwrapParens(ld.initializer) : undefined;
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return false;
+        const arg: any = this.unwrapParens(call.arguments[0]);
+        const pd: any = this.rustDeclarationOfIdentifier(param);
+        return isIdentifier(arg) && pd !== undefined && isParameterDeclaration(pd) && this.rustDeclarationOfIdentifier(arg) === pd
+            && !this.rustLocalIsReassigned(kd, String(key.text)) && !this.rustLocalIsReassigned(ld, String(init.expression.text));
     }
 
     /** One reference of a shadow candidate: true only for a read the shadow can

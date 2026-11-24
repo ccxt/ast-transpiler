@@ -9033,7 +9033,7 @@ describe('rust string key elements', () => {
     test('a key list element used as a map key reads the map natively as an optional string', () => {
         const out = transpiler.transpileRustByPath(path.join (rustFixtureRoot, 'string-key-element', 'ts/src/venue.ts')).content;
         expect(out).toContain('let mut key: Option<&str> = keys.get(i as usize).and_then(Value::as_str);');
-        expect(out).toContain('(if let (Some(__m), Some(__k)) = (response.as_map(), key.as_deref()) { __m.get(__k).cloned().unwrap_or(Value::Null) } else { Value::Null })');
+        expect(out).toContain('response.get(key.as_deref().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 
     test('a key that is also boxed at its last use is typed and moves into that slot', () => {
@@ -13749,7 +13749,7 @@ describe('ral-uh: string-literal ternary locals key a proven map read', () => {
             "class X {\n    f (market: Dict, inverse: boolean) {\n        const codeCurrency = inverse ? 'base' : 'quote';\n        return market[codeCurrency];\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('let mut codeCurrency: String = (if inverse { "base".to_string() } else { "quote".to_string() });');
-        expect(output).toContain('market.as_map() { __m.get(codeCurrency.as_str()).cloned().unwrap_or(Value::Null) } else { Value::Null })');
+        expect(output).toContain('market.get(codeCurrency.as_str()).cloned().unwrap_or(Value::Null)');
         expect(output).not.toContain('let mut codeCurrency: Value');
     });
     test('negative: arms of different kinds (number | string) stay a Value', () => {
