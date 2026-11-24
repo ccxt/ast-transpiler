@@ -61660,3 +61660,49 @@ GoTranspiler.prototype.goProvenReturnRetype = function (node, printed: string): 
     }
 };
 // ===== end H48-G15
+
+// ===== H48-G30: awaited list of a venue method whose every return is a pushed-row local (begin) =====
+// `const xs = await this.m (..)` where every return of the venue method m is one local seeded `[]` and only
+// pushed `this.extend (..)` rows (a Go map, never a scalar pointer) or rows this rule already proves
+function h48g30PushedRowList (goTranspiler: GoTranspiler, list, depth: number): boolean {
+    const checker: any = goTranspiler.checkerOrUndefined ();
+    const declaration: any = goTranspiler.goCheckerVariableDeclaration (list);
+    const awaited: any = goTranspiler.goUnwrapParenthesizedNode (declaration?.initializer);
+    const call: any = goTranspiler.goUnwrapParenthesizedNode (awaited?.expression);
+    if ((checker === undefined) || (depth > 2) || (awaited?.kind !== SyntaxKind.AwaitExpression) || (call?.kind !== SyntaxKind.CallExpression)
+        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), list.text, declaration).length > 0)) {
+        return false;
+    }
+    const method: any = checker.getSymbolAtLocation (call.expression.name)?.valueDeclaration?.resolve?.();
+    const fileName = String (method?.getSourceFile?.()?.fileName ?? '').replace (/\\/g, '/');
+    if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined) || !/(^|\/)ts\/src\//.test (fileName)
+        || /(^|\/)ts\/src\/(base|test)\//.test (fileName)) {
+        return false;
+    }
+    const returns = collectReturnStatements (method.body);
+    return (returns.length > 0) && returns.every ((r: any) => {
+        const value: any = goTranspiler.goUnwrapParenthesizedNode (r.expression);
+        const local: any = (value?.kind === SyntaxKind.Identifier) ? goTranspiler.goCheckerVariableDeclaration (value) : undefined;
+        const seed: any = goTranspiler.goUnwrapParenthesizedNode (local?.initializer);
+        if ((local === undefined) || (goTranspiler.goEnclosingFunction (local) !== method) || (seed?.kind !== SyntaxKind.ArrayLiteralExpression)
+            || (seed.elements.length !== 0)) {
+            return false;
+        }
+        return goTranspiler.goNameWriteSites (method, value.text, local).every ((w: any) => {
+            const push: any = w.parent?.parent;
+            const row: any = goTranspiler.goUnwrapParenthesizedNode (push?.arguments?.[0]);
+            return (w.parent?.kind === SyntaxKind.PropertyAccessExpression) && (w.parent.expression === w) && (w.parent.name?.text === 'push')
+                && (push?.kind === SyntaxKind.CallExpression) && (push.expression === w.parent) && (push.arguments.length === 1)
+                && (row?.kind === SyntaxKind.CallExpression) && (row.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (row.expression.expression?.kind === SyntaxKind.ThisKeyword) && (row.expression.name?.text === 'extend');
+        });
+    });
+}
+{
+    const pointerFree = GoTranspiler.prototype.goListElementsArePointerFree;
+    GoTranspiler.prototype.goListElementsArePointerFree = function (list, depth = 0): boolean {
+        return pointerFree.call (this, list, depth) || ((list?.kind === SyntaxKind.Identifier) && h48g30PushedRowList (this, list, depth));
+    };
+}
+// ===== H48-G30 (end) =====
