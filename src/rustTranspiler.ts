@@ -43491,6 +43491,8 @@ export class RustTranspiler extends BaseTranspiler {
             const p: any = n.parent;
             if (p === undefined) return false;
             if (!routed && isCallExpression(p) && p.expression !== n && this.rustDeclarationOfIdentifier(n) === param) {
+                // a `this.spawn (this.m, .., client, ..)` hand-off takes the boxed handle (`client.as_value()`)
+                if (this.rustWsSpawnHandoff(p, n)) return true;
                 const slot = this.rustWsHandleSlotOf(n);
                 if (slot !== undefined) links.push(slot);
                 return slot !== undefined;
@@ -43525,6 +43527,14 @@ export class RustTranspiler extends BaseTranspiler {
         const up: any = access.parent;
         if (isDeleteExpression(up)) return up.parent?.kind === SyntaxKind.ExpressionStatement;
         return isBinaryExpression(up) && up.left === access && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+    /** `client` as a later argument of `this.spawn (this.m, ..)` whose target is a method reference. */
+    rustWsSpawnHandoff(call: any, n: any): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || callee.name.text !== 'spawn') return false;
+        const target: any = call.arguments[0];
+        return target !== n && call.arguments.indexOf(n) > 0 && target !== undefined && isPropertyAccessExpression(target) && target.expression.kind === SyntaxKind.ThisKeyword
+            && !call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement);
     }
     /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
      *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */
