@@ -106,3 +106,54 @@ describe ('csharp venue-private params bag seen from the pro file', () => {
         expect(a).toContain('untypedCaller(object s, object parameters = null)');
     });
 });
+
+describe ('csharp venue-private params bag fed by an omit or a destructured slot', () => {
+    // `this.omit (<dictionary local>, 'k')` binds the omit(IDictionary, string) overload (a fresh
+    // Dictionary); a destructured slot counts only when the host layer names its printed type
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-omit-dict-params');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    omit (a: any, k: any): any { return a; }\n    pair (a: any): any[] { return [ 1, a ]; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { const q: Dict = {}; const [ n, p ] = this.pair (q); const [ m, r ] = this.pair (q); return [ this.omitted ('s', this.omit (q, 'k')), this.boxedOmit ('s', this.omit (x, 'k')), this.slot ('s', p), this.otherSlot ('s', r), n, m ]; }\n" +
+            "    omitted (s: string, params: Dict = {}) { return this.omit (params, 'k'); }\n" +
+            "    boxedOmit (s: string, params: Dict = {}) { return this.omit (params, 'k'); }\n" +
+            "    slot (s: string, params: Dict = {}) { return this.omit (params, 'k'); }\n" +
+            "    otherSlot (s: string, params: Dict = {}) { return this.omit (params, 'k'); }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        const csharp = (transpiler as any).csharpTranspiler;
+        csharp.csharpDestructuredDictSlotType = (element) => ((element.name?.text === 'p') ? 'IDictionary<string, object>' : undefined);
+        // the host layer declares `q` a dictionary (ccxt: build/csharp-local-types.js)
+        csharp.csharpExpressionTypeResolver = (node) => ((node.text === 'q') ? 'IDictionary<string, object>' : undefined);
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('an omit of a dictionary local prints IDictionary', () => {
+        expect(a).toContain('omitted(string s, IDictionary<string, object>? parameters = null)');
+    });
+
+    test('an omit of a boxed value keeps object', () => {
+        expect(a).toContain('boxedOmit(string s, object parameters = null)');
+    });
+
+    test('a destructured slot the host types prints IDictionary', () => {
+        expect(a).toContain('slot(string s, IDictionary<string, object>? parameters = null)');
+    });
+
+    test('a destructured slot the host does not type keeps object', () => {
+        expect(a).toContain('otherSlot(string s, object parameters = null)');
+    });
+});

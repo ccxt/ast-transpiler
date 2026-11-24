@@ -3346,7 +3346,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const dict = (t) => (typeof t === 'string') && /^I?Dictionary<string, object>\??$/.test(t.trim());
         if (isCallExpression(value)) {
-            return dict(this.csharpCallReturnType(value));
+            return dict(this.csharpCallReturnType(value)) || this.csharpDictOmitCall(value);
         }
         if (!isIdentifier(value)) {
             return false;
@@ -3355,7 +3355,30 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((binding !== undefined) && (binding.kind === SyntaxKind.Parameter) && this.csharpIsDictParamsBag(binding)) {
             return true;
         }
+        if ((binding !== undefined) && (binding.kind === SyntaxKind.BindingElement) && dict(this.csharpDestructuredDictSlotType(binding))) {
+            return true;
+        }
         return dict(this.csharpResolvedReadType(value)) || ((binding !== undefined) && isVariableDeclaration(binding) && dict(this.csharpDeclaredLocalType(value)));
+    }
+
+    // `this.omit (<dictionary local>, '<key>')` binds the hand-written omit(IDictionary, string) overload,
+    // which returns a fresh Dictionary<string, object> on every path
+    csharpDictOmitCall(call): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || (callee.expression.kind !== SyntaxKind.ThisKeyword) || !isIdentifier(callee.name)
+            || (callee.name.text !== 'omit') || (call.arguments.length !== 2) || !isStringLiteral(call.arguments[1])) {
+            return false;
+        }
+        const receiver = this.csharpUnparenthesized(call.arguments[0]);
+        const binding: any = isIdentifier(receiver) ? this.csharpReceiverBinding(receiver) : undefined;
+        const type = ((binding !== undefined) && isVariableDeclaration(binding)) ? (this.csharpResolvedReadType(receiver) ?? this.csharpDeclaredLocalType(receiver)) : undefined;
+        return (typeof type === 'string') && /^I?Dictionary<string, object>$/.test(type.trim());
+    }
+
+    // The C# type the embedding build layer prints for a destructured slot (`const [ x, p ] = ...`), or
+    // undefined (the printer itself declares every slot `var`). Undefined by default.
+    csharpDestructuredDictSlotType(element): string | undefined {
+        return undefined;
     }
 
     // the venue's pro subclass (ts/src/pro/<file>) is transpiled in another batch, so its file is parsed here:
