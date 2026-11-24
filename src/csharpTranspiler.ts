@@ -679,6 +679,7 @@ const CSHARP_OVERRIDE_PARAM_TYPES: { [name: string]: { [index: number]: string }
     ethRpc: { 2: 'IList<object>' },
     parsePredictionOpenInterest: { 0: 'IDictionary<string, object>' },
     signEvmTransaction: { 0: 'IDictionary<string, object>' },
+    handleMyTrades: { 2: 'IDictionary<string, object>' },
 };
 
 // a parameter whose ts/src annotation is an array of JSON cells (`Dict[]`, `Market[]`, `any[]`) prints `IList<object>` -- the very value the generated C# tree passes for a TS array -- instead of

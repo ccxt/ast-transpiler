@@ -4609,6 +4609,28 @@ describe('always-dictionary fields and oracle-proven dictionaries read natively'
             const output = transpiler.transpileCSharp(other).content;
             expect(output).toContain('parsePredictionOpenInterest(object interest, object market = null)');
         });
+        test('a ws handler subscription slot prints the declared dictionary', () => {
+            const ws =
+            "type Dict = { [key: string]: any };\n" +
+            "class Exchange {\n" +
+            "    handleMyTrades (client: any, message: Dict, subscription: Dict | undefined = undefined) {\n" +
+            "        return message;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(ws).content;
+            expect(output).toMatch(/handleMyTrades\(object client, [^,]+ message, IDictionary<string, object>\?? subscription = null\)/);
+        });
+        test('a ws handler subscription slot of another kind keeps object', () => {
+            const ws =
+            "type Dict = { [key: string]: any };\n" +
+            "class Exchange {\n" +
+            "    handleMyTrades (client: any, message: Dict, subscription: any = undefined) {\n" +
+            "        return message;\n" +
+            "    }\n" +
+            "}";
+            const output = transpiler.transpileCSharp(ws).content;
+            expect(output).toContain('object subscription = null)');
+        });
     });
     // ---- ws handler `message` parameter ----
     const wsHandlerSource = (body: string, messageType: string = 'Dict', extra: string = '') =>
