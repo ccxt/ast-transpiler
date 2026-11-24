@@ -23575,7 +23575,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text) ?? this.printNilMapBox(node, text); if (optList !== undefined) return optList;
         const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
-        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printVenueDictValue(node, text) ?? this.printVenueDictLentValue(node, text) ?? this.printVenueDictReaderArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printVenueDictValue(node, text) ?? this.printVenueDictLentValue(node, text) ?? this.printVenueDictReaderArg(node, text) ?? this.printVenueDictExtendArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -41300,8 +41300,9 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         if (!this.rustVenueOnlyMethod(method, name)) return false;
         const handler = this.rustWsHandlerMessageSlot(method, param);
-        // an async method borrows its map only as a ws handler (its by-name arm lends the boxed map)
-        if (this.isAsyncFunction(method) && !handler) return false;
+        // an async method borrows its map only as a ws handler or as a pure operand of the runtime `this.extend`
+        const extendOnly = !handler && this.isAsyncFunction(method) && this.rustParamOnlyExtendOperand(method, param);
+        if (this.isAsyncFunction(method) && !handler && !extendOnly) return false;
         if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || (!handler && this.rustMethodReferencedAsValue(method))) return false;
         const params: any[] = Array.from(method.parameters);
         const at = params.indexOf(param);
@@ -41310,7 +41311,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
         // (a by-name handler that never names its message borrows it too: nothing reads the slot)
-        if (this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
+        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
@@ -41321,6 +41322,24 @@ export class RustTranspiler extends BaseTranspiler {
         // syntactic test first: a typed-local decision is asked only when every argument could lend
         if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
+    }
+
+    /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
+    rustParamOnlyExtendOperand(method: any, param: any): boolean {
+        const name = String(param.name.text);
+        let uses = 0;
+        let ok = true;
+        const visit = (n: any): void => {
+            if (!ok) return;
+            if (isIdentifier(n) && n.text === name && n !== param.name) {
+                const call: any = n.parent;
+                if (this.rustDeclarationOfIdentifier(n) !== param || !isCallExpression(call) || call.expression === n || !this.rustRuntimeExtendCall(call)) { ok = false; return; }
+                uses++;
+            }
+            n.forEachChild(visit);
+        };
+        method.body?.forEachChild(visit);
+        return ok && uses > 0;
     }
 
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
@@ -41633,6 +41652,15 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
         return `&${text}`;
+    }
+
+    /** A borrowed rustVenueDictParam handed to the runtime `this.extend`: the head and the operands take the map by reference. */
+    printVenueDictExtendArg(node: any, text: string): string | undefined {
+        const call: any = node?.parent;
+        if (!isIdentifier(node) || !isCallExpression(call) || call.expression === node || !this.rustRuntimeExtendCall(call)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
+        return RustTranspiler.rustLentMark(text);
     }
 
     /** `Value::Map(x.clone())` for a rustVenueDictParam read as an object-literal entry value. */
