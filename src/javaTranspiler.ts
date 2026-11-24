@@ -366,6 +366,8 @@ const JAVA_NATIVE_ALIAS_TYPES: { [name: string]: string } = {
     'OrderSide': 'String',
 };
 const JAVA_NATIVE_PARAMETER_TYPES: { [name: string]: string } = { ...JAVA_NATIVE_ALIAS_TYPES, 'Bool': 'Boolean' };
+// a fixed `MarketInterface` parameter (the non-nullable Market row) is a Map like `Market`
+JAVA_NATIVE_PARAMETER_TYPES['MarketInterface'] = 'java.util.Map<String, Object>';
 
 // Java types of default-valued parameters; separate from the fixed-parameter table.
 // `Num`/`Bool` stay Object: widening them changes payload strings or varargs spreading.
