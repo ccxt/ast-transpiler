@@ -7022,7 +7022,8 @@ export class JavaTranspiler extends BaseTranspiler {
             const arithmetic = this.printInlineHelperArithmetic(left, right, leftText, rightText, op)
                 ?? this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op)
                 ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op)
-                ?? this.printParseToIntDoubleProduct(node, left, right, leftText, rightText, op);
+                ?? this.printParseToIntDoubleProduct(node, left, right, leftText, rightText, op)
+                ?? this.printNumSinkDoubleProduct(node, left, right, leftText, rightText, op);
             if (arithmetic !== undefined) {
                 return arithmetic;
             }
@@ -7593,6 +7594,70 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return parent !== undefined && isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.SlashToken
             && (parent.left === child || parent.right === child);
+    }
+
+    // `a * b` with a double side whose value is declared `Num`: written to a `: Num` local or returned
+    // from a `: Num` method. The declared type is a double, so the product is typed double, not re-boxed Long
+    printNumSinkDoubleProduct(node, left, right, leftText: string, rightText: string, op): string | undefined {
+        if (op !== SyntaxKind.AsteriskToken || !this.javaProductFeedsNumSink(node)) {
+            return undefined;
+        }
+        const kindOf = (operand, text: string) => {
+            const inner = this.unwrapParenthesized(operand);
+            if (isNumericLiteral(inner)) {
+                return /^\d+(\.\d+)?$/.test(inner.text) ? (/\./.test(inner.text) ? 'doubleprim' : 'longprim') : undefined;
+            }
+            if (isBinaryExpression(inner) && this.javaNativeArithmeticKind(inner) === 'double' && !text.includes('Helpers.')) {
+                return 'doubleprim';
+            }
+            if (!isIdentifier(inner) || text.trim() !== String(inner.text) || !this.javaIdentifierPrintsDeclaredName(inner)
+                || !this.javaIdentifierKeepsDeclaredName(inner) || !this.javaNumberOrNullishType(inner)) {
+                return undefined;
+            }
+            const declaration = this.javaDeclarationOfIdentifier(inner);
+            const type = declaration === undefined ? undefined : this.javaTry(() => this.javaDeclaredTypeOfDeclaration(declaration));
+            const family = this.javaDeclaredNumericTypeKind(type);
+            if (family === undefined) {
+                return undefined;
+            }
+            return family + (String(type).replace(/^final\s+/, '').trim() === String(type).replace(/^final\s+/, '').trim().toLowerCase() ? 'prim' : 'box');
+        };
+        const kinds = [kindOf(left, leftText), kindOf(right, rightText)];
+        if (kinds.some((kind) => kind === undefined) || !kinds.some((kind) => kind.startsWith('double'))) {
+            return undefined;
+        }
+        const texts = [leftText.trim(), rightText.trim()];
+        const expression = `(((double) ${texts[0]}) * ((double) ${texts[1]}))`;
+        const boxes = kinds.map((kind, i) => (kind.endsWith('box') ? texts[i] : undefined))
+            .filter((text, i, all) => text !== undefined && all.indexOf(text) === i);
+        return boxes.length === 0 ? expression : `((${boxes.map((box) => `${box} == null`).join(' || ')}) ? null : ${expression})`;
+    }
+
+    javaProductFeedsNumSink(node): boolean {
+        let child = node;
+        let parent = node?.parent;
+        while (parent !== undefined && isParenthesizedExpression(parent)) {
+            child = parent;
+            parent = parent.parent;
+        }
+        const isNum = (type) => type !== undefined && type.kind === SyntaxKind.TypeReference
+            && isIdentifier(type.typeName) && type.typeName.text === 'Num';
+        if (parent !== undefined && isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.EqualsToken
+            && parent.right === child && isIdentifier(parent.left)) {
+            const declaration: any = this.javaDeclarationOfIdentifier(parent.left);
+            return declaration !== undefined && isVariableDeclaration(declaration) && isNum(declaration.type);
+        }
+        if (parent !== undefined && isVariableDeclaration(parent) && parent.initializer === child) {
+            return isNum(parent.type);
+        }
+        if (parent !== undefined && isReturnStatement(parent) && parent.expression === child) {
+            let fn: any = parent.parent;
+            while (fn !== undefined && !isMethodDeclaration(fn) && !isFunctionDeclaration(fn) && !isArrowFunction(fn) && !isFunctionExpression(fn)) {
+                fn = fn.parent;
+            }
+            return fn !== undefined && isMethodDeclaration(fn) && !this.isAsyncFunction(fn) && isNum(fn.type);
+        }
+        return false;
     }
 
     // `2 * 1.67`: two decimal literals whose IEEE product is finite and fractional. Helpers.multiply
