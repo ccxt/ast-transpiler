@@ -14059,6 +14059,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseLastPrice': [ 0 ],
     // ticker rows: every caller passes a map row (element reads go through a {}-defaulted safeDict)
     'parseTicker': [ 0 ],
+    // its one base caller passes the awaited snapshot map; every override reads the book with safeInteger
+    'getCacheIndex': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -14210,6 +14212,8 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         if ((arg === undefined) || (arg.kind === ts.SyntaxKind.SpreadElement)) { return false; }
         // a base call above the transpile delimiter is not printed: its hand-written Go twin is compiler-checked
         if (goIsBaseExchangeFile (fn) && goCallAboveTranspileDelimiter (call)) { continue; }
+        // a base call inside a method the writer replaces by a hand-written Go twin is not printed either
+        if (goIsBaseExchangeFile (fn) && go.goHandWrittenBaseMethods.includes (go.goEnclosingFunction (call)?.name?.text)) { continue; }
         if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
         if (h30a18MapArg (go, name, call, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)) { return false; }
@@ -16731,6 +16735,8 @@ export class GoTranspiler extends BaseTranspiler {
     // no file in ts/src calls (the call-site proof is vacuous, so the table names the methods whose Go
     // signature may print `string`)
     uncalledStringParams: { [method: string]: number[] } = {};
+    // base methods whose printed body the writer drops for a hand-written Go twin (config handWrittenBaseMethods)
+    goHandWrittenBaseMethods: string[] = [];
     // base methods whose tuple result slot 0 is the Go `*string` (TS declares `string`)
     stringPointerTupleCalls: string[] = [];
     guardedStringTupleCalls: string[] = [];
@@ -16810,6 +16816,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.unifiedNullableInt64Params = config['unifiedNullableInt64Params'] ?? {};
         this.unifiedFloat64Params = config['unifiedFloat64Params'];
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
+        this.goHandWrittenBaseMethods = config['handWrittenBaseMethods'] ?? [];
         this.stringPointerTupleCalls = config['stringPointerTupleCalls'] ?? [];
         this.guardedStringTupleCalls = config['guardedStringTupleCalls'] ?? [];
         this.predictionMapFields = new Set<string>(config['predictionMapFields'] ?? []);
