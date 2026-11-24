@@ -35,7 +35,7 @@ describe ('rust ws handler message: returned or handed whole to an any slot', ()
     test ('the handler takes the dict handle and boxes it whole where a Value is wanted', () => {
         expect (output).toMatch (/fn handleOHLCV\([^)]*message: &crate::value::Dict\)/);
         expect (output).toMatch (/parseOHLCV\(Value::from\(message\)/);
-        expect (output).toMatch (/return Value::from\(message\);/);
+        expect (output).toMatch (/return std::sync::Arc::clone\(message\);/);
     });
 
     test ('a typed Dict slot or a key write keeps the Value message', () => {

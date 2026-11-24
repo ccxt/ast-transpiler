@@ -23056,6 +23056,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'dict' && this.rustRuntimeExtendCall(exp) && printed.startsWith('self.extend(') && printed.endsWith(')') && this.rustBalancedText(printed.slice('self.extend('.length, -1))) return 'self.extend_t(' + printed.slice('self.extend('.length);
         // a local the source declares `Dict` that still prints as a `Value`: the method's one conversion replaces each caller's
         const local: any = kind === 'dict' && isIdentifier(this.unwrapParens(exp)) ? this.rustDeclaredNode(this.unwrapParens(exp)) : undefined;
+        // a `Dict` parameter that already takes the dict handle hands on that same map
+        if (local?.kind === SyntaxKind.Parameter && this.rustVenueDictParam(local) && this.rustVenueDictValueParam(local)) { const held = /^(?:Value::from\(([A-Za-z_]\w*)\)|([A-Za-z_]\w*))$/.exec(printed); if (held !== null) return `std::sync::Arc::clone(${held[1] ?? held[2]})`; }
         if (local !== undefined && isVariableDeclaration(local) && String(local.type?.getText?.() ?? '') === 'Dict' && /^[A-Za-z_]\w*$/.test(printed)) return `${printed}.into_dict()`;
         // a `this.parseX (..)` parser declared to return the method's own record (a fresh map, never undefined)
         if (kind === 'dict' && fn !== undefined && this.rustOwnRecordParserReturn(exp, fn)) return `${printed}.into_dict()`;
