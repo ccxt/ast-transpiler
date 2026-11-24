@@ -61721,7 +61721,7 @@ GoTranspiler.prototype.goProvenReturnRetype = function (node, printed: string): 
     const out: string = h48g15UpstreamProvenReturnRetype.call(this, node, printed);
     const builder = H48G15_ROW_BUILDERS[String(node?.type?.getText?.() ?? '').trim()];
     if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined) || (typeof builder !== 'string')
-        || !/^[^\n]*\) any \{\n/.test(out) || new TupleSlots(this).baseDeclares(node)) {
+        || !/(^|\n)func [^\n]*\) any \{\n/.test(out) || new TupleSlots(this).baseDeclares(node)) {
         return out;
     }
     const name = this.transformMethodNameIfNeeded(String(node.name?.text ?? ''));
