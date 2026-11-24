@@ -14242,6 +14242,12 @@ function goDictParamSafeDictArg (go: any, arg: any): boolean {
         && (found.fallback.properties.length === 0) && go.goNeverNilDict (arg, go.goSourceTreeKind (arg) === 'ws');
 }
 
+// a local the safeDict unbox rule declares `map[string]any` (a comma-ok map read): the Go value is that map
+function goDictParamUnboxedLocalArg (go: any, arg: any): boolean {
+    const decl: any = (arg?.kind === SK.Identifier) ? go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.() : undefined;
+    return (decl?.kind === SK.VariableDeclaration) && (go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE);
+}
+
 function goDictParamCallTakesMap (go: any, node: any, index: number): boolean {
     const param = go.goCallParamAt (node, index);
     return (param !== undefined) && (go.goNativeParameterType (param) === GO_BASE_DICT_PARAM_TYPE);
@@ -25492,7 +25498,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((argType !== goType)
                 && !((goType === 'string') && (call.runner === undefined) && this.goNilProvenStringPtrArg(arg))
                 // a `{}`-defaulted safeDict argument is never nil and always a map: a map slot prints it through goDictParamCallArgs
-                && !((goType === GO_BASE_DICT_PARAM_TYPE) && (call.runner === undefined) && goDictParamSafeDictArg(this, arg))) {
+                && !((goType === GO_BASE_DICT_PARAM_TYPE) && (call.runner === undefined) && goDictParamSafeDictArg(this, arg))
+                && !((goType === GO_BASE_DICT_PARAM_TYPE) && (call.runner === undefined) && goDictParamUnboxedLocalArg(this, arg))) {
                 return false;
             }
         }
