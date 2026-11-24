@@ -17130,10 +17130,16 @@ export class RustTranspiler extends BaseTranspiler {
         return allowNone || uses > 0;
     }
 
+    // `any`, or the ws side class itself (`bookSide: OrderBookSide`): both print the shared `Side` handle
+    rustBookSideAnnotation(type: any): boolean {
+        if (type?.kind === SyntaxKind.AnyKeyword) return true;
+        return isTypeReferenceNode(type) && isIdentifier(type.typeName) && type.typeArguments === undefined && /^(?:Indexed|Counted)?OrderBookSide$/.test(String(type.typeName.text));
+    }
+
     rustBookSideParamUncached(param: any): boolean {
         const method: any = param.parent;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
-        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined || param.type?.kind !== SyntaxKind.AnyKeyword) return false;
+        if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined || !this.rustBookSideAnnotation(param.type)) return false;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(file) || this.isAsyncFunction(method)) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword || m.kind === SyntaxKind.OverrideKeyword)) return false;
