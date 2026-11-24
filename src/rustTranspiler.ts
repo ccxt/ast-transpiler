@@ -39848,6 +39848,7 @@ export class RustTranspiler extends BaseTranspiler {
         'calculateRateLimiterCost': [ '', 'method', 'path' ],
         'signEvmTransaction': [ '', 'privateKey' ],
         'calculateFee': [ 'symbol', '', 'side' ],
+        'createSubAccount': [ 'name' ],
     };
     // the same for `number` parameters (printed `f64`): method -> parameter names by index
     private static readonly RUST_INHERENT_GROUP_NUM_PARAMS: Record<string, string[]> = {
