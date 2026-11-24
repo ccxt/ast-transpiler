@@ -9255,7 +9255,7 @@ describe ('java plain base cache maps', () => {
             expect(r1).toContain('Object a = (this.tickers == null || sym == null ? null : this.tickers.get(sym));');
             expect(r1).toContain('Helpers.GetValue(this.bag, ((String)sym))');
             expect(r1).toContain('Helpers.GetValue(this.other, ((String)sym))');
-            expect(r1).toContain('Helpers.GetValue(this.tickers, this.hash((String) (sym)))');
+            expect(r1).toContain('Helpers.GetValue(this.tickers, this.hash(sym))');
         });
 
         test('without a declared plain cache every site keeps the helper', () => {

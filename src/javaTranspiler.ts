@@ -1389,6 +1389,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === 'Long' && this.javaLocalDeclaredAs(isAsExpression(arg) ? arg.expression : arg, printed, type)) {
             return printed;
         }
+        // a local the build layer already declares String passes a String slot as it is
+        if (type === 'String' && isIdentifier(arg) && this.javaLocalDeclaredAs(arg, printed, type)) {
+            return printed;
+        }
         if (type === JAVA_STRING_LIST_TYPE && JAVA_TEST_TIER_FILES.test(arg.getSourceFile().fileName.replace(/\\/g, '/'))) {
             return printed; // test-tier receivers print a dynamic call, whose argument slot is Object
         }

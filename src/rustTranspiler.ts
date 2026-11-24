@@ -6514,7 +6514,9 @@ export class RustTranspiler extends BaseTranspiler {
         // tc: hand-written `random_bytes -> String` (TS `randomBytes (length: number): string`, always a hex string)
         'randomBytes',
         // tc: hand-written `capitalize -> String` (TS `capitalize (s: string | undefined): string`, always a string)
-        'capitalize' ]);
+        'capitalize',
+        // hand-written `eth_get_address_from_private_key -> String` (TS `ethGetAddressFromPrivateKey (privateKey: string): string`)
+        'ethGetAddressFromPrivateKey' ]);
     private static readonly RUST_STR_RUNTIME_APPEND_VETO = new Set([ 'implodeParams', 'intToBase16' ]);
     // The runtime's free signers with a TS `string` return (`base/functions/crypto.ts`, `rsa.ts`).
     private static readonly RUST_STR_RUNTIME_FREE = new Set([ 'eddsa', 'jwt', 'rsa', 'hash' ]);
