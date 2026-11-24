@@ -59799,6 +59799,10 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
         guard = `len(${xs}) > ${k}`;
     } else if ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && (go.goLoopBoundedIndexRead(call, list, key, xs, key.text) === `${xs}[${key.text}]`)) {
         k = key.text;
+    } else if ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && (go.goResolvedLocalGoType(key) === 'int64')) {
+        // an int64 local index: the explicit bounds test answers out of range (and negative) like the helper
+        k = key.text;
+        guard = `${k} >= 0 && ${k} < int64(len(${xs}))`;
     } else {
         return printed;
     }
