@@ -19525,12 +19525,12 @@ describe('venue pair verdict per importing module', () => {
     const kept = "    f (params: Dict = {}) {\n        return this.safeString (this.resolve ('x', params), 0);\n    }\n";
     test('an unrelated venue reading the same-named tuple by index does not box this venue', () => {
         const out = run('tmp-vp-a', pair("        return [ 'w', params ];\n") + destructured, pair("        return [ 'w', params ];\n") + kept, 'a.ts');
-        expect(out).toContain('Resolve(m string, params any) (*string, map[string]any) {');
+        expect(out).toContain('Resolve(m string, params map[string]any) (*string, map[string]any) {');
         expect(out).toContain('u, p := this.Resolve("x", params)');
     });
     test('the venue whose own callers read by index keeps the []any tuple', () => {
         const out = run('tmp-vp-b', pair("        return [ 'w', params ];\n") + destructured, pair("        return [ 'w', params ];\n") + kept, 'b.ts');
-        expect(out).toContain('func (this *b) Resolve(m string, params any) any {');
+        expect(out).toContain('func (this *b) Resolve(m string, params map[string]any) any {');
         expect(out).not.toContain('(*string, map[string]any)');
     });
     test('a return led by a comment line still prints the pair', () => {
@@ -20365,7 +20365,7 @@ describe('venue [boolean, Dict] pair: multiple Go results and native caller bind
     const bare = "    h (params: Dict = {}) {\n        this.pick ('z', params);\n        return params;\n    }\n";
     test('a boolean keyword slot prints (bool, map) and binds the read slot natively', () => {
         const out = run('tmp-p08-a', producer('[ boolean, Dict ]') + reader);
-        expect(out).toContain('Pick(m string, params any) (bool, map[string]any) {');
+        expect(out).toContain('Pick(m string, params map[string]any) (bool, map[string]any) {');
         expect(out).toContain('s, q := this.Pick("x", params)');
         expect(out).not.toContain('GetValue(');
     });

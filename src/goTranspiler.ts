@@ -60136,6 +60136,9 @@ function goNumericSlotArgPasses (go: any, arg: any, goType: string): boolean {
             const t = this.goResolvedLocalGoType (n);
             return (((t === undefined) || (t === 'any')) && h43g11JoinLetStaysLocal (this, n)) ? (ccxtGoNilJoinDeclarationType (this, n) ?? t) : t;
         };
+        if (h47g19UserParamsFed (this, container)) {
+            return printed; // a user params bag is not decoded JSON
+        }
         const literalKey = (key?.kind === SyntaxKind.StringLiteral) && /^[^"\\\n]*$/.test (key.text);
         if (((goTypeOf (container) !== 'map[string]any') && !h40g23MapLet (this, container, false)) || (!literalKey && (goTypeOf (key) !== 'string'))) {
             return printed;
@@ -61503,3 +61506,73 @@ GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
     return `${m[1]}${ind}${name}, _ = ${container.text}["${key.text}"].(map[string]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = map[string]any{}\n${ind}}`;
 };
 // ===== end H47-G41
+// ===== H47-G19
+// a `Dict`-declared parameter whose callers hand on their own defaulted `params = {}` parameter: Go binds that
+// argument `var params map[string]any = GetArgMap(..)`, so the call site passes the map (sibling files by text)
+function h47g19GetArgMapArg (go: any, arg: any): boolean {
+    if (arg?.kind !== SyntaxKind.Identifier) { return false; }
+    const decl: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
+    return (decl?.kind === SyntaxKind.Parameter) && (go.goGetArgParameterType (decl) === 'map[string]any');
+}
+function h47g19SiblingGetArgMapArg (text: string, argText: string, at: number | undefined): boolean {
+    const name = /^([A-Za-z_$][\w$]*)$/.exec ((argText ?? '').trim ());
+    if ((name === null) || (at === undefined)) { return false; }
+    const head = text.substring (0, at);
+    const methods = [ ...head.matchAll (/^ {4}(?:async\s+)?[A-Za-z_$][\w$]*\s*\(([^)]*)\)[^\n{;]*\{\s*$/gm) ];
+    const last = methods[methods.length - 1];
+    if ((last === undefined) || /^ {4}\}/m.test (head.substring (last.index + last[0].length))) { return false; }
+    return new RegExp ('(?:^|,)\\s*' + name[1] + '\\s*=\\s*\\{\\s*\\}\\s*(?:,|$)').test (last[1]);
+}
+{
+    const sitesPassTypeH47g19 = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string): boolean {
+        if (sitesPassTypeH47g19.call(this, fn, index, goType)) { return true; }
+        if ((goType !== 'map[string]any') || (fn?.parameters?.[index]?.type?.getText () !== 'Dict')) { return false; }
+        const name = fn.name.text;
+        for (const call of this.goSameFileCallsOf(fn, name)) {
+            const arg = call.arguments?.[index];
+            if ((arg === undefined) || ((this.goPrintedArgType(arg) !== goType) && !h47g19GetArgMapArg(this, arg))) { return false; }
+        }
+        const tree = this.goTsSrcTree(fn.getSourceFile());
+        if (tree === undefined) { return true; }
+        const myClass = this.goEnclosingClassName(fn);
+        const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        for (const site of (tree.callIndex.get(name) ?? [])) {
+            if ((site.file === myFile) || !this.goTsSrcFileDerivesFrom(tree, site.file, myClass) || this.h27g01ForeignNamesake(tree, site.file, myFile)
+                || h29g22SameSourceCopy(site.file, myFile)) { continue; }
+            const arg = site.args[index];
+            if ((arg === undefined) || !(this.goTextArgMatchesType(arg, goType, site.file, tree, site.at)
+                || h47g19SiblingGetArgMapArg(tree.fileText.get(site.file) ?? '', arg, site.at))) { return false; }
+        }
+        return true;
+    };
+}
+// a parameter some caller feeds its own user params bag is not decoded JSON (a Go user may store []string or a
+// typed map in it): its member reads keep the helper even when the parameter prints map[string]any
+function h47g19UserParamsFed (go: any, container: any): boolean {
+    const decl: any = (container?.kind === SyntaxKind.Identifier) ? go.checkerOrUndefined ()?.getSymbolAtLocation (container)?.valueDeclaration?.resolve?.() : undefined;
+    const fn: any = decl?.parent;
+    if ((decl?.kind !== SyntaxKind.Parameter) || (decl.initializer !== undefined) || (fn?.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    const index = fn.parameters.indexOf (decl);
+    const bag = (arg: any): boolean => {
+        const d: any = (arg?.kind === SyntaxKind.Identifier) ? go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.() : undefined;
+        return h47g19GetArgMapArg (go, arg) || ((d?.kind === SyntaxKind.Parameter) && (d.initializer?.kind === SyntaxKind.ObjectLiteralExpression));
+    };
+    if (go.goSameFileCallsOf (fn, fn.name.text).some ((call: any) => bag (call.arguments?.[index]))) { return true; }
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if (tree === undefined) { return false; }
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    return (tree.callIndex.get (fn.name.text) ?? []).some ((site: any) => (site.file !== myFile) && (site.args[index] !== undefined)
+        && h47g19SiblingGetArgMapArg (tree.fileText.get (site.file) ?? '', site.args[index], site.at));
+}
+{
+    const typedMapDictReadH47g19 = GoTranspiler.prototype.goTypedMapDictRead;
+    GoTranspiler.prototype.goTypedMapDictRead = function (args, unboxValue: string, container: string, key: string, varName: string, identation: number) {
+        return h47g19UserParamsFed (this, args?.container) ? undefined : typedMapDictReadH47g19.call (this, args, unboxValue, container, key, varName, identation);
+    };
+    const receiverTypeH47g19 = GoTranspiler.prototype.h27a01ReceiverType;
+    GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
+        return h47g19UserParamsFed (this, container) ? undefined : receiverTypeH47g19.call (this, container);
+    };
+}
+// ===== end H47-G19
