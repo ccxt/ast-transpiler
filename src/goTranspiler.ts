@@ -14102,6 +14102,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'cancelUnifiedOrder': [ 0 ],
     // fetchUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
     'fetchUnifiedOrder': [ 0 ],
+    // its one base caller passes the `tx` Dict literal; every override reads it with safe* readers
+    'signEvmTransaction': [ 0 ],
 };
 // the async rows above (each one's typed wrapper converts its struct argument)
 const GO_BASE_DICT_ASYNC_PARAMS: string[] = [
@@ -61064,3 +61066,53 @@ GoTranspiler.prototype.h45g36LiteralTableRead = function (node, printed) {
     };
 }
 // ===== end H45-G36
+// ===== H46-G21 (begin): a `: string` base method whose body only throws, and its `: string` overrides =====
+// The base stub prints `string` (a panic-only body compiles under any result type); an override prints it too
+// and must prove every return a Go string, or the build fails (one signature for the base and every override).
+function h46g21RootStringStub (go: any, node: any): boolean {
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body?.kind !== SyntaxKind.Block) || go.isAsyncFunction(node)
+        || (node.type?.kind !== SyntaxKind.StringKeyword) || (node.name?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    let root: any = node;
+    const checker: any = go.checkerOrUndefined();
+    for (let depth = 0; (checker !== undefined) && (depth < 12); depth++) {
+        const cls: any = go.goEnclosingClass(root);
+        const clause: any = (cls?.heritageClauses ?? []).find((c: any) => c.token === SyntaxKind.ExtendsKeyword);
+        const symbol = (clause === undefined) ? undefined : checker.getTypeAtLocation(clause.types?.[0])?.getProperty?.(node.name.text);
+        const declaration: any = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d: any) => d.resolve())?.[0];
+        if (declaration?.kind !== SyntaxKind.MethodDeclaration) {
+            break;
+        }
+        root = declaration;
+    }
+    return /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(root.getSourceFile?.()?.fileName ?? '')) && (root.body?.kind === SyntaxKind.Block)
+        && (root.type?.kind === SyntaxKind.StringKeyword) && !go.isAsyncFunction(root) && (root.body.statements.length > 0)
+        && root.body.statements.every((st: any) => st.kind === SyntaxKind.ThrowStatement);
+}
+// a string literal, a call printing a Go string, or a `+` chain of those
+function h46g21StringLeaves (go: any, e: any): boolean {
+    if ((e?.kind === SyntaxKind.BinaryExpression) && (e.operatorToken?.kind === SyntaxKind.PlusToken)) {
+        return h46g21StringLeaves(go, e.left) && h46g21StringLeaves(go, e.right);
+    }
+    if ((e?.kind === SyntaxKind.StringLiteral) || (e?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) {
+        return true;
+    }
+    return (e?.kind === SyntaxKind.CallExpression) && (go.goTypeOfInitializer(e, go.printNode(e, 0)) === 'string');
+}
+{
+    const returnTypeH46g21 = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+    GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+        if (!h46g21RootStringStub(this, node)) {
+            return returnTypeH46g21.call(this, node);
+        }
+        for (const r of collectReturnStatements(node.body)) {
+            const e = r.expression;
+            if ((e === undefined) || !h46g21StringLeaves(this, e)) {
+                throw new Error(`go string stub returns: ${this.goEnclosingClassName(node)}.${node.name.text} returns unproven \`${e?.getText?.() ?? ''}\`; the base prints string`);
+            }
+        }
+        return 'string';
+    };
+}
+// ===== H46-G21 (end)
