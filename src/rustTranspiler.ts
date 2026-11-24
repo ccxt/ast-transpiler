@@ -41562,7 +41562,7 @@ export class RustTranspiler extends BaseTranspiler {
         const params: any[] = Array.from(method.parameters);
         // trailing parameters past the message must be optional (`subscription: Dict | undefined = undefined`)
         if (params.length < 2 || params[1] !== param || !/^handle[A-Z]/.test(String(method.name.text))) return false;
-        if (params.slice(2).some((p: any) => p.initializer === undefined && p.questionToken === undefined)) return false;
+        if (params.slice(2).some((p: any) => p.initializer === undefined && p.questionToken === undefined) && !this.rustWsHandlerExtrasPassed(method)) return false;
         if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
         if (params[0].type === undefined || !this.rustParameterIsClientHandle(params[0])) return false;
         // a key write into a local not built as a fresh literal may alias a row of the message: keep `Value`
@@ -41574,6 +41574,8 @@ export class RustTranspiler extends BaseTranspiler {
                 while (isElementAccessExpression(root) || isPropertyAccessExpression(root)) root = root.expression;
                 if (isIdentifier(root)) {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
+                    // a write into a trailing slot of the handler itself (its own `subscription`) is not a row of the message
+                    if (decl !== undefined && params.indexOf(decl) >= 2 && root === n.left.expression) { n.forEachChild(visit); return; }
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
                         || this.rustCallReturnsObjectLiteral(init)
@@ -41587,6 +41589,40 @@ export class RustTranspiler extends BaseTranspiler {
         };
         method.body?.forEachChild(visit);
         return !aliasWrite;
+    }
+
+    /** Every `this.<handler> (..)` and every `f.call (this, ..)` that may reach the handler passes all its parameters
+     *  (a short `.call` is ruled out only when `f` is read from a local table literal not naming the handler). */
+    rustWsHandlerExtrasPassed(method: any): boolean {
+        const count = method.parameters.length;
+        const full = (args: any[]): boolean => args.length >= count && !args.some((a: any) => a.kind === SyntaxKind.SpreadElement);
+        const name = String(method.name.text);
+        let reached = false;
+        let ok = true;
+        const misses = (callee: any): boolean => {
+            const decl: any = isIdentifier(callee) ? this.rustDeclarationOfIdentifier(callee) : undefined;
+            const init: any = decl !== undefined && isVariableDeclaration(decl) && decl.initializer !== undefined ? this.unwrapParens(decl.initializer) : undefined;
+            if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.arguments.length < 1 || !isIdentifier(init.arguments[0])) return false;
+            const table: any = this.rustDeclarationOfIdentifier(init.arguments[0]);
+            const literal: any = table !== undefined && isVariableDeclaration(table) && table.initializer !== undefined ? this.unwrapParens(table.initializer) : undefined;
+            return literal !== undefined && isObjectLiteralExpression(literal) && !literal.getText().includes(name) && !this.rustLocalIsReassigned(table, String(init.arguments[0].text));
+        };
+        const visit = (n: any): void => {
+            if (!ok) return;
+            // a direct `this.<name> (..)` by name (a short call may not resolve to the declaration)
+            if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && n.expression.expression.kind === SyntaxKind.ThisKeyword && String(n.expression.name.text) === name) {
+                if (full(Array.from(n.arguments))) reached = true;
+                else ok = false;
+            }
+            if (isCallExpression(n) && isPropertyAccessExpression(n.expression) && String(n.expression.name.text) === 'call' && n.arguments.length > 0 && n.arguments[0].kind === SyntaxKind.ThisKeyword) {
+                const args: any[] = Array.from(n.arguments).slice(1);
+                if (full(args)) reached = true;
+                else if (!misses(n.expression.expression)) ok = false;
+            }
+            n.forEachChild(visit);
+        };
+        method.getSourceFile().forEachChild(visit);
+        return ok && reached;
     }
 
     /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
