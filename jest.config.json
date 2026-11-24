@@ -4,6 +4,7 @@
     "node_modules/typescript/.+\\.js$": "<rootDir>/tests/esbuild-transform.cjs"
   },
   "testEnvironment": "node",
+  "workerIdleMemoryLimit": "1024MB",
   "testRegex": "/tests/.*\\.(test|spec)?\\.(ts|tsx)$",
   "moduleFileExtensions": [
     "ts",
