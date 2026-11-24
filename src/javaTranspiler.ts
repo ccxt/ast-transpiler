@@ -432,6 +432,8 @@ const JAVA_UNIFIED_EDIT_ORDER_NUMBER_METHODS = new Set<string>(['editOrder', 'ed
 const JAVA_UNIFIED_TRAILING_PERCENT_METHODS = new Set<string>(['createTrailingPercentOrder']);
 // public transfer shortcuts the venues declare as `(code: string, amount: number, params)`, with no base declaration
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
+// unified trailing-percent order methods whose defaulted `trailingTriggerPrice: Num` prints `Double`
+const JAVA_UNIFIED_TRAILING_TRIGGER_PRICE_METHODS = new Set<string>(['createTrailingPercentOrder']);
 
 // Parameter positions whose Java signature cannot move to the annotated type even though
 // the base declaration carries it. Java overrides are invariant, so one excluded position
@@ -2169,6 +2171,10 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         if (name === 'Num' && (node.name as any)?.text === 'trailingPercent' && this.isAsyncFunction(method)
             && JAVA_UNIFIED_TRAILING_PERCENT_METHODS.has(String((method.name as any)?.text))) {
+            return 'Double';
+        }
+        if (name === 'Num' && (node.name as any)?.text === 'trailingTriggerPrice' && this.isAsyncFunction(method)
+            && JAVA_UNIFIED_TRAILING_TRIGGER_PRICE_METHODS.has(String((method.name as any)?.text))) {
             return 'Double';
         }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
