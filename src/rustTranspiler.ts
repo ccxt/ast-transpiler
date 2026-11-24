@@ -686,7 +686,7 @@ export class RustTranspiler extends BaseTranspiler {
         // a loop-header binding is read again by the condition / incrementor of the next pass
         const header: any = declaration.parent?.parent;
         if (header !== undefined && (header.kind === SyntaxKind.ForStatement || header.kind === SyntaxKind.ForOfStatement || header.kind === SyntaxKind.ForInStatement)) return false;
-        if (!this.rustOwnedLastUse(node, declaration)) return false;
+        if (!this.rustOwnedLastUse(node, declaration) && !this.rustReturnedLiteralValueMoves(node, declaration)) return false;
         // a closure below the declaration that names the local may still hold it
         const scope: any = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(node);
@@ -9747,6 +9747,44 @@ export class RustTranspiler extends BaseTranspiler {
         for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
             if (isFunctionLike(up) || up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
                 || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
+        }
+        return true;
+    }
+
+    /** A bare object-literal value moves when no read runs after it: inside a `return` (which leaves the function, a loop
+     *  too), or when every later read sits in the other arm of an enclosing `if`; never under a `try` or a closure. */
+    rustReturnedLiteralValueMoves(node, declaration): boolean {
+        const prop: any = node.parent;
+        if (prop?.kind !== SyntaxKind.PropertyAssignment || prop.initializer !== node || !isObjectLiteralExpression(prop.parent)) return false;
+        const statement: any = findAncestor(node, (a: any) => isStatement(a));
+        const scope = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(node);
+        if (statement === undefined || own === undefined || scope === undefined || this.rustEnclosingFunction(node) !== scope) return false;
+        const returned = isReturnStatement(statement);
+        let looped = false;
+        for (let up: any = statement.parent; up !== undefined && up !== scope; up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.TryStatement) return false;
+            const below = !(up.pos <= declaration.pos && declaration.end <= up.end);
+            if (below && (up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement || up.kind === SyntaxKind.ForInStatement
+                || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement)) looped = true;
+        }
+        if (!returned && looped) return false;
+        // a read in the other arm of an `if` that holds this use never runs after it
+        const otherArm = (n: any): boolean => {
+            for (let up: any = node.parent; up !== undefined && up !== scope; up = up.parent) {
+                if (!isIfStatement(up) || up.elseStatement === undefined) continue;
+                const inThen = (x: any) => x.pos >= up.thenStatement.pos && x.end <= up.thenStatement.end;
+                const inElse = (x: any) => x.pos >= up.elseStatement.pos && x.end <= up.elseStatement.end;
+                if ((inThen(node) && inElse(n)) || (inElse(node) && inThen(n))) return true;
+            }
+            return false;
+        };
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (this.rustEnclosingFunction(n) !== scope || (n.pos >= statement.pos && n.end <= statement.end)) return false;
+            if (n.pos > node.pos && !returned && !otherArm(n)) return false;
         }
         return true;
     }
