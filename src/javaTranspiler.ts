@@ -5537,7 +5537,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declared = this.javaDeclaredTypeOf(node.expression);
-        const declaredList = declared !== undefined && JAVA_DECLARED_LIST_TYPES.test(declared);
+        // a ws cache local (ArrayCache extends ArrayList<Object>) reads like a declared List
+        const declaredList = declared !== undefined
+            && (JAVA_DECLARED_LIST_TYPES.test(declared) || (isCounter && declared === 'io.github.ccxt.ws.ArrayCache'));
         if (!declaredList) {
             const type = this.getChecker().getTypeAtLocation(node.expression);
             if (!this.isJavaListValueType(type) || this.isVarargsArrayReference(node.expression)
