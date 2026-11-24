@@ -6921,7 +6921,7 @@ export class CSharpTranspiler extends BaseTranspiler {
 
     // a parameter read whose printed signature names a numeric kind (int / Int64 / double, nullable or not)
     csharpNumericParamKind(node): string | undefined {
-        let printed = isIdentifier(node) ? this.csharpPrintedParamType(node) : undefined;
+        let printed = isIdentifier(node) ? (this.csharpPrintedParamType(node) ?? this.csharpShadowedNumericParamType(node)) : undefined;
         if ((printed === undefined) || (CSHARP_NUMERIC_VALUE_KINDS.indexOf(printed) < 0)) {
             return undefined;
         }
@@ -10868,7 +10868,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     // in a shadow local (`limitVar`) and types that local `Int64?` when every use is an identity read. This is the same decision made on the AST: every use of the parameter is a null test, an
     // argument of an allowlisted `this.<callee>` call, or an operand of Math.min/max against an integer literal.
     csharpShadowedNumericParamType(node): string | undefined {
-        if (!isIdentifier(node) || (node.text !== 'limit')) {
+        if (!isIdentifier(node) || ((node.text !== 'limit') && (node.text !== 'since'))) {
             return undefined;
         }
         const declaration: any = this.csharpParameterDeclaration(node);
@@ -10922,6 +10922,9 @@ export class CSharpTranspiler extends BaseTranspiler {
             current = current.parent;
         }
         const parent: any = current.parent;
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (CSHARP_NATIVE_COMPARISON_TOKENS[parent.operatorToken.kind] !== undefined) && (read.text === 'since')) {
+            return true; // an ordered comparison reads the shadow's value (Int64? beside Int64? or a literal)
+        }
         if (parent?.kind === SyntaxKind.BinaryExpression) {
             const op = parent.operatorToken.kind;
             if (CSHARP_EQUALITY_TOKENS.indexOf(op) < 0) {
