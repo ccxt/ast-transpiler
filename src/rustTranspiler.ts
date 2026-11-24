@@ -10363,6 +10363,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a local also used as an insert key keeps the book key as a field key (its typed key would turn a call-bound map
         // into an IndexMap bearer copied out of its `Value`: bitvavo `limits`)
         if (bookField && keyUse) field = true;
+        // a pro-file `String` keyed on a cache field whose copying boxes all sit at lending slots lends there too
+        if (!lendable && RustTranspiler.RUST_PRO_TIER_FILE.test(String(declaration.getSourceFile().fileName)) && this.rustScalarDecisions.get(declaration) === 'str' && this.rustReaderLendBoxes(declaration)) lendable = true;
         if ((field || bookField) && boxed && lendable && !this.rustStrNoLend) {
             this.rustStrLentLocals.add(declaration);
             return false;
