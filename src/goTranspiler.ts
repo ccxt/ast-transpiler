@@ -61472,3 +61472,34 @@ GoTranspiler.prototype.goUrlsViewRead = function (node, baseExpr, keys, keyStrs:
     };
 }
 // ===== end H47-G38
+// ===== H47-G41
+// `x = this.safeDict (R, 'k', {})` on a JSON-origin map receiver R, x printed `map[string]any`: the comma-ok read plus
+// the `{}` fill, as h27a03 prints the declaration form (missing, nil, "" or non-map member: `{}` either way)
+const h47g41UpstreamExpressionStatement = GoTranspiler.prototype.printExpressionStatement;
+GoTranspiler.prototype.printExpressionStatement = function (node, identation) {
+    const printed: string = h47g41UpstreamExpressionStatement.call(this, node, identation);
+    const write: any = node?.expression;
+    const init: any = this.goUnwrapParenthesizedNode(write?.right);
+    const callee: any = init?.expression;
+    if ((write?.kind !== SyntaxKind.BinaryExpression) || (write.operatorToken?.kind !== SyntaxKind.EqualsToken) || (write.left?.kind !== SyntaxKind.Identifier)
+        || (init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)
+        || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3) || (typeof printed !== 'string')) {
+        return printed;
+    }
+    const [ container, key, fallback ] = init.arguments;
+    if ((fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0) || (key?.kind !== SyntaxKind.StringLiteral)
+        || !/^[^"\\\n]*$/.test(key.text) || (container?.kind !== SyntaxKind.Identifier) || (container.text === write.left.text)
+        || (ccxtGoWriteSiteLocalGoType(this, write.left) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE) || !this.goJsonOriginContainer(container)) {
+        return printed;
+    }
+    const name = write.left.text;
+    const shipped = `${name} = this.SafeDictMap(${container.text}, "${key.text}", map[string]any{})`;
+    const m = /^([\s\S]*?)(\t*)([^\n]*)$/.exec(printed);
+    if ((m === null) || (m[3] !== shipped) || (printed.split(shipped).length !== 2)) {
+        return printed;
+    }
+    const ind = m[2];
+    return `${m[1]}${ind}${name}, _ = ${container.text}["${key.text}"].(map[string]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = map[string]any{}\n${ind}}`;
+};
+// ===== end H47-G41
