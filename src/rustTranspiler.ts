@@ -41467,10 +41467,12 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(method.name.text);
         if (!this.rustVenueOnlyMethod(method, name)) return false;
         const handler = this.rustWsHandlerMessageSlot(method, param);
+        // an async pro method reached only through `this.spawn` / `this.delay` by name: its by-name arm lends the map
+        const spawned = !handler && this.isAsyncFunction(method) && this.rustSpawnOnlyTarget(method);
         // an async method borrows its map only as a ws handler or as a pure operand of the runtime `this.extend`
-        const extendOnly = !handler && this.isAsyncFunction(method) && this.rustParamOnlyExtendOperand(method, param);
-        if (this.isAsyncFunction(method) && !handler && !extendOnly) return false;
-        if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || (!handler && this.rustMethodReferencedAsValue(method))) return false;
+        const extendOnly = !handler && !spawned && this.isAsyncFunction(method) && this.rustParamOnlyExtendOperand(method, param);
+        if (this.isAsyncFunction(method) && !handler && !extendOnly && !spawned) return false;
+        if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== undefined || (!handler && !spawned && this.rustMethodReferencedAsValue(method))) return false;
         const params: any[] = Array.from(method.parameters);
         const at = params.indexOf(param);
         if (params.slice(0, at).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined || p.dotDotDotToken !== undefined)) return false;
@@ -41478,17 +41480,34 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
         // (a by-name handler that never names its message borrows it too: nothing reads the slot)
-        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
+        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === undefined && !((handler || spawned) && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
         const calls: any[] = [ ...this.rustVenueStrCallSites(method), ...sibling ];
-        if ((calls.length === 0 && !handler) || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length) return false;
+        if ((calls.length === 0 && !handler && !spawned) || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length) return false;
         // another pro file calls this name directly without declaring its own copy: the call may reach this one
         if (handler && this.rustWsHandlerCalledElsewhere(method, name)) return false;
         // syntactic test first: a typed-local decision is asked only when every argument could lend
         if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
+    }
+
+    /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
+     *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
+    rustSpawnOnlyTarget(method: any): boolean {
+        if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        const name = String(method.name.text);
+        let targets = 0;
+        for (const n of this.rustScopeIndex(method.getSourceFile()).nodes as any[]) {
+            if (!isPropertyAccessExpression(n) || String(n.name.text) !== name) continue;
+            const call: any = n.parent;
+            if (n.expression.kind !== SyntaxKind.ThisKeyword || !isCallExpression(call) || call.expression === n || !isPropertyAccessExpression(call.expression)) return false;
+            const via = String(call.expression.name.text);
+            if (call.expression.expression.kind !== SyntaxKind.ThisKeyword || call.arguments[via === 'delay' ? 1 : via === 'spawn' ? 0 : -1] !== n) return false;
+            targets++;
+        }
+        return targets > 0;
     }
 
     /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
