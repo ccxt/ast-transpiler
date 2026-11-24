@@ -28395,12 +28395,21 @@ export class RustTranspiler extends BaseTranspiler {
         return super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     }
 
+    /** The printed name of a borrowed venue `Dict` slot (`&crate::value::Dict`): already the map, no `as_map` view. */
+    rustVenueDictSlotName(node: any): string | undefined {
+        const recv: any = this.rustSkipWrappers(node);
+        if (recv === undefined || !isIdentifier(recv)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(recv);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.Parameter || declaration.name === recv || !this.rustVenueDictParam(declaration)) return undefined;
+        return declaration === this.rustProHandlerShadowParam ? RustTranspiler.PRO_HANDLER_SHADOW_NAME : super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    }
+
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined {
         const arg = this.bearerEnumArg(node);
         // ral-61n: `None` enumerates nothing, exactly the empty list `object_keys` / `object_values` answer for Null
         const opt = arg === undefined ? undefined : this.rustOptKeySetDictName(arg);
         if (opt !== undefined) return kind === 'keys' ? `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect())` : `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::values).cloned().collect())`;
-        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg);
+        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg) ?? this.rustVenueDictSlotName(arg);
         if (name === undefined) return undefined;
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
     }
@@ -41957,7 +41966,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
         // (a by-name handler that never names its message borrows it too: nothing reads the slot)
-        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === undefined && !((handler || spawned) && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
+        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler || this.rustSyncVenueDictWholeSlot(method, param)) === undefined && !((handler || spawned) && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
@@ -41985,6 +41994,14 @@ export class RustTranspiler extends BaseTranspiler {
     rustRoutedFrameUse(id: any): boolean {
         const own: any = this.rustDeclarationOfIdentifier(id);
         return own?.kind === SyntaxKind.Parameter && isMethodDeclaration(own.parent) && own.name !== id && own.parent.parameters[1] === own && this.rustWsRoutedHandler(own.parent);
+    }
+
+    /** A sync REST venue method whose slot no plain shadow read covers: a whole hand-off to a boxed sibling slot
+     *  boxes the shared handle (`Value::from(x)`), as a ws handler does; slots the shadow already covers stay as they are. */
+    rustSyncVenueDictWholeSlot(method: any, param: any): boolean {
+        if (!isMethodDeclaration(method) || this.isAsyncFunction(method)) return false;
+        if (!/(?:^|\/)ts\/src\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        return this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, false) === undefined;
     }
 
     /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
@@ -42293,6 +42310,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const n = (text.match(call) ?? []).length;
                 if (n === 0) continue;
                 if (counted(dir) && f === base) count += n;
+                // a ws file whose own REST file declares the name reaches that copy
+                else if (dir === '/pro' && !declares.test(text) && f !== base && declares.test(readRustTsIndexSource(`${root}/${f}`) ?? '')) continue;
                 else if (dir === '/base' || !declares.test(text)) return -1;
             }
         }
@@ -42526,7 +42545,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsRoutedHandler(param.parent)) return true;
         const name = String(param.name.text);
         // a handed-whole or returned message takes the handle only in a ws handler
-        const handler = isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsHandlerMessageSlot(param.parent, param);
+        const handler = isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && (this.rustWsHandlerMessageSlot(param.parent, param) || this.rustSyncVenueDictWholeSlot(param.parent, param));
         let found = false;
         const visit = (n: any) => {
             if (found) return;
