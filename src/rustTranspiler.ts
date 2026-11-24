@@ -41317,7 +41317,9 @@ export class RustTranspiler extends BaseTranspiler {
      *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
     rustWsHandlerMessageSlot(method: any, param: any): boolean {
         const params: any[] = Array.from(method.parameters);
-        if (params.length !== 2 || params[1] !== param || !/^handle[A-Z]/.test(String(method.name.text))) return false;
+        // trailing parameters past the message must be optional (`subscription: Dict | undefined = undefined`)
+        if (params.length < 2 || params[1] !== param || !/^handle[A-Z]/.test(String(method.name.text))) return false;
+        if (params.slice(2).some((p: any) => p.initializer === undefined && p.questionToken === undefined)) return false;
         if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
         if (params[0].type === undefined || !this.rustParameterIsClientHandle(params[0])) return false;
         // a key write into a local not built as a fresh literal may alias a row of the message: keep `Value`
