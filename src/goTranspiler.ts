@@ -61446,3 +61446,18 @@ GoTranspiler.prototype.goUrlsViewRead = function (node, baseExpr, keys, keyStrs:
     return `this.ExceptionsWs[${keyStrs[entry]}]`;
 };
 // ===== end H47-G30
+// ===== H47-G38
+// the safeList write after a leading comment block: the comment lines print unchanged above the comma-ok read
+{
+    const h47g38UpstreamSafeListWrite = GoTranspiler.prototype.h29a20SafeListWrite;
+    GoTranspiler.prototype.h29a20SafeListWrite = function (node, identation: number, printed: string): string | undefined {
+        const plain = h47g38UpstreamSafeListWrite.call(this, node, identation, printed);
+        const lead = (plain === undefined) && (typeof printed === 'string') ? /^(?:[ \t]*(?:\/\/[^\n]*)?\n)+/.exec(printed) : null;
+        if (lead === null) {
+            return plain;
+        }
+        const rest = h47g38UpstreamSafeListWrite.call(this, node, identation, printed.slice(lead[0].length));
+        return (rest === undefined) ? undefined : lead[0] + rest;
+    };
+}
+// ===== end H47-G38
