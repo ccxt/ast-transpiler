@@ -41579,12 +41579,26 @@ export class RustTranspiler extends BaseTranspiler {
      *  the dict handle is shared into the box, no copy. */
     rustVenueDictLentValueUse(id: any): boolean {
         const call: any = id?.parent;
+        if (isIdentifier(id) && this.rustClientResolveValueArg(id)) return true;
         if (!isIdentifier(id) || !isCallExpression(call) || call.expression === id || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
         const at = Array.from(call.arguments).indexOf(id);
         const param: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
         if (param === undefined || param.dotDotDotToken !== undefined || !isMethodDeclaration(param.parent) || param.parent.body === undefined) return false;
         return this.rustParamType(param) === 'impl Into<crate::Value>';
+    }
+
+    /** A ws handler's message resolved whole with an explicit hash on its own client (`client.resolve (message, hash)`):
+     *  `resolve` takes `impl Into<Value>`, so the dict handle is shared into the box. */
+    rustClientResolveValueArg(id: any): boolean {
+        const call: any = id.parent;
+        if (!isCallExpression(call) || call.arguments.length !== 2 || call.arguments[0] !== id || !isPropertyAccessExpression(call.expression)) return false;
+        const recv: any = call.expression.expression;
+        if (String(call.expression.name.text) !== 'resolve' || !isIdentifier(recv)) return false;
+        const owner: any = this.rustDeclarationOfIdentifier(recv);
+        const param: any = this.rustDeclarationOfIdentifier(id);
+        if (owner?.kind !== SyntaxKind.Parameter || param?.kind !== SyntaxKind.Parameter || owner.parent !== param.parent) return false;
+        return this.rustParameterIsClientHandle(owner) && this.rustWsHandlerMessageSlot(param.parent, param);
     }
 
     /** `Value::Dict(Arc::clone(x))` for a rustVenueDictParam handed whole to a lent `impl Into<crate::Value>` slot. */
