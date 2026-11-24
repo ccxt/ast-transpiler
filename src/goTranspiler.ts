@@ -14065,7 +14065,13 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseLongShortRatio': [ 0 ],
     // both tree callers pass a `{}`-defaulted safeDict row; every override reads the row as a map
     'parseIsolatedBorrowRate': [ 0 ],
+    // cancelUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
+    'cancelUnifiedOrder': [ 0 ],
 };
+// the async rows above (each one's typed wrapper converts its struct argument)
+const GO_BASE_DICT_ASYNC_PARAMS: string[] = [
+    'cancelUnifiedOrder',
+];
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
 function goDictParamTabledSafeDictArg (go: any, call: any, arg: any): boolean {
@@ -14315,7 +14321,8 @@ function goDictParamRejection (go: any, fn: any, param: any): string | undefined
     if ((param.dotDotDotToken !== undefined) || (param.initializer !== undefined)) { return 'optional/variadic parameter'; }
     if (param.name?.kind !== SK.Identifier) { return 'destructured parameter'; }
     if ((fn?.kind !== SK.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== SK.Identifier)) { return 'not a method with a body'; }
-    if (go.isAsyncFunction (fn)) { return 'async method'; }
+    // an async table row is public surface: its typed wrapper converts the declared struct to the map
+    if (go.isAsyncFunction (fn) && !GO_BASE_DICT_ASYNC_PARAMS.includes (fn.name.text)) { return 'async method'; }
     if (go.goMethodKeepsBaseSignature (fn) && !goIsBaseExchangeFile (fn)) {
         // an override of a method outside the table would print the base signature for another reason
         const cls = go.goEnclosingClass (fn);
