@@ -2378,6 +2378,7 @@ export class RustTranspiler extends BaseTranspiler {
     ]);
 
     printCustomBinaryExpressionIfAny(node, identation) {
+        const exchangeFieldOp = this.printExchangeParamFieldOp(node); if (exchangeFieldOp !== undefined) return exchangeFieldOp;
         const { left, right } = node;
         const op = node.operatorToken.kind;
         const isAssign = op === SyntaxKind.EqualsToken;
@@ -4382,8 +4383,114 @@ export class RustTranspiler extends BaseTranspiler {
         return names;
     }
 
+    // ── base-exchange parameter (`p: BaseExchange` printed `&crate::exchange::Exchange`) ──
+    // Field kinds of the hand-written `Exchange` struct (rust/ccxt-common/src/exchange.rs) a parameter may read.
+    private static readonly RUST_EXCHANGE_FIELD_KINDS: Record<string, 'value' | 'dict' | 'optdict' | 'list'> = {
+        'id': 'value', 'ids': 'value', 'codes': 'value', 'baseCurrencies': 'value', 'quoteCurrencies': 'value',
+        'markets': 'optdict', 'markets_by_id': 'optdict', 'currencies_by_id': 'optdict',
+        'currencies': 'dict', 'options': 'dict', 'symbols': 'list',
+    };
+
+    // ts/src/base/Exchange.ts, or the overload-free copy the ccxt build transpiles in its place
+    static rustIsBaseExchangeFile(name: string): boolean {
+        return /\/base\/(?:\.__)?Exchange(?:NoOverloads)?\.ts$/.test(String(name).replace(/\\/g, '/'));
+    }
+
+    /** The base `Exchange` / `BaseExchange` class of ts/src/base/Exchange.ts (or a union with undefined). */
+    rustIsBaseExchangeClassType(type: Type | undefined): boolean {
+        if (type === undefined) return false;
+        return symbolDeclarations(this.typeSymbolOf(type)).some((d: any) => {
+            if (!isClassDeclaration(d) || d.name === undefined || !(d.name.text === 'BaseExchange' || d.name.text === 'Exchange')) return false;
+            return RustTranspiler.rustIsBaseExchangeFile(d.getSourceFile().fileName);
+        });
+    }
+
+    /** A parameter of a base method annotated as the base exchange class whose every use is a read of a known struct field. */
+    rustExchangeParam(param: any): boolean {
+        if (param === undefined || !isParameterDeclaration(param) || !isIdentifier(param.name) || param.type === undefined || !isTypeReferenceNode(param.type)) return false;
+        const method: any = param.parent;
+        if (method === undefined || !isMethodDeclaration(method) || method.body === undefined) return false;
+        if (!RustTranspiler.rustIsBaseExchangeFile(method.getSourceFile().fileName)) return false;
+        if (!this.rustIsBaseExchangeClassType(this.getCheckedTypeOf(param.name))) return false;
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) return false;
+        const symbol = checker.getSymbolAtLocation(param.name);
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok) return;
+            if (isIdentifier(n) && n !== param.name && String(n.text) === String(param.name.text) && checker.getSymbolAtLocation(n) === symbol) {
+                if (this.rustExchangeParamFieldOf(n.parent) === undefined || n.parent.expression !== n) ok = false;
+                return;
+            }
+            n.forEachChild(visit);
+        };
+        method.body.forEachChild(visit);
+        return ok;
+    }
+
+    /** `p.f` / `p['f']` on a base-exchange parameter: the receiver text and the field kind, else undefined. */
+    rustExchangeParamFieldOf(node: any): { field: string, kind: string, receiver: string } | undefined {
+        if (node === undefined) return undefined;
+        let field: string | undefined;
+        if (isPropertyAccessExpression(node) && isIdentifier(node.name)) field = String(node.name.text);
+        else if (isElementAccessExpression(node) && isStringLiteral(node.argumentExpression)) field = String(node.argumentExpression.text);
+        if (field === undefined || !isIdentifier(node.expression)) return undefined;
+        const kind = Object.prototype.hasOwnProperty.call(RustTranspiler.RUST_EXCHANGE_FIELD_KINDS, field) ? RustTranspiler.RUST_EXCHANGE_FIELD_KINDS[field] : undefined;
+        if (kind === undefined) return undefined;
+        return { field, kind, receiver: String(node.expression.text) };
+    }
+
+    /** The field info when `node` reads a field of a parameter printed as `&crate::exchange::Exchange`. */
+    rustExchangeParamRead(node: any): { field: string, kind: string, receiver: string } | undefined {
+        const info = this.rustExchangeParamFieldOf(node);
+        if (info === undefined) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(node.expression);
+        return declaration !== undefined && this.rustExchangeParam(declaration) ? info : undefined;
+    }
+
+    /** A value read of a base-exchange parameter field: the struct field boxed once (a dict / list shares its handle). */
+    printExchangeParamFieldRead(node: any): string | undefined {
+        const info = this.rustExchangeParamRead(node);
+        if (info === undefined) return undefined;
+        const field = `(*${info.receiver}).${info.field}`;
+        return info.kind === 'value' ? `Value::clone(&${field})` : `Value::from(&${field})`;
+    }
+
+    /** `p.options[k]` on a base-exchange parameter: the dict entry by the key's text, `Null` when missing. */
+    printExchangeParamDictEntry(node: any): string | undefined {
+        if (!isElementAccessExpression(node) || this.isNativeWriteTargetBase(node)) return undefined;
+        const info = this.rustExchangeParamRead(this.unwrapParens(node.expression));
+        if (info === undefined || info.kind !== 'dict') return undefined;
+        const key = this.printNode(node.argumentExpression, 0).trim();
+        return `(*${info.receiver}).${info.field}.get(&crate::runtime::stringify_param(&${key})).cloned().unwrap_or(Value::Null)`;
+    }
+
+    /** `p.f === undefined` and `this.f = p.f` on a base-exchange parameter field: the native test / copy. */
+    printExchangeParamFieldOp(node: any): string | undefined {
+        const op = node.operatorToken?.kind;
+        const left = this.unwrapParens(node.left);
+        const right = this.unwrapParens(node.right);
+        if (op === SyntaxKind.EqualsToken) {
+            const info = this.rustExchangeParamRead(right);
+            if (info === undefined || !isPropertyAccessExpression(left) || left.expression.kind !== SyntaxKind.ThisKeyword || String(left.name.text) !== info.field) return undefined;
+            const field = `(*${info.receiver}).${info.field}`;
+            const copy = info.kind === 'optdict' ? `${field}.as_ref().map(std::sync::Arc::clone)` : info.kind === 'value' ? `Value::clone(&${field})` : `std::sync::Arc::clone(&${field})`;
+            return `self.${info.field} = ${copy}`;
+        }
+        const equal = op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken;
+        if (!equal && op !== SyntaxKind.ExclamationEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return undefined;
+        const nil = (n: any) => n.kind === SyntaxKind.NullKeyword || (isIdentifier(n) && n.text === 'undefined');
+        const [ read, other ] = this.rustExchangeParamRead(left) !== undefined ? [ left, right ] : [ right, left ];
+        const info = this.rustExchangeParamRead(read);
+        if (info === undefined || !nil(other) || info.kind === 'dict' || info.kind === 'list') return undefined;
+        const field = `(*${info.receiver}).${info.field}`;
+        if (info.kind === 'optdict') return `${field}.${equal ? 'is_none' : 'is_some'}()`;
+        return `${equal ? '' : '!'}${field}.is_null()`;
+    }
+
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param): string {
+        if (this.rustExchangeParam(param)) return '&crate::exchange::Exchange';
         const groupMap = this.rustGroupMapParamType(param); if (groupMap !== undefined) return groupMap;
         if (this.rustSafeMarketIdParam(param) === true) return 'Option<&str>';
         if (this.rustListGroupParam(param)) return 'crate::value::List';
@@ -18773,6 +18880,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printPropertyAccessExpression(node, identation) {
+        const exchangeField = this.printExchangeParamFieldRead(node); if (exchangeField !== undefined) return exchangeField;
         const bookField = this.printWsBookFieldRead(node) ?? this.printWsBookMapField(node); if (bookField !== undefined) return bookField;
         const cacheField = this.printWsCacheHashmapRead(node) ?? this.printWsCacheFieldRead(node) ?? this.printWsCacheMapField(node); if (cacheField !== undefined) return cacheField;
         const listField = this.printTypedListFieldRead(node); if (listField !== undefined) return listField;
@@ -21261,6 +21369,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printElementAccessExpression(node, identation) {
+        const exchangeField = this.printExchangeParamFieldRead(node) ?? this.printExchangeParamDictEntry(node); if (exchangeField !== undefined) return exchangeField;
         const untilSlot = this.printRustUntilPairSlotRead(node); if (untilSlot !== undefined) return untilSlot;
         const venueKeyRead = this.printVenueKeyReadParamRead(node); if (venueKeyRead !== undefined) return venueKeyRead;
         const sideRead = this.printBookSideRead(node); if (sideRead !== undefined) return sideRead;

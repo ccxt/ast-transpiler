@@ -4726,6 +4726,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (checker.isArrayType(type) || checker.isTupleType(type)) {
             return false;
         }
+        // a class instance (an exchange's index signature) prints its own Java class, never a Map
+        if (((type.getSymbol?.()?.flags ?? 0) & SymbolFlags.Class) !== 0) {
+            return false;
+        }
         if (type.getStringIndexType() !== undefined) {
             return true;
         }
