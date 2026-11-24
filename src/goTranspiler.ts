@@ -4208,7 +4208,7 @@ function ccxtGoAnnotatedMethodReturnType (goTranspiler, node) {
     CCXT_GO_RETURN_TYPE_IN_PROGRESS.add (node);
     let result;
     try {
-        result = ccxtGoProveReturnPaths (goTranspiler, node, allowed);
+        result = ((allowed.length === 1) && (allowed[0] === '[]string')) ? '[]string' : ccxtGoProveReturnPaths (goTranspiler, node, allowed);
         if ((result === undefined) && allowed.includes ('string')) {
             result = goDefaultedSafeStringReturnPaths (goTranspiler, node, allowed) ?? goNarrowedStringReturnPaths (goTranspiler, node);
         }
@@ -12745,7 +12745,29 @@ function goStringArrayAnnotatedReturnTypes (goTranspiler, node, name) {
         return undefined;
     }
     const neverNil = collectReturnStatements (node.body).every ((statement) => ccxtGoContainerNeverNil (goTranspiler, statement.expression));
-    return neverNil ? [ '[]any' ] : undefined;
+    return neverNil ? [ '[]any' ] : (h48g02StringListReturnPaths (goTranspiler, node) ? [ '[]string' ] : undefined);
+}
+
+// every path is absent, a `.split (..)`, a `[]string` local or `this.safeStringList (..)`: the method returns that []string
+function h48g02StringListReturnPaths (goTranspiler, node) {
+    const returns = collectReturnStatements (node.body);
+    return (returns.length > 0) && returns.every ((statement) => {
+        const e = ccxtGoUnwrapParens (statement.expression);
+        if ((e === undefined) || isAbsentExpression (e)) {
+            return e !== undefined;
+        }
+        if (ts.isIdentifier (e)) {
+            return goTranspiler.goDeclaredTypeOfIdentifier (e) === '[]string';
+        }
+        const callee = ts.isCallExpression (e) && ts.isPropertyAccessExpression (e.expression) ? e.expression : undefined;
+        if (callee === undefined) {
+            return false;
+        }
+        if ((callee.expression.kind === ts.SyntaxKind.ThisKeyword) && (callee.name.text === 'safeStringList')) {
+            return true;
+        }
+        return (callee.name.text === 'split') && (ccxtGoReturnExpressionType (goTranspiler, e) === '[]string');
+    });
 }
 
 // `p === undefined ? D : p` over a declared `*int64`/`*float64` (D a literal, or a value local of the
