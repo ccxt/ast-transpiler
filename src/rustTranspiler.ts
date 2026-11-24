@@ -16544,6 +16544,8 @@ export class RustTranspiler extends BaseTranspiler {
             const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n) => {
                 if (this.rustEnclosingFunction(n) !== callScope) return false;
                 if (elem === 'vec' && this.rust67gSafeDictElemUse(n)) { elemUses++; return true; }
+                // `Object.keys (r)` of a keyed result lists the map's own keys (printTypedResultKeys)
+                if (elem !== 'vec' && this.rustTypedResultKeysUse(n)) return true;
                 if (this.rustMarketValueUse(n)) { valueUses++; return true; }
                 if (elem !== undefined && this.rustTypedResultElemUse(n, elem)) { elemUses++; return true; }
                 return false;
@@ -16689,6 +16691,25 @@ export class RustTranspiler extends BaseTranspiler {
         const keyLocal = this.rustScalarLocalOf(key);
         // ral-68g: an `Option<String>` key local the checker types plain `string` (printTypedResultElemRead reads Null for None)
         return keyLocal === undefined || ((keyLocal.kind === 'str' || keyLocal.kind === 'ostr') && this.rust65kPlainStringKey(key));
+    }
+
+    /** `n` is the sole argument of `Object.keys (n)`. */
+    rustTypedResultKeysUse(n: any): boolean {
+        const call: any = n?.parent;
+        return call !== undefined && isCallExpression(call) && this.bearerEnumArg(call) === n && call.arguments[0] === n
+            && String((call.expression as any).name.text) === 'keys';
+    }
+
+    /** `Object.keys (r)` on a typed keyed result local (`HashMap<String, T>`): its own keys, in the order `into_raw` listed them. */
+    printTypedResultKeys(node: any): string | undefined {
+        const arg: any = this.bearerEnumArg(node);
+        const declaration = arg === undefined || !this.rustTypedResultKeysUse(arg) ? undefined : this.rustCallLocalOf(arg);
+        if (declaration === undefined) return undefined;
+        // the declared result is a string-keyed map (`Dictionary<T>`): the Rust result is `HashMap<String, T>`
+        const ret = this.rustTypedCallResultType(declaration.initializer);
+        const type: any = this.getCheckedTypeOf(arg);
+        if (ret === undefined || ret.startsWith('Vec<') || type === undefined || this.getChecker().getIndexTypeOfType(type, IndexKind.String) === undefined) return undefined;
+        return `Value::Array(${super.printIdentifier(arg)}.keys().cloned().map(Value::from).collect())`;
     }
 
     /** ral-65k: the checker types `k` as plain `string` (no `undefined` / `null` member). */
@@ -22302,6 +22323,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
+        const typedKeys = this.printTypedResultKeys(node); if (typedKeys !== undefined) return typedKeys;
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
         const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'keys'); if (h29 !== undefined) return h29;
