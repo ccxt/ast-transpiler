@@ -11710,6 +11710,10 @@ function installCcxtGoTupleResults (goTranspiler) {
         if (probe !== undefined) {
             return probe;
         }
+        const plainPair = ccxtGoVenueStringPairBind (this, declaration, identation);
+        if (plainPair !== undefined) {
+            return plainPair;
+        }
         const pairSlot = ccxtGoPairSlot0 (this, declaration.initializer);
         const ofBase = Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, declaration.initializer.expression.name.text);
         const nullableBool = CCXT_GO_NULLABLE_BOOL_PAIRS.includes (declaration.initializer.expression.name.text) && ccxtGoTupleBoolCallIsNullable (declaration.initializer);
@@ -47359,6 +47363,21 @@ function h26g39IsPlainString (go, e) {
     } catch (err) {
         return false;
     }
+}
+// `const [ a, b ] = this.m (..)` of a venue `(string, map[string]any)` pair: each local takes its slot's Go type
+function ccxtGoVenueStringPairBind (goTranspiler, declaration, identation) {
+    const elements = declaration?.name?.elements ?? [];
+    if ((ccxtGoVenuePairOfCall (declaration?.initializer)?.type !== 'string') || (elements.length !== 2)
+        || ((declaration.parent?.flags & ts.NodeFlags.Const) === 0)
+        || !elements.every ((e) => (e.kind === ts.SyntaxKind.BindingElement) && (e.name !== undefined) && ts.isIdentifier (e.name) && (e.initializer === undefined))) {
+        return undefined;
+    }
+    const bound = ccxtGoTupleResultUnwrap (goTranspiler.printNode (declaration.initializer, 0));
+    if (bound === undefined) {
+        return undefined;
+    }
+    const joined = goTranspiler.getIden (identation) + elements.map ((e) => e.name.text).join (', ') + ' := ' + bound;
+    return ccxtGoVenueBoolPairBlankUnread (goTranspiler, declaration, joined);
 }
 // ===== h26-G39 (end) =====
 
