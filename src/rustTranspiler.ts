@@ -35965,7 +35965,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined || p.dotDotDotToken !== undefined)) return undefined;
         if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamPrintsBool(param) || this.rustParamIsLentDict(param) || this.rustParamIsLentList(param)
             || this.rustParamIsLentResponse(param) || this.rustParamPrintsMap(param) || this.rustParamPrintsStrVec(param) || this.rustParamReadsByReference(param)) return undefined;
-        if (this.rustVenueDictParam(param)) return undefined;
+        if (this.rustVenueDictParam(param) || (this.rustBookSideListShape(param) && this.rustVenueStrListParam(param))) return undefined;
         const type: any = param.type;
         const typeName = type?.kind === SyntaxKind.TypeReference && isIdentifier(type.typeName) && type.typeArguments === undefined ? String(type.typeName.text) : '';
         // ral-46e: a `string[]` slot every caller fills with an `Object.keys (..)` local (a list of strings, read-only here)
@@ -41111,16 +41111,26 @@ export class RustTranspiler extends BaseTranspiler {
         return decision;
     }
 
+    /** `bidAsks: any[]` beside a leading book-side handle (`handleBidAsks (bookSide, bidAsks)`). */
+    rustBookSideListShape(param: any): boolean {
+        const method: any = param?.parent;
+        if (!isMethodDeclaration(method) || param.type?.kind !== SyntaxKind.ArrayType || param.type.elementType?.kind !== SyntaxKind.AnyKeyword) return false;
+        return method.parameters[0] !== param && this.rustBookSideParam(method.parameters[0]);
+    }
+
     rustVenueStrListParamUncached(param: any): boolean {
         const method: any = param.parent;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
         if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined || param.initializer !== undefined || param.questionToken !== undefined) return false;
-        if (param.type?.kind !== SyntaxKind.ArrayType || param.type.elementType?.kind !== SyntaxKind.StringKeyword) return false;
+        if (param.type?.kind !== SyntaxKind.ArrayType) return false;
+        // an `any[]` list handed beside a book-side handle (`handleBidAsks (bookSide, bidAsks)`) is read the same way
+        const sideList = this.rustBookSideListShape(param);
+        if (param.type.elementType?.kind !== SyntaxKind.StringKeyword && !sideList) return false;
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) return false;
         const params: any[] = Array.from(method.parameters);
         if (params.slice(0, params.indexOf(param)).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined)) return false;
         if (!this.rustVenueOnlyMethod(method, String(method.name.text)) || this.rustTypedSignature(method) !== undefined || this.rustMethodReferencedAsValue(method)) return false;
-        if (this.rustParamPrintsStrVec(param) || this.rustParamIsLentList(param) || this.rustParamIsLentVenue(param) || this.rustParamReadsByReference(param) || this.rustParameterIsClientHandle(param)) return false;
+        if (this.rustParamPrintsStrVec(param) || this.rustParamIsLentList(param) || (!sideList && this.rustParamIsLentVenue(param)) || this.rustParamReadsByReference(param) || this.rustParameterIsClientHandle(param)) return false;
         // every caller hands a list it holds by name (a local or a lent parameter): it lends, nothing is rebuilt
         const at = params.indexOf(param);
         let held = 0;
