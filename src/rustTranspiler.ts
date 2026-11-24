@@ -42151,7 +42151,10 @@ export class RustTranspiler extends BaseTranspiler {
         // trailing parameters past the message must be optional (`subscription: Dict | undefined = undefined`)
         if (params.length < 2 || params[1] !== param || !/^handle[A-Z]/.test(String(method.name.text))) return false;
         if (params.slice(2).some((p: any) => p.initializer === undefined && p.questionToken === undefined) && !this.rustWsHandlerExtrasPassed(method)) return false;
-        if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        const wsFile = String(method.getSourceFile().fileName).replace(/\\/g, '/');
+        // a prediction venue's routed handleMessage is reached through the same by-name arm as a pro one
+        const routedPrediction = String(method.name.text) === 'handleMessage' && /(?:^|\/)ts\/src\/prediction\/[^/]+\.ts$/.test(wsFile);
+        if (!routedPrediction && !/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(wsFile)) return false;
         if (params[0].type === undefined || !this.rustParameterIsClientHandle(params[0])) return false;
         // a key write into a local not built as a fresh literal may alias a row of the message: keep `Value`
         let aliasWrite = false;
