@@ -4289,11 +4289,12 @@ function goFilledBeforeReturn (goTranspiler, ret, ident) {
         || !goTranspiler.goIsNilTestOfIdentifier (ccxtGoUnwrapParens (guard.expression), ident)) {
         return false;
     }
-    const body = guard.thenStatement.statements;
-    const last = body[body.length - 1];
-    const fill = (last?.kind === ts.SyntaxKind.ExpressionStatement) ? last.expression : undefined;
-    if ((fill?.kind !== ts.SyntaxKind.BinaryExpression) || (fill.operatorToken.kind !== ts.SyntaxKind.EqualsToken)
-        || (fill.left.kind !== ts.SyntaxKind.Identifier) || (fill.left.text !== ident.text) || !goTranspiler.goDefaultedSafeStringCall (fill.right)) {
+    // the fill is a top-level statement of the guard block (always reached unless the block exits)
+    const fill = guard.thenStatement.statements.map ((st) => ((st.kind === ts.SyntaxKind.ExpressionStatement) ? st.expression : undefined))
+        .find ((x) => (x?.kind === ts.SyntaxKind.BinaryExpression) && (x.operatorToken.kind === ts.SyntaxKind.EqualsToken)
+            && (x.left.kind === ts.SyntaxKind.Identifier) && (x.left.text === ident.text));
+    if ((fill === undefined) || !(goTranspiler.goDefaultedSafeStringCall (fill.right) || goTranspiler.goNumberToStringOfProvenNumber (fill.right)
+        || goTranspiler.goNumberToStringOfNonNilModulo (fill.right))) {
         return false;
     }
     const scope = goTranspiler.goEnclosingFunction (ident);
@@ -17777,6 +17778,29 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const nativeMinMax = (this.go92g7MinMaxName(arg) !== undefined) && (this.go92g7Int64Operands(arg) !== undefined);
         return nativeMinMax || (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(goType) >= 0)
             || ((arg.kind === SyntaxKind.Identifier) && this.goNarrowedNumberPointerArg(arg, this.goDeclaredTypeOfIdentifier(arg)));
+    }
+
+    // `this.numberToString (r)`, r a const `a % b` over non-nil numeric operands: Mod answers a number (NaN on a
+    // zero divisor), which the base NumberToString never prints as "", so the *string is never nil
+    goNumberToStringOfNonNilModulo(node): boolean {
+        if (!this.goBaseThisCall(node, 'numberToString', 1)) {
+            return false;
+        }
+        const mod: any = this.goUnwrapParenthesizedNode(this.goConstLocalInitializer(node.arguments[0]));
+        if ((mod?.kind !== SyntaxKind.BinaryExpression) || (mod.operatorToken?.kind !== SyntaxKind.PercentToken)) {
+            return false;
+        }
+        const nonNil = (x: any): boolean => {
+            const e: any = this.goUnwrapParenthesizedNode(x);
+            if (e?.kind === SyntaxKind.Identifier) {
+                const declared = this.goDeclaredTypeOfIdentifier(e);
+                return (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(declared) >= 0)
+                    || (((declared === '*int64') || (declared === '*float64')) && this.goPointerNumberIsNonNil(e));
+            }
+            return (e?.kind === SyntaxKind.NumericLiteral) || (e?.kind === SyntaxKind.BinaryExpression)
+                && (GO_NUMBER_TO_STRING_NON_NIL_OPERANDS.indexOf(this.goOperandStaticType(e, this.printNode(e, 0)) ?? '') >= 0);
+        };
+        return nonNil(mod.left) && nonNil(mod.right);
     }
 
     // `this.iso8601 (this.milliseconds ())`, directly or through const locals: the base Milliseconds is the int64 clock,
