@@ -6514,6 +6514,8 @@ export class RustTranspiler extends BaseTranspiler {
         isPostOnly: [ 'boolean', 'bool' ],
         usesPrivateKey: [ 'boolean', 'bool' ],
         isGateFuturesContractWithDecimalSize: [ 'boolean', 'bool' ],
+        // ws error handlers: true when the message was an error it handled, false otherwise
+        handleErrorMessage: [ 'boolean|Bool', 'bool' ],
         paramsToString: [ 'string', 'str' ],
         // pg: the precision formatters answer `Str` (overrides may spell `string`); every return is a string or undefined
         amountToPrecision: [ 'Str|string', 'ostr' ], priceToPrecision: [ 'Str|string', 'ostr' ], costToPrecision: [ 'Str|string', 'ostr' ],
@@ -22382,6 +22384,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `{}` (Display) renders an ExchangeError as `[Kind] message`; `{:?}` would dump the struct fields.
     printThrowStatement(node, identation) {
+        if (this.rustInLabelledTry(node)) return `${this.getIden(identation)}break '__try Err(${this.printNode(node.expression, 0)}.to_string());`;
         return `${this.getIden(identation)}panic!("{}", ${this.printNode(node.expression, 0)});`;
     }
 
@@ -22548,11 +22551,100 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-44h: a binding read only as an error object is a typed `CaughtError` (ccxt's catch lowering reads the mark)
         const caught = read && this.rustCaughtErrorBinding(node.catchClause);
         const head = read ? `if let Err(${errorName}) = _try_result {${caught ? ' /* CaughtError */' : ''}` : 'if _try_result.is_err() {';
+        const boolTry = this.printRustBoolReturnTry(node, identation, read, caught); if (boolTry !== undefined) return boolTry;
         return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {\n${body(node.tryBlock)}\n${iden}}));\n` +
             `${iden}${head}\n${body(node.catchClause.block)}\n${iden}}`;
     }
 
+    /** A statement every path of which returns or throws. */
+    rustStatementAlwaysExits(s: any): boolean {
+        if (s === undefined) return false;
+        if (isReturnStatement(s) || isThrowStatement(s)) return true;
+        if (isBlock(s)) return this.rustStatementAlwaysExits(s.statements[s.statements.length - 1]);
+        if (isIfStatement(s)) return s.elseStatement !== undefined && this.rustStatementAlwaysExits(s.thenStatement) && this.rustStatementAlwaysExits(s.elseStatement);
+        return false;
+    }
+
+    // A try block that always exits inside a sync method typed `-> bool`: the closure returns the bool itself,
+    // the Ok arm returns it from the method and the catch arm runs on a panic (its own returns are the method's).
+    printRustBoolReturnTry(node, identation, read: boolean, caught: boolean): string | undefined {
+        const fn: any = findAncestor(node.parent, isFunctionLike);
+        if (node.finallyBlock !== undefined || node.catchClause === undefined || this.rustMethodTypedReturnKind(fn) !== 'bool') return undefined;
+        if (!this.rustStatementAlwaysExits(node.tryBlock)) return undefined;
+        // a `break` / `continue` in the closure would leave it; the catch arm prints in the method itself
+        let loopExit = false;
+        const visit = (n: any) => { if (loopExit || isFunctionLike(n)) return; if (n.kind === SyntaxKind.BreakStatement || n.kind === SyntaxKind.ContinueStatement) { loopExit = true; return; } n.forEachChild(visit); };
+        node.tryBlock.forEachChild(visit);
+        if (loopExit) return undefined;
+        const iden = this.getIden(identation);
+        const body = (block) => block.statements.map(s => this.printNode(s, identation + 1)).join('\n');
+        const name = node.catchClause.variableDeclaration?.name?.text;
+        const bind = !read ? 'Err(_)' : 'Err(_try_err)';
+        // a try block that cannot panic but by its own `throw new K (..)`: a labelled block, no closure
+        if (this.rustTryBlockOnlyOwnThrows(node.tryBlock)) {
+            const payload = caught ? 'crate::error::CaughtError::from_panic(Box::new(_try_err))' : 'panic_to_value(Box::new(_try_err))';
+            const linit = !read ? '' : ` let ${name}: ${caught ? 'crate::error::CaughtError' : 'Value'} = ${payload};`;
+            this.rustLabelledTryBlocks.add(node.tryBlock);
+            const inner = body(node.tryBlock);
+            this.rustLabelledTryBlocks.delete(node.tryBlock);
+            // parenthesized: the ccxt post-pass drops the `;` of a line ending in `};`
+            return `${iden}let _try_result: Result<bool, String> = ('__try: {\n${inner}\n${iden}});\n` +
+                `${iden}match _try_result { Ok(__try_ret) => return __try_ret, ${bind} => {${linit}\n${body(node.catchClause.block)}\n${iden}} }`;
+        }
+        const init = !read ? '' : caught ? ` let ${name}: crate::error::CaughtError = crate::error::CaughtError::from_panic(_try_err);` : ` let ${name}: Value = panic_to_value(_try_err);`;
+        return `${iden}let _try_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> bool {\n${body(node.tryBlock)}\n${iden}}));\n` +
+            `${iden}match _try_result { Ok(__try_ret) => return __try_ret, ${bind} => {${init}\n${body(node.catchClause.block)}\n${iden}} }`;
+    }
+
+    rustLabelledTryBlocks = new Set<object>();
+
+    /** The node sits in a try block printed as `'__try: {`, with no function or nested try in between. */
+    rustInLabelledTry(node: any): boolean {
+        if (this.rustLabelledTryBlocks.size === 0) return false;
+        for (let up: any = node.parent; up !== undefined; up = up.parent) {
+            if (this.rustLabelledTryBlocks.has(up)) return true;
+            if (isFunctionLike(up) || up.kind === SyntaxKind.TryStatement) return false;
+        }
+        return false;
+    }
+
+    /** Every throw is `throw new K (..)` of a ccxt error class and every call is a `this.safe*` reader, so nothing
+     *  but those throws can panic; no loop exit, nested try, function or bare `throw x`. */
+    rustTryBlockOnlyOwnThrows(block: any): boolean {
+        let ok = true;
+        const visit = (n: any) => {
+            if (!ok) return;
+            if (isFunctionLike(n) || n.kind === SyntaxKind.TryStatement || n.kind === SyntaxKind.BreakStatement || n.kind === SyntaxKind.ContinueStatement
+                || n.kind === SyntaxKind.AwaitExpression || n.kind === SyntaxKind.YieldExpression) { ok = false; return; }
+            if (isThrowStatement(n)) {
+                const e: any = n.expression;
+                if (!isNewExpression(e) || !isIdentifier(e.expression) || !RustTranspiler.RUST_ERROR_CLASS_NAME.test(String(e.expression.text))
+                    || this.rustDynamicErrorClass(e) !== undefined) { ok = false; return; }
+                (e.arguments ?? []).forEach(visit);
+                return;
+            }
+            if (isNewExpression(n)) { ok = false; return; }
+            if (isCallExpression(n)) {
+                const c: any = n.expression;
+                if (!isPropertyAccessExpression(c) || c.expression.kind !== SyntaxKind.ThisKeyword || !/^safe[A-Z]\w*$/.test(String(c.name.text))) { ok = false; return; }
+            }
+            n.forEachChild(visit);
+        };
+        block.forEachChild(visit);
+        return ok;
+    }
+
     printReturnStatement(node, identation) {
+        if (this.rustInLabelledTry(node)) {
+            const plain = this.printReturnStatementPlain(node, identation);
+            const m = /^(\s*)return (.*);$/s.exec(plain);
+            if (m) return `${m[1]}break '__try Ok(${m[2]});`;
+            return plain;
+        }
+        return this.printReturnStatementPlain(node, identation);
+    }
+
+    printReturnStatementPlain(node, identation) {
         const exp = node.expression;
         const idn = this.getIden(identation);
         if (!exp) return `${idn}return;`;
