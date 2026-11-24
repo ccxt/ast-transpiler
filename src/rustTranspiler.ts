@@ -22833,9 +22833,10 @@ export class RustTranspiler extends BaseTranspiler {
         return d ?? undefined;
     }
 
-    // unified records (a map at runtime) a venue-private method may declare as its own map return
+    // unified records (a map at runtime) a venue-private method may declare as its own map return, and record lists
     private static readonly RUST_OWN_RECORD_RETURNS: Set<string> = new Set([
         'MarginModification',
+        'Order[]',
     ]);
 
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined {
