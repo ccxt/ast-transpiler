@@ -6666,6 +6666,8 @@ export class RustTranspiler extends BaseTranspiler {
         parseLeverageTiers: [ 'LeverageTiers', 'dict' ],
         // venue client setup: `true` once set up, `false` when it caught an error (an async declaration spells `Promise<..>`)
         initializeClient: [ 'Promise<boolean>', 'bool' ],
+        // venue builder-fee gate: true when approved (or already), false when skipped or refused (async: awaited at each call)
+        handleBuilderFeeApproval: [ 'Promise<boolean>', 'bool' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
