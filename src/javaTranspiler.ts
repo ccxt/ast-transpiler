@@ -2398,6 +2398,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (unifiedList !== undefined) {
             return unifiedList;
         }
+        const venueList = testTier ? undefined : this.javaVenueStringListParameterType(node, name, method, type, checker);
+        if (venueList !== undefined) {
+            return venueList;
+        }
         const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type);
         if (unifiedInt !== undefined) {
             return unifiedInt;
@@ -2429,6 +2433,53 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         return this.isAsyncFunction(method) || this.javaOverriddenSyncStringListSlot(name, method, type, checker)
             ? JAVA_STRING_LIST_TYPE : undefined;
+    }
+
+    // a fixed `string[]` slot of a venue-private method (no ancestor, never written, no hand-written or dynamic use)
+    // prints List<String> when every `this.name (..)` caller hands its own fixed `string[]` parameter of an override
+    javaVenueStringListParameterType(node, name, method, type, checker): string | undefined {
+        if (name === 'Strings' || !this.javaIsStringArrayType(checker, type) || (type as any).isUnionType?.()
+            || typeof this.javaRepoMethodUses !== 'function' || !isIdentifier(method.name)
+            || !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'))
+            || this.getMethodOverride(method) !== undefined || this.javaParameterIsWritten(node)
+            || this.javaParameterIsTypeofTested(node)) {
+            return undefined;
+        }
+        const methodName = String(method.name.text);
+        const uses = this.javaRepoMethodUses(methodName, node.getSourceFile().fileName);
+        if (uses === undefined || uses.mentions > 0 || uses.handWritten) {
+            return undefined;
+        }
+        const position = method.parameters.indexOf(node);
+        const internal = this.javaThisCallsInFile(node.getSourceFile(), methodName).map((call) => [ ...call.arguments ]);
+        const all = internal.concat(uses.calls);
+        return all.length > 0 && all.every((args) => this.javaOverrideStringListArgument(args[position]))
+            ? JAVA_STRING_LIST_TYPE : undefined;
+    }
+
+    // an identifier naming a fixed `string[]` parameter of the enclosing `override async` method (read syntactically:
+    // callers in other files carry no checker), so it already prints List<String>
+    javaOverrideStringListArgument(arg): boolean {
+        if (arg === undefined || !isIdentifier(arg)) {
+            return false;
+        }
+        let method = arg.parent;
+        while (method !== undefined && !isMethodDeclaration(method)) {
+            method = method.parent;
+        }
+        const modifiers = ((method as any)?.modifiers ?? []).map((m) => m.kind);
+        if (method === undefined || !modifiers.includes(SyntaxKind.OverrideKeyword) || !modifiers.includes(SyntaxKind.AsyncKeyword)) {
+            return false;
+        }
+        const param = (method as any).parameters.find((p) => isIdentifier(p.name) && p.name.text === arg.text);
+        const annotation = param?.type;
+        if (param === undefined || param.initializer !== undefined || param.questionToken !== undefined || annotation === undefined
+            || annotation.kind !== SyntaxKind.ArrayType || annotation.elementType?.kind !== SyntaxKind.StringKeyword) {
+            return false;
+        }
+        // the parameter is never reassigned in the caller's body
+        return !this.javaTreeSome((method as any).body, (n) => (isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.EqualsToken
+            && isIdentifier(n.left) && n.left.text === arg.text) || undefined);
     }
 
     // a sync `string[]` slot (not `Strings`) of a base method that venues override and no hand-written Java declares
