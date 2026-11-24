@@ -60794,3 +60794,50 @@ function h44g10NullableBoolMethod(go: any, method: any): boolean {
 }
 Object.assign (CCXT_GO_HELPER_RETURN_TYPES, { 'this.HandleErrors': '*bool', 'exchange.HandleErrors': '*bool' });
 // ===== end H44-G10
+// ===== H45-G12 (begin): a required `Market` slot whose callers pass only maps or a literal `undefined` =====
+// `undefined` prints `nil`, which a map[string]any slot takes and reads as the absent market, as the box did
+{
+    const sitesPassTypeH45g12 = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string): boolean {
+        if (sitesPassTypeH45g12.call(this, fn, index, goType)) {
+            return true;
+        }
+        return (goType === GO_SAFE_DICT_LOCAL_TYPE) && h45g12MarketSlotSites(this, fn, index);
+    };
+}
+function h45g12MarketSlotSites (go: any, fn: any, index: number): boolean {
+    const param: any = fn?.parameters?.[index];
+    if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || go.isAsyncFunction(fn)
+        || (param?.type?.getText?.() !== 'Market') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || goIsBaseExchangeFile(fn) || go.goMethodKeepsBaseSignature(fn) || goHasDynamicCall(fn, fn.name.text)) {
+        return false;
+    }
+    const name: string = fn.name.text;
+    const calls: any[] = go.goSameFileCallsOf(fn, name);
+    if (calls.length === 0) {
+        return false;
+    }
+    for (const call of calls) {
+        const arg: any = call.arguments?.[index];
+        if ((arg === undefined) || (arg.kind === SyntaxKind.SpreadElement) || (call.runner !== undefined)) {
+            return false;
+        }
+        const nil = (arg.kind === SyntaxKind.Identifier) && (arg.text === 'undefined');
+        if (!nil && (go.goPrintedArgType(arg) !== GO_SAFE_DICT_LOCAL_TYPE)) {
+            return false;
+        }
+    }
+    // a caller in another file (a derived venue) is not proven here
+    const tree = go.goTsSrcTree(fn.getSourceFile());
+    if (tree !== undefined) {
+        const myClass = go.goEnclosingClassName(fn);
+        const myFile = tree.relativeOf.get(path.resolve(fn.getSourceFile().fileName));
+        for (const site of (tree.callIndex.get(name) ?? [])) {
+            if ((site.file !== myFile) && go.goTsSrcFileDerivesFrom(tree, site.file, myClass) && !go.h27g01ForeignNamesake(tree, site.file, myFile)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+// ===== H45-G12 (end)
