@@ -19480,6 +19480,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
     printOptionalParamsArg(node: any, text: string): string | undefined {
+        // the Dict-bound params returned as the base pair's map slot: boxed as the handle (the ccxt pass unboxes it)
+        const tupleSlot: any = node?.parent;
+        if (isIdentifier(node) && isArrayLiteralExpression(tupleSlot) && tupleSlot.elements[1] === node && isReturnStatement(tupleSlot.parent) && this.rustBaseTupleParamsParam(this.rustDeclarationOfIdentifier(node)) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node))) return `Value::Dict(${text})`;
         // the typed `params` slot handed to a venue helper's `Dict = {}` slot: moved at its last use, else shared
         if ((this.rustDeclarationOfIdentifier(node) as any)?.kind === SyntaxKind.Parameter && isIdentifier(node) && this.rustParamsHelperSlot(node.parent, node) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node))) return this.rustLocalLastUse(node, this.rustDeclarationOfIdentifier(node)) ? `Value::Dict(${text})` : `Value::from(&${text})`;
         if (!isIdentifier(node) || !this.rustOptionalParamsSlot(node.parent, node)) return undefined;
@@ -29501,11 +29504,14 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     rustParamsDictSlotUncached(d: any): boolean {
-        if (!this.rustTypedParamsParam(d)) return false;
+        const tuple = this.rustBaseTupleParamsParam(d);
+        if (!tuple && !this.rustTypedParamsParam(d)) return false;
         let uses = 0; let extendUses = 0; let clonedArm = false;
         const safe = this.rustLocalUsesAll(d, 'params', false, (n: any) => {
             if (this.rustDeclaredNode(n) !== d) return false;
             const up: any = n.parent;
+            // the last slot of the base helper's own `return [ v, params ]` (its declared `[.., Dict]` tuple)
+            if (tuple && isArrayLiteralExpression(up) && up.elements.length === 2 && up.elements[1] === n && isReturnStatement(up.parent) && findAncestor(up, isFunctionLike) === d.parent) { uses++; return true; }
             // the sole extra operand of a base `extend` (not deepExtend): lent as `&[&params]`, a non-map merged nothing before too
             if (this.rustOptExtendOperandUse(n)) { uses++; extendUses++; return true; }
             // a `let q: Dict = params` alias decided a map takes the slot itself; a venue helper's trailing `Dict = {}` slot is lent the map
@@ -29537,6 +29543,17 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // an extend operand must not turn a moved ternary arm into a clone
         return safe && uses > 0 && !(extendUses > 0 && clonedArm);
+    }
+
+    /** The never-reassigned `params: Dict = {}` of a base-tier method declared to return a `[.., Dict]` pair. */
+    rustBaseTupleParamsParam(d: any): boolean {
+        if (d?.kind !== SyntaxKind.Parameter || !isIdentifier(d.name) || d.type === undefined || String(d.type.getText()) !== 'Dict') return false;
+        if (d.initializer === undefined || !isObjectLiteralExpression(d.initializer) || d.initializer.properties.length !== 0) return false;
+        const fn: any = d.parent;
+        if (fn?.kind !== SyntaxKind.MethodDeclaration || fn.body === undefined || this.rustTestTierSource(d) || !RustTranspiler.RUST_BASE_TIER_FILE.test(String(fn.getSourceFile().fileName))) return false;
+        const ret: any = fn.type;
+        if (ret?.kind !== SyntaxKind.TupleType || ret.elements.length !== 2 || String(ret.elements[1].getText()) !== 'Dict') return false;
+        return !this.rustLocalIsReassigned(d, String(d.name.text));
     }
 
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
