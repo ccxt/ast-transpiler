@@ -19936,7 +19936,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  one must exist; anything else (a write, a `Value` pass-through, a Null
      *  comparison, a marker key) answers undefined and the parameter keeps its
      *  box. */
-    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false, strList = false, infoValue = false): { reads: number } | undefined {
+    private rustParamShadowUseCensus(fn: Node, param: ParameterDeclaration, kind: RustParamShadowKind, literalKeys = false, strList = false, infoValue = false, wholeUse = false): { reads: number } | undefined {
         const name = String((param.name as Identifier).text);
         const paramSymbol = this.rustSymbolOf(param.name as Identifier);
         if (paramSymbol === undefined) return undefined;
@@ -19945,7 +19945,7 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -20278,6 +20278,8 @@ export class RustTranspiler extends BaseTranspiler {
         const arc = `${view}_arc`;
         const map = 'indexmap::IndexMap<String, Value>';
         const ind = this.getIden(identation + 2);
+        // a dict-handle parameter already is the map: the view borrows it
+        if (this.rustVenueDictParam(param) && this.rustVenueDictValueParam(param)) return { param, lines: `${ind}let ${view}: &${map} = &${name};\n` };
         // an owned Arc clone keeps the shadow from borrowing the parameter (it may move later)
         const lines =
             `${ind}let ${arc}: std::sync::Arc<${map}> = (if let Value::Dict(__d) = &${name} { __d.clone() } else { std::sync::Arc::new(indexmap::IndexMap::new()) });\n` +
@@ -23575,7 +23577,7 @@ export class RustTranspiler extends BaseTranspiler {
         const text = super.transformIdentifier(node, identifier);
         const optList = this.printOptListIdentifier(node, text) ?? this.printNilMapBox(node, text); if (optList !== undefined) return optList;
         const asLent = this.printLentAsArg(node, text); if (asLent !== undefined) return asLent;
-        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printVenueDictValue(node, text) ?? this.printVenueDictLentValue(node, text) ?? this.printVenueDictReaderArg(node, text) ?? this.printVenueDictExtendArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
+        const borrowedArg = this.printUntilSelfArg(node, text) ?? this.printExtendHeadArg(node, text) ?? this.printJwtLentArg(node, text) ?? this.printVenueDictArg(node, text) ?? this.printVenueDictValue(node, text) ?? this.printVenueDictLentValue(node, text) ?? this.printVenueDictReaderArg(node, text) ?? this.printVenueDictWholeArg(node, text) ?? this.printVenueDictWhole(node, text) ?? this.printVenueDictExtendArg(node, text) ?? this.printLentVenueArg(node, text) ?? this.printLentOptionalArg(node, text) ?? this.printBorrowedReaderArg(node, text) ?? this.printLentParamsArg(node, text) ?? this.printLentListArg(node, text) ?? this.printLentResponseArg(node, text) ?? this.printLentHelperArg(node, text) ?? this.printOptionalParamsArg(node, text) ?? this.printWsFieldBox(node, text) ?? this.printDictElementBox(node, text) ?? this.printHandedSlotBox(node, text); if (borrowedArg !== undefined) return borrowedArg;
         const containerBox = this.printRustContainerLocalBox(node, text);
         if (containerBox !== undefined) return containerBox;
         const lentBox = this.printRustLentListBox(node, text); if (lentBox !== undefined) return lentBox;
@@ -41312,7 +41314,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
         // (a by-name handler that never names its message borrows it too: nothing reads the slot)
-        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
+        if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === undefined && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0))) return false;
         // every call site proven: own file and the ws sibling, and no other `.name (` / quoted name anywhere in ts/src
         const sibling = this.rustWsSiblingCallSites(method);
         if (sibling === undefined) return false;
@@ -41586,8 +41588,13 @@ export class RustTranspiler extends BaseTranspiler {
     rustVenueDictArgLends(arg: any): boolean {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind === SyntaxKind.Parameter) return declaration.name !== arg && (this.rustVenueDictParam(declaration) || (this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg)));
-        return this.rustNeverNullDictLocalArg(arg);
+        if (declaration?.kind !== SyntaxKind.Parameter) return this.rustNeverNullDictLocalArg(arg);
+        if (declaration.name === arg) return false;
+        if (!this.rustVenueDictParam(declaration)) return this.rustBoxedDictParamLends(declaration) && !this.rustArgSlotTakesDictHandle(arg);
+        // a borrowed map view cannot feed a slot that takes the dict handle
+        const call: any = arg.parent;
+        const slot: any = isCallExpression(call) ? this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(arg)] : undefined;
+        return slot === undefined || !this.rustVenueDictValueParam(slot) || this.rustVenueDictValueParam(declaration);
     }
 
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
@@ -41647,6 +41654,31 @@ export class RustTranspiler extends BaseTranspiler {
         return up !== undefined && isCallExpression(up) && up.arguments[0] === id && this.rustBorrowedAnyKeyReader(up);
     }
 
+    /** Handed whole to a `this.` venue method whose slot takes a boxed value: the dict handle is boxed there
+     *  (`Value::from(x)`, the same shared map the box held). */
+    rustVenueDictWholeArgUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (!isIdentifier(id) || !isCallExpression(call) || call.expression === id || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (call.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement) || this.rustCalleeIsRuntimeBase(call)) return false;
+        const at = Array.from(call.arguments).indexOf(id);
+        const callee: any = this.rustScalarCallee(call);
+        const slot: any = at < 0 ? undefined : callee?.parameters?.[at];
+        if (slot === undefined || !isMethodDeclaration(callee) || callee.body === undefined || slot.dotDotDotToken !== undefined || this.isAsyncFunction(callee)) return false;
+        if (slot.type !== undefined && slot.type.kind !== SyntaxKind.AnyKeyword && !(isTypeReferenceNode(slot.type) && isIdentifier(slot.type.typeName) && String(slot.type.typeName.text) === 'Dict')) return false;
+        // a callee that writes into the row it is handed keeps its own box
+        if (this.rustVenueDictParam(slot) || !isIdentifier(slot.name) || this.rustProHandlerParamIsWritten(slot, String(slot.name.text))) return false;
+        const printed = this.rustParamType(slot);
+        return printed === 'Value' || printed === 'impl Into<crate::Value>';
+    }
+
+    /** `Value::from(x)` for a borrowed dict handle handed whole to a boxed slot. */
+    printVenueDictWholeArg(node: any, text: string): string | undefined {
+        if (!isIdentifier(node) || !this.rustVenueDictWholeArgUse(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration) || !this.rustVenueDictValueParam(declaration)) return undefined;
+        return `Value::from(${text})`;
+    }
+
     /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
     printVenueDictReaderArg(node: any, text: string): string | undefined {
         if (!isIdentifier(node) || !this.rustVenueDictReaderUse(node)) return undefined;
@@ -41666,20 +41698,73 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `Value::Map(x.clone())` for a rustVenueDictParam read as an object-literal entry value. */
     printVenueDictValue(node: any, text: string): string | undefined {
-        if (!isIdentifier(node) || !this.rustVenueDictValueUse(node)) return undefined;
+        if (!isIdentifier(node)) return undefined;
+        if (!this.rustVenueDictValueUse(node)) return this.printVenueDictHandleEntry(node, text);
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration)) return undefined;
+        // a handle whose later reads go through the handler view: `.clone()` would look like a last use to a move pass
+        if ((declaration === this.rustProHandlerShadowParam || (isMethodDeclaration(declaration.parent) && isIdentifier(declaration.parent.name) && this.rustWsHandlerMessageSlot(declaration.parent, declaration))) && this.rustVenueDictValueParam(declaration)) return `Value::from(${text})`;
         return `Value::Dict(${text}.clone())`;
+    }
+
+    /** A ws handler's message handed whole to an untyped `Value` slot of `this.m (..)`, or returned: the dict handle boxes as is. */
+    rustVenueDictWholeUse(id: any): boolean {
+        const up: any = id?.parent;
+        if (up === undefined) return false;
+        if (isReturnStatement(up) && up.expression === id) {
+            let fn: any = up.parent;
+            while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+            return fn !== undefined && isMethodDeclaration(fn) && this.rustDeclarationOfIdentifier(id)?.parent === fn;
+        }
+        if (!isCallExpression(up) || !isPropertyAccessExpression(up.expression) || up.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const args: any[] = Array.from(up.arguments);
+        const at = args.indexOf(id);
+        if (at < 0 || args.some((a: any) => a.kind === SyntaxKind.SpreadElement)) return false;
+        // a venue method's own `any` slot (a base-tier slot keeps its own lending rules)
+        const callee: any = this.rustScalarCallee(up);
+        if (callee === undefined || RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee.getSourceFile().fileName))) return false;
+        const slot: any = callee.parameters?.[at];
+        if (slot === undefined || slot.dotDotDotToken !== undefined || (slot.type !== undefined && slot.type.kind !== SyntaxKind.AnyKeyword)) return false;
+        return isIdentifier(slot.name) && !this.rustProHandlerParamIsWritten(slot, String(slot.name.text));
+    }
+
+    /** `Value::from(x)` (the shared dict handle) for a rustVenueDictParam handed whole to a `Value` slot or returned. */
+    printVenueDictWhole(node: any, text: string): string | undefined {
+        if (!isIdentifier(node)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration) || !this.rustVenueDictWholeUse(node)) return undefined;
+        return `Value::from(${text})`;
+    }
+
+    /** A dict-handle parameter as an object-literal entry value at its last use: the box shares the handle. */
+    printVenueDictHandleEntry(node: any, text: string): string | undefined {
+        const up: any = node.parent;
+        if (up === undefined || !isPropertyAssignment(up) || up.initializer !== node || !isObjectLiteralExpression(up.parent)) return undefined;
+        const declaration: any = this.rustDeclarationOfIdentifier(node);
+        if (declaration?.kind !== SyntaxKind.Parameter || declaration.name === node || !this.rustVenueDictParam(declaration) || !this.rustVenueDictValueParam(declaration)) return undefined;
+        return `Value::from(${text})`;
+    }
+
+    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+     *  caller parameter cannot lend as a map view. */
+    rustArgSlotTakesDictHandle(arg: any): boolean {
+        const call: any = arg?.parent;
+        if (!isCallExpression(call)) return false;
+        const at = Array.from(call.arguments).indexOf(arg);
+        const param: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
+        return param !== undefined && this.rustVenueDictValueParam(param);
     }
 
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
     rustVenueDictValueParam(param: any): boolean {
         if (!isIdentifier(param?.name) || param.parent?.body === undefined) return false;
         const name = String(param.name.text);
+        // a handed-whole or returned message takes the handle only in a ws handler
+        const handler = isMethodDeclaration(param.parent) && isIdentifier(param.parent.name) && this.rustWsHandlerMessageSlot(param.parent, param);
         let found = false;
         const visit = (n: any) => {
             if (found) return;
-            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n)) && this.rustDeclarationOfIdentifier(n) === param) found = true;
+            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
             n.forEachChild(visit);
         };
         param.parent.body.forEachChild(visit);
@@ -41697,16 +41782,6 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustParamType(param) === 'Value';
     }
 
-    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
-     *  caller parameter cannot lend as a map view. */
-    rustArgSlotTakesDictHandle(arg: any): boolean {
-        const call: any = arg?.parent;
-        if (!isCallExpression(call)) return false;
-        const at = Array.from(call.arguments).indexOf(arg);
-        const param: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
-        return param !== undefined && this.rustVenueDictValueParam(param);
-    }
-
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined {
         const call: any = node?.parent;
@@ -41717,7 +41792,9 @@ export class RustTranspiler extends BaseTranspiler {
         const param: any = callee?.parameters?.[at];
         if (param === undefined || !this.rustVenueDictParam(param)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
-        if (declaration?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration)) return `${text}.as_map().unwrap_or(&Default::default())`;
+        if (declaration?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration)) {
+            return `${text}.as_map().unwrap_or(&Default::default())`;
+        }
         return declaration?.kind === SyntaxKind.Parameter ? text : `&${text}`;
     }
 
