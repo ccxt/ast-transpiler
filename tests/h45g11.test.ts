@@ -14,7 +14,7 @@ describe ('go dict params: cancelUnifiedOrder order (async table row)', () => {
         '    safeString (d: any, k: any, v: any = undefined): any { return undefined; }\n' +
         '    async cancelOrder (id: string, symbol: any = undefined, params: Dict = {}): Promise<any> { return undefined; }\n' +
         '    async cancelUnifiedOrder (order: Order, params: Dict = {}): Promise<any> {\n' + body + '    }\n' +
-        '    async fetchUnifiedOrder (order: Order, params: Dict = {}): Promise<any> {\n' +
+        '    async fetchOtherOrder (order: Order, params: Dict = {}): Promise<any> {\n' +
         "        return await this.cancelOrder (this.safeString (order, 'id', ''), this.safeString (order, 'symbol'), params);\n" +
         '    }\n' +
         '}\n';
@@ -33,7 +33,7 @@ describe ('go dict params: cancelUnifiedOrder order (async table row)', () => {
     });
     test ('an async method outside the async rows keeps the box', () => {
         const out = print ("        return await this.cancelOrder (this.safeString (order, 'id', ''), this.safeString (order, 'symbol'), params);\n");
-        expect (out).toContain ('FetchUnifiedOrderAsync(order any');
+        expect (out).toContain ('FetchOtherOrderAsync(order any');
     });
     test ('a base body that writes the parameter another type keeps the box', () => {
         const out = print ("        order = 'x';\n        return await this.cancelOrder (this.safeString (order, 'id', ''), undefined, params);\n");

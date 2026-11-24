@@ -14100,10 +14100,13 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseIsolatedBorrowRate': [ 0 ],
     // cancelUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
     'cancelUnifiedOrder': [ 0 ],
+    // fetchUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
+    'fetchUnifiedOrder': [ 0 ],
 };
 // the async rows above (each one's typed wrapper converts its struct argument)
 const GO_BASE_DICT_ASYNC_PARAMS: string[] = [
     'cancelUnifiedOrder',
+    'fetchUnifiedOrder',
 ];
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
