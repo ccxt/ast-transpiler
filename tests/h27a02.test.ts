@@ -77,6 +77,17 @@ describe ('go safeList (R, lit) on a JSON-origin map local prints the comma-ok l
         '        }\n' +
         '        return n;\n' +
         '    }\n' +
+        '    async indexHop () {\n' +
+        '        const response = await this.publicGetRows ();\n' +
+        '        const meta = this.safeDict (response, 0, {});\n' +
+        "        const universe = this.safeList (meta, 'universe');\n" +
+        '        return universe.length;\n' +
+        '    }\n' +
+        '    indexHopParam (payload: any) {\n' +
+        '        const head = this.safeDict (payload, 0, {});\n' +
+        "        const cells = this.safeList (head, 'cells');\n" +
+        '        return cells.length;\n' +
+        '    }\n' +
         '    fromParam (payload: Dict) {\n' +
         "        const entries = this.safeList (payload, 'entries');\n" +
         '        return entries.length;\n' +
@@ -120,5 +131,14 @@ describe ('go safeList (R, lit) on a JSON-origin map local prints the comma-ok l
 
     test ('negative: a parameter receiver is not JSON-origin and keeps the wrap', () => {
         expect (out).not.toMatch (/entries, _ = payload/);
+    });
+
+    test ('positive: a dict hop at a numeric index of a decoded response is JSON-origin too', () => {
+        expect (out).toMatch (/universe, _ = meta\["universe"\]\.\(\[\]any\)/);
+    });
+
+    test ('negative: a numeric-index hop on a parameter keeps the wrap', () => {
+        expect (out).not.toMatch (/cells, _ = head\[/);
+        expect (out).toMatch (/SafeListTyped\(head, "cells"\)/);
     });
 });

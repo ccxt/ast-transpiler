@@ -48357,7 +48357,7 @@ GoTranspiler.prototype.h27a02JsonOrigin = function (node, depth: number) {
         fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
     } else {
         const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
+        fromJson = (args !== undefined) && ((args.key?.kind === SyntaxKind.StringLiteral) || (args.key?.kind === SyntaxKind.NumericLiteral))
             && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
             && this.h27a02JsonOrigin(args.container, depth + 1);
     }
@@ -48406,7 +48406,7 @@ GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read) {
         fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
     } else {
         const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-        fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
+        fromJson = (args !== undefined) && ((args.key?.kind === SyntaxKind.StringLiteral) || (args.key?.kind === SyntaxKind.NumericLiteral))
             && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
             && (this.h27a02JsonOrigin(args.container, 0) || this.h27a02JsonOriginBeforeRead(args.container, read));
     }
