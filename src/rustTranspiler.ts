@@ -39727,6 +39727,7 @@ export class RustTranspiler extends BaseTranspiler {
     // the same for `string` parameters dispatched by name (no trait slot): method -> parameter names by index, printed `&str`
     private static readonly RUST_INHERENT_GROUP_STR_PARAMS: Record<string, string[]> = { 'handleTextMessage': [ '', 'message' ],
         'calculateRateLimiterCost': [ '', 'method', 'path' ],
+        'signEvmTransaction': [ '', 'privateKey' ],
     };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
