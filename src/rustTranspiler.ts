@@ -14520,6 +14520,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isIdentifier(key) || this.rustScalarUseForms.get(key) !== 'bkey') return undefined;
         const kind = this.rustScalarLocalOf(key)?.kind;
         if (kind !== 'str' && kind !== 'ostr') return undefined;
+        // a typed book local or parameter reads its side through the shared-store `book_field` (a `None` key reads no field)
+        const book: any = this.rustStripWrappers(node.expression);
+        if (isIdentifier(book) && this.rustWsBookLocalOf(book) !== undefined) {
+            return `${super.printIdentifier(book)}.book_field(${super.printIdentifier(key)}.${kind === 'str' ? 'as_str()' : 'as_deref().unwrap_or_default()'})`;
+        }
         const recv = this.printNode(node.expression, 0).trim();
         return `get_value(&${recv}, ${super.printIdentifier(key)}.${kind === 'str' ? 'as_str' : 'as_deref'}())`;
     }

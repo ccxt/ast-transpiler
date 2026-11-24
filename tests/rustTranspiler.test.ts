@@ -22329,10 +22329,15 @@ describe('ral-64k: the key of an element read on a typed ws order-book local is 
         return transpiler.transpileRustByPath (path.join (dir, 'ts/src/pro/venue.ts')).content;
     };
     const body = (keyUse: string) => "    handle (amount: number, first: Dict) {\n        const orderbook = this.orderBook ({}, 10);\n        const side = (amount < 0) ? 'asks' : 'bids';\n        const bookside = orderbook[side];\n        this.consume (bookside);\n" + keyUse + "        this.consume (orderbook);\n    }\n";
-    test('the key is a String and the read lends side.as_str()', () => {
+    test('the key is a String and the side reads through book_field (no get_value)', () => {
         const out = write ('64k-book', body (''));
         expect(out).not.toMatch(/let mut side: Value = /);
-        expect(out).toContain('get_value(&Value::from(&orderbook), side.as_str())');
+        expect(out).toContain('orderbook.book_field(side.as_str())');
+        expect(out).not.toContain('get_value(&Value::from(&orderbook), side');
+    });
+    test('an optional key (list element) reads book_field of its str, empty for none', () => {
+        const out = write ('64k-book-opt', body ('').replace ("const side = (amount < 0) ? 'asks' : 'bids';", "const keys = [ 'asks', 'bids' ];\n        const side = keys[amount];"));
+        expect(out).toContain('orderbook.book_field(side.as_deref().unwrap_or_default())');
     });
     test('negative: a read that is no local initializer keeps the boxed key', () => {
         const out = write ('64k-book-neg', body ('').replace ('const bookside = orderbook[side];\n        this.consume (bookside);', 'this.consume (orderbook[side]);'));
