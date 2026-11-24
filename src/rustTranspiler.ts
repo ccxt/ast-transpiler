@@ -6662,6 +6662,8 @@ export class RustTranspiler extends BaseTranspiler {
         handleErrors: [ 'Bool', 'obool' ],
         // prediction EVM signer: the signed raw tx hex on every path (the base throws)
         signEvmTransaction: [ 'string', 'str' ],
+        // every body returns the symbol -> tiers map it builds (`-> Dict`)
+        parseLeverageTiers: [ 'LeverageTiers', 'dict' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
