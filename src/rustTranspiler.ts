@@ -22346,6 +22346,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
         const typedKeys = this.printTypedResultKeys(node); if (typedKeys !== undefined) return typedKeys;
+        const memberKeys = (this as any).rustH49MemberDictKeys(node); if (memberKeys !== undefined) return memberKeys;
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
         const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'keys'); if (h29 !== undefined) return h29;
@@ -44830,3 +44831,32 @@ const rustR14VenueCallText = new Map<string, string>();
     return handOn === 1 && this.rustScopeNameNodes(method, String(param.name.text)).filter((n: any) => n !== param.name && n !== param && !this.rustIdentifierIsPropertyName(n)).length === 1;
 };
 // ===== end h48-R24
+
+// ===== h49-R52: `Object.keys (this.safeDict (m, k, {}))` on a map the printer already holds natively
+// The member when it is a map, else the empty map: its own keys, or none (what `object_keys` of the boxed read answered).
+(RustTranspiler.prototype as any).rustH49MemberDictKeys = function (this: any, node: any): string | undefined {
+    if (!isCallExpression(node) || node.arguments.length !== 1 || this.rustTestTierSource(node)) return undefined;
+    const call: any = this.rustSkipWrappers(node.arguments[0]);
+    if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+    if (String(call.expression.name.text) !== 'safeDict' || call.arguments.length !== 3 || !this.rustCalleeIsRuntimeBase(call)) return undefined;
+    const dflt: any = this.rustSkipWrappers(call.arguments[2]);
+    if (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0) return undefined;
+    const recv: any = this.rustSkipWrappers(call.arguments[0]);
+    if (recv === undefined || !isIdentifier(recv)) return undefined;
+    const shadow = this.rustParamShadowOf(recv);
+    const map = shadow?.kind === RUST_PARAM_SHADOWS.MAP ? shadow.name : this.rustBorrowedDictName(recv)
+        ?? (this.rustDictBearerDeclaration(recv) !== undefined ? (BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text) : undefined);
+    if (map === undefined) return undefined;
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    let k: string | undefined;
+    if (key !== undefined && isStringLiteral(key)) k = JSON.stringify(String(key.text));
+    else if (key !== undefined && isIdentifier(key)) {
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        const name = (BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text);
+        if (kind === 'str') k = `${name}.as_str()`;
+        else if (kind === 'ostr') k = `${name}.as_deref().unwrap_or("null")`;
+    }
+    if (k === undefined) return undefined;
+    return `Value::Array(match ${map}.get(${k}) { Some(Value::Dict(__m)) => __m.keys().cloned().map(Value::from).collect(), _ => Vec::new() })`;
+};
+// ===== end h49-R52
