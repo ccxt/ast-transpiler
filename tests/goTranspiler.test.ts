@@ -21619,3 +21619,90 @@ describe ('go parsePosition row read inline off a decoded ws frame map', () => {
         expect(out).not.toMatch(/rawDict\w*, _ := raw\[i\]/);
     });
 });
+
+describe ('go parseTicker row parameter from the base dict-param table', () => {
+    const print = (name: string, body: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parseTicker (ticker: Dict, market: any = undefined) {\n' +
+            "        return ticker['a'];\n" +
+            '    }\n' +
+            '    run (data: any, xs: any[]) {\n' + body + '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false });
+            installCcxtGoLocalTypes(t.goTranspiler);
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict row prints the map parameter and a native read', () => {
+        const out = print('tmp-h39g07-pos', '        return this.parseTicker (this.safeDict (data, 0, {}));\n');
+        expect(out).toContain('ParseTicker(ticker map[string]any, optionalArgs ...any)');
+        expect(out).not.toContain('GetValue(ticker');
+    });
+    test('negative: a raw list element (nil, missing or another kind) keeps the box', () => {
+        const out = print('tmp-h39g07-raw', '        return this.parseTicker (xs[0]);\n');
+        expect(out).toContain('ParseTicker(ticker any, optionalArgs ...any)');
+    });
+    test('negative: a nil-able safeDict row with no default keeps the box', () => {
+        const out = print('tmp-h39g07-nil', '        return this.parseTicker (this.safeDict (data, 0));\n');
+        expect(out).toContain('ParseTicker(ticker any, optionalArgs ...any)');
+    });
+    test('a typed list row stored into a map slot reads natively (no SafeDictMap)', () => {
+        const out = print('tmp-h42g01-store', '        const rows: Dict[] = [];\n        const r: Dict = {};\n        for (let i = 0; i < rows.length; i++) {\n            r[\'k\'] = this.parseTicker (this.safeDict (rows, i, {}));\n        }\n        return r;\n');
+        expect(out).toMatch(/(rowsDict\d+), _ := rows\[i\]\.\(map\[string\]any\)\n\s*if \1 == nil \{\n\s*\1 = map\[string\]any\{\}\n\s*\}\n\s*r\["k"\] = .*ParseTicker\(\1\)/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('a typed list row pushed into a list reads natively', () => {
+        const out = print('tmp-h42g01-push', '        const rows: Dict[] = [];\n        const r = [];\n        for (let i = 0; i < rows.length; i++) {\n            r.push (this.parseTicker (this.safeDict (rows, i, {})));\n        }\n        return r;\n');
+        expect(out).toMatch(/rowsDict\d+, _ := rows\[i\]\.\(map\[string\]any\)/);
+        expect(out).not.toContain('SafeDictMap');
+    });
+    test('a typed map local read by a string key prints the comma-ok key read', () => {
+        const out = print('tmp-h42g01-map', '        const m: Dict = this.safeDict (data, \'x\', {});\n        return this.parseTicker (this.safeDict (m, \'data\', {}));\n');
+        expect(out).toMatch(/(mDict\d+), _ := m\["data"\]\.\(map\[string\]any\)\n\s*if \1 == nil \{\n\s*\1 = map\[string\]any\{\}\n\s*\}\n.*ParseTicker\(\1\)/);
+        expect(out).not.toContain('SafeDictMap(m,');
+    });
+    test('negative: a store into a target that runs a call keeps the wrap', () => {
+        const out = print('tmp-h42g01-nested', '        const rows: Dict[] = [];\n        const r: Dict = {};\n        r[this.safeDict (data, \'k\')][\'b\'] = this.parseTicker (this.safeDict (rows, 0, {}));\n        return r;\n');
+        expect(out).toContain('this.SafeDictMap(rows, 0, map[string]any{})');
+    });
+    test('negative: an untyped map receiver keeps the wrap', () => {
+        const out = print('tmp-h42g01-untypedmap', '        return this.parseTicker (this.safeDict (data, \'data\', {}));\n');
+        expect(out).toContain('this.SafeDictMap(data, "data", map[string]any{})');
+    });
+    test('a typed map local read by an element of its Object.keys list prints the comma-ok key read', () => {
+        const out = print('tmp-h43g01-keys', '        const m: Dict = this.safeDict (data, \'x\', {});\n        const keys = Object.keys (m);\n        const r = [];\n        for (let i = 0; i < keys.length; i++) {\n            r.push (this.parseTicker (this.safeDict (m, keys[i], {})));\n        }\n        return r;\n');
+        expect(out).toMatch(/(mDict\d+), _ := m\[keys\[i\]\]\.\(map\[string\]any\)\n\s*if \1 == nil \{\n\s*\1 = map\[string\]any\{\}/);
+        expect(out).not.toContain('SafeDictMap(m,');
+    });
+    test('negative: a key read from an untyped list keeps the wrap', () => {
+        const out = print('tmp-h43g01-anykeys', '        const m: Dict = this.safeDict (data, \'x\', {});\n        return this.parseTicker (this.safeDict (m, xs[0], {}));\n');
+        expect(out).not.toMatch(/mDict\d+, _ := m\[/);
+    });
+    test('negative: a receiver joined with an untyped value (printed any) keeps the wrap', () => {
+        const out = print('tmp-h44g01-anyjoin', '        let m: Dict = undefined;\n        if (xs.length > 0) {\n            m = this.safeDict (data, \'x\', {});\n        } else {\n            m = data;\n        }\n        const k: string = \'a\';\n        return this.parseTicker (this.safeDict (m, k, {}));\n');
+        expect(out).not.toMatch(/mDict\d+, _ := m\[/);
+        expect(out).toContain('SafeDictMap(m, k, map[string]any{})');
+    });
+    test('a nil-declared map local joined only from map rows prints the comma-ok key read', () => {
+        const out = print('tmp-h45g01-niljoin', '        let m = undefined;\n        if (xs.length > 0) {\n            m = this.safeDict (data, \'x\', {});\n        } else {\n            m = this.safeDict (data, \'y\', {});\n        }\n        return this.parseTicker (this.safeDict (m, \'data\', {}));\n');
+        expect(out).toContain('var m map[string]any = nil');
+        expect(out).toMatch(/(mDict\d+), _ := m\["data"\]\.\(map\[string\]any\)\n\s*if \1 == nil \{\n\s*\1 = map\[string\]any\{\}/);
+        expect(out).not.toContain('SafeDictMap(m,');
+    });
+    test('negative: a nil-declared local joined with an untyped value keeps the wrap', () => {
+        const out = print('tmp-h45g01-niljoinany', '        let m = undefined;\n        if (xs.length > 0) {\n            m = this.safeDict (data, \'x\', {});\n        } else {\n            m = data;\n        }\n        return this.parseTicker (this.safeDict (m, \'data\', {}));\n');
+        expect(out).not.toMatch(/mDict\d+, _ := m\[/);
+        expect(out).toContain('SafeDictMap(m, "data", map[string]any{})');
+    });
+});

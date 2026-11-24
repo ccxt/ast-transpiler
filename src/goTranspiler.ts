@@ -14057,6 +14057,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parsePredictionPosition': [ 0 ],
     // every tree caller passes an extend copy of the row
     'parseLastPrice': [ 0 ],
+    // ticker rows: every caller passes a map row (element reads go through a {}-defaulted safeDict)
+    'parseTicker': [ 0 ],
 };
 
 // `this.safeDict (c, k, {})` at a tabled dict slot prints the typed `this.SafeDictMap (..)` read (same value, never nil)
@@ -59343,6 +59345,12 @@ function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
         // only argument 0 of a `this.m (..)` call: nothing of the statement runs before the read
         if ((p.kind === SyntaxKind.CallExpression) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
             && (p.expression.expression?.kind === SyntaxKind.ThisKeyword)) { continue; }
+        // the pushed value of `xs.push (..)` and the right side of `x = ..` / `x[k] = ..` (plain names only)
+        if ((p.kind === SyntaxKind.CallExpression) && (p.arguments.length === 1) && (p.arguments[0] === child) && (p.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (p.expression.name?.text === 'push') && (p.expression.expression?.kind === SyntaxKind.Identifier) && (p.parent === statement)) { continue; }
+        if ((p.kind === SyntaxKind.BinaryExpression) && (p.operatorToken.kind === SyntaxKind.EqualsToken) && (p.right === child) && (p.parent === statement)
+            && ((p.left.kind === SyntaxKind.Identifier) || ((p.left.kind === SyntaxKind.ElementAccessExpression) && (p.left.expression.kind === SyntaxKind.Identifier)
+                && ((p.left.argumentExpression.kind === SyntaxKind.Identifier) || (p.left.argumentExpression.kind === SyntaxKind.StringLiteral))))) { continue; }
         return false;
     }
     return true;
@@ -59371,6 +59379,25 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
     // a string key on a decoded ws frame map (JSON values only): the comma-ok read, `{}` when missing or not a map
     const frameKey = ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && go.h29a13FrameMap(list))
         ? (go.h27a05KeyText(key) ?? ((go.goResolvedLocalGoType(key) === 'string') ? key.text : undefined)) : undefined;
+    // a typed map local read by a string key: the comma-ok key read, `{}` for a missing or non-map member
+    // (the receiver's printed Go declaration is a map, not only a value the printer reads as one; a key that prints a Go string)
+    const strKey = (key?.kind === SyntaxKind.StringLiteral) || ((key?.kind === SyntaxKind.Identifier) && (key.text !== xs) && (go.goResolvedLocalGoType(key) === 'string'))
+        || ((key?.kind === SyntaxKind.ElementAccessExpression) && (key.expression?.kind === SyntaxKind.Identifier) && (key.argumentExpression?.kind === SyntaxKind.Identifier)
+            && (key.expression.text !== xs) && (go.goResolvedLocalGoType(key.expression) === GO_STRING_LIST_LOCAL_TYPE));
+    // a nil-declared map local also qualifies: a nil map read is the missing-key answer
+    const mapRecv = (go.goResolvedLocalGoType(list) === GO_SAFE_DICT_LOCAL_TYPE) || (ccxtGoNilJoinDeclarationType(go, list) === GO_SAFE_DICT_LOCAL_TYPE)
+        || h29a01EndpointMapLocal(go, list);
+    if ((frameKey === undefined) && strKey && mapRecv) {
+        const mk = go.printNode(key, 0).trim();
+        const mwrap = `this.SafeDictMap(${xs}, ${mk}, map[string]any{})`;
+        const mat = printed.indexOf(mwrap);
+        if ((mat < 0) || (printed.indexOf(mwrap, mat + 1) >= 0)) { return printed; }
+        const mname = `${xs}Dict${go.getLineBasedSuffix(call)}`;
+        const miden = go.getIden(identation);
+        const mhoist = `${miden}${mname}, _ := ${xs}[${mk}].(map[string]any)\n${miden}if ${mname} == nil {\n${go.getIden(identation + 1)}${mname} = map[string]any{}\n${miden}}\n`;
+        const mline = printed.lastIndexOf('\n', mat) + 1;
+        return printed.substring(0, mline) + mhoist + printed.substring(mline, mat) + mname + printed.substring(mat + mwrap.length);
+    }
     if ((frameKey === undefined) && (go.goResolvedLocalGoType(list) !== GO_SAFE_LIST_LOCAL_TYPE) && !go.goAwaitedListLocal(list)
         && (ccxtGoNilJoinDeclarationType(go, list) !== GO_SAFE_LIST_LOCAL_TYPE)) { return printed; }
     let k: string;
