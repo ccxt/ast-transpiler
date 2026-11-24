@@ -31355,7 +31355,7 @@ export class RustTranspiler extends BaseTranspiler {
             const list: any = declaration.parent;
             const init: any = this.unwrapParens(declaration.initializer);
             const kind = slot ? (this.rustWsTupleCacheSlot(declaration) ? 'opt' : undefined)
-                : init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) || this.rustWsWatchResultKind(init) === 'cache' ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
+                : init === undefined ? undefined : (this.rustWsCacheField(init) || this.rustWsCacheOptSource(init, false) || this.rustWsWatchResultKind(init) === 'cache' || this.rustWsDeclaredCacheWatch(declaration) ? 'opt' : (this.rustWsCacheCtor(init) ? 'cache' : undefined));
             if (kind !== undefined && (slot || (list?.kind === SyntaxKind.VariableDeclarationList && list.declarations.length === 1))) {
                 const forms = new Map<Node, 'bare' | 'box' | 'test' | 'len' | 'split' | 'llen' | 'lret'>();
                 const split: any = kind === 'opt' && !slot ? this.rustWsCacheListSplit(declaration) : undefined;
@@ -31387,6 +31387,39 @@ export class RustTranspiler extends BaseTranspiler {
             this.rustWsCacheLocals.set(declaration, known);
         }
         return known ?? undefined;
+    }
+
+    /** `const x: ArrayCache* = await this.w (..)` where w is a venue wrapper of the same ws class that awaits a watch:
+     *  the venue declares the awaited cache, and the marker test converts any other resolved value to None. */
+    rustWsDeclaredCacheWatch(declaration: any): boolean {
+        const type: any = declaration?.type;
+        if (type?.kind !== SyntaxKind.TypeReference || !isIdentifier(type.typeName) || !RustTranspiler.RUST_CACHE_CTORS.has(String(type.typeName.text))) return false;
+        const awaited: any = this.unwrapParens(declaration.initializer);
+        const call: any = awaited?.kind === SyntaxKind.AwaitExpression ? this.unwrapParens(awaited.expression) : undefined;
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(call.expression.name.text);
+        if (name === 'watch' || name === 'watchMultiple' || this.isTestSource(call)) return false;
+        const cls: any = findAncestor(call, isClassDeclaration);
+        const table = cls === undefined ? null : this.rustWsResolveTable(cls);
+        if (table === null) return false;
+        const save = this.rustWsHashEnv;
+        let hashes: Array<Array<string | null>> | undefined;
+        try {
+            this.rustWsHashEnv = undefined;
+            hashes = this.rustWsAwaitedHashes(call, cls, 0);
+        } finally {
+            this.rustWsHashEnv = save;
+        }
+        if (hashes === undefined || hashes.length === 0 || hashes.some((p) => p.every((s) => s === null))) return false;
+        // every matching resolve with a known hash text settles a cache (or Null); only unknown-hash resolves may differ
+        let caches = 0;
+        for (const r of table) {
+            if (!r.pats.some((rp) => hashes!.some((wp) => RustTranspiler.rustWsPatternsMeet(rp, wp)))) continue;
+            const known = r.pats.every((rp) => rp.some((s) => s !== null));
+            if (r.kind === 'cache') caches++;
+            else if (known && r.kind !== 'none') return false;
+        }
+        return caches > 0;
     }
 
     /** ral-54w: a slot of `const [ a, b, c ] = await this.m (..)` (a proven watch, see rustWsWatchResultKind) where every
@@ -31735,6 +31768,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustWsCacheUndefined(n)) return 'None';
         // a proven watch result: the runtime's marker test converts the resolved value once
         if (this.rustWsWatchResultKind(n) === 'cache') return `${this.printNode(n, 0).trim()}.into()`;
+        if (isVariableDeclaration(n?.parent) && this.unwrapParens(n.parent.initializer) === n && this.rustWsDeclaredCacheWatch(n.parent)) return `${this.printNode(n, 0).trim()}.into()`;
         if (this.rustWsCacheField(n)) return `self.${String(n.name.text)}.clone()`;
         if (this.rustWsCacheMapEntry(n) || this.rustWsCacheMapLookup(n)) return this.rustWsCacheMapReadText(n);
         if (isConditionalExpression(n)) {
