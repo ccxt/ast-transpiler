@@ -6530,6 +6530,7 @@ export class RustTranspiler extends BaseTranspiler {
         isPostOnly: [ 'boolean', 'bool' ],
         usesPrivateKey: [ 'boolean', 'bool' ],
         isGateFuturesContractWithDecimalSize: [ 'boolean', 'bool' ],
+        isFiat: [ 'boolean', 'bool' ],
         // ws error handlers: true when the message was an error it handled, false otherwise
         handleErrorMessage: [ 'boolean|Bool', 'bool' ],
         paramsToString: [ 'string', 'str' ],
