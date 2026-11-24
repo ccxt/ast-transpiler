@@ -12832,7 +12832,7 @@ export class RustTranspiler extends BaseTranspiler {
         // xd: an `Int` parameter of a typed base filter signature is a native `Option<i64>` already: read as is
         if (this.rustTypedFilterParamOf(inner)?.rustType === 'Option<i64>') return { kind: 'oint', text: super.printIdentifier(inner) };
         const kind = this.rustOptParamKind(inner);
-        if (kind === 'int' && this.rustGroupIntParamUnboundRead(inner)) return { kind, text: super.printIdentifier(inner) };
+        if ((kind === 'int' || kind === 'num') && this.rustGroupIntParamUnboundRead(inner)) return { kind, text: super.printIdentifier(inner) };
         return kind === undefined ? undefined : { kind, text: `${super.printIdentifier(inner)}.${RustTranspiler.RUST_PARAM_READ[kind]}` };
     }
 
@@ -39686,7 +39686,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declared = this.rustVenueScalarTypeOf(type, param.type);
         if (declared === undefined || (optional && declared === 'bool')) return undefined;
         const rustType = optional && !declared.startsWith('Option<') ? `Option<${declared}>` : declared;
-        if (rustType.includes('f64') && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
+        if (rustType.includes('f64') && !group && !this.rustVenueFloatUsesStayInside(method, param)) return undefined;
         // ral-63x: only a required string slot whose every caller passes a string literal (no conversion at any caller)
         // and that seeds a local of the body (`let x = param`): that local is what the typed parameter frees
         if (noArmStr && !this.rust63xLiteralSeedStrParam(method, param, rustType) && !(this.rust92raStrConsumerParam(method, param, rustType)) && !this.rustVenueOptStrParam(method, param, rustType) && !this.rustVenueStrParam(method, param, rustType)) return undefined;
@@ -39849,6 +39849,10 @@ export class RustTranspiler extends BaseTranspiler {
         'signEvmTransaction': [ '', 'privateKey' ],
         'calculateFee': [ 'symbol', '', 'side' ],
     };
+    // the same for `number` parameters (printed `f64`): method -> parameter names by index
+    private static readonly RUST_INHERENT_GROUP_NUM_PARAMS: Record<string, string[]> = {
+        'calculateFee': [ '', '', '', 'amount', 'price' ],
+    };
 
     private rustOverrideGroupAgreeByRoot = new Map<string, boolean>();
 
@@ -39912,14 +39916,15 @@ export class RustTranspiler extends BaseTranspiler {
         const map = inherent === undefined ? RustTranspiler.RUST_OVERRIDE_GROUP_MAP_PARAMS[name]?.[index] : undefined;
         const ostr = map === undefined && inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS[name] ?? []).includes(index);
         const int = map !== undefined || ostr || (inherent === undefined && (RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS[name] ?? []).includes(index));
-        const inherentStr = inherent === undefined && !int ? RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name]?.[index] : undefined;
+        const inherentNum = inherent === undefined && !int ? RustTranspiler.RUST_INHERENT_GROUP_NUM_PARAMS[name]?.[index] || undefined : undefined;
+        const inherentStr = inherent === undefined && !int ? inherentNum ?? RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name]?.[index] : undefined;
         const pname = int ? String(param.name.text) : inherent ?? inherentStr ?? RustTranspiler.RUST_OVERRIDE_GROUP_STR_PARAMS[name]?.[index];
         if (!pname || (inherent !== undefined && index !== 0) || String(param.name.text) !== pname) return false;
         const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
         // a map entry of an inherent group (no trait slot, dispatched by name) types like its string entries
         const inherentMap = map !== undefined && RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name] !== undefined;
         if ((inherent !== undefined || inherentStr || inherentMap ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
-        const spelled = `${int ? '' : pname}:${map ?? (inherent !== undefined || ostr ? 'Str' : int ? 'int' : 'string')}`;
+        const spelled = `${int ? '' : pname}:${map ?? (inherent !== undefined || ostr ? 'Str' : int ? 'int' : inherentNum ? 'number' : 'string')}`;
         const at = file.indexOf('ts/src/');
         if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file)) return false;
         const root = file.slice(0, at) + 'ts/src';
@@ -40141,7 +40146,8 @@ export class RustTranspiler extends BaseTranspiler {
     /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
      *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
     rustGroupIntParamUnbound(param: any): boolean {
-        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || this.rustVenueStrParamType(param) !== 'i64') return false;
+        // a `number` group slot (`f64`) the same way: every read boxes it on the spot
+        if (param?.kind !== SyntaxKind.Parameter || !isIdentifier(param.name) || ![ 'i64', 'f64' ].includes(this.rustVenueStrParamType(param) ?? '')) return false;
         const method: any = param.parent;
         const file = String(method.getSourceFile().fileName).replace(/\\/g, '/');
         if (!this.rustOverrideGroupParam(method, param, file)) return false;
@@ -40157,6 +40163,7 @@ export class RustTranspiler extends BaseTranspiler {
         const left: any = this.unwrapParens(leftNode);
         const right: any = this.unwrapParens(rightNode);
         const lit = (n: any) => this.rustScalarIntLiteral(n);
+        if ([ left, right ].some((n: any) => isIdentifier(n) && this.rustVenueStrParamType(this.rustDeclaredNode(n)) === 'f64')) return undefined;
         if (isIdentifier(left) && this.rustGroupIntParamUnboundRead(left) && lit(right) !== undefined) return `${String(left.text)} ${sign} ${lit(right)}`;
         if (isIdentifier(right) && this.rustGroupIntParamUnboundRead(right) && lit(left) !== undefined) return `${lit(left)} ${sign} ${String(right.text)}`;
         return undefined;
