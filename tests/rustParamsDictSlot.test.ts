@@ -69,3 +69,30 @@ describe ('an extend operand never turns a moved ternary arm into a clone', () =
         expect (out).not.toContain ('&[&params]');
     });
 });
+
+describe ('a Dict alias of the params slot and a venue helper params slot take the map', () => {
+    const helper = "    getKind (method: string, params: Dict = {}): [Str, Dict] {\n        return [ this.safeString (params, 'type'), this.omit (params, 'type') ];\n    }\n";
+    const runWith = (dir: string, body: string) => {
+        fs.mkdirSync (path.join (root, dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (root, dir, 'ts/src/venue.ts'), venue (body).replace (/\}\n$/, helper + '}\n').replace ('import type { Dict, Int, Trade }', 'import type { Dict, Int, Str, Trade }'));
+        return new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': [ 'fetchTrades' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (root, dir, 'ts/src/venue.ts')).content;
+    };
+    const alias = "        let query: Dict = params;\n        if (symbol === 'x') {\n            let kind: Str = undefined;\n            [ kind, query ] = this.getKind ('fetchTrades', params);\n            this.hold (kind);\n        }\n        const rest = this.omit (query, 'type');\n        this.hold (rest);\n";
+    test ('`let query: Dict = params` is a plain map binding and params is handed to the helper slot', () => {
+        const out = runWith ('alias', alias);
+        expect (out).toContain ('let params: crate::value::Dict = get_arg_dict(optional_args, ');
+        expect (out).toMatch (/let mut query: crate::value::Dict = params(\.clone\(\))?;/);
+        expect (out).not.toContain ('params.clone().into_dict()');
+        expect (out).not.toMatch (/match &?params \{ Value::/);
+        expect (out).toMatch (/self\.(get_kind|getKind)\("fetchTrades", &\[&?(Value::Dict\(params\)|Value::from\(&params\))\]\)/);
+    });
+    test ('negative: an untyped alias of params keeps the boxed get_arg', () => {
+        const out = runWith ('alias-any', "        const query = params;\n        this.hold (query);\n");
+        expect (out).not.toContain ('get_arg_dict');
+    });
+    test ('negative: params handed to a helper slot that is not a Dict keeps the boxed get_arg', () => {
+        const out = runWith ('alias-hold', alias + "        this.hold (params);\n");
+        expect (out).not.toContain ('get_arg_dict');
+    });
+});

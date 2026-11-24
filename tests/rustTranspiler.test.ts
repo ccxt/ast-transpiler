@@ -16838,7 +16838,7 @@ describe('ral-44c: a params alias held as the map through an omit rewrite', () =
         expect(t3).toContain('let mut merged: crate::value::Dict = params.clone().into_dict();');
         // params not read after the alias: it moves in (no Arc copy, as the boxed alias moved it)
         const t4 = text.slice(text.indexOf('fn fetchTicker'), text.indexOf('fn rebound'));
-        expect(t4).toContain('let mut moved: crate::value::Dict = params.into_dict();');
+        expect(t4).toContain('let mut moved: crate::value::Dict = params;');
         const t2 = text.slice(text.indexOf('fn rebound'));
         expect(t2).toContain('let mut y: Value =');
     });
@@ -23674,7 +23674,7 @@ describe('ral-73g: a params alias lent to a lent-params slot holds the map', () 
         fs.rmSync (root, { recursive: true, force: true });
     });
     test('limitless cancelAllOrders paramsValue: `let y: Dict = params` rewritten from the slot and lent `&y` to the handle* params', () => {
-        expect(out).toContain('let mut paramsValue: crate::value::Dict = params.into_dict();');
+        expect(out).toContain('let mut paramsValue: crate::value::Dict = params;');
         expect(out).toMatch(/handleOptionAndParams\(&paramsValue, /);
         expect(out).toContain('self.safe_string_k_opt(&paramsValue, "slug", &[])');
         expect(out).not.toContain('let mut paramsValue: Value');

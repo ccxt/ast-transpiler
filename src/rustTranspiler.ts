@@ -2720,6 +2720,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustLentListLocal(declaration)) return this.printBuiltListDeclaration(declaration, indent, varName) ?? `${indent}let mut ${varName}: crate::value::List = ${this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? parsedValue}.into_list()`;
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustEcdsaCall(this.rustSkipWrappers(declaration.initializer))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${this.rustBytesBareText(this.rustSkipWrappers(declaration.initializer), identation)}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
+        if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustParamsAliasDecl(declaration) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(this.rustSkipWrappers(declaration.initializer)))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? this.rustDictTwinText(declaration.initializer, read, false) ?? `${read}.into_dict()`}`); }
         if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? this.rustDictTwinText(declaration.initializer, parsedValue, false) ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
@@ -19187,8 +19188,22 @@ export class RustTranspiler extends BaseTranspiler {
         return String(param.type?.getText?.() ?? '').replace(/\s+/g, '') === 'Dict';
     }
 
+    /** The trailing `params: Dict = {}` of a venue's own non-unified method (the wide optional slot), handed the typed `params` slot. */
+    rustParamsHelperSlot(call: any, arg: any): boolean {
+        if (!isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword || !isIdentifier(arg)) return false;
+        const name = String(call.expression.name.text);
+        if (/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(name) || this.rustTypedUnified.has(name)) return false;
+        const args = Array.from(call.arguments ?? []);
+        const params = this.rustTranspiledCalleeParams(call, name);
+        const param: any = params?.[args.indexOf(arg)];
+        if (params === undefined || args.indexOf(arg) !== params.length - 1 || param?.initializer === undefined || !isObjectLiteralExpression(param.initializer) || param.initializer.properties.length !== 0) return false;
+        return !params.some((p: any) => p.dotDotDotToken !== undefined) && String(param.type?.getText?.() ?? '').replace(/\s+/g, '') === 'Dict';
+    }
+
     /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
     printOptionalParamsArg(node: any, text: string): string | undefined {
+        // the typed `params` slot handed to a venue helper's `Dict = {}` slot: moved at its last use, else shared
+        if ((this.rustDeclarationOfIdentifier(node) as any)?.kind === SyntaxKind.Parameter && isIdentifier(node) && this.rustParamsHelperSlot(node.parent, node) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node))) return this.rustLocalLastUse(node, this.rustDeclarationOfIdentifier(node)) ? `Value::Dict(${text})` : `Value::from(&${text})`;
         if (!isIdentifier(node) || !this.rustOptionalParamsSlot(node.parent, node)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node || !this.rustHandedDictLocal(declaration)) return undefined;
@@ -29045,6 +29060,9 @@ export class RustTranspiler extends BaseTranspiler {
             const up: any = n.parent;
             // the sole extra operand of a base `extend` (not deepExtend): lent as `&[&params]`, a non-map merged nothing before too
             if (this.rustOptExtendOperandUse(n)) { uses++; extendUses++; return true; }
+            // a `let q: Dict = params` alias decided a map takes the slot itself; a venue helper's trailing `Dict = {}` slot is lent the map
+            if (isVariableDeclaration(up) && up.initializer === n && up.type !== undefined && String(up.type.getText()) === 'Dict' && this.rustParamsAliasDecl(up)) { uses++; return true; }
+            if (this.rustParamsHelperSlot(up, n)) { uses++; return true; }
             if (isCallExpression(up) && up.arguments[0] === n) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
