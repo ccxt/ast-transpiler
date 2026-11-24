@@ -9531,7 +9531,11 @@ function ccxtGoProducerReturnsGoList (goTranspiler, call, printed) {
     if ((own === undefined) || goTranspiler.isAsyncFunction (own)) {
         return false;
     }
-    return /\) \[\]any\s*$/.test (goTranspiler.printMethodDefinition (own, 0).split ('\n').pop ());
+    if (/\) \[\]any\s*$/.test (goTranspiler.printMethodDefinition (own, 0).split ('\n').pop ())) {
+        return true;
+    }
+    // a tuple-declared venue method (no base twin) whose every own return prints `return []any{..}`: its Go signature is `[]any`
+    return (own.type?.kind === ts.SyntaxKind.TupleType) && new TupleSlots (goTranspiler).printsSlice (own);
 }
 
 // chain the four safeDict/safeList unbox hooks: the shipped answer decides first, so a site it already types
