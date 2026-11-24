@@ -20231,7 +20231,8 @@ export class RustTranspiler extends BaseTranspiler {
         const visit = (node: Node) => {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
-                if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
+                const strRead = strList && this.rustStrListSafeStringUse(node);
+                if (this.rustSymbolOf(node) !== paramSymbol || !(strRead || this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -30095,6 +30096,8 @@ export class RustTranspiler extends BaseTranspiler {
         const testLent = this.printTestReaderArg(node, text); if (testLent !== undefined) return testLent;
         // a lent deltas slice is already a reference (`&[Value]: KeyRead`): handed on as it is
         if (this.rustBookDeltasSafeReadUse(node) && this.rustVenueStrListParam(this.rustDeclarationOfIdentifier(node))) return RustTranspiler.rustLentMark(text);
+        // a lent string-list slot read by `safeString (xs, i)` is lent on as it is
+        if (this.rustStrListSafeStringUse(node) && this.rustVenueStrListParam(this.rustDeclarationOfIdentifier(node))) return RustTranspiler.rustLentMark(text);
         const call: any = node.parent;
         // a lent group map slot (handleErrors `headers`) is already `&HashMap`, a `KeyRead` container: pass it uncloned
         if (call !== undefined && isCallExpression(call) && call.arguments[0] === node && isPropertyAccessExpression(call.expression) && RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(call.expression.name.text)) && this.rustGroupMapParamType(this.rustDeclarationOfIdentifier(node)) === RUST_MAPREF_TYPE) return RustTranspiler.rustLentMark(text);
@@ -41851,6 +41854,15 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustStrListSliceUse(id)) return false;
         const decl: any = this.rustDeclarationOfIdentifier(id);
         return decl !== undefined && this.rustVenueStrListParam(decl);
+    }
+
+    /** `this.safeString (xs, i)` on a lent string-list parameter with a loop-counter key: `&[Value]` is a `KeyRead`. */
+    rustStrListSafeStringUse(id: any): boolean {
+        const call: any = id?.parent;
+        if (!isCallExpression(call) || call.arguments[0] !== id || call.arguments.length !== 2 || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        if (String(call.expression.name.text) !== 'safeString' || !this.isRustValueIndexKey(call.arguments[1])) return false;
+        const decl: any = this.rustDeclarationOfIdentifier(id);
+        return decl !== undefined && isParameterDeclaration(decl) && decl.type?.kind === SyntaxKind.ArrayType && decl.type.elementType?.kind === SyntaxKind.StringKeyword;
     }
 
     rustStrListNumberKeyUse(id: any): boolean {
