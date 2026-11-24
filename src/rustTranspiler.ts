@@ -22980,10 +22980,24 @@ export class RustTranspiler extends BaseTranspiler {
         // a local the source declares `Dict` that still prints as a `Value`: the method's one conversion replaces each caller's
         const local: any = kind === 'dict' && isIdentifier(this.unwrapParens(exp)) ? this.rustDeclaredNode(this.unwrapParens(exp)) : undefined;
         if (local !== undefined && isVariableDeclaration(local) && String(local.type?.getText?.() ?? '') === 'Dict' && /^[A-Za-z_]\w*$/.test(printed)) return `${printed}.into_dict()`;
+        // a `this.parseX (..)` parser declared to return the method's own record (a fresh map, never undefined)
+        if (kind === 'dict' && fn !== undefined && this.rustOwnRecordParserReturn(exp, fn)) return `${printed}.into_dict()`;
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
         return box[1] === 'Map' ? `std::sync::Arc::new(${inner})` : inner;
+    }
+
+    /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
+    rustOwnRecordParserReturn(exp: any, fn: any): boolean {
+        const call: any = this.unwrapParens(exp);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword || !/^parse[A-Z]/.test(String(call.expression.name.text))) return false;
+        const own = String(fn.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
+        if (!RustTranspiler.RUST_OWN_RECORD_RETURNS.has(own)) return false;
+        // the resolved signature's declared return (a union with undefined / null never equals the record name)
+        let ret = '';
+        try { const checker: any = this.getChecker(); ret = String(checker.typeToString(checker.getReturnTypeOfSignature(checker.getResolvedSignature(call)))); } catch (e) { return false; }
+        return ret.replace(/\s+/g, '') === own;
     }
 
     /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
