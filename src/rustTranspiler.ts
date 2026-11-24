@@ -6664,6 +6664,8 @@ export class RustTranspiler extends BaseTranspiler {
         signEvmTransaction: [ 'string', 'str' ],
         // every body returns the symbol -> tiers map it builds (`-> Dict`)
         parseLeverageTiers: [ 'LeverageTiers', 'dict' ],
+        // venue client setup: `true` once set up, `false` when it caught an error (an async declaration spells `Promise<..>`)
+        initializeClient: [ 'Promise<boolean>', 'bool' ],
     };
 
     private static readonly RUST_BASE_TYPED_RUNTIME: { [name: string]: string } = {
@@ -6682,8 +6684,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** The native kind a method declaration returns under the table, else undefined. */
     rustMethodTypedReturnKind(node): string | undefined {
-        if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || this.isAsyncFunction(node) || !isIdentifier(node.name)) return undefined;
+        if (node?.kind !== SyntaxKind.MethodDeclaration || node.body === undefined || !isIdentifier(node.name)) return undefined;
         const entry = RustTranspiler.RUST_BASE_TYPED_METHODS[String(node.name.text)];
+        if (this.isAsyncFunction(node) !== (Array.isArray(entry) && entry[0].startsWith('Promise<'))) return undefined;
         const declared = String(node.type?.getText?.() ?? '').trim();
         if (!Array.isArray(entry) || !(entry[0] === declared || entry[0].split('|').includes(declared))) return undefined;
         return /ts[\\/]src[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? '')) ? entry[1] : undefined;
@@ -22364,6 +22367,13 @@ export class RustTranspiler extends BaseTranspiler {
         if (containerKind === 'odict' && !this.rustOwnContainerBare.has(node)) return `${this.rustOwnContainerBareText(node.expression)}.await.map_or(Value::Null, Value::Dict)`;
         if (containerKind !== undefined && !this.rustOwnContainerBare.has(node)) return `${containerKind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node.expression)}.await)`;
         const outcomeBox = this.printOptOutcomeAwaitBox(node, identation); if (outcomeBox !== undefined) return outcomeBox;
+        // an async method of the typed-return table: await the native future, then box once where a `Value` is expected
+        const asyncKind = isCallExpression(node.expression) ? this.rustBaseTypedReturnKind(node.expression) : undefined;
+        const asyncCallee: any = asyncKind !== undefined ? this.rustScalarCallee(node.expression) : undefined;
+        if (asyncKind !== undefined && asyncCallee !== undefined && this.isAsyncFunction(asyncCallee)) {
+            const bare = `${this.rustBaseTypedBareText(node.expression)}.await`;
+            return node.parent?.kind === SyntaxKind.ExpressionStatement ? bare : this.rustScalarBoxText(asyncKind, bare, node);
+        }
         // a local in a method that inlines a value-position spawn holds the spawn's resolved result
         if (isIdentifier(node.expression) && this.rustInlinesValueSpawn(findAncestor(node, isMethodDeclaration))) {
             return this.printNode(node.expression, identation);
@@ -22851,6 +22861,7 @@ export class RustTranspiler extends BaseTranspiler {
     printRustBoolReturnTry(node, identation, read: boolean, caught: boolean): string | undefined {
         const fn: any = findAncestor(node.parent, isFunctionLike);
         if (node.finallyBlock !== undefined || node.catchClause === undefined || this.rustMethodTypedReturnKind(fn) !== 'bool') return undefined;
+        if (this.isAsyncFunction(fn)) return undefined;
         if (!this.rustStatementAlwaysExits(node.tryBlock)) return undefined;
         // a `break` / `continue` in the closure would leave it; the catch arm prints in the method itself
         let loopExit = false;

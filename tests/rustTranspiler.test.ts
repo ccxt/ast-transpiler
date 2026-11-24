@@ -27788,3 +27788,30 @@ describe('rust typed fetchWithdrawal return (venue-private, from its declaration
         expect(out).toMatch(/pub fn fetchWithdrawal\(&self, id: &str, code: Option<&str>, optional_args: &\[Value\]\) -> Value/);
     });
 });
+
+describe('rust venue initializeClient Promise<boolean> prints -> bool', () => {
+    const venue = (ret: string) => "import Exchange from './base/Exchange.js';\n"
+        + "export default class venue extends Exchange {\n"
+        + "    async initializeClient (): " + ret + " {\n        try {\n            await this.approve ();\n        } catch (e) {\n            return false;\n        }\n        return true;\n    }\n"
+        + "    async approve (): Promise<boolean> {\n        return true;\n    }\n"
+        + "    async fetchIt () {\n        await this.initializeClient ();\n        return 1;\n    }\n}\n";
+    const build = (tag: string, ret: string) => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), 'astfx-' + tag + '-'));
+        fs.mkdirSync(path.join(root, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'ts/src/base/Exchange.ts'), 'export default class Exchange {\n}\n');
+        fs.writeFileSync(path.join(root, 'ts/src/venue.ts'), venue(ret));
+        const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
+        try { return t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    };
+    test('a Promise<boolean> declaration returns a native bool', () => {
+        const out = build('ic1', 'Promise<boolean>');
+        expect(out).toMatch(/fn initializeClient\(&(?:mut )?self\) -> bool \{/);
+        expect(out).toContain('return false;');
+        expect(out).toContain('return true;');
+        expect(out).not.toContain('Value::Bool(self.initializeClient())');
+    });
+    test('negative: Promise<Bool> and Promise<any> keep -> Value', () => {
+        expect(build('ic2', 'Promise<Bool>')).toMatch(/fn initializeClient\(&(?:mut )?self\) -> Value \{/);
+        expect(build('ic3', 'Promise<any>')).toMatch(/fn initializeClient\(&(?:mut )?self\) -> Value \{/);
+    });
+});
