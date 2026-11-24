@@ -28775,6 +28775,7 @@ export class RustTranspiler extends BaseTranspiler {
         }
         // a keyed row of a typed record-map local (`Tickers`, `FundingRates`, ..): the record's own map, read by the key's text
         const recordRow = /^self\.safe(?:_d|D)ict\(crate::types::IntoRaw::into_raw\((\w+)(?:\.clone\(\))?\), (.+), &\[\]\)$/.exec(printed);
+        // eslint-disable-next-line no-control-regex
         if (recordRow !== null && this.rustRecordMapLocalRead(init, recordRow[1])) return `${this.rustTypesPath(init)}::RecordRows::row_dict(&${recordRow[1]}, ${recordRow[2].replace(/^\u0004?(\w+)(?:\.clone\(\))?$/, '&$1')})`;
         // a map row `xs[i]` of a typed list: the base `safe_dict_o` reader (the element's map, `None` out of range / non-map)
         const listRow = /^crate::value::KeyRead::read\(&&(\w+), &Value::Int\((\w+)\)\)$/.exec(printed);
