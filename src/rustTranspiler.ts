@@ -41317,6 +41317,7 @@ export class RustTranspiler extends BaseTranspiler {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
+                        || this.rustCallReturnsObjectLiteral(init)
                         || this.rustReadOffThisMember(init) && !this.rustLocalIsReassigned(decl, String(root.text))
                         || this.rustOwnStateRowLocal(decl, String(root.text)))
                         || this.rustLocalHoldsFreshBook(decl, init);
@@ -41424,6 +41425,29 @@ export class RustTranspiler extends BaseTranspiler {
         const stmts: any[] = decl !== undefined && isMethodDeclaration(decl) && decl.body !== undefined ? Array.from(decl.body.statements) : [];
         const ret: any = stmts.length === 1 && isReturnStatement(stmts[0]) ? stmts[0].expression : undefined;
         return ret !== undefined && isObjectLiteralExpression(ret) && ret.properties.every((p: any) => isPropertyAssignment(p) && (isIdentifier(p.initializer) && p.initializer.text === 'undefined' || isStringLiteral(p.initializer) || isNumericLiteral(p.initializer)));
+    }
+
+    /** `this.m (..)` whose every `return` is an object literal (`parseOrderBook`): each call builds a fresh top-level
+     *  map, so a key write into it cannot reach the message. */
+    rustCallReturnsObjectLiteral(init: any): boolean {
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || init.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const decl: any = this.rustCalleeDeclaration(init);
+        if (decl === undefined || !isMethodDeclaration(decl) || decl.body === undefined) return false;
+        const rets: any[] = [];
+        let nested = false;
+        const visit = (n: any): void => {
+            if (isFunctionLike(n)) { nested = true; return; }
+            if (isReturnStatement(n)) rets.push(n.expression);
+            n.forEachChild(visit);
+        };
+        decl.body.forEachChild(visit);
+        return !nested && rets.length > 0 && rets.every((r: any) => {
+            let e: any = r;
+            while (e !== undefined && (isParenthesizedExpression(e) || isAsExpression(e))) e = e.expression;
+            // an entry holding an exchange field (`'info': this.shared`) shares state: not fresh
+            return e !== undefined && isObjectLiteralExpression(e) && e.properties.every((p: any) => isPropertyAssignment(p)
+                && !(isPropertyAccessExpression(p.initializer) && p.initializer.expression.kind === SyntaxKind.ThisKeyword));
+        });
     }
 
     /** `this.m (..)` whose every `return` is `this.r ({ .. })`, where `r` hands back its own first parameter (`safePosition`):
