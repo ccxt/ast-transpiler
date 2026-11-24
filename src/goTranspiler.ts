@@ -7886,6 +7886,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // non-empty (kept) defaults, the two-key accessors and the Safe* read shapes of the list family
     installCcxtGoSafeCollectionUnbox (goTranspiler);
     installH25g05UrlsViews (goTranspiler);
+    installH46g30UrlsApiLocal (goTranspiler);
     installCcxtGoSafeListWrappedReads (goTranspiler);
     // name the async-receive locals whose element type the core's channel carries
     goTranspiler.goAwaitReceiveUnbox = function (awaitNode, printedInitializer) {
@@ -61116,3 +61117,34 @@ function h46g21StringLeaves (go: any, e: any): boolean {
     };
 }
 // ===== H46-G21 (end)
+
+// ===== H46-G30: `const u = this.urls['api'] (as Dict)` is the UrlsApi view =====
+// urls["api"] is declared Dict: a const local of it whose every use reads the map is declared from
+// BaseExchange.UrlsApi (urls["api"] as stored, nil when absent or not a map, as the box read nil)
+function h46g30UrlsApiLocal (go: any, declaration: any): boolean {
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((declaration.parent?.flags & NodeFlags.Const) === 0)) {
+        return false;
+    }
+    let init: any = declaration.initializer;
+    while ((init?.kind === SyntaxKind.AsExpression) || (init?.kind === SyntaxKind.ParenthesizedExpression)) {
+        init = init.expression;
+    }
+    if ((init?.kind !== SyntaxKind.ElementAccessExpression) || !h25g05IsUrlsApi (go, init)) {
+        return false;
+    }
+    return go.goDeclaredLocalTypeIfSafe (declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => go.goSafeDictUseReadsTheMap (n)) !== undefined;
+}
+
+export function installH46g30UrlsApiLocal (goTranspiler: any) {
+    if (!goInstallOnce (goTranspiler, 'h46g30UrlsApiLocalInstalled', 'goSafeDictUnboxValue')) { return; }
+    const shippedType = goTranspiler.goSafeDictLocalUnbox;
+    const shippedValue = goTranspiler.goSafeDictUnboxValue;
+    goTranspiler.goSafeDictLocalUnbox = function (this: any, declaration: any) {
+        return shippedType.call (this, declaration) ?? (h46g30UrlsApiLocal (this, declaration) ? GO_SAFE_DICT_LOCAL_TYPE : undefined);
+    };
+    goTranspiler.goSafeDictUnboxValue = function (this: any, declaration: any, identation: number) {
+        return h46g30UrlsApiLocal (this, declaration) ? 'this.UrlsApi' : shippedValue.call (this, declaration, identation);
+    };
+}
+// ===== end H46-G30
