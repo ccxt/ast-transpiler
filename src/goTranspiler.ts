@@ -51018,10 +51018,17 @@ GoTranspiler.prototype.h28a03JoinedEndpointLocal = function (node: any): boolean
             writes += 1;
             return true;
         }
-        return this.goJsonOriginUseIsReadOnly(n, name) || this.h42g22ReaderArgument(n);
+        return this.goJsonOriginUseIsReadOnly(n, name) || this.h42g22ReaderArgument(n) || h46g16ObjectKeysArg(n);
     });
     return readOnly && (writes > 0);
 };
+// `Object.keys (x)`: the key list reads the map and never writes it
+function h46g16ObjectKeysArg (n: any): boolean {
+    const call: any = n.parent;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === n)
+        && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.name?.text === 'keys')
+        && (call.expression.expression?.kind === SyntaxKind.Identifier) && (call.expression.expression.text === 'Object');
+}
 {
     const jsonOriginH28a03 = GoTranspiler.prototype.goJsonOriginContainer;
     GoTranspiler.prototype.goJsonOriginContainer = function (node, depth = 0): boolean {
@@ -59595,7 +59602,7 @@ function h37p01HoistSafeDictArg (go: any, statement: any, printed: string, ident
             && (key.expression.text !== xs) && (go.goResolvedLocalGoType(key.expression) === GO_STRING_LIST_LOCAL_TYPE));
     // a nil-declared map local also qualifies: a nil map read is the missing-key answer
     const mapRecv = (go.goResolvedLocalGoType(list) === GO_SAFE_DICT_LOCAL_TYPE) || (ccxtGoNilJoinDeclarationType(go, list) === GO_SAFE_DICT_LOCAL_TYPE)
-        || h29a01EndpointMapLocal(go, list);
+        || h29a01EndpointMapLocal(go, list) || go.h28a03JoinedEndpointLocal(list);
     if ((frameKey === undefined) && strKey && mapRecv) {
         const mk = go.printNode(key, 0).trim();
         const mwrap = `this.SafeDictMap(${xs}, ${mk}, map[string]any{})`;
