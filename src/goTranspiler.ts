@@ -13072,6 +13072,31 @@ function goSiblingLiteralStringLocal (argText: string, fileText: string, at: num
     return (decls.length === 1) && (allDecls.length === 1) && (allWrites.length === writes.length);
 }
 
+// a sibling-file local of the calling method bound once by `const x = <expr>.replace ('<lit>', '<lit>')`
+// and never written: Go prints the replace as strings.Replace / Replace, both answer a Go `string`
+function goSiblingReplaceStringLocal (argText: string, fileText: string, at: number | undefined): boolean {
+    const name = /^([A-Za-z_]\w*)$/.exec ((argText ?? '').trim ())?.[1];
+    if ((name === undefined) || (at === undefined)) {
+        return false;
+    }
+    const signature = /\n {4}(?:(?:override|async|public|private|protected) )*[A-Za-z_$][\w$]* \([^\n]*\)(?:: [^\n{]*)? \{\n/g;
+    let start = -1;
+    for (let m = signature.exec (fileText); (m !== null) && (m.index < at); m = signature.exec (fileText)) {
+        start = m.index;
+    }
+    const end = fileText.indexOf ('\n    }\n', at);
+    if ((start < 0) || (end < 0)) {
+        return false;
+    }
+    const raw = fileText.substring (start, end).replace (/\/\*[\s\S]*?\*\//g, '').replace (/^\s*\/\/.*$/gm, '');
+    const body = goMaskTsStrings (raw);
+    const lit = String.raw`'[^'\\\n]*'`;
+    const decls = raw.match (new RegExp (String.raw`\bconst ` + name + String.raw`(?:: string)? = [A-Za-z_$][\w$.]*\.replace \(` + lit + ', ' + lit + String.raw`\);`, 'g')) ?? [];
+    const allWrites = body.match (new RegExp (String.raw`(?<![\w$.])` + name + String.raw`\s*(?:[-+*/|&?]?=(?!=)|\+\+|--)`, 'g')) ?? [];
+    const allDecls = body.match (new RegExp (String.raw`\b(?:let|const|var) ` + name + String.raw`\b`, 'g')) ?? [];
+    return (decls.length === 1) && (allDecls.length === 1) && (allWrites.length === 1);
+}
+
 // the method is reached only through plain `this.<name> (..)` calls: no file of the tree quotes the name
 // (dispatch by string), and in the files of the class's own lineage every code mention is a call or the declaration
 function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass, runnerRefs = false) {
@@ -25533,7 +25558,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const passthrough = (goType === 'string') && (this.siblingStringPassthroughPattern !== undefined) && this.siblingStringPassthroughPattern.test(name)
                     && (arg !== undefined) && this.goSiblingPassesUnifiedString(arg, tree.fileText.get(site.file) ?? '', site.at);
                 const requiredString = (goType === 'string') && (arg !== undefined) && this.goSiblingRequiredStringParam(arg, tree, site.file, site.at);
-                if ((arg === undefined) || !(this.goTextArgMatchesType(arg, goType, site.file, tree, site.at) || passthrough || requiredString)) {
+                const replaced = (goType === 'string') && (arg !== undefined) && goSiblingReplaceStringLocal(arg, tree.fileText.get(site.file) ?? '', site.at);
+                if ((arg === undefined) || !(this.goTextArgMatchesType(arg, goType, site.file, tree, site.at) || passthrough || requiredString || replaced)) {
                     return false;
                 }
             }
