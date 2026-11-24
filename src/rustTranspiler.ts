@@ -23094,7 +23094,7 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustVenueContainerDecisionOf(node);
         if (kind !== undefined && kind.nullable && kind.kind === 'dict') return this.rustOwnOptDictReturn(node);
         const declared = String(node.type?.getText?.() ?? '').replace(/\s+/g, '').replace(/^Promise<(.+)>$/, '$1');
-        if (kind === undefined || kind.nullable || !(/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared) || RustTranspiler.RUST_OWN_RECORD_RETURNS.has(declared))) return undefined;
+        if (kind === undefined || kind.nullable || !(/^(?:Dict|List|Dict\[\]|any\[\]|string\[\])$/.test(declared) || RustTranspiler.RUST_OWN_RECORD_RETURNS.has(declared))) return undefined;
         const checker = this.getChecker();
         let returns = 0;
         let ok = true;
@@ -29974,6 +29974,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner === 'Dict') return { kind: 'dict', nullable: false };
         if (inner === 'NullableDict') return { kind: 'dict', nullable: true };
         if (inner === 'List' || inner === 'Dict[]' || inner === 'any[]') return { kind: 'list', nullable: false };
+        // a venue `string[]` list is the same boxed list on the Rust side (the own-container rule still proves each return)
+        if (inner === 'string[]') return { kind: 'list', nullable: false };
         if (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(inner)) return { kind: 'dict', nullable: false };
         const elem = /^(\w+)\[\]$/.exec(inner);
         if (elem !== null && (RustTranspiler.RUST_VENUE_RECORD_NAMES.has(elem[1]) || RustTranspiler.RUST_VENUE_LIST_ELEMENT_NAMES.has(elem[1]))) return { kind: 'list', nullable: false };
