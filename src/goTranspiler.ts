@@ -61639,3 +61639,24 @@ function h47g19UserParamsFed (go: any, container: any): boolean {
     };
 }
 // ===== end H48-G12
+// ===== H48-G15
+// a venue-private sync method declared `: Trade` (no base twin) whose every return is a map literal, a struct->map
+// converter or SafeTrade (boxed by the struct pass) prints map[string]any; anything else keeps `any`
+const H48G15_ROW_BUILDERS: { [declared: string]: string } = { 'Trade': 'SafeTrade' };
+const h48g15UpstreamProvenReturnRetype = GoTranspiler.prototype.goProvenReturnRetype;
+GoTranspiler.prototype.goProvenReturnRetype = function (node, printed: string): string {
+    const out: string = h48g15UpstreamProvenReturnRetype.call(this, node, printed);
+    const builder = H48G15_ROW_BUILDERS[String(node?.type?.getText?.() ?? '').trim()];
+    if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined) || (typeof builder !== 'string')
+        || !/^[^\n]*\) any \{\n/.test(out) || new TupleSlots(this).baseDeclares(node)) {
+        return out;
+    }
+    const name = this.transformMethodNameIfNeeded(String(node.name?.text ?? ''));
+    try {
+        const text = retypeGoProvenFamily('\n' + out + '\n', [ name ], 'map[string]any', 'MapTyped', [ builder ], '\\w+', [ 'TradeToMap' ]);
+        return text.substring(1, text.length - 1);
+    } catch (e) {
+        return out;
+    }
+};
+// ===== end H48-G15
