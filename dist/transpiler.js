@@ -5087,12 +5087,13 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     return void 0;
   }
-  // the trailing `params: Dict = {}` bag of a venue-private method prints `IDictionary<string, object>`
+  // the `params: Dict = {}` bag of a venue-private method (only defaulted parameters after it) prints `IDictionary<string, object>`
   // when no subclass overrides it, the body never rebinds it and every `this.` call passes nothing or a
   // value whose printed C# type is already a dictionary; one boxed argument keeps `object`
   csharpVenueDictParamsKind(method, parameter, index, calls) {
     const initializer = parameter.initializer;
-    if (index !== method.parameters.length - 1 || !isIdentifier2(parameter.name) || parameter.name.text !== "params" || parameter.dotDotDotToken !== void 0 || initializer === void 0 || !isObjectLiteralExpression2(initializer) || initializer.properties.length !== 0 || this.csharpVenueOverriddenMethods.has(method) || this.csharpIsDictParamsBag(parameter) || parameter.type !== void 0 && parameter.type.getText().trim() !== "Dict" || this.csharpDictParamsRebound(method)) {
+    const trailing = Array.from(method.parameters).slice(index + 1).every((p) => p.initializer !== void 0);
+    if (!trailing || !isIdentifier2(parameter.name) || parameter.name.text !== "params" || parameter.dotDotDotToken !== void 0 || initializer === void 0 || !isObjectLiteralExpression2(initializer) || initializer.properties.length !== 0 || this.csharpVenueOverriddenMethods.has(method) || this.csharpIsDictParamsBag(parameter) || parameter.type !== void 0 && parameter.type.getText().trim() !== "Dict" || this.csharpDictParamsRebound(method)) {
       return void 0;
     }
     const proKinds = this.csharpProFileCallKinds(method, index, true);
@@ -19208,6 +19209,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
   installCcxtGoArrayLiteralWrites(goTranspiler);
   installCcxtGoSafeCollectionUnbox(goTranspiler);
   installH25g05UrlsViews(goTranspiler);
+  installH46g30UrlsApiLocal(goTranspiler);
   installCcxtGoSafeListWrappedReads(goTranspiler);
   goTranspiler.goAwaitReceiveUnbox = function(awaitNode, printedInitializer) {
     return ccxtGoAwaitReceiveUnbox(this, awaitNode, printedInitializer) ?? ccxtGoDeclaredAwaitReceive(this, awaitNode, printedInitializer);
@@ -19641,7 +19643,23 @@ function ccxtGoTupleStringReadIsSafe(goTranspiler, node) {
       return true;
     }
   }
+  if (current === node && ccxtGoTupleStringFeedsProvenStrParam(goTranspiler, node)) {
+    return true;
+  }
   return current === node && goReadRuleAccepts(NIL_DECLARED_READ_RULE, goTranspiler, node);
+}
+function ccxtGoTupleStringFeedsProvenStrParam(goTranspiler, node) {
+  const call = node.parent;
+  const local = ccxtGoParamDeclarationOf(goTranspiler, node);
+  if (call?.kind !== ts.SyntaxKind.CallExpression || call.expression === node || local?.kind !== ts.SyntaxKind.VariableDeclaration || local.type?.kind !== ts.SyntaxKind.TypeReference || local.type.typeName?.getText() !== "Str") {
+    return false;
+  }
+  const callee = stringPtrParamCallDeclaration(goTranspiler, call);
+  const param = callee?.parameters?.[call.arguments.indexOf(node)];
+  if (param === void 0 || param.type?.getText() !== "Str") {
+    return false;
+  }
+  return goStringPtrParamProvenAssuming(goTranspiler, param, local);
 }
 var CCXT_GO_TUPLE_STRING_SAFE_ARG_INDEX = {
   "this.HandleMarketTypeAndParams": [3]
@@ -20586,7 +20604,25 @@ function ccxtGoProducerUnboxValue(goTranspiler, declaration, identation, family)
   if (family === "map" && CCXT_GO_HELPER_RETURN_TYPES["this." + callee.name.text.charAt(0).toUpperCase() + callee.name.text.slice(1)] === "map[string]any") {
     return printed;
   }
+  if (family === "list" && ccxtGoProducerReturnsGoList(goTranspiler, declaration.initializer, printed)) {
+    return printed;
+  }
   return (family === "map" ? "MapTyped(" : "ArrayTyped(") + printed + ")";
+}
+function ccxtGoProducerReturnsGoList(goTranspiler, call, printed) {
+  const name = String(call.expression.name.text);
+  const goName = name.charAt(0).toUpperCase() + name.slice(1);
+  if (!printed.startsWith("this." + goName + "(") || !printed.endsWith(")") || !goTranspiler.isWholePrintedCall(printed, printed.indexOf("("))) {
+    return false;
+  }
+  if (goTranspiler.generatedListCallees?.has?.(goName) === true) {
+    return true;
+  }
+  const own = ccxtGoAsyncListClassMember(enclosingClassDeclaration(call), name);
+  if (own === void 0 || goTranspiler.isAsyncFunction(own)) {
+    return false;
+  }
+  return /\) \[\]any\s*$/.test(goTranspiler.printMethodDefinition(own, 0).split("\n").pop());
 }
 function installGoContainerUnbox(goTranspiler, typeOf, valueOf) {
   const shipped = {
@@ -23714,6 +23750,17 @@ function goStringPtrAssumedArg(go, arg) {
   const decl = go.goGetArgCalleeDeclaration(arg);
   return decl !== void 0 && GO_STR_PTR_ASSUMED.has(decl);
 }
+function goStringPtrParamProvenAssuming(go, param, local) {
+  if (GO_STR_PTR_ASSUMED.has(local)) {
+    return goStringPtrParamProven(go, param);
+  }
+  GO_STR_PTR_ASSUMED.add(local);
+  try {
+    return goStringPtrParamProven(go, param);
+  } finally {
+    GO_STR_PTR_ASSUMED.delete(local);
+  }
+}
 function goStringPtrFlowsIntoProvenParam(go, param, callee, argIndex) {
   const decl = go.goGetArgCalleeDeclaration(callee);
   const target = decl?.kind === ts.SyntaxKind.MethodDeclaration ? decl.parameters?.[argIndex] : void 0;
@@ -24773,10 +24820,15 @@ var GO_BASE_DICT_PARAMS = {
   // both tree callers pass a `{}`-defaulted safeDict row; every override reads the row as a map
   "parseIsolatedBorrowRate": [0],
   // cancelUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
-  "cancelUnifiedOrder": [0]
+  "cancelUnifiedOrder": [0],
+  // fetchUnifiedOrder (order: Order): no ts/src caller; the typed wrapper hands OrderToMap of its Order
+  "fetchUnifiedOrder": [0],
+  // its one base caller passes the `tx` Dict literal; every override reads it with safe* readers
+  "signEvmTransaction": [0]
 };
 var GO_BASE_DICT_ASYNC_PARAMS = [
-  "cancelUnifiedOrder"
+  "cancelUnifiedOrder",
+  "fetchUnifiedOrder"
 ];
 function goDictParamTabledSafeDictArg(go, call, arg) {
   const callee = call?.expression;
@@ -51254,6 +51306,11 @@ GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function(node) {
   }
 };
 var GO_GUARDED_WRAPPED_HEAD = /^[ \t]*var (\w+) (\*string|map\[string\]any) = ((?:ccxt\.)?(?:SafeStringPtr|MapTyped))\(/;
+function h46g39StringElementList(goTranspiler, head, read) {
+  const declaration = goTranspiler.checkerOrUndefined()?.getSymbolAtLocation(read.expression)?.valueDeclaration?.resolve?.();
+  const t = declaration?.type;
+  return head[2] === "*string" && head[1] !== "s" && read.expression.text !== "s" && t?.kind === SyntaxKind5.ArrayType && t.elementType?.kind === SyntaxKind5.StringKeyword && goGuardedListReadSafeListLocal(goTranspiler, read.expression);
+}
 function installGoGuardedWrappedRead(goTranspiler) {
   if (!goInstallOnce(goTranspiler, "__goGuardedWrappedReadInstalled", "printVariableDeclarationList")) {
     return;
@@ -51275,6 +51332,13 @@ function installGoGuardedWrappedRead(goTranspiler) {
       return printed;
     }
     const iden = this.getIden(identation);
+    if (h46g39StringElementList(this, head, read)) {
+      const typed = `if s, ok := ${m[2]}[${m[1]}].(string); ok {
+${this.getIden(identation + 2)}${head[1]} = &s
+${this.getIden(identation + 1)}}`;
+      return `${iden}var ${head[1]} ${head[2]} = nil
+${goGuardedListReadIf(this, typed, m.slice(1), identation)}`;
+    }
     return `${iden}var ${head[1]} ${head[2]} = nil
 ${goGuardedListReadIf(this, `${head[1]} = ${head[3]}(${m[2]}[${m[1]}])`, m.slice(1), identation)}`;
   };
@@ -54699,6 +54763,9 @@ GoTranspiler.prototype.goTypedMapReceiverStaysPlain = function(container) {
     return false;
   });
 };
+function h46g15NilProvenPointerKey(go, keyNode, key) {
+  return keyNode?.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && go.goDeclaredTypeOfIdentifier(keyNode) === "*string" && go.goProvenPointerKeyMapIndex(keyNode, "m", key) !== void 0;
+}
 GoTranspiler.prototype.h27a06OptionsDictRead = function(node, printed) {
   const declaration = node?.declarations?.length === 1 ? node.declarations[0] : void 0;
   const call = declaration?.initializer;
@@ -54708,7 +54775,9 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function(node, printed) {
   const keyNode = call.arguments[1];
   const key = this.printNode(keyNode, 0).trim();
   const isLiteral = keyNode.kind === SyntaxKind5.StringLiteral && /^"[\w.-]*"$/.test(key);
-  if (!isLiteral && !(keyNode.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && this.goKeyIsString(keyNode, key))) {
+  const pointerKey = h46g15NilProvenPointerKey(this, keyNode, key);
+  const ptrKey = !isLiteral && keyNode.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && this.goDeclaredTypeOfIdentifier(keyNode) === "*string";
+  if (!isLiteral && !pointerKey && !ptrKey && !(keyNode.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && this.goKeyIsString(keyNode, key))) {
     return void 0;
   }
   const name = declaration.name.text;
@@ -54716,7 +54785,11 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function(node, printed) {
   if (match === null || match[3] !== name || match[6] !== key) {
     return void 0;
   }
-  return match[1] + match[2] + "var " + name + ", _ = this." + match[5] + "[" + key + "].(map[string]any)";
+  if (!pointerKey && ptrKey && !this.goIsNilGuardedStringPointerKey(keyNode)) {
+    const ind = match[2];
+    return match[1] + ind + "var " + name + " map[string]any\n" + ind + "if " + key + " != nil {\n" + ind + "	" + name + ", _ = this." + match[5] + "[*" + key + "].(map[string]any)\n" + ind + "}";
+  }
+  return match[1] + match[2] + "var " + name + ", _ = this." + match[5] + "[" + (pointerKey || ptrKey ? "*" : "") + key + "].(map[string]any)";
 };
 var printVariableDeclarationListH27a06 = GoTranspiler.prototype.printVariableDeclarationList;
 GoTranspiler.prototype.printVariableDeclarationList = function(node, identation) {
@@ -56778,16 +56851,18 @@ GoTranspiler.prototype.h28a06OptionsDefaultedDictRead = function(node, printed) 
   const keyNode = call.arguments[1];
   const key = this.printNode(keyNode, 0).trim();
   const isLiteral = keyNode.kind === SyntaxKind5.StringLiteral && /^"[\w.-]*"$/.test(key);
-  if (!isLiteral && !(keyNode.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && this.goKeyIsString(keyNode, key))) {
+  const pointerKey = h46g15NilProvenPointerKey(this, keyNode, key);
+  if (!isLiteral && !pointerKey && !(keyNode.kind === SyntaxKind5.Identifier && /^\w+$/.test(key) && this.goKeyIsString(keyNode, key))) {
     return void 0;
   }
+  const index = pointerKey ? "*" + key : key;
   const name = declaration.name.text;
   const kept = /^(\n*)(\t*)var (\w+) map\[string\]any = this\.SafeDictMap\(this\.(Options|Balance), (.*), map\[string\]any\{\}\)$/.exec(printed);
   if (kept === null || kept[3] !== name || kept[5] !== key) {
     return void 0;
   }
   const ind = kept[2];
-  return kept[1] + ind + "var " + name + " map[string]any\n" + ind + name + ", _ = this." + kept[4] + "[" + key + "].(map[string]any)\n" + ind + "if " + name + " == nil {\n" + ind + "	" + name + " = map[string]any{}\n" + ind + "}";
+  return kept[1] + ind + "var " + name + " map[string]any\n" + ind + name + ", _ = this." + kept[4] + "[" + index + "].(map[string]any)\n" + ind + "if " + name + " == nil {\n" + ind + "	" + name + " = map[string]any{}\n" + ind + "}";
 };
 var printVariableDeclarationListH28a06 = GoTranspiler.prototype.printVariableDeclarationList;
 GoTranspiler.prototype.printVariableDeclarationList = function(node, identation) {
@@ -61495,7 +61570,8 @@ GoTranspiler.prototype.h30a03AssignRead = function(node, identation, printed) {
   }
   const accessor = this.goUnwrapParenthesizedNode(e.right)?.expression?.name?.text;
   const goType = accessor === "safeList" ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
-  return declared === goType ? res : void 0;
+  const joined = accessor === "safeList" && ccxtGoNilJoinDeclarationType(this, e.left) === goType;
+  return declared === goType || joined ? res : void 0;
 };
 {
   const printVariableDeclarationListH30a03 = GoTranspiler.prototype.printVariableDeclarationList;
@@ -65062,6 +65138,89 @@ ${ind}}`;
     return printed;
   };
 }
+function h46g21RootStringStub(go, node) {
+  if (node?.kind !== SyntaxKind5.MethodDeclaration || node.body?.kind !== SyntaxKind5.Block || go.isAsyncFunction(node) || node.type?.kind !== SyntaxKind5.StringKeyword || node.name?.kind !== SyntaxKind5.Identifier) {
+    return false;
+  }
+  let root = node;
+  const checker = go.checkerOrUndefined();
+  for (let depth = 0; checker !== void 0 && depth < 12; depth++) {
+    const cls = go.goEnclosingClass(root);
+    const clause = (cls?.heritageClauses ?? []).find((c) => c.token === SyntaxKind5.ExtendsKeyword);
+    const symbol = clause === void 0 ? void 0 : checker.getTypeAtLocation(clause.types?.[0])?.getProperty?.(node.name.text);
+    const declaration = symbol?.valueDeclaration?.resolve?.() ?? symbol?.declarations?.map((d) => d.resolve())?.[0];
+    if (declaration?.kind !== SyntaxKind5.MethodDeclaration) {
+      break;
+    }
+    root = declaration;
+  }
+  return /(^|[\\/])ts[\\/]src[\\/]base[\\/]/.test(String(root.getSourceFile?.()?.fileName ?? "")) && root.body?.kind === SyntaxKind5.Block && root.type?.kind === SyntaxKind5.StringKeyword && !go.isAsyncFunction(root) && root.body.statements.length > 0 && root.body.statements.every((st) => st.kind === SyntaxKind5.ThrowStatement);
+}
+function h46g21StringLeaves(go, e) {
+  if (e?.kind === SyntaxKind5.BinaryExpression && e.operatorToken?.kind === SyntaxKind5.PlusToken) {
+    return h46g21StringLeaves(go, e.left) && h46g21StringLeaves(go, e.right);
+  }
+  if (e?.kind === SyntaxKind5.StringLiteral || e?.kind === SyntaxKind5.NoSubstitutionTemplateLiteral) {
+    return true;
+  }
+  return e?.kind === SyntaxKind5.CallExpression && go.goTypeOfInitializer(e, go.printNode(e, 0)) === "string";
+}
+{
+  const returnTypeH46g21 = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+  GoTranspiler.prototype.goStrPtrFamilyReturnType = function(node) {
+    if (!h46g21RootStringStub(this, node)) {
+      return returnTypeH46g21.call(this, node);
+    }
+    for (const r of collectReturnStatements(node.body)) {
+      const e = r.expression;
+      if (e === void 0 || !h46g21StringLeaves(this, e)) {
+        throw new Error(`go string stub returns: ${this.goEnclosingClassName(node)}.${node.name.text} returns unproven \`${e?.getText?.() ?? ""}\`; the base prints string`);
+      }
+    }
+    return "string";
+  };
+}
+function h46g30UrlsApiLocal(go, declaration) {
+  if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || (declaration.parent?.flags & NodeFlags3.Const) === 0) {
+    return false;
+  }
+  let init = declaration.initializer;
+  while (init?.kind === SyntaxKind5.AsExpression || init?.kind === SyntaxKind5.ParenthesizedExpression) {
+    init = init.expression;
+  }
+  if (init?.kind !== SyntaxKind5.ElementAccessExpression || !h25g05IsUrlsApi(go, init)) {
+    return false;
+  }
+  return go.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n) => go.goSafeDictUseReadsTheMap(n)) !== void 0;
+}
+function installH46g30UrlsApiLocal(goTranspiler) {
+  if (!goInstallOnce(goTranspiler, "h46g30UrlsApiLocalInstalled", "goSafeDictUnboxValue")) {
+    return;
+  }
+  const shippedType = goTranspiler.goSafeDictLocalUnbox;
+  const shippedValue = goTranspiler.goSafeDictUnboxValue;
+  goTranspiler.goSafeDictLocalUnbox = function(declaration) {
+    return shippedType.call(this, declaration) ?? (h46g30UrlsApiLocal(this, declaration) ? GO_SAFE_DICT_LOCAL_TYPE : void 0);
+  };
+  goTranspiler.goSafeDictUnboxValue = function(declaration, identation) {
+    return h46g30UrlsApiLocal(this, declaration) ? "this.UrlsApi" : shippedValue.call(this, declaration, identation);
+  };
+}
+var h46g45Upstream = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function(initializer, printedValue) {
+  const known = h46g45Upstream.call(this, initializer, printedValue);
+  if (known !== void 0 || !/^this\.Parse(?:Ws)?OHLCV\(/.test(printedValue ?? "")) {
+    return known;
+  }
+  const declaration = initializer?.parent;
+  const callee = initializer?.expression;
+  if (initializer?.kind !== SyntaxKind5.CallExpression || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.ThisKeyword || !/^parse(?:Ws)?OHLCV$/.test(callee.name?.text ?? "") || declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.initializer !== initializer || declaration.name?.kind !== SyntaxKind5.Identifier) {
+    return void 0;
+  }
+  const name = declaration.name.text;
+  const indexed = this.hasNodeWhere(this.goEnclosingFunction(declaration), (n) => n.kind === SyntaxKind5.ElementAccessExpression && n.expression?.kind === SyntaxKind5.Identifier && n.expression.text === name);
+  return indexed ? void 0 : "[]any";
+};
 
 // src/javaTranspiler.ts
 init_esm_shims();
@@ -66919,6 +67078,31 @@ var JavaTranspiler = class extends BaseTranspiler {
       return void 0;
     }
   }
+  // a venue method's `x: Dict | undefined = undefined` slot its body never reads: every in-file call
+  // (direct or `.call (this, ..)`) leaves it undefined or passes an object literal, so a Map slot holds it
+  javaVenueOptionalDictUnionParameter(node, method) {
+    const file = node.getSourceFile();
+    const name = node.name?.text;
+    const methodName = method.name?.text;
+    if (!JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(file.fileName.replace(/\\/g, "/")) || node.type?.kind !== SyntaxKind6.UnionType || !this.h30J04DictTypeNode(node.type) || !this.javaIsUndefinedLiteral(node.initializer) || name === void 0 || methodName === void 0) {
+      return false;
+    }
+    const index = method.parameters.indexOf(node);
+    if (this.javaTreeSome(method.body, (n) => isIdentifier3(n) && n.text === name || void 0)) {
+      return false;
+    }
+    const fits = (a) => a === void 0 || this.javaIsUndefinedLiteral(a) || isObjectLiteralExpression3(a);
+    return !this.javaTreeSome(file, (n) => {
+      if (!isCallExpression6(n) || !isPropertyAccessExpression3(n.expression)) {
+        return void 0;
+      }
+      const callee = n.expression.name.text;
+      if (callee === methodName) {
+        return !fits(n.arguments[index]) || void 0;
+      }
+      return callee === "call" && n.arguments[0]?.kind === SyntaxKind6.ThisKeyword && !fits(n.arguments[index + 1]) || void 0;
+    });
+  }
   // the annotation proof for an optional parameter (no initializer bail)
   javaOptionalParameterTypeOf(node) {
     if (node === void 0 || !isParameterDeclaration2(node) || node.dotDotDotToken !== void 0) {
@@ -66937,6 +67121,9 @@ var JavaTranspiler = class extends BaseTranspiler {
     const name = symbol?.name;
     if (node.type === void 0) {
       return this.javaInheritedOptionalParameterType(node);
+    }
+    if (this.javaVenueOptionalDictUnionParameter(node, method)) {
+      return JAVA_NATIVE_DICT_PARAMETER_TYPE;
     }
     if (name === "Strings" || this.javaIsStringArrayType(checker, type)) {
       const listName = JAVA_STRINGS_OPTIONAL_PARAMETER_NAMES.has(node.name?.text) && !JAVA_STRINGS_EXCLUDED_METHODS.has(method.name?.text) || this.javaUnifiedOptionalStringListParameter(node, method);
@@ -67154,6 +67341,10 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (unifiedInt !== void 0) {
       return unifiedInt;
     }
+    const venueDict = testTier ? void 0 : this.javaVenueNullableDictParameterType(node, name, symbol, method);
+    if (venueDict !== void 0) {
+      return venueDict;
+    }
     if (name === void 0) {
       return this.javaPlainParameterTypeOf(node, type, checker);
     }
@@ -67216,6 +67407,22 @@ var JavaTranspiler = class extends BaseTranspiler {
       return false;
     }
     return !this.javaTreeSome(method.body, (n) => isBinaryExpression4(n) && n.operatorToken.kind === SyntaxKind6.EqualsToken && isIdentifier3(n.left) && n.left.text === arg.text || void 0);
+  }
+  // a fixed `NullableDict` slot of a venue-private method (no ancestor, never written, no foreign, hand-written or
+  // dynamic use) prints a Map when every own-file `this.name (..)` caller hands a local the printer declares a Map
+  javaVenueNullableDictParameterType(node, name, symbol, method) {
+    if (name !== "NullableDict" || typeof this.javaRepoMethodUses !== "function" || !isIdentifier3(method.name) || !JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(symbol?.declarations?.[0]?.resolve()?.getSourceFile?.()?.fileName ?? "") || !JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, "/")) || this.getMethodOverride(method) !== void 0 || this.javaParameterIsWritten(node) || this.javaParameterIsTypeofTested(node)) {
+      return void 0;
+    }
+    const methodName = String(method.name.text);
+    const uses = this.javaRepoMethodUses(methodName, node.getSourceFile().fileName);
+    if (uses === void 0 || uses.foreignCalls !== 0 || uses.mentions > 0 || uses.handWritten) {
+      return void 0;
+    }
+    const position = method.parameters.indexOf(node);
+    const internal = this.javaThisCallsInFile(node.getSourceFile(), methodName);
+    const isMap = (arg) => arg !== void 0 && isIdentifier3(arg) && this.printNode(arg, 0) === arg.text && (this.javaDeclaredTypeOf(arg) ?? "").replace(/^final\s+/, "").replace(/\s+/g, "").replace(/^java\.util\./, "") === "Map<String,Object>";
+    return internal.length > 0 && internal.every((call) => isMap(call.arguments?.[position])) ? JAVA_NATIVE_DICT_PARAMETER_TYPE : void 0;
   }
   // a sync `string[]` slot (not `Strings`) of a base method that venues override and no hand-written Java declares
   // or calls: the base's own callers hand List<String>, and every override shares the annotation
@@ -76099,6 +76306,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     // shadow read (rustParamShadowUseCensus) prints `&indexmap::IndexMap<String, Value>`; every caller lends a plain
     // dict local (`&x`) or its own borrowed slot; by-name arms lend the boxed map (an empty map for Null, as the shadow).
     this.rustVenueDictDecisions = /* @__PURE__ */ new WeakMap();
+    this.rustVenueDictPending = /* @__PURE__ */ new Set();
+    this.rustVenueDictGuardHits = 0;
+    this.rustVenueDictValuePending = /* @__PURE__ */ new Set();
     this.rustSafeMarketBoxing = /* @__PURE__ */ new Set();
     this.rust65eByIdLists = /* @__PURE__ */ new WeakMap();
     // ===== end h27-R07
@@ -76272,6 +76482,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     }
     if (this.rustGroupIntParamUnboundRead(node))
       return `Value::from(${name})`;
+    if (this.rustListGroupParamBoxedUse(node))
+      return `Value::from(&${name})`;
     return this.rustOwnedUseMark(node, this.printRustBytesLocalRead(node) ?? this.printWsBookLocalUse(node) ?? this.printWsCacheLocalUse(node) ?? this.printClientHandleUse(node) ?? this.printTypedFilterParamRead(node) ?? this.printRustNilLocalRead(node) ?? this.printRustScalarLocalRead(node) ?? this.printRustStrSlotConcat(node) ?? this.printRustStrSlotBox(node) ?? super.printIdentifier(node));
   }
   rustOwnedUseMark(node, text) {
@@ -78057,6 +78269,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (kind === void 0)
       return text;
     const bare2 = this.rustOwnContainerBareText(node);
+    if (kind === "odict") {
+      const obox = `${bare2}.map_or(Value::Null, Value::Dict)`;
+      return text.split(`${obox}.into_dict()`).join(`${bare2}.unwrap_or_default()`).split(`${obox}.into_opt_dict()`).join(bare2);
+    }
     const box = `${kind === "dict" ? "Value::Dict" : "Value::Arr"}(${bare2})`;
     const native = kind === "dict" ? "crate::value::Dict" : "crate::value::List";
     return text.split(`${box}.into_${kind}()`).join(bare2).split(`${box}.into_opt_${kind}()`).join(`Some(${bare2})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare2}`).split(`${box}.as_array().cloned().unwrap_or_default()`).join(kind === "list" ? `${bare2}.to_vec()` : `${box}.as_array().cloned().unwrap_or_default()`);
@@ -78217,6 +78433,10 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) {
       this.rustPrintedBorrowed.add(declaration);
       return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === "list" ? "List" : "Dict"} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === "list" ? "list" : "dict"}()`;
+    }
+    if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustParamsAliasDecl(declaration) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(this.rustSkipWrappers(declaration.initializer)))) {
+      this.rustPrintedBorrowed.add(declaration);
+      return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue.trim().replace(/\.clone\(\)$/, "")}${this.rustParamReadAfter(declaration) ? ".clone()" : ""}`;
     }
     if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) {
       this.rustPrintedBorrowed.add(declaration);
@@ -79921,6 +80141,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return groupMap;
     if (this.rustSafeMarketIdParam(param) === true)
       return "Option<&str>";
+    if (this.rustListGroupParam(param))
+      return "crate::value::List";
     if (this.rustWsHandleParam(param))
       return `&${_RustTranspiler.RUST_CLIENT_HANDLE_TYPE}`;
     if (this.rustMarketSlotParam(param))
@@ -90421,6 +90643,10 @@ ${ind}];`;
     const kind = this.rustScalarLocalOf(key)?.kind;
     if (kind !== "str" && kind !== "ostr")
       return void 0;
+    const book = this.rustStripWrappers(node.expression);
+    if (isIdentifier4(book) && this.rustWsBookLocalOf(book) !== void 0) {
+      return `${super.printIdentifier(book)}.book_field(${super.printIdentifier(key)}.${kind === "str" ? "as_str()" : "as_deref().unwrap_or_default()"})`;
+    }
     const recv = this.printNode(node.expression, 0).trim();
     return `get_value(&${recv}, ${super.printIdentifier(key)}.${kind === "str" ? "as_str" : "as_deref"}())`;
   }
@@ -93396,7 +93622,7 @@ ${i1}}`;
     }
     const container = this.rustOwnContainerReturn(node);
     if (container !== void 0)
-      return container === "dict" ? "crate::value::Dict" : "crate::value::List";
+      return container === "odict" ? "Option<crate::value::Dict>" : container === "dict" ? "crate::value::Dict" : "crate::value::List";
     if (this.rustAsyncNoValueMethod(node))
       return "";
     try {
@@ -94182,6 +94408,9 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return runtimeCall;
     if (expression.kind === SyntaxKind7.PropertyAccessExpression && expression.expression.kind === SyntaxKind7.ThisKeyword && expression.name.text === "json" && node.arguments.length === 1) {
       const argText = this.printNode(node.arguments[0], 0).trim();
+      const jsonDecl = isIdentifier4(node.arguments[0]) ? this.rustDeclarationOfIdentifier(node.arguments[0]) : void 0;
+      if (jsonDecl?.kind === SyntaxKind7.Parameter && jsonDecl.name !== node.arguments[0] && this.rustVenueDictParam(jsonDecl))
+        return `json_stringify(${argText})`;
       if (!argText.includes("self.")) {
         const withoutClone = argText.replace(/\.clone\(\)$/, "");
         return `json_stringify(${this.ensureRef(withoutClone)})`;
@@ -94816,8 +95045,24 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       return false;
     return String(param.type?.getText?.() ?? "").replace(/\s+/g, "") === "Dict";
   }
+  /** The trailing `params: Dict = {}` of a venue's own non-unified method (the wide optional slot), handed the typed `params` slot. */
+  rustParamsHelperSlot(call, arg) {
+    if (!isCallExpression7(call) || !isPropertyAccessExpression4(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword || !isIdentifier4(arg))
+      return false;
+    const name = String(call.expression.name.text);
+    if (/^(?:handle\w+|fetchPaginatedCall\w+)$/.test(name) || this.rustTypedUnified.has(name))
+      return false;
+    const args = Array.from(call.arguments ?? []);
+    const params = this.rustTranspiledCalleeParams(call, name);
+    const param = params?.[args.indexOf(arg)];
+    if (params === void 0 || args.indexOf(arg) !== params.length - 1 || param?.initializer === void 0 || !isObjectLiteralExpression4(param.initializer) || param.initializer.properties.length !== 0)
+      return false;
+    return !params.some((p) => p.dotDotDotToken !== void 0) && String(param.type?.getText?.() ?? "").replace(/\s+/g, "") === "Dict";
+  }
   /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
   printOptionalParamsArg(node, text) {
+    if (this.rustDeclarationOfIdentifier(node)?.kind === SyntaxKind7.Parameter && isIdentifier4(node) && this.rustParamsHelperSlot(node.parent, node) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node)))
+      return this.rustLocalLastUse(node, this.rustDeclarationOfIdentifier(node)) ? `Value::Dict(${text})` : `Value::from(&${text})`;
     if (!isIdentifier4(node) || !this.rustOptionalParamsSlot(node.parent, node))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(node);
@@ -95475,6 +95720,10 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
         this.rustParamShadowEmittedSet().add(fn);
         continue;
       }
+      if (this.rustListGroupParam(shadow.declaration)) {
+        lines.push(`${idn}let ${shadow.name}: &[Value] = &${shadow.name};`);
+        continue;
+      }
       if (this.rustVenueDictParam(shadow.declaration)) {
         this.rustParamShadowEmittedSet().add(fn);
         continue;
@@ -95610,7 +95859,7 @@ ${this.getIden(identation + 1)}let mut ${this.printNode(p.name, 0)}: Value = get
       if (!ok)
         return;
       if (isIdentifier4(node) && node.text === name && node !== param.name) {
-        if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node)) || infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node)) || wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node)))) {
+        if (this.rustSymbolOf(node) !== paramSymbol || !(this.rustParamUseIsRead(node, kind, literalKeys) || strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node)) || infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node)) || wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node)))) {
           ok = false;
           return;
         }
@@ -97723,6 +97972,8 @@ ${this.getIden(identation)}}`;
     if (typedCall !== void 0)
       return typedCall;
     const containerKind = this.rustOwnContainerCallKind(node.expression);
+    if (containerKind === "odict" && !this.rustOwnContainerBare.has(node))
+      return `${this.rustOwnContainerBareText(node.expression)}.await.map_or(Value::Null, Value::Dict)`;
     if (containerKind !== void 0 && !this.rustOwnContainerBare.has(node))
       return `${containerKind === "dict" ? "Value::Dict" : "Value::Arr"}(${this.rustOwnContainerBareText(node.expression)}.await)`;
     const outcomeBox = this.printOptOutcomeAwaitBox(node, identation);
@@ -98449,6 +98700,8 @@ ${iden}} }`;
     if (baseList !== void 0)
       return baseList;
     const kind = this.rustVenueContainerDecisionOf(node);
+    if (kind !== void 0 && kind.nullable && kind.kind === "dict")
+      return this.rustOwnOptDictReturn(node);
     const declared = String(node.type?.getText?.() ?? "").replace(/\s+/g, "").replace(/^Promise<(.+)>$/, "$1");
     if (kind === void 0 || kind.nullable || !(/^(?:Dict|List|Dict\[\]|any\[\])$/.test(declared) || _RustTranspiler.RUST_OWN_RECORD_RETURNS.has(declared)))
       return void 0;
@@ -98468,6 +98721,47 @@ ${iden}} }`;
     };
     node.body.forEachChild(visit);
     return ok && returns > 0 ? kind.kind : void 0;
+  }
+  /** A venue method declared `NullableDict` whose every return is undefined, an optional map local or a no-default
+   *  `safeDict` read: it returns `Option<Dict>` (None exactly where the boxed answer was Null). */
+  rustOwnOptDictReturn(node) {
+    if (this.rustMethodTypedReturnKind(node) !== void 0 || String(node.type?.getText?.() ?? "").replace(/\s+/g, "").replace(/^Promise<(.+)>$/, "$1") !== "NullableDict")
+      return void 0;
+    let returns = 0;
+    let ok = true;
+    const visit = (n) => {
+      if (!ok || n !== node.body && isFunctionLike(n))
+        return;
+      if (isReturnStatement4(n)) {
+        returns++;
+        if (n.expression === void 0 || this.rustOwnOptDictOperand(n.expression) === void 0)
+          ok = false;
+      }
+      n.forEachChild(visit);
+    };
+    node.body.forEachChild(visit);
+    const last = node.body.statements[node.body.statements.length - 1];
+    return ok && returns > 0 && last !== void 0 && (isReturnStatement4(last) || isThrowStatement4(last)) ? "odict" : void 0;
+  }
+  /** The `Option<Dict>` text of a return operand of an `rustOwnOptDictReturn` method, else undefined. */
+  rustOwnOptDictOperand(exp) {
+    const v = this.unwrapParens(exp);
+    if (v === void 0)
+      return void 0;
+    if (this.literalKindOfNode(v) === "null")
+      return "None";
+    if (isIdentifier4(v)) {
+      const local = this.rustOptContainerOf(v);
+      return local !== void 0 && local.kind === "dict" ? super.transformIdentifier(v, this.ReservedKeywordsReplacements[v.text] ?? v.text) : void 0;
+    }
+    if (!isCallExpression7(v) || !isPropertyAccessExpression4(v.expression) || v.expression.expression.kind !== SyntaxKind7.ThisKeyword || String(v.expression.name.text) !== "safeDict")
+      return void 0;
+    if (v.arguments.length !== 2 || !isStringLiteral3(v.arguments[1]) || !this.rustCalleeIsRuntimeBase(v))
+      return void 0;
+    const recv = this.unwrapParens(v.arguments[0]);
+    if (!isPropertyAccessExpression4(recv) || recv.expression.kind !== SyntaxKind7.ThisKeyword || !isIdentifier4(recv.name))
+      return void 0;
+    return `self.safe_dict_k_o(&${this.printNode(recv, 0).trim()}, ${JSON.stringify(v.arguments[1].text)})`;
   }
   /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
    *  local the body builds: it returns `List` (a list on every path, never Null). */
@@ -98625,6 +98919,8 @@ ${iden}} }`;
     if (up.parent?.kind === SyntaxKind7.AwaitExpression)
       return void 0;
     const kind = this.rustOwnContainerCallKind(node);
+    if (kind === "odict")
+      return `${this.rustOwnContainerBareText(node)}.map_or(Value::Null, Value::Dict)`;
     return kind === void 0 ? void 0 : `${kind === "dict" ? "Value::Dict" : "Value::Arr"}(${this.rustOwnContainerBareText(node)})`;
   }
   /** The native text of `[await] this.m (..)` for a typed local of the same kind, else undefined. */
@@ -98754,6 +99050,8 @@ ${iden}} }`;
   /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
   printOwnContainerReturn(fn, exp) {
     const kind = this.rustOwnContainerReturn(fn);
+    if (kind === "odict")
+      return this.rustOwnOptDictOperand(exp);
     return kind === void 0 ? void 0 : this.rustOwnContainerPayload(exp, kind);
   }
   /** `this.safeDict (x, 'k', {})` / `this.safeList (x, 'k', [])`: the member when it is that container, else the empty one,
@@ -101001,6 +101299,29 @@ ${iden}} }`;
   rustIsJsonOperand(node) {
     const call = node?.parent;
     return isIdentifier4(node) && isCallExpression7(call) && call.arguments.length === 1 && call.arguments[0] === node && isPropertyAccessExpression4(call.expression) && call.expression.expression.kind === SyntaxKind7.ThisKeyword && String(call.expression.name.text) === "json";
+  }
+  /** A `this.json (x)` operand inside a method that returns no value and is reached only by name (a ws ack handler):
+   *  it lends the dict handle. A direct caller may hold the message boxed, so it keeps the slot as it is. */
+  rustVoidHandlerJsonOperand(node) {
+    if (!this.rustIsJsonOperand(node))
+      return false;
+    let fn = node.parent;
+    while (fn !== void 0 && !isFunctionLike(fn))
+      fn = fn.parent;
+    if (fn === void 0 || !isMethodDeclaration5(fn) || fn.body === void 0 || fn.type !== void 0 && fn.type.kind !== SyntaxKind7.VoidKeyword)
+      return false;
+    if (!this.rustMethodReferencedAsValue(fn) || this.rustVenueStrCallSites(fn).length > 0)
+      return false;
+    let valued = false;
+    const visit = (n) => {
+      if (valued || isFunctionLike(n))
+        return;
+      if (isReturnStatement4(n) && n.expression !== void 0)
+        valued = true;
+      n.forEachChild(visit);
+    };
+    fn.body.forEachChild(visit);
+    return !valued;
   }
   /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
   printRustContainerLocalBox(node, text) {
@@ -104867,6 +105188,14 @@ ${iden}} }`;
       if (this.rustOptExtendOperandUse(n)) {
         uses++;
         extendUses++;
+        return true;
+      }
+      if (isVariableDeclaration3(up) && up.initializer === n && up.type !== void 0 && String(up.type.getText()) === "Dict" && this.rustParamsAliasDecl(up)) {
+        uses++;
+        return true;
+      }
+      if (this.rustParamsHelperSlot(up, n)) {
+        uses++;
         return true;
       }
       if (isCallExpression7(up) && up.arguments[0] === n) {
@@ -116013,6 +116342,57 @@ ${this.getIden(identation)}}`;
     const at = Array.from(call.arguments).indexOf(n);
     return at >= 0 && this.rustVenueStrSlot(this.rustCalleeParams(call), at) === "Option<i64>";
   }
+  rustListGroupParam(param) {
+    const method = param?.parent;
+    if (param?.kind !== SyntaxKind7.Parameter || !isMethodDeclaration5(method) || method.body === void 0 || !isIdentifier4(method.name) || !isIdentifier4(param.name))
+      return false;
+    const name = String(method.name.text);
+    const index = Array.from(method.parameters).indexOf(param);
+    const pname = _RustTranspiler.RUST_INHERENT_GROUP_LIST_PARAMS[name]?.[index];
+    if (!pname || String(param.name.text) !== pname || param.initializer !== void 0 || param.questionToken !== void 0)
+      return false;
+    if (String(param.type?.getText?.() ?? "") !== "List" || this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}))
+      return false;
+    if (this.rustLocalIsReassigned(param, pname))
+      return false;
+    const file = String(method.getSourceFile().fileName).replace(/\\/g, "/");
+    const at = file.indexOf("ts/src/");
+    if (at < 0 || /(?:^|\/)ts\/src\/test\//.test(file))
+      return false;
+    const root = file.slice(0, at) + "ts/src";
+    const key = root + "#list#" + name + "#" + index;
+    let agree = this.rustOverrideGroupAgreeByRoot.get(key);
+    if (agree === void 0) {
+      agree = true;
+      let seen = 0;
+      const header = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(\\s*([^)]*)`, "gm");
+      for (const dir of ["", "/pro", "/prediction", "/base"]) {
+        let entries = [];
+        try {
+          entries = fs3.readdirSync(root + dir).filter((f) => isRustTsIndexSource(f) && (dir !== "/base" || f === "Exchange.ts" || f === "PredictionExchange.ts"));
+        } catch (e) {
+          continue;
+        }
+        for (const f of entries) {
+          for (const m of (readRustTsIndexSource(`${root}${dir}/${f}`) ?? "").matchAll(header)) {
+            seen++;
+            if ((m[1].split(",")[index] ?? "").replace(/\s+/g, "") !== `${pname}:List`)
+              agree = false;
+          }
+        }
+      }
+      agree = agree && seen > 0;
+      this.rustOverrideGroupAgreeByRoot.set(key, agree);
+    }
+    return agree;
+  }
+  /** A use of a list group slot outside its slice view: the shared list boxed by reference (no copy). */
+  rustListGroupParamBoxedUse(node) {
+    const declaration = this.rustDeclarationOfIdentifier(node);
+    if (declaration === void 0 || !isParameterDeclaration3(declaration) || declaration.name === node || node.parent === declaration)
+      return false;
+    return this.rustListGroupParam(declaration) && this.rustParamShadowOf(node) === void 0;
+  }
   /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
    *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
   rustOverrideGroupParam(method, param, file) {
@@ -116027,7 +116407,8 @@ ${this.getIden(identation)}}`;
     if (!pname || inherent !== void 0 && index !== 0 || String(param.name.text) !== pname)
       return false;
     const slot = this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {});
-    if ((inherent !== void 0 || inherentStr ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name)))
+    const inherentMap = map !== void 0 && _RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS[name] !== void 0;
+    if ((inherent !== void 0 || inherentStr || inherentMap ? slot : !slot) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name)))
       return false;
     const spelled = `${int ? "" : pname}:${map ?? (inherent !== void 0 || ostr ? "Str" : int ? "int" : "string")}`;
     const at = file.indexOf("ts/src/");
@@ -116083,6 +116464,10 @@ ${this.getIden(identation)}}`;
       return opt ? "Some(&indexmap::IndexMap::new())" : "&indexmap::IndexMap::new()";
     if (!opt && this.rustNeverNullDictLocalArg(inner))
       return `&${super.transformIdentifier(inner, this.ReservedKeywordsReplacements[inner.text] ?? inner.text)}`;
+    if (isIdentifier4(inner) && this.rustDictBearerDeclaration(inner) !== void 0 && this.rustNestedDictBearerDeclaration(inner) === void 0) {
+      const id = super.transformIdentifier(inner, this.ReservedKeywordsReplacements[inner.text] ?? inner.text);
+      return opt ? `Some(&${id})` : `&${id}`;
+    }
     const text = this.printNode(arg, identation).trim();
     return opt ? `(${text}).as_map()` : `(${text}).as_map().unwrap_or(&Default::default())`;
   }
@@ -117487,12 +117872,20 @@ ${this.getIden(identation)}}`;
     let decision = this.rustVenueDictDecisions.get(param);
     if (decision === void 0) {
       this.rustVenueDictDecisions.set(param, false);
+      this.rustVenueDictPending.add(param);
+      const hits = this.rustVenueDictGuardHits;
       try {
         decision = this.rustVenueDictParamUncached(param);
       } catch (e) {
         decision = false;
       }
-      this.rustVenueDictDecisions.set(param, decision);
+      this.rustVenueDictPending.delete(param);
+      if (this.rustVenueDictPending.size > 0 && this.rustVenueDictGuardHits !== hits)
+        this.rustVenueDictDecisions.delete(param);
+      else
+        this.rustVenueDictDecisions.set(param, decision);
+    } else if (this.rustVenueDictPending.has(param)) {
+      this.rustVenueDictGuardHits++;
     }
     return decision;
   }
@@ -117711,10 +118104,11 @@ ${this.getIden(identation)}}`;
     if (!this.rustVenueOnlyMethod(method, name))
       return false;
     const handler = this.rustWsHandlerMessageSlot(method, param);
-    const extendOnly = !handler && this.isAsyncFunction(method) && this.rustParamOnlyExtendOperand(method, param);
-    if (this.isAsyncFunction(method) && !handler && !extendOnly)
+    const spawned = !handler && this.isAsyncFunction(method) && this.rustSpawnOnlyTarget(method);
+    const extendOnly = !handler && !spawned && this.isAsyncFunction(method) && this.rustParamOnlyExtendOperand(method, param);
+    if (this.isAsyncFunction(method) && !handler && !extendOnly && !spawned)
       return false;
-    if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== void 0 || !handler && this.rustMethodReferencedAsValue(method))
+    if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustTypedSignature(method) !== void 0 || !handler && !spawned && this.rustMethodReferencedAsValue(method))
       return false;
     const params = Array.from(method.parameters);
     const at = params.indexOf(param);
@@ -117724,19 +118118,39 @@ ${this.getIden(identation)}}`;
       return false;
     if (this.rustLocalIsReassigned(param, String(param.name.text)))
       return false;
-    if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === void 0 && !(handler && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0)))
+    if (!extendOnly && this.rustParamShadowUseCensus(method, param, RUST_PARAM_SHADOWS.MAP, false, false, true, handler) === void 0 && !((handler || spawned) && this.rustParamNeverNamed(method, param) && (this.rustMethodReferencedAsValue(method) || this.rustVenueStrCallSites(method).length > 0)))
       return false;
     const sibling = this.rustWsSiblingCallSites(method);
     if (sibling === void 0)
       return false;
     const calls = [...this.rustVenueStrCallSites(method), ...sibling];
-    if (calls.length === 0 && !handler || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length)
+    if (calls.length === 0 && !handler && !spawned || this.rustVenueDictTextCallCount(method, name, calls.length) !== calls.length)
       return false;
     if (handler && this.rustWsHandlerCalledElsewhere(method, name))
       return false;
     if (!calls.every((call) => call.arguments.length >= at + 1 && isIdentifier4(call.arguments[at])))
       return false;
     return calls.every((call) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
+  }
+  /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
+   *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
+  rustSpawnOnlyTarget(method) {
+    if (!/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(method.getSourceFile().fileName).replace(/\\/g, "/")))
+      return false;
+    const name = String(method.name.text);
+    let targets = 0;
+    for (const n of this.rustScopeIndex(method.getSourceFile()).nodes) {
+      if (!isPropertyAccessExpression4(n) || String(n.name.text) !== name)
+        continue;
+      const call = n.parent;
+      if (n.expression.kind !== SyntaxKind7.ThisKeyword || !isCallExpression7(call) || call.expression === n || !isPropertyAccessExpression4(call.expression))
+        return false;
+      const via = String(call.expression.name.text);
+      if (call.expression.expression.kind !== SyntaxKind7.ThisKeyword || call.arguments[via === "delay" ? 1 : via === "spawn" ? 0 : -1] !== n)
+        return false;
+      targets++;
+    }
+    return targets > 0;
   }
   /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
   rustParamOnlyExtendOperand(method, param) {
@@ -118022,7 +118436,8 @@ ${this.getIden(identation)}}`;
         const text = readRustTsIndexSource(`${root}${dir}/${f}`) ?? "";
         if (!text.includes(name))
           continue;
-        if (quoted.test(text))
+        const own2 = counted(dir) && f === base;
+        if (quoted.test(text) && (own2 || dir === "/base" || !declares.test(text) || this.getMethodOverride(method) !== void 0))
           return -1;
         const n = (text.match(call) ?? []).length;
         if (n === 0)
@@ -118041,7 +118456,7 @@ ${this.getIden(identation)}}`;
       return false;
     const declaration = this.rustDeclarationOfIdentifier(arg);
     if (declaration?.kind !== SyntaxKind7.Parameter)
-      return this.rustNeverNullDictLocalArg(arg);
+      return this.rustNeverNullDictLocalArg(arg) || declaration?.name !== arg && this.rustExtendOnlySlotOf(arg) && this.rustVenueDictLiteralLocalArg(declaration);
     if (declaration.name === arg)
       return false;
     if (!this.rustVenueDictParam(declaration))
@@ -118049,6 +118464,19 @@ ${this.getIden(identation)}}`;
     const call = arg.parent;
     const slot = isCallExpression7(call) ? this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(arg)] : void 0;
     return slot === void 0 || !this.rustVenueDictValueParam(slot) || this.rustVenueDictValueParam(declaration);
+  }
+  /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
+  rustExtendOnlySlotOf(arg) {
+    const call = arg.parent;
+    const callee = isCallExpression7(call) ? this.rustScalarCallee(call) : void 0;
+    const slot = callee?.parameters?.[Array.from(call.arguments).indexOf(arg)];
+    return slot !== void 0 && this.isAsyncFunction(callee) && !this.rustWsHandlerMessageSlot(callee, slot) && this.rustParamOnlyExtendOperand(callee, slot);
+  }
+  /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
+  rustVenueDictLiteralLocalArg(declaration) {
+    if (declaration?.kind !== SyntaxKind7.VariableDeclaration || !isIdentifier4(declaration.name) || !isObjectLiteralExpression4(this.rustSkipWrappers(declaration.initializer)))
+      return false;
+    return !this.rustLocalIsReassigned(declaration, String(declaration.name.text)) && !this.rustNestedDictLocalIsTyped(declaration) && this.rustDictLocalIsTyped(declaration);
   }
   /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
   rustVenueDictValueUse(id) {
@@ -118144,6 +118572,16 @@ ${this.getIden(identation)}}`;
       return void 0;
     return `Value::from(${text})`;
   }
+  /** An argument landing in another venue method's borrowed-map slot (`this.handleBidAsk (client, message)`): the
+   *  borrowed map is passed on as is. A slot that takes the dict handle cannot take a map view. */
+  rustVenueDictLentSlotUse(id) {
+    const call = id?.parent;
+    if (call === void 0 || !isCallExpression7(call) || call.expression === id || !isPropertyAccessExpression4(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const at = Array.from(call.arguments).indexOf(id);
+    const slot = at < 0 ? void 0 : this.rustScalarCallee(call)?.parameters?.[at];
+    return slot !== void 0 && slot !== this.rustDeclarationOfIdentifier(id) && this.rustVenueDictParam(slot) && !this.rustVenueDictValueParam(slot);
+  }
   /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
   printVenueDictReaderArg(node, text) {
     if (!isIdentifier4(node) || !this.rustVenueDictReaderUse(node))
@@ -118230,9 +118668,20 @@ ${this.getIden(identation)}}`;
     const param = at < 0 ? void 0 : this.rustScalarCallee(call)?.parameters?.[at];
     return param !== void 0 && this.rustVenueDictValueParam(param);
   }
+  /** Lent on to a sibling's borrowed slot that takes the dict handle: the handle is passed on as is. */
+  rustVenueDictLentHandleUse(id) {
+    const call = id?.parent;
+    if (call === void 0 || !isCallExpression7(call) || call.expression === id || !isPropertyAccessExpression4(call.expression) || call.expression.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const own = this.rustDeclarationOfIdentifier(id);
+    if (own?.kind !== SyntaxKind7.Parameter || !isMethodDeclaration5(own.parent) || !this.rustWsHandlerMessageSlot(own.parent, own))
+      return false;
+    const slot = this.rustScalarCallee(call)?.parameters?.[Array.from(call.arguments).indexOf(id)];
+    return slot !== void 0 && slot !== own && !this.rustVenueDictValuePending.has(slot) && this.rustVenueDictParam(slot) && this.rustVenueDictValueParam(slot);
+  }
   /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
   rustVenueDictValueParam(param) {
-    if (!isIdentifier4(param?.name) || param.parent?.body === void 0)
+    if (this.rustVenueDictValuePending.has(param) || !isIdentifier4(param?.name) || param.parent?.body === void 0)
       return false;
     const name = String(param.name.text);
     const handler = isMethodDeclaration5(param.parent) && isIdentifier4(param.parent.name) && this.rustWsHandlerMessageSlot(param.parent, param);
@@ -118240,11 +118689,16 @@ ${this.getIden(identation)}}`;
     const visit = (n) => {
       if (found)
         return;
-      if (isIdentifier4(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n))) && this.rustDeclarationOfIdentifier(n) === param)
+      if (isIdentifier4(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || this.rustVoidHandlerJsonOperand(n) || handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n))) && this.rustDeclarationOfIdentifier(n) === param)
         found = true;
       n.forEachChild(visit);
     };
-    param.parent.body.forEachChild(visit);
+    this.rustVenueDictValuePending.add(param);
+    try {
+      param.parent.body.forEachChild(visit);
+    } finally {
+      this.rustVenueDictValuePending.delete(param);
+    }
     return found;
   }
   /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
@@ -118275,7 +118729,9 @@ ${this.getIden(identation)}}`;
     if (declaration?.kind === SyntaxKind7.Parameter && !this.rustVenueDictParam(declaration) && this.rustBoxedDictParamLends(declaration)) {
       return `${text}.as_map().unwrap_or(&Default::default())`;
     }
-    return declaration?.kind === SyntaxKind7.Parameter ? text : `&${text}`;
+    if (declaration?.kind === SyntaxKind7.Parameter)
+      return this.rustVenueDictParam(declaration) ? _RustTranspiler.rustLentMark(text) : text;
+    return `&${text}`;
   }
   /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
    *  `priceToPrecision` / `costToPrecision` (stringified like `numberToString`: `3.0` prints `3`). */
@@ -120583,7 +121039,9 @@ _RustTranspiler.RUST_BASE_TYPED_METHODS = {
   // describe: base literal or `deepExtend (super.describe (), {..})` of maps on every path (`-> Dict`)
   describe: ["Dict", "dict"],
   // the error hook: `undefined` (go on to the status table) or `true` (handled) on every path (`-> Option<bool>`)
-  handleErrors: ["Bool", "obool"]
+  handleErrors: ["Bool", "obool"],
+  // prediction EVM signer: the signed raw tx hex on every path (the base throws)
+  signEvmTransaction: ["string", "str"]
 };
 _RustTranspiler.RUST_BASE_TYPED_RUNTIME = {
   milliseconds: "int",
@@ -120889,6 +121347,8 @@ _RustTranspiler.RUST_TYPED_RETURNS = {
   setMarginMode: "Option<crate::value::Dict>",
   // every body answers the endpoint's dict (`None` when the endpoint answered no dict)
   cancelAllOrdersAfter: "Option<crate::value::Dict>",
+  // TS `Promise<Dict>`: the limits keyed by symbol (`None` when a body answered no dict)
+  fetchTradingLimits: "Option<crate::value::Dict>",
   fetchMarginMode: "crate::types::MarginMode",
   fetchMarginModes: "crate::types::MarginModes",
   addMargin: "crate::types::MarginModification",
@@ -121063,7 +121523,9 @@ _RustTranspiler.RUST_TYPED_RETURNS = {
   unWatchTicker: "crate::Value",
   unWatchTickers: "crate::Value",
   unWatchTrades: "crate::Value",
-  unWatchTradesForSymbols: "crate::Value"
+  unWatchTradesForSymbols: "crate::Value",
+  fetchDeposit: "crate::types::Transaction",
+  fetchWithdrawal: "crate::types::Transaction"
 };
 // `const market = this.market (symbol)` whose every use is a literal-key read or a whole-value hand-off
 // stays a `crate::types::Market`: listed fields read natively, other keys and hand-offs use its `raw`.
@@ -121779,7 +122241,10 @@ _RustTranspiler.RUST_OVERRIDE_GROUP_INT_PARAMS = { "handleErrors": [0] };
 // the same for `Str` parameters (printed `Option<&str>`, slot rustDispatch.isSlotOptStr); any name
 _RustTranspiler.RUST_OVERRIDE_GROUP_OSTR_PARAMS = { "handleErrors": [8] };
 // the same for `Dict` / `NullableDict` parameters (printed as a lent map / an optional lent map); any name
-_RustTranspiler.RUST_OVERRIDE_GROUP_MAP_PARAMS = { "handleErrors": { 4: "Dict", 7: "NullableDict" } };
+_RustTranspiler.RUST_OVERRIDE_GROUP_MAP_PARAMS = {
+  "handleErrors": { 4: "Dict", 7: "NullableDict" },
+  "signEvmTransaction": { 0: "Dict" }
+};
 // Non-trait override groups (base + venue inherent overrides, `super_*` shim): method -> first parameter, printed
 // `Option<&str>` everywhere when every declaration spells it `<name>: Str`.
 _RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS = { "safeCurrencyCode": "currencyId" };
@@ -121787,7 +122252,13 @@ _RustTranspiler.RUST_INHERENT_GROUP_OSTR_PARAMS = { "safeCurrencyCode": "currenc
 _RustTranspiler.RUST_INHERENT_GROUP_STR_PARAMS = {
   "handleTextMessage": ["", "message"],
   "calculateRateLimiterCost": ["", "method", "path"],
-  "signEvmTransaction": ["", "privateKey"]
+  "signEvmTransaction": ["", "privateKey"],
+  "calculateFee": ["symbol", "", "side"]
+};
+// List-typed override group parameters reached by name only (no trait slot): method -> parameter names by index,
+// printed `crate::value::List` when every declaration spells it `<name>: List`; other uses box the shared list
+_RustTranspiler.RUST_INHERENT_GROUP_LIST_PARAMS = {
+  "handleListMessage": ["", "message"]
 };
 /** Order request builders whose amount / price slots stay as they are (held). */
 _RustTranspiler.RUST_HELD_ORDER_REQUEST = /^(?:create|edit)Orders?Request$/;

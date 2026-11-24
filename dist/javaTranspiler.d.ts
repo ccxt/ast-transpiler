@@ -139,6 +139,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaOptionalParameterJavaType(node: any): string;
     javaInheritedOptionalParameterType(node: any): string | undefined;
     javaOptionalParameterType(node: any): string | undefined;
+    javaVenueOptionalDictUnionParameter(node: any, method: any): boolean;
     javaOptionalParameterTypeOf(node: any): string | undefined;
     javaOptionalParameterFamilyAgrees(method: any, override: any, index: any, type: string): boolean;
     hasDefaultedTail(node: any): boolean;
@@ -158,6 +159,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
     javaVenueStringListParameterType(node: any, name: any, method: any, type: any, checker: any): string | undefined;
     javaOverrideStringListArgument(arg: any): boolean;
+    javaVenueNullableDictParameterType(node: any, name: any, symbol: any, method: any): string | undefined;
     javaOverriddenSyncStringListSlot(name: any, method: any, type: any, checker: any): boolean;
     javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;

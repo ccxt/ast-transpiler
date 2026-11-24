@@ -2802,3 +2802,4 @@ export interface GoTranspiler {
     h45g36LiteralTable(node: any): boolean;
     h45g36LiteralTableRead(node: any, printed: string): string | undefined;
 }
+export declare function installH46g30UrlsApiLocal(goTranspiler: any): void;

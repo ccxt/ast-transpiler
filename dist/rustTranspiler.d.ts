@@ -2807,6 +2807,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** An optional `params: Dict = {}` of a transpiled `handle*` / `fetchPaginatedCall*` method (the base one or a venue
      *  override): the argument rides in the `optional_args` slice, where a dict local is the shared map (`From<&Dict>`). */
     rustOptionalParamsSlot(call: any, arg: any): boolean;
+    /** The trailing `params: Dict = {}` of a venue's own non-unified method (the wide optional slot), handed the typed `params` slot. */
+    rustParamsHelperSlot(call: any, arg: any): boolean;
     /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
     printOptionalParamsArg(node: any, text: string): string | undefined;
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
@@ -3340,9 +3342,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustUntilPairRaw;
     private rustOwnContainerDecisions;
     private rustOwnContainerBare;
-    rustOwnContainerReturn(node: any): 'dict' | 'list' | undefined;
+    rustOwnContainerReturn(node: any): 'dict' | 'list' | 'odict' | undefined;
     private static readonly RUST_OWN_RECORD_RETURNS;
-    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | undefined;
+    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined;
+    /** A venue method declared `NullableDict` whose every return is undefined, an optional map local or a no-default
+     *  `safeDict` read: it returns `Option<Dict>` (None exactly where the boxed answer was Null). */
+    rustOwnOptDictReturn(node: any): 'odict' | undefined;
+    /** The `Option<Dict>` text of a return operand of an `rustOwnOptDictReturn` method, else undefined. */
+    rustOwnOptDictOperand(exp: any): string | undefined;
     /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
      *  local the body builds: it returns `List` (a list on every path, never Null). */
     rustBaseStringListReturn(node: any): 'list' | undefined;
@@ -3356,7 +3363,7 @@ export declare class RustTranspiler extends BaseTranspiler {
         nullable: boolean;
     } | undefined;
     /** `[await] this.m (..)` of an own-container method: its kind. */
-    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | undefined;
+    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | 'odict' | undefined;
     private rustFilterTwinTexts;
     private rustFilterTwinRaw;
     rustFilterTwinKind(call: any): 'dict' | 'list' | undefined;
@@ -3734,6 +3741,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustContainerBoxForm(n: any, neverNull: boolean): 'clone' | 'move' | undefined;
     /** The sole argument of a base `this.json (x)` (printed `json_stringify(&x)`, not a `self.` field). */
     rustIsJsonOperand(node: any): boolean;
+    /** A `this.json (x)` operand inside a method that returns no value and is reached only by name (a ws ack handler):
+     *  it lends the dict handle. A direct caller may hold the message boxed, so it keeps the slot as it is. */
+    rustVoidHandlerJsonOperand(node: any): boolean;
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
     printRustContainerLocalBox(node: any, text: string): string | undefined;
     private static readonly RUST_BORROWED_DICT_READERS;
@@ -5667,6 +5677,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
     private static readonly RUST_INHERENT_GROUP_STR_PARAMS;
     private rustOverrideGroupAgreeByRoot;
+    private static readonly RUST_INHERENT_GROUP_LIST_PARAMS;
+    rustListGroupParam(param: any): boolean;
+    /** A use of a list group slot outside its slice view: the shared list boxed by reference (no copy). */
+    rustListGroupParamBoxedUse(node: any): boolean;
     /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean;
@@ -5883,6 +5897,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  to another such slot: a lent `&[crate::Value]` (callers lend their list, by-name arms decode once, Null -> empty). */
     rustVenueStrListParam(param: any): boolean;
     private rustVenueDictDecisions;
+    private rustVenueDictPending;
+    private rustVenueDictGuardHits;
     rustVenueDictParam(param: any): boolean;
     /** `bidAsks: any[]` beside a leading book-side handle (`handleBidAsks (bookSide, bidAsks)`). */
     rustBookSideListShape(param: any): boolean;
@@ -5908,6 +5924,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
     rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
     rustVenueDictParamUncached(param: any): boolean;
+    /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
+     *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
+    rustSpawnOnlyTarget(method: any): boolean;
     /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
     rustParamOnlyExtendOperand(method: any, param: any): boolean;
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
@@ -5941,6 +5960,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueDictTextCallCount(method: any, name: string, own: number): number;
     /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
     rustVenueDictArgLends(arg: any): boolean;
+    /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
+    rustExtendOnlySlotOf(arg: any): boolean;
+    /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
+    rustVenueDictLiteralLocalArg(declaration: any): boolean;
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
     rustVenueDictValueUse(id: any): boolean;
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
@@ -5958,6 +5981,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueDictWholeArgUse(id: any): boolean;
     /** `Value::from(x)` for a borrowed dict handle handed whole to a boxed slot. */
     printVenueDictWholeArg(node: any, text: string): string | undefined;
+    /** An argument landing in another venue method's borrowed-map slot (`this.handleBidAsk (client, message)`): the
+     *  borrowed map is passed on as is. A slot that takes the dict handle cannot take a map view. */
+    rustVenueDictLentSlotUse(id: any): boolean;
     /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
     printVenueDictReaderArg(node: any, text: string): string | undefined;
     /** A borrowed rustVenueDictParam handed to the runtime `this.extend`: the head and the operands take the map by reference. */
@@ -5973,6 +5999,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
      *  caller parameter cannot lend as a map view. */
     rustArgSlotTakesDictHandle(arg: any): boolean;
+    private rustVenueDictValuePending;
+    /** Lent on to a sibling's borrowed slot that takes the dict handle: the handle is passed on as is. */
+    rustVenueDictLentHandleUse(id: any): boolean;
     /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
     rustVenueDictValueParam(param: any): boolean;
     /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
