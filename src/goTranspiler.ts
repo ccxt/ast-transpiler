@@ -61188,3 +61188,26 @@ export function installH46g30UrlsApiLocal (goTranspiler: any) {
     };
 }
 // ===== end H46-G30
+// ===== H46-G45
+// parseOHLCV / parseWsOHLCV are declared `: OHLCV` (a [ts, o, h, l, c, v] tuple); the ccxt build boxes every call
+// with OHLCVToList, which answers that row as a non-nil `[]any`, so a local the call initialises is a `[]any`
+// (a local read or written by index keeps the box: its element reads and writes print the boxed helpers)
+const h46g45Upstream = GoTranspiler.prototype.goTypeOfInitializer;
+GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue: string) {
+    const known = h46g45Upstream.call(this, initializer, printedValue);
+    if ((known !== undefined) || !/^this\.Parse(?:Ws)?OHLCV\(/.test(printedValue ?? '')) {
+        return known;
+    }
+    const declaration: any = initializer?.parent;
+    const callee: any = initializer?.expression;
+    if ((initializer?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !/^parse(?:Ws)?OHLCV$/.test(callee.name?.text ?? '')
+        || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer !== initializer) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    const name: string = declaration.name.text;
+    const indexed = this.hasNodeWhere(this.goEnclosingFunction(declaration), (n: any) => (n.kind === SyntaxKind.ElementAccessExpression)
+        && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === name));
+    return indexed ? undefined : '[]any';
+};
+// ===== end H46-G45
