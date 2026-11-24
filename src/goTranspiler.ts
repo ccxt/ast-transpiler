@@ -56856,7 +56856,9 @@ GoTranspiler.prototype.h30a03AssignRead = function (node, identation: number, pr
     }
     const accessor = this.goUnwrapParenthesizedNode(e.right)?.expression?.name?.text;
     const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
-    return (declared === goType) ? res : undefined;
+    // a nil-seeded local the nil-join rule declares `var x []any = nil` resolves as `any` here
+    const joined = (accessor === 'safeList') && (ccxtGoNilJoinDeclarationType(this, e.left) === goType);
+    return ((declared === goType) || joined) ? res : undefined;
 };
 {
     const printVariableDeclarationListH30a03 = GoTranspiler.prototype.printVariableDeclarationList;
