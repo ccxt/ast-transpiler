@@ -7140,6 +7140,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if ((declaration?.kind === SyntaxKind.VariableDeclaration) && this.csharpIsIntegerLiteral(init) && this.csharpInt64WritesNeverNull(symbol, declaration)) {
             return true;
         }
+        // a parameter with an integer literal default prints a `<name> ??= <literal>;` prologue: non-null from there on
+        if ((declaration?.kind === SyntaxKind.Parameter) && (declaration.dotDotDotToken === undefined) && (init !== undefined) && isNumericLiteral(init)
+            && this.csharpIsIntegerLiteral(init) && this.csharpInt64WritesNeverNull(symbol, declaration)) {
+            return true;
+        }
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (init === undefined) || this.csharpIntegralBindingIsRewritten(symbol, true)) {
             return false;
         }
@@ -10882,7 +10887,7 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpShadowedNumericParamProof(declaration): string | undefined {
         const owner: any = declaration.parent;
         const init: any = declaration.initializer;
-        if (!isMethodDeclaration(owner) || (owner.body === undefined) || (init?.kind !== SyntaxKind.NumericLiteral) || !/^\d{1,9}$/.test(init.text)) {
+        if (!isMethodDeclaration(owner) || (owner.body === undefined) || (init?.kind !== SyntaxKind.NumericLiteral) || !/^\d{1,10}$/.test(init.text) || (Number(init.text) > 2147483647)) {
             return undefined;
         }
         const position = owner.parameters.indexOf(declaration);
@@ -10935,6 +10940,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if ((callee.expression?.kind === SyntaxKind.Identifier) && ((callee.expression as any).text === 'Math') && ((callee.name?.text === 'min') || (callee.name?.text === 'max'))) {
             const other: any = (parent.arguments.length === 2) ? parent.arguments[(parent.arguments[0] === current) ? 1 : 0] : undefined;
+            if (isIdentifier(other) && (other.text !== read.text) && (this.csharpArithmeticOperandType(other) === 'int') && this.csharpOperandIsPlainNumber(other)) {
+                return true; // a declared int local beside the shadow: the min/max rule reads the shadow's value
+            }
             return (other?.kind === SyntaxKind.NumericLiteral) && /^\d{1,9}$/.test(other.text);
         }
         return (callee.expression?.kind === SyntaxKind.ThisKeyword) && this.csharpShadowCallees.has(callee.name?.text as string);
