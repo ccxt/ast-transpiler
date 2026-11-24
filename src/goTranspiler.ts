@@ -60940,3 +60940,80 @@ function h45g12MarketSlotSites (go: any, fn: any, index: number): boolean {
     return true;
 }
 // ===== H45-G12 (end)
+// ===== H45-G36
+// `const d = this.safeDict (L, k[, {}])` where L is a const `Dict` local seeded by an object literal of literals
+// (nested literals, strings, numbers, booleans) and only ever read by `this.safe*` readers: every member is a
+// plain map or a scalar, so the comma-ok assertion answers what SafeMapTyped did (nil for a nil key, missing or non-map)
+export interface GoTranspiler {
+    h45g36LiteralTable(node): boolean;
+    h45g36LiteralTableRead(node, printed: string): string | undefined;
+}
+function h45g36PlainLiteral (node: any): boolean {
+    if (node?.kind === SyntaxKind.ObjectLiteralExpression) {
+        return node.properties.every ((p: any) => (p.kind === SyntaxKind.PropertyAssignment)
+            && ((p.name?.kind === SyntaxKind.StringLiteral) || (p.name?.kind === SyntaxKind.Identifier)) && h45g36PlainLiteral (p.initializer));
+    }
+    return (node?.kind === SyntaxKind.StringLiteral) || (node?.kind === SyntaxKind.NumericLiteral)
+        || (node?.kind === SyntaxKind.TrueKeyword) || (node?.kind === SyntaxKind.FalseKeyword);
+}
+GoTranspiler.prototype.h45g36LiteralTable = function (node) {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(node) : undefined;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+        || ((declaration.parent?.flags & NodeFlags.Const) === 0) || (declaration.initializer?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || !h45g36PlainLiteral (declaration.initializer)) {
+        return false;
+    }
+    // every other use is the receiver of a `this.safe*` reader: nothing writes into the table or hands it on
+    return this.goJsonOriginBindingIsReadOnly(declaration, (n: any) => {
+        const call: any = n.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && /^safe[A-Z]/.test(call.expression.name?.text ?? '');
+    });
+};
+GoTranspiler.prototype.h45g36LiteralTableRead = function (node, printed) {
+    if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
+        return undefined;
+    }
+    const decl: any = node.declarations[0];
+    const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
+    const callee: any = call?.expression;
+    if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')
+        || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
+        return undefined;
+    }
+    const [ container, key, fallback ] = call.arguments;
+    if (((fallback !== undefined) && ((fallback.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)))
+        || (key?.kind !== SyntaxKind.Identifier) || !this.h45g36LiteralTable(container)) {
+        return undefined;
+    }
+    const keyType = this.goDeclaredTypeOfIdentifier(key);
+    const name: string = decl.name.text;
+    const c = this.printNode(container, 0).trim();
+    const k = this.printNode(key, 0).trim();
+    const lead = /^\n*/.exec(printed)[0];
+    const m = /^(\t*)var (\w+) map\[string\]any = (?:ccxt\.)?SafeMapTyped\((\w+), (\w+)\)$/.exec(printed.substring(lead.length));
+    if ((m === null) || (m[2] !== name) || (m[3] !== c) || (m[4] !== k)) {
+        return undefined;
+    }
+    const ind = m[1];
+    if (keyType === 'string') {
+        return `${lead}${ind}var ${name}, _ = ${c}[${k}].(map[string]any)`;
+    }
+    if (keyType !== '*string') {
+        return undefined;
+    }
+    if (this.goIsNilGuardedStringPointerKey(key)) {
+        return `${lead}${ind}var ${name}, _ = ${c}[*${k}].(map[string]any)`;
+    }
+    return `${lead}${ind}var ${name} map[string]any\n${ind}if ${k} != nil {\n${ind}\t${name}, _ = ${c}[*${k}].(map[string]any)\n${ind}}`;
+};
+{
+    const h45g36Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h45g36Upstream.call(this, node, identation);
+        const h = this.h45g36LiteralTableRead(node, printed); if (h !== undefined) { return h; }
+        return printed;
+    };
+}
+// ===== end H45-G36
