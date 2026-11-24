@@ -48261,7 +48261,8 @@ GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read) {
     } else {
         const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
         fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
-            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE) && this.h27a02JsonOrigin(args.container, 0);
+            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
+            && (this.h27a02JsonOrigin(args.container, 0) || this.h27a02JsonOriginBeforeRead(args.container, read));
     }
     const after = read.end;
     return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
