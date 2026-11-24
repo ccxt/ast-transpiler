@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { Transpiler } from '../src/transpiler.js';
-import { installCcxtGoLocalTypes, installFmGo5G01 } from '../src/goTranspiler.js';
+import { installCcxtGoDictParams, installCcxtGoLocalTypes, installFmGo5G01 } from '../src/goTranspiler.js';
 
 const t = () => {
     const x = new Transpiler ({ 'verbose': false, 'go': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
@@ -77,5 +77,24 @@ describe ('h30 P05 parseOrder loop rows, more negatives', () => {
     test ('negative: a row reassigned is not asserted', () => {
         const out = go (dispatch + '\n    handleOrders (client: Client, message: Dict) {\n        const data = this.safeList (message, \'data\', []);\n        for (let i = 0; i < data.length; i++) {\n            let raw = data[i];\n            raw = {};\n            this.parseOrder (raw);\n        }\n    }');
         expect (out).not.toContain ('data[i].(map[string]any)');
+    });
+});
+describe ('h30 P05 rows at a typed parseOrder slot', () => {
+    const typed = (body: string) => {
+        const full = path.join (root, 'ts/src/pro/ex' + (seq++) + '.ts');
+        fs.mkdirSync (path.dirname (full), { recursive: true });
+        fs.writeFileSync (full, src (body));
+        const x = t ();
+        installCcxtGoDictParams (x.goTranspiler);
+        return x.transpileGoByPath (full).content as string;
+    };
+    test ('a row read by a safe reader and then parsed passes the comma-ok row, not the raw element', () => {
+        const out = typed (handler ('            const raw = data[i];\n            const side = this.safeString (raw, \'side\');\n            if (side !== undefined) {\n                const order = this.parseOrder (raw);\n                result.push (order);\n            }'));
+        expect (out).toContain ('ParseOrder(raw)');
+        expect (out).not.toContain ('ParseOrder(data[i])');
+    });
+    test ('the okx shape: a defaulted string read, a length test, then the parse', () => {
+        const out = typed (handler ('            const raw = data[i];\n            const tradeId = this.safeString (raw, \'tradeId\', \'\');\n            if (tradeId.length > 0) {\n                const order = this.parseOrder (raw);\n                result.push (order);\n            }'));
+        expect (out).not.toContain ('ParseOrder(data[i])');
     });
 });

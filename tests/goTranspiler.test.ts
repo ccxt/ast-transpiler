@@ -19945,6 +19945,137 @@ describe ('go dict param: parseOption / parseAccount / parseMarginMode rows', ()
     }
 });
 
+describe ('go dict param: the parseOrder row', () => {
+    const print = (name: string, arg: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    extend (...args: any[]): any {\n' +
+            '        return args[0];\n' +
+            '    }\n' +
+            '    parseOrder (order: Dict, market: any = undefined) {\n' +
+            "        return order['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[], r: any) {\n' +
+            '        return this.parseOrder (' + arg + ');\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a {}-defaulted safeDict row types the order parameter', () => {
+        const out = print('tmp-dict-param-po-sd', 'this.safeDict (xs, 0, {})');
+        expect(out).toContain('ParseOrder(order map[string]any');
+    });
+    test('an extend copy of an untyped value types the order parameter', () => {
+        const out = print('tmp-dict-param-po-ext', 'this.extend ({}, r)');
+        expect(out).toContain('ParseOrder(order map[string]any');
+    });
+    test('a list element (may be nil or another kind) keeps the box', () => {
+        const out = print('tmp-dict-param-po-el', 'xs[0]');
+        expect(out).toContain('ParseOrder(order any');
+    });
+    test('a safeDict row without a default keeps the box', () => {
+        const out = print('tmp-dict-param-po-nil', 'this.safeDict (xs, 0)');
+        expect(out).toContain('ParseOrder(order any');
+    });
+});
+
+describe ('go dict param: a venue call of its own parseOrder override', () => {
+    const print = (name: string, venue: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    safeDict (d: any, k: any, v: any = undefined): any {\n' +
+            '        return v;\n' +
+            '    }\n' +
+            '    parseOrder (order: Dict, market: any = undefined) {\n' +
+            "        return order['a'];\n" +
+            '    }\n' +
+            '    run (xs: any[]) {\n' +
+            '        return this.parseOrder (this.safeDict (xs, 0, {}));\n' +
+            '    }\n' +
+            '}\n');
+        fs.writeFileSync(path.join(dir, 'venue.ts'), venue);
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    const venue = (override: boolean) => 'import Exchange from \'./base/Exchange.js\';\n' +
+        'export default class venue extends Exchange {\n' +
+        (override ? '    parseOrder (order: any, market: any = undefined) {\n        return order;\n    }\n' : '') +
+        '    go (r: any) {\n' +
+        '        return this.parseOrder (r);\n' +
+        '    }\n' +
+        '}\n';
+    test('a boxed row passed to the venue override does not keep the base box', () => {
+        expect(print('tmp-dict-param-po-ovr', venue(true))).toContain('ParseOrder(order map[string]any');
+    });
+    test('a boxed row that reaches the base keeps the box', () => {
+        expect(print('tmp-dict-param-po-novr', venue(false))).toContain('ParseOrder(order any');
+    });
+});
+
+describe ('go dict param: an awaited boxed Dict local at a tabled slot', () => {
+    const print = (name: string, ret: string, decl: string): string => {
+        const dir = path.join(__dirname, 'files', name, 'ts', 'src');
+        fs.mkdirSync(path.join(dir, 'base'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'base', 'Exchange.ts'),
+            'type Dict = { [key: string]: any };\n' +
+            'export class Exchange {\n' +
+            '    async replies (r: any): Promise<' + ret + '> {\n' +
+            '        return r;\n' +
+            '    }\n' +
+            '    parseOrder (order: Dict, market: any = undefined) {\n' +
+            "        return order['a'];\n" +
+            '    }\n' +
+            '    async run (r: any) {\n' +
+            '        ' + decl + ' result = await this.replies (r);\n' +
+            '        return this.parseOrder (result, undefined);\n' +
+            '    }\n' +
+            '}\n');
+        try {
+            const t = new Transpiler({ verbose: false, go: {} });
+            installCcxtGoDictParams(t.goTranspiler);
+            return t.transpileGoByPath(path.join(dir, 'base', 'Exchange.ts')).content;
+        } finally {
+            fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
+        }
+    };
+    test('a const Promise<Dict> local is read into a comma-ok map local', () => {
+        const out = print('tmp-dict-param-aw-dict', 'Dict', 'const');
+        expect(out).toContain('ParseOrder(order map[string]any');
+        expect(out).toMatch(/resultMap\w*, _ := result\.\(map\[string\]any\)/);
+        expect(out).toMatch(/this\.ParseOrder\(resultMap\w*, nil\)/);
+    });
+    test('a Promise<any> local (any kind) keeps the box', () => {
+        const out = print('tmp-dict-param-aw-any', 'any', 'const');
+        expect(out).toContain('ParseOrder(order any');
+        expect(out).not.toContain('.(map[string]any)');
+    });
+    test('a let local (rebindable) keeps the box', () => {
+        const out = print('tmp-dict-param-aw-let', 'Dict', 'let');
+        expect(out).toContain('ParseOrder(order any');
+        expect(out).not.toContain('resultMap');
+    });
+});
+
 describe ('go dict param argument of a wrapped base dispatch', () => {
     const print = (name: string, arg: string): string => {
         const dir = path.join(__dirname, 'files', name, 'ts', 'src');

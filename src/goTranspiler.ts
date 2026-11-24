@@ -14088,6 +14088,7 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'handleTriggerAndParams': [ 0 ], 'isTriggerOrder': [ 0 ],
     // row parsers: the base loops pass `{}`-defaulted safeDict rows, every override reads the row as a map
     'parseLedgerEntry': [ 0 ], 'parseTransaction': [ 0 ],
+    'parseOrder': [ 0 ],
     // response and request headers: the fetch path passes header maps, ws callers pass `{}` or a defaulted safeDict
     'handleErrors': [ 4, 7 ],
     // transfer and deposit-address rows: every caller passes a map row (lists are built inline by the venue)
@@ -14183,6 +14184,15 @@ function goDictParamAwaitedMapArg (go: any, arg: any): boolean {
     return go.goAwaitedMapLocal (decl) || goAwaitedMapWritesOnlyLocal (go, decl);
 }
 
+// a const local of an awaited `Promise<Dict>` that prints boxed: read into a comma-ok map local on the line before
+function goDictParamAwaitedBoxedLocal (go: any, arg: any): boolean {
+    if ((arg?.kind !== SK.Identifier) || goDictParamAwaitedMapArg (go, arg)) { return false; }
+    const decl: any = go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.();
+    if ((decl?.kind !== SK.VariableDeclaration) || !((decl.parent?.flags ?? 0) & ts.NodeFlags.Const) || (decl.initializer?.kind !== SK.AwaitExpression)) { return false; }
+    const type: any = go.checkerOrUndefined ()?.getTypeAtLocation (decl.initializer);
+    return (type !== undefined) && (go.getChecker ().typeToString (type) === 'Dict');
+}
+
 // `this.safeDict (c, k, {})` (one key, never-nil default): passed to a map parameter it prints the same read as
 // `this.SafeDictMap (c, k, map[string]any{})`
 function goDictParamSafeDictArg (go: any, arg: any): boolean {
@@ -14274,6 +14284,13 @@ function goCallAboveTranspileDelimiter (call: any): boolean {
     return (delimiter >= 0) && (call.getStart () < delimiter);
 }
 
+// a venue file (or the pro file over its REST file) that declares `name` itself: its calls reach that override, not the base
+function goTsSrcSiteClassOverrides (tree: any, file: string, name: string): boolean {
+    const declares = new RegExp ('^[ \\t]+(?:override\\s+)?(?:async\\s+)?' + name + '\\s*\\(', 'm');
+    const own = [ file, String (file).replace (/^pro\//, '') ].map ((f: string) => tree.fileText.get (f));
+    return !/(^|\/)base\//.test (String (file)) && own.some ((t: any) => (t !== undefined) && declares.test (t));
+}
+
 function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean {
     const name = fn.name.text;
     for (const call of go.goSameFileCallsOf (fn, name)) {
@@ -14285,7 +14302,8 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         if (goIsBaseExchangeFile (fn) && go.goHandWrittenBaseMethods.includes (go.goEnclosingFunction (call)?.name?.text)) { continue; }
         if (h29g22OwnParamPassedThrough (go, fn, index, arg)) { continue; }
         if (h30a18MapArg (go, name, call, arg)) { continue; }
-        if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)) { return false; }
+        if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)
+            && !goDictParamAwaitedBoxedLocal (go, arg)) { return false; }
     }
     const tree = go.goTsSrcTree (fn.getSourceFile ());
     if (tree === undefined) { return false; }
@@ -14299,6 +14317,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         // a tabled base method has no override, so every venue call reaches it (an abstract `Exchange extends _Exchange` hides the chain)
         const tabledBase = goIsBaseExchangeFile (fn) && Object.prototype.hasOwnProperty.call (GO_BASE_DICT_PARAMS, name);
         if (!tabledBase && !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
+        if (tabledBase && goTsSrcSiteClassOverrides (tree, site.file, name)) { continue; }
         // `x as Dict` is the same value as `x`: the declaration of `x` decides
         const arg = String (site.args?.[index] ?? '').trim ().replace (/\s+as\s+Dict$/, '');
         if (arg.startsWith ('{')) { continue; }
@@ -54878,6 +54897,11 @@ GoTranspiler.prototype.h29a18RawUse = function (n: any): boolean {
         && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29A18_READERS.has(callee.name?.text)) {
         return false;
     }
+    // a tabled map slot (a parseOrder row) takes the typed comma-ok row, not the raw element
+    if ((parent?.kind === SyntaxKind.CallExpression) && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+        && H30P05_ROW_PARSERS.has(callee.name?.text) && (parent.arguments[0] === n) && (GO_BASE_DICT_PARAMS[callee.name.text] ?? []).includes(0)) {
+        return false;
+    }
     return ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.initializer === n) && (parent.parent?.kind === SyntaxKind.ObjectLiteralExpression))
         || ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n) && parent.arguments.includes(n));
 };
@@ -54954,6 +54978,18 @@ GoTranspiler.prototype.h29a18Row = function (declaration: any): boolean {
             }
         }
         return printIdentifierH29a18.call(this, node);
+    };
+    // at the row-parser slot the identifier prints the comma-ok row itself
+    const declaredTypeH29a18 = GoTranspiler.prototype.goDeclaredTypeOfIdentifier;
+    GoTranspiler.prototype.goDeclaredTypeOfIdentifier = function (node): string | undefined {
+        const shipped = declaredTypeH29a18.call(this, node);
+        if ((shipped !== undefined) || (node?.kind !== SyntaxKind.Identifier) || this.h29a18RawUse(node)) {
+            return shipped;
+        }
+        const declaration: any = this.goAnyBoxLocalDeclaration(node);
+        const parent: any = node.parent;
+        const slot = (parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node) && H30P05_ROW_PARSERS.has(parent.expression?.name?.text);
+        return (slot && (declaration !== undefined) && (declaration.name !== node) && this.h29a18Row(declaration)) ? GO_SAFE_DICT_LOCAL_TYPE : shipped;
     };
     const receiverTypeH29a18 = GoTranspiler.prototype.h27a01ReceiverType;
     GoTranspiler.prototype.h27a01ReceiverType = function (container): string | undefined {
@@ -61211,3 +61247,39 @@ GoTranspiler.prototype.goTypeOfInitializer = function (initializer, printedValue
     return indexed ? undefined : '[]any';
 };
 // ===== end H46-G45
+// ===== tabled dict slot fed an awaited boxed local =====
+// `this.m (x, ..)` at a GO_BASE_DICT_PARAMS slot where x is a const awaited `Dict` printed `any`: the statement reads
+// x into `<x>Map, _ := x.(map[string]any)` first (nil, a list or another kind give a nil map, which every reader answers as before)
+function goHoistAwaitedBoxedDictArg (go: any, statement: any, printed: string, identation: number): string {
+    if (typeof printed !== 'string') { return printed; }
+    const root: any = (statement.kind === SyntaxKind.VariableStatement) ? statement.declarationList : statement.expression;
+    if (root === undefined) { return printed; }
+    const found: any[] = [];
+    const visit = (n: any): boolean => {
+        if ((n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression) && (n.expression.expression?.kind === SyntaxKind.ThisKeyword)) {
+            const slots = Object.prototype.hasOwnProperty.call(GO_BASE_DICT_PARAMS, n.expression.name?.text) ? GO_BASE_DICT_PARAMS[n.expression.name.text] : [];
+            for (const i of slots) {
+                if (goDictParamAwaitedBoxedLocal(go, n.arguments?.[i]) && goDictParamCallTakesMap(go, n, i)) { found.push(n.arguments[i]); }
+            }
+        }
+        return false;
+    };
+    visit(root);
+    go.hasNodeWhere(root, visit);
+    if (found.length !== 1) { return printed; }
+    const x = found[0].text;
+    const name = `${x}Map${go.getLineBasedSuffix(found[0])}`;
+    const re = new RegExp(`\\(${x}([,)])`);
+    const m = re.exec(printed);
+    if ((m === null) || (printed.indexOf(`(${x}${m[1]}`, m.index + 1) >= 0)) { return printed; }
+    const line = printed.lastIndexOf('\n', m.index) + 1;
+    const hoist = `${go.getIden(identation)}${name}, _ := ${x}.(map[string]any)\n`;
+    return printed.substring(0, line) + hoist + printed.substring(line, m.index + 1) + name + printed.substring(m.index + 1 + x.length);
+}
+for (const method of [ 'printVariableStatement', 'printExpressionStatement', 'printReturnStatement' ]) {
+    const shipped = GoTranspiler.prototype[method];
+    GoTranspiler.prototype[method] = function (node, identation) {
+        return goHoistAwaitedBoxedDictArg(this, node, shipped.call(this, node, identation), identation);
+    };
+}
+// ===== tabled dict slot fed an awaited boxed local (end) =====
