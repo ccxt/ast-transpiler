@@ -29345,7 +29345,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
     rustDeepExtendOfMaps(call: any): boolean {
         if (!this.rustBaseCallNamed(call, new Set([ 'deepExtend' ])) || this.rustTestTierSource(call) || call.arguments.length < 2) return false;
-        return Array.from(call.arguments).every((a: any) => {
+        const proven = (a: any): boolean => {
             const node: any = this.rustSkipWrappers(a);
             if (node === undefined) return false;
             if (isObjectLiteralExpression(node)) return this.rustPlainDictLiteral(node) && node.properties.every((p: any) => p.kind === SyntaxKind.PropertyAssignment);
@@ -29372,7 +29372,11 @@ export class RustTranspiler extends BaseTranspiler {
                 return !(isElementAccessExpression(up) && up.expression === n && isBinaryExpression(up.parent) && up.parent.left === up)
                     && !(isPropertyAccessExpression(up) && up.expression === n && isBinaryExpression(up.parent) && up.parent.left === up);
             });
-        });
+        };
+        // a proven map as the LAST operand makes the merge a map on every path (runtime `deep_extend`: a map source
+        // always answers a map); no operand may read a tagged store, whose tag keys the merged copy would carry
+        const args: any[] = Array.from(call.arguments);
+        return args.every(proven) || (proven(args[args.length - 1]) && !this.rustInitReadsTaggedStore(call));
     }
 
     /** Every other `let`/`const` of `name` in the enclosing function is initialised by a call of the same `this.` method. */
