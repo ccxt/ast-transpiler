@@ -61621,3 +61621,21 @@ function h47g19UserParamsFed (go: any, container: any): boolean {
     };
 }
 // ===== end H47-G19
+
+// ===== H48-G12
+// a method declared `: Liquidation` whose every function-level return is `this.safeLiquidation (..)` answers
+// the map the base SafeLiquidation returns (its Go signature is `map[string]any`)
+{
+    const returnTypeH48g12 = GoTranspiler.prototype.goStrPtrFamilyReturnType;
+    GoTranspiler.prototype.goStrPtrFamilyReturnType = function (node): string | undefined {
+        const declared = ((node?.kind === SyntaxKind.MethodDeclaration) && (node.body !== undefined)) ? String(node.type?.getText?.() ?? '') : '';
+        const returns: any[] = ((declared === 'Liquidation') && !this.isAsyncFunction(node)) ? this.goFunctionLevelReturns(node.body) : [];
+        const proven = (returns.length > 0) && returns.every((r: any) => {
+            const e: any = this.goUnwrapParenthesizedNode(r.expression);
+            return (e?.kind === SyntaxKind.CallExpression) && (e.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                && (e.expression.expression?.kind === SyntaxKind.ThisKeyword) && (e.expression.name?.text === 'safeLiquidation');
+        });
+        return proven ? 'map[string]any' : returnTypeH48g12.call(this, node);
+    };
+}
+// ===== end H48-G12
