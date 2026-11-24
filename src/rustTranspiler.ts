@@ -690,7 +690,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a loop-header binding is read again by the condition / incrementor of the next pass
         const header: any = declaration.parent?.parent;
         if (header !== undefined && (header.kind === SyntaxKind.ForStatement || header.kind === SyntaxKind.ForOfStatement || header.kind === SyntaxKind.ForInStatement)) return false;
-        if (!this.rustOwnedLastUse(node, declaration) && !this.rustReturnedLiteralValueMoves(node, declaration)) return false;
+        if (!this.rustOwnedLastUse(node, declaration) && !this.rustReturnedLiteralValueMoves(node, declaration)
+            && !this.rustOwnedDeadBeforeWrite(node, declaration)) return false;
         // a closure below the declaration that names the local may still hold it
         const scope: any = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(node);
@@ -9824,6 +9825,39 @@ export class RustTranspiler extends BaseTranspiler {
             if (n.pos > node.pos && !returned && !otherArm(n)) return false;
         }
         return true;
+    }
+
+    /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
+     *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
+    rustOwnedDeadBeforeWrite(node, declaration): boolean {
+        const scope: any = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(node);
+        if (scope === undefined || own === undefined || this.rustEnclosingFunction(node) !== scope || this.rustUnderHoistedCall(node)) return false;
+        let statement: any = node;
+        while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
+        const block: any = statement.parent;
+        if (block === undefined || !isBlock(block)) return false;
+        for (let up: any = block; up !== undefined && up !== scope; up = up.parent) if (up.kind === SyntaxKind.TryStatement || isFunctionLike(up)) return false;
+        const siblings: any[] = Array.from(block.statements);
+        const write: any = siblings.slice(siblings.indexOf(statement) + 1).find((s: any) => this.rustScopeNameNodes(scope, String(declaration.name.text))
+            .some((n: any) => n.pos >= s.pos && n.end <= s.end && isIdentifier(n) && !this.rustIdentifierIsPropertyName(n) && [ undefined, own ].includes(this.rustSymbolOf(n))));
+        if (write === undefined || write.kind !== SyntaxKind.ExpressionStatement) return false;
+        const assign: any = write.expression;
+        if (!isBinaryExpression(assign) || assign.operatorToken.kind !== SyntaxKind.EqualsToken || !isIdentifier(assign.left) || this.rustSymbolOf(assign.left) !== own) return false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text)) as any[]) {
+            if (n === node || n === assign.left || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (n.pos >= statement.pos && n.end <= write.end) return false;
+        }
+        let jumps = false;
+        const visit = (n: any) => {
+            if (jumps || isFunctionLike(n)) return;
+            if (n.kind === SyntaxKind.BreakStatement || n.kind === SyntaxKind.ContinueStatement || n.kind === SyntaxKind.TryStatement) { jumps = true; return; }
+            n.forEachChild(visit);
+        };
+        siblings.slice(siblings.indexOf(statement), siblings.indexOf(write)).forEach(visit);
+        return !jumps;
     }
 
     rustLocalLastUse(node, declaration): boolean {
