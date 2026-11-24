@@ -56982,12 +56982,12 @@ GoTranspiler.prototype.h30a02WrittenThroughElement = function (declaration): boo
 // an awaited map endpoint, every other use a read) and to the assignment form `x = this.safeList|safeDict (R, 'k', [] | {})`
 // on such a receiver; the comma-ok read plus the fresh empty default answers what SafeListSlice / SafeDictMap did
 export interface GoTranspiler {
-    h30a03Receiver(container, read): boolean;
+    h30a03Receiver(container, read, call?): boolean;
     h30a03Site(call, name: string, identation: number, printed: string, prefix: string, declaration?): string | undefined;
     h30a03DeclRead(node, identation: number, printed: string): string | undefined;
     h30a03AssignRead(node, identation: number, printed: string): string | undefined;
 }
-GoTranspiler.prototype.h30a03Receiver = function (container, read) {
+GoTranspiler.prototype.h30a03Receiver = function (container, read, call?) {
     if ((container?.kind !== SyntaxKind.Identifier) || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE)) {
         return false;
     }
@@ -56995,8 +56995,18 @@ GoTranspiler.prototype.h30a03Receiver = function (container, read) {
         return true;
     }
     const source: any = this.goAnyBoxLocalDeclaration(container);
-    return (this.goUnwrapParenthesizedNode(source?.initializer)?.kind === SyntaxKind.AwaitExpression)
-        && (this.h27a02JsonOrigin(container, 0) || ((read !== undefined) && this.h27a02JsonOriginBeforeRead(container, read)));
+    const seed: any = this.goUnwrapParenthesizedNode(source?.initializer);
+    if (seed?.kind === SyntaxKind.AwaitExpression) {
+        return this.h27a02JsonOrigin(container, 0) || ((read !== undefined) && this.h27a02JsonOriginBeforeRead(container, read));
+    }
+    // a literal-key safeDict hop cut from a joined endpoint local, read in an assignment `x = this.safeList (hop, 'k', [])`
+    const hop: any = this.goSafeAccessorLocalArgs(seed, 'safeDict');
+    const write: any = call?.parent;
+    if ((hop === undefined) || (hop.key?.kind !== SyntaxKind.StringLiteral) || !this.h28a03JoinedEndpointLocal(hop.container)
+        || (read !== undefined) || (write?.kind !== SyntaxKind.BinaryExpression) || (write.right !== call) || (write.parent?.kind !== SyntaxKind.ExpressionStatement)) {
+        return false;
+    }
+    return this.h27a02JsonOriginBeforeRead(container, { kind: write.kind, parent: write, end: call.end, initializer: call });
 };
 GoTranspiler.prototype.h30a03Site = function (call, name: string, identation: number, printed: string, prefix: string, declaration?) {
     let init: any = call;
@@ -57012,7 +57022,7 @@ GoTranspiler.prototype.h30a03Site = function (call, name: string, identation: nu
     }
     const args: any = this.goSafeAccessorLocalArgs(init, accessor);
     if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test(args.key.text)
-        || !this.h30a03Receiver(args.container, ((declaration !== undefined) && (declaration.initializer === init)) ? declaration : undefined)) {
+        || !this.h30a03Receiver(args.container, ((declaration !== undefined) && (declaration.initializer === init)) ? declaration : undefined, init)) {
         return undefined;
     }
     const goType = (accessor === 'safeList') ? GO_SAFE_LIST_LOCAL_TYPE : GO_SAFE_DICT_LOCAL_TYPE;
