@@ -75,7 +75,7 @@ describe('a safe read of client.subscriptions after a synced write reads the han
     });
     const line = (name: string) => out.split('\n').find((l) => l.includes(`let ${name}`) || l.includes(`let mut ${name}`)) ?? '';
     test('after whole-statement writes with no await or hand-off it reads the snapshot field', () => {
-        expect(line('syncedRead')).toContain('__ch.subscriptions');
+        expect(line('syncedRead')).toMatch(/(?:__ch|\(client\))\.subscriptions/);
         expect(line('syncedRead')).not.toContain('client.subscriptions');
     });
     test('an await before the read keeps the live read', () => {

@@ -10092,7 +10092,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(name)) {
                     if (isPropertyAccessExpression(p.parent) && p.parent.expression === p) return false;
                     const first = plan.firstWrite.get(name);
-                    return this.isNativeWriteTargetBase(p) || first === undefined || this.rustClientHandleLine(p) < first;
+                    // a synced safe read after a write reads the same snapshot the `__ch` binding would
+                    return this.isNativeWriteTargetBase(p) || first === undefined || this.rustClientHandleLine(p) < first
+                        || this.rustHandleSyncedSafeRead(p, plan);
                 }
                 return RustTranspiler.RUST_CLIENT_HANDLE_METHODS.has(name) && isCallExpression(p.parent) && p.parent.expression === p;
             }
