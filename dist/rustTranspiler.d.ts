@@ -69,8 +69,8 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'mutclient' | 'other';
+export type RustDispatchReturnKind = 'optlist' | 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -959,6 +959,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOdictCallText(expr: any): string | undefined;
     /** A Dict local from an `odict` call: the empty map for `None`, as `.into_dict()` answered for Null. */
     rustOdictDefaultText(expr: any): string | undefined;
+    /** The bare `Option<List>` call text of an `olist` table call (safeListN), else undefined. */
+    rustOlistCallText(expr: any): string | undefined;
     /** `return x` of an `-> Option<Dict>` method: the map a `Value` holds is moved out, anything else is `None`. */
     rustOdictReturnText(exp: any): string;
     /** `return x` of an `-> Dict` method: a map literal or `deep_extend` as its typed twin, else the held map (empty otherwise). */
@@ -1465,6 +1467,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A bare object-literal value moves when no read runs after it: inside a `return` (which leaves the function, a loop
      *  too), or when every later read sits in the other arm of an enclosing `if`; never under a `try` or a closure. */
     rustReturnedLiteralValueMoves(node: any, declaration: any): boolean;
+    /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
+     *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
+    rustOwnedDeadBeforeWrite(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
     rustWsSettleCall(call: any): boolean;
     /** ral-73c E1: `const e = new XError (msg)` (a ccxt error class the printer routes to `crate::exchange_errors::<x>(msg)`,
@@ -2532,6 +2537,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBookDeltasSafeReadUse(id: any): boolean;
     /** Every use of the parameter is a side operation statement, a `length` read, a level read or a side-slot hand-on. */
     rustBookSideUsesOnly(param: any, allowNone: boolean): boolean;
+    rustBookSideAnnotation(type: any): boolean;
     rustBookSideParamUncached(param: any): boolean;
     /** The argument lands in a side parameter slot of a `this.<m>(..)` call. */
     rustBookSideArgSlot(n: any): boolean;
@@ -3268,7 +3274,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     /** `Object.keys/values(p)` on a shadowed Dict parameter (`IndexMap`; `Null` shadows the empty map, the helper's `[]`). */
     printShadowEnum(node: any, kind: 'keys' | 'values'): string | undefined;
-    printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
+    printObjectKeysCall(node: any, identation: any, parsedArg?: any): any;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
      *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
@@ -4160,6 +4166,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustExtendCopyDictName(recv: any): string | undefined;
     /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
     rustOptKeySetDictName(node: any): string | undefined;
+    /** The printed name of a borrowed venue `Dict` slot (`&crate::value::Dict`): already the map, no `as_map` view. */
+    rustVenueDictSlotName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
     /** `k in message` on a borrowed venue `Dict` slot: the key test on the map itself (on the handler view where one is bound). */
     printProHandlerViewInOp(key: any, obj: any): string | undefined;
@@ -4335,6 +4343,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustParamsDictDecisions;
     rustParamsDictSlotOmit(call: any): boolean;
     rustParamsDictSlotUncached(d: any): boolean;
+    /** The never-reassigned `params: Dict = {}` of a base-tier method declared to return a `[.., Dict]` pair. */
+    rustBaseTupleParamsParam(d: any): boolean;
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
      *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
      *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
@@ -4572,6 +4582,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsCacheFieldWriteBack(n: any): boolean;
     /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
     rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined;
+    /** `const x: ArrayCache* = await this.w (..)` where w is a venue wrapper of the same ws class that awaits a watch:
+     *  the venue declares the awaited cache, and the marker test converts any other resolved value to None. */
+    rustWsDeclaredCacheWatch(declaration: any): boolean;
     /** ral-54w: a slot of `const [ a, b, c ] = await this.m (..)` (a proven watch, see rustWsWatchResultKind) where every
      *  resolve that can match the awaited hash passes an array literal (or an unreassigned local bound to one) whose
      *  element at the slot's index is a cache: the slot holds that cache. Any other matching resolve (another kind,
@@ -5782,6 +5795,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrUnbound;
     rustVenueStrParamUnbound(param: any): boolean;
     rustVenueStrParamUnboundUncached(param: any): boolean;
+    /** A `&str` parameter never written whose every read is the receiver of `x.slice (n)` with one integer literal bound. */
+    rustStrParamTailSliceOnly(param: any): boolean;
+    /** `x.slice (n)` on an unbound `&str` parameter: the runtime's char slice read from the borrow, boxed once. */
+    rustStrParamTailSliceValue(node: any): string | undefined;
     /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
     rustVenueF64ParamUnbound(param: any): boolean;
     /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
@@ -5815,6 +5832,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarBoxCopies(u: any): boolean;
     /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
     rustVenueStrSimpleArg(arg: any): boolean;
+    /** `x.slice (n)` with one integer literal bound on an identifier the checker types `string`: its receiver. */
+    rustStrTailSliceRecv(arg: any): any;
+    /** `&str` argument text of `x.slice (n)` on a `&str` parameter or a `String` local: the chars past the clamped start. */
+    rustStrTailSliceText(arg: any): string | undefined;
     /** Order request builders whose amount / price slots stay as they are (held). */
     private static readonly RUST_HELD_ORDER_REQUEST;
     /** `(x as string)` over a simple operand the checker already types `string` / `Str`: a string slot takes the
@@ -5981,6 +6002,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrListNumberKeyText(key: any): string | undefined;
     /** A slice-slot use whose parameter itself prints as a lent `&[crate::Value]` slice. */
     rustStrListSliceLent(id: any): boolean;
+    /** `this.safeString (xs, i)` on a lent string-list parameter with a loop-counter key: `&[Value]` is a `KeyRead`. */
+    rustStrListSafeStringUse(id: any): boolean;
     rustStrListNumberKeyUse(id: any): boolean;
     printStrListNumberKeyRead(name: string, key: any): string | undefined;
     /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
@@ -5997,6 +6020,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustRoutedMessageDictParam(method: any, param: any): boolean;
     /** The identifier names the `message` parameter of a routed `handleMessage` override. */
     rustRoutedFrameUse(id: any): boolean;
+    /** A sync REST venue method whose slot no plain shadow read covers: a whole hand-off to a boxed sibling slot
+     *  boxes the shared handle (`Value::from(x)`), as a ws handler does; slots the shadow already covers stay as they are. */
+    rustSyncVenueDictWholeSlot(method: any, param: any): boolean;
     /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
      *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
     rustSpawnOnlyTarget(method: any): boolean;
@@ -6036,6 +6062,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueDictTextCallCount(method: any, name: string, own: number): number;
     /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
     rustVenueDictArgLends(arg: any): boolean;
+    /** `const row = rows[i]` (no annotation, never reassigned) of a `Dict[]` local converted once by `dict_rows`. */
+    rustP21RowLocalLends(declaration: any): boolean;
     /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
     rustExtendOnlySlotOf(arg: any): boolean;
     /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
@@ -6197,6 +6225,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
     h27r07KeepBoxedKey(node: any, plan: any): boolean;
     private rustWsHandleParamCache;
+    private rustWsHandleParamWriters;
+    private rustWsHandleParamMut;
     rustWsHandleParam(param: any): boolean;
     /** The `client` params linked to `param` by a direct `this.h (.., client, ..)` hand-off (either way), or undefined when it
      *  cannot take the handle. */
@@ -6206,6 +6236,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The callee's `client` param when bare `client` is argument `n` of a `this.h (..)` call to a method with a body. */
     rustWsHandleSlotOf(n: any): any;
     rustWsHandleParamUncached(param: any, links: any[]): boolean;
+    /** `client.subscriptions[k] = v` / `delete client.subscriptions[k]` as a whole statement (`p` is `client.subscriptions`):
+     *  printed through the handle's `add_subscription` / `remove_subscription`. */
+    rustWsHandleSubscriptionStatement(p: any): boolean;
+    /** `client` as a later argument of `this.spawn (this.m, ..)` whose target is a method reference. */
+    rustWsSpawnHandoff(call: any, n: any): boolean;
     /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
      *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */
     rustWsRoutedHandler(method: any): boolean;

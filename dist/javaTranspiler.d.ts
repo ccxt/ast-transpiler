@@ -162,7 +162,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueNullableDictParameterType(node: any, name: any, symbol: any, method: any): string | undefined;
     javaOverriddenSyncStringListSlot(name: any, method: any, type: any, checker: any): boolean;
     javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
-    javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any): string | undefined;
+    javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any, node?: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
     javaPrintsListArgument(arg: any, producerDeclared?: (name: string) => boolean): boolean;
     javaNativeParameterClassType(name: string, symbol: any): string | undefined;
