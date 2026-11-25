@@ -39264,7 +39264,20 @@ ${tryBodyBlock}
         }
         return { name: decl.name, container: call.arguments[0], key: call.arguments[1] };
     }
+    // a pure AST question (parent shape and callee name): answered once per identifier node
+    h29a18RawUseMemo = new WeakMap<object, boolean>();
     h29a18RawUse(n: any): boolean {
+        if ((n === null) || (typeof n !== 'object')) {
+            return this.h29a18RawUseOf(n);
+        }
+        let hit = this.h29a18RawUseMemo.get(n);
+        if (hit === undefined) {
+            hit = this.h29a18RawUseOf(n);
+            this.h29a18RawUseMemo.set(n, hit);
+        }
+        return hit;
+    }
+    h29a18RawUseOf(n: any): boolean {
         const parent: any = n?.parent;
         const pKind = parent?.kind;
         if (pKind === SyntaxKind.PropertyAssignment) {
