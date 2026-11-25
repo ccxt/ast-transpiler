@@ -48966,7 +48966,10 @@ GoTranspiler.prototype.h27a08RowRead = function (declaration, declaredType: stri
         && (key.left?.kind === SyntaxKind.PropertyAccessExpression) && (key.left.name?.text === 'length') && (key.left.expression?.kind === SyntaxKind.Identifier)
         && (key.left.expression.text === list?.text) && (key.right?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(`${key.right.text}`);
     const counterKey = (key?.kind === SyntaxKind.Identifier) && (list?.kind === SyntaxKind.Identifier) && (key.text !== list.text);
-    if ((list?.kind !== SyntaxKind.Identifier) || !(intKey || lastKey || counterKey) || !this.goDeclaredListIdentifier(list)
+    // a nil-seeded local the endpoint join declares `[]any` is a slice at every read, like a declared list
+    const listLocal = (list?.kind === SyntaxKind.Identifier)
+        && (this.goDeclaredListIdentifier(list) || ((assert === GO_SAFE_DICT_LOCAL_TYPE) && (ccxtGoNilJoinDeclarationType(this, list) === GO_SAFE_LIST_LOCAL_TYPE)));
+    if (!listLocal || !(intKey || lastKey || counterKey)
         || ((assert !== GO_SAFE_DICT_LOCAL_TYPE) && (!intKey || !this.h27a08JsonList(list)))) {
         return undefined;
     }
