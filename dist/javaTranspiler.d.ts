@@ -522,7 +522,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaTypedStringReplaceAllCall(node: any, name: any, parsedArg: any, parsedArg2: any): string | undefined;
     stringLiteralArgument(argument: any): string;
     sideEffectFreeReceiver(expression: any): any;
-    printPadEndCall(_node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
+    printPadEndCall(node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
+    printNativePadEnd(node: any, name: any, parsedArg: any): string;
     printPadStartCall(node: any, _identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     javaNarrowedIndexOf(node: any, name: any, parsedArg: any): string;
     printBlock(node: any, identation: any, chainBlock?: boolean): string;

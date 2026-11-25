@@ -1637,6 +1637,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
     goMapRangeLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goDefaultedEntryKeysRead(receiver: any): {
+        container: string;
+        key: string;
+    } | undefined;
+    goDefaultedEntryKeysDeclaration(declaration: any, receiver: any, identation: number): string | undefined;
     goIsMapRangeFieldReceiver(receiver: any, method: string): boolean;
     goIsRebindFreeMapReceiver(receiver: any): boolean;
     goObjectValuesLocalIsList(declaration: any, scope: any): boolean;

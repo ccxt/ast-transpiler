@@ -989,8 +989,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.arraySlice (b, s, e)` of a byte-buffer local `b` with integer-literal bounds `0 <= s <= e`: the runtime copies
      *  `b[min(s, len) .. min(e, len)]` into a fresh list, so the slice is itself a byte buffer. Answers `b`'s identifier. */
     rustBytesSliceSource(node: any): Node | undefined;
-    /** `this.packb (..)` / `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
-     *  (`packb` always a list, `ethAbiEncode` a list or `Null` on an unsupported type). Only a local initializer takes
+    /** `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
+     *  (a list or `Null` on an unsupported type). Only a local initializer takes
      *  it, unboxed once into the `Bytes` handle (`Null` reads as no bytes, as every byte slot reads it). */
     rustBoxedBytesProducer(node: Node): boolean;
     rustBytesBareText(node: any, identation?: number): string;
@@ -1467,6 +1467,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A bare object-literal value moves when no read runs after it: inside a `return` (which leaves the function, a loop
      *  too), or when every later read sits in the other arm of an enclosing `if`; never under a `try` or a closure. */
     rustReturnedLiteralValueMoves(node: any, declaration: any): boolean;
+    /** Every later read of the local sits in the other arm of an enclosing `if` (no read in this statement, no loop,
+     *  `try` or closure between the use and the declaration): no read runs after this use, so it moves. */
+    rustOwnedOtherArmLastUse(node: any, declaration: any): boolean;
     /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
      *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
     rustOwnedDeadBeforeWrite(node: any, declaration: any): boolean;
@@ -4168,6 +4171,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOptKeySetDictName(node: any): string | undefined;
     /** The printed name of a borrowed venue `Dict` slot (`&crate::value::Dict`): already the map, no `as_map` view. */
     rustVenueDictSlotName(node: any): string | undefined;
+    /** The bound handler view of an unwritten `message: Dict` handler parameter (a non-map binds the empty map, the helper's `[]`). */
+    rustProHandlerViewName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
     /** `k in message` on a borrowed venue `Dict` slot: the key test on the map itself (on the handler view where one is bound). */
     printProHandlerViewInOp(key: any, obj: any): string | undefined;
@@ -5799,6 +5804,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrParamTailSliceOnly(param: any): boolean;
     /** `x.slice (n)` on an unbound `&str` parameter: the runtime's char slice read from the borrow, boxed once. */
     rustStrParamTailSliceValue(node: any): string | undefined;
+    /** `&str` of the last `n` chars of the string `s` (the whole string when shorter): a char-boundary sub-slice, no copy. */
+    rustStrTailSliceNative(s: string, n: number): string;
     /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
     rustVenueF64ParamUnbound(param: any): boolean;
     /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
@@ -6026,6 +6033,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
      *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
     rustSpawnOnlyTarget(method: any): boolean;
+    /** A `this.json (x)` operand of a pro method called by name only from routed `handleMessage` frames, each handing
+     *  its own borrowed frame: every caller holds the dict handle, so the slot takes it too. */
+    rustFrameLentJsonOperand(node: any): boolean;
     /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
     rustParamOnlyExtendOperand(method: any, param: any): boolean;
     /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
@@ -6072,6 +6082,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTableDictLocalArg(arg: any): boolean;
     /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
     rustVenueDictValueUse(id: any): boolean;
+    /** An object-literal entry value (`'info': x`) at the last use: the dict handle is shared into the box (`Value::from(x)`). */
+    rustVenueDictLastEntryUse(id: any): boolean;
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
      *  the dict handle is shared into the box, no copy. */
     rustVenueDictLentValueUse(id: any): boolean;
@@ -6113,6 +6125,15 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
      *  it lends its map view, an empty map for a non-dict (as the callee's shadow reads answer for Null). */
     rustBoxedDictParamLends(param: any): boolean;
+    /** An inline `this.safeDict (list, i, {})` on a plain list local with a loop counter: the row (the empty map for a
+     *  missing / non-map element, as `safe_dict_t` answers) is read off the slice. Answers [list local, counter]. */
+    rustVenueDictRowReadArg(arg: any): [any, any] | undefined;
+    /** The row read above, lent to a rustVenueDictParam slot: a map view, or the dict handle for a handle slot. */
+    printVenueDictRowReadArg(node: any): string | undefined;
+    /** A local initialised by an awaited endpoint whose abstract declaration answers `Promise<Dict>`. */
+    rustEndpointDictLocal(arg: any): boolean;
+    /** The argument lands in a rustVenueDictParam slot of its `this.` call. */
+    rustVenueDictSlotOf(call: any, arg: any): boolean;
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
     printVenueDictArg(node: any, text: string): string | undefined;
     /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
