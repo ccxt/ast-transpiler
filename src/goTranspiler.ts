@@ -30344,6 +30344,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goGetArgNilStringSliceUseOnlyReads(n): boolean {
         const parent: any = n.parent;
         if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)) {
+            // `x.join (sep)`: Join answers "" for a nil []string and for the absent box alike
+            if ((parent.name?.text === 'join') && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent)) {
+                return true;
+            }
             return (parent.name?.text === 'length') && (parent.parent?.kind !== SyntaxKind.CallExpression || parent.parent.expression !== parent)
                 && !((parent.parent?.kind === SyntaxKind.BinaryExpression) && (parent.parent.left === parent));
         }
