@@ -19145,13 +19145,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (scope === undefined) {
             return undefined;
         }
+        const sibling = goSiblingBlockBinding(this, declaration);
         const unsafe = this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter)
                 && (n !== declaration) && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === sourceName)) {
-                return true; // a shadowing binding would mix two values under one name
+                return !sibling.disjoint(n); // a shadowing binding would mix two values under one name
             }
             if ((n.kind !== SyntaxKind.Identifier) || (n.text !== sourceName) || (n === declaration.name)) {
                 return false;
+            }
+            if (sibling.foreign(n)) {
+                return false; // a read of the same-named const of a disjoint block
             }
             return (skipUse !== undefined && skipUse(n)) ? false : !readsTheValue(n);
         });
@@ -62175,3 +62179,46 @@ function h50g45ListFrameHead (go: any, arg: any): boolean {
     return !calledHere && !h27a11WritesInto(go, fn.body, param.name.text, param);
 }
 // ===== end H50-G45
+
+// ===== H50-G51
+// pro tree: a `const x` in one block and a same-named binding in a disjoint block print as two Go
+// locals in two scopes, so neither shadows the other; reads of the other block's binding are not ours
+function goNearestBlock(node): any {
+    let current: any = node?.parent;
+    while ((current !== undefined) && (current.kind !== SyntaxKind.Block)) {
+        current = current.parent;
+    }
+    return current;
+}
+function goNodeWithin(node, ancestor): boolean {
+    for (let current: any = node; current !== undefined; current = current.parent) {
+        if (current === ancestor) {
+            return true;
+        }
+    }
+    return false;
+}
+function goSiblingBlockBinding(transpiler, declaration): { disjoint: (n: any) => boolean, foreign: (n: any) => boolean } {
+    const none = { disjoint: (n: any) => false, foreign: (n: any) => false };
+    const statement: any = declaration?.parent?.parent;
+    if ((statement?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0) || !goSourceIsWsTree(declaration)) {
+        return none;
+    }
+    const callee: any = (declaration.initializer?.kind === SyntaxKind.CallExpression) ? declaration.initializer.expression : undefined;
+    if ((callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !/^parse/.test(String(callee.name?.text ?? ''))) {
+        return none; // only a parse* producer local
+    }
+    const own = goNearestBlock(statement);
+    if ((own === undefined) || (transpiler.goEnclosingFunction(own) === undefined) || (own === transpiler.goEnclosingFunction(declaration)?.body)) {
+        return none; // a function-level const encloses every other block
+    }
+    const disjoint = (n: any): boolean => {
+        if ((n.kind !== SyntaxKind.VariableDeclaration) || (n.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            return false;
+        }
+        const block = goNearestBlock(n.parent.parent);
+        return (block !== undefined) && !goNodeWithin(block, own) && !goNodeWithin(own, block);
+    };
+    return { disjoint, foreign: (n: any) => !goNodeWithin(n, own) };
+}
+// ===== end H50-G51
