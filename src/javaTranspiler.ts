@@ -9131,6 +9131,12 @@ export class JavaTranspiler extends BaseTranspiler {
             && (isIdentifier(arg) || isPropertyAccessExpression(arg))) {
             return `${this.javaStringReceiverText(receiver, name)}.indexOf(${this.javaStringReceiverText(arg, parsedArg)})`;
         }
+        // a declared String receiver and a plain-string `.slice(..)` target the printer emits as a native substring
+        if (this.javaDeclaredStringType(receiver) === true && isCallExpression(arg) && isPropertyAccessExpression(arg.expression)
+            && arg.expression.name.text === 'slice' && argType.getAliasSymbol?.() === undefined && this.isStringType(argType.flags)
+            && !String(parsedArg).startsWith('Helpers.')) {
+            return `${name}.indexOf(${parsedArg})`;
+        }
         return undefined;
     }
 
