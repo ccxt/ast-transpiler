@@ -48838,7 +48838,8 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
         || ((call.arguments.length !== 2) && ((call.arguments.length !== 3) || (call.arguments[2].kind !== SyntaxKind.ObjectLiteralExpression)
             || (call.arguments[2].properties.length !== 0))) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
         || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'safeDict')
-        || ((baseMemberDecl (this, call.arguments[0], 'options') === undefined) && (baseMemberDecl (this, call.arguments[0], 'balance') === undefined))) {
+        || ((baseMemberDecl (this, call.arguments[0], 'options') === undefined) && (baseMemberDecl (this, call.arguments[0], 'balance') === undefined)
+            && (this.goMarketTable (call.arguments[0]) === undefined) && !this.goCacheField (call.arguments[0]))) {
         return undefined;
     }
     const keyNode = call.arguments[1];
@@ -48852,7 +48853,8 @@ GoTranspiler.prototype.h27a06OptionsDictRead = function (node, printed) {
     }
     const name = declaration.name.text;
     // SafeDictMap is MapTyped of the SafeDict read: with no default it answers what SafeMapTyped does
-    const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.(Options|Balance), (.*)\)$/.exec (printed);
+    const match = /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.(Options|Balance), (.*)\)$/.exec (printed)
+        ?? /^(\n*)(\t*)var (\w+) map\[string\]any = ((?:ccxt\.)?SafeMapTyped|this\.SafeDictMap)\(this\.(Markets|Markets_by_id|Currencies|Currencies_by_id|Outcomes|Outcomes_by_id), (.*)\)$/.exec (printed);
     if ((match === null) || (match[3] !== name) || (match[6] !== key)) {
         return undefined;
     }
