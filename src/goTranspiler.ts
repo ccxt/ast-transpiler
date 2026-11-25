@@ -10923,7 +10923,8 @@ const CCXT_GO_TUPLE_RESULT_METHODS = [ 'handleMarketTypeAndParams', 'handleSubTy
     'handleOptionStringAndParams2',
     'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
     'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2',
-    'handleTriggerDirectionAndParams', 'handleMaxEntriesPerRequestAndParams', 'handleTriggerAndParams', 'isTriggerOrder' ];
+    'handleTriggerDirectionAndParams', 'handleMaxEntriesPerRequestAndParams', 'handleTriggerAndParams', 'isTriggerOrder',
+    'encodeDydxTxForSigning' ];
 // element 0 unwrap per method (element 1 is always the params map); default SafeStringPtr
 const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handleOptionBoolAndParams': 'GetValueBool',
     'handleOptionBoolAndParams2': 'GetValueBool', 'handleOptionIntegerAndParams': 'Int64Value',
@@ -10931,7 +10932,8 @@ const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handl
     'handleParamInteger': 'SafeIntegerPtr', 'handleParamInteger2': 'SafeIntegerPtr',
     'handleTriggerAndParams': 'SafeBoolPtr', 'isTriggerOrder': 'SafeBoolPtr',
     // the Go pair's `any` slot 0 is already the derefScalar'd option value, read as is
-    'handleOptionAndParams': 'Raw', 'handleOptionAndParams2': 'Raw', 'handleMaxEntriesPerRequestAndParams': 'Raw' };
+    'handleOptionAndParams': 'Raw', 'handleOptionAndParams2': 'Raw', 'handleMaxEntriesPerRequestAndParams': 'Raw',
+    'encodeDydxTxForSigning': 'Raw' };
 // pair twins with their slot-0 Go type: the printed base twins (GO_BASE_PAIR_TWINS) and the hand-written pairs
 const CCXT_GO_PAIR_SLOT_0 = { 'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool', 'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
