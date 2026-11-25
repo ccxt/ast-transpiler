@@ -96,3 +96,21 @@ describe ('a Dict alias of the params slot and a venue helper params slot take t
         expect (out).not.toContain ('get_arg_dict');
     });
 });
+
+describe ('an unannotated alias of the params slot takes the map', () => {
+    const body = "        const network = this.safeString (params, 'network');\n        let paramsOmitted = params;\n        if (network !== undefined) {\n            paramsOmitted = this.omit (paramsOmitted, 'network');\n        }\n        const request: Dict = { 'a': 1 };\n        this.hold (this.extend (request, paramsOmitted));\n";
+    test ('`let q = params` binds params as Dict and drops the into_dict wrap', () => {
+        const out = run ('alias-plain', body);
+        expect (out).toContain ('let params: crate::value::Dict = get_arg_dict(optional_args, ');
+        expect (out).not.toContain ('params.into_dict()');
+        expect (out).not.toContain ('params.clone().into_dict()');
+    });
+    test ('negative: an unannotated alias handed to an untyped slot keeps the boxed get_arg', () => {
+        const out = run ('alias-plain-hold', "        const q = params;\n        this.hold (q);\n");
+        expect (out).not.toContain ('get_arg_dict');
+    });
+    test ('negative: an unannotated alias with params also handed to an untyped slot keeps the boxed get_arg', () => {
+        const out = run ('alias-plain-both', body + "        this.hold (params);\n");
+        expect (out).not.toContain ('get_arg_dict');
+    });
+});

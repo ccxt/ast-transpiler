@@ -16829,7 +16829,8 @@ describe('ral-44c: a params alias held as the map through an omit rewrite', () =
     test('`let y = params` of a typed unified method is a Dict alias; the omit write takes the map back; a plain any parameter alias keeps the box', () => {
         const text = out();
         const t1 = text.slice(text.indexOf('fn fetchTrades'), text.indexOf('fn rebound'));
-        expect(t1).toContain('let mut paramsOmitted: crate::value::Dict = params.clone().into_dict();');
+        expect(t1).toContain('let params: crate::value::Dict = get_arg_dict(optional_args, 2);');
+        expect(t1).toContain('let mut paramsOmitted: crate::value::Dict = params.clone();');
         expect(t1).toMatch(/paramsOmitted = self\.omit\(params, [^\n]*\)\.into_dict\(\);/);
         expect(t1).toContain('&[&paramsOmitted]');
         const t3 = text.slice(text.indexOf('fn fetchOrder'), text.indexOf('fn rebound'));

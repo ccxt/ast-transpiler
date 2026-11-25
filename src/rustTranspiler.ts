@@ -29698,6 +29698,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.rustOptExtendOperandUse(n)) { uses++; extendUses++; return true; }
             // a `let q: Dict = params` alias decided a map takes the slot itself; a venue helper's trailing `Dict = {}` slot is lent the map
             if (isVariableDeclaration(up) && up.initializer === n && up.type !== undefined && String(up.type.getText()) === 'Dict' && this.rustParamsAliasDecl(up)) { uses++; return true; }
+            // an unannotated `let q = params` alias that the local solve already binds as a map takes the slot the same way
+            if (isVariableDeclaration(up) && up.initializer === n && up.type === undefined && this.rustParamsAliasDecl(up)) { uses++; return true; }
             if (this.rustParamsHelperSlot(up, n)) { uses++; return true; }
             if (isCallExpression(up) && up.arguments[0] === n) {
                 const callee: any = up.expression;
