@@ -2813,24 +2813,22 @@ function installCcxtGoSafeCollectionUnbox (goTranspiler) {
         || !goInstallOnce (goTranspiler, '__ccxtGoSafeCollectionUnboxInstalled')) {
         return;
     }
-    const shippedDictType = goTranspiler.goSafeDictLocalUnbox;
-    const shippedListType = goTranspiler.goSafeListLocalUnbox;
     const dictFamilies = [ 'dict', 'dict2' ];
     const listFamilies = [ 'list', 'list2' ];
-    goTranspiler.goSafeDictLocalUnbox = function (declaration) {
+    goInstAround (goTranspiler, 'goSafeDictLocalUnbox', function (shippedDictType, declaration) {
         const known = shippedDictType.call (this, declaration);
         if (known !== undefined) {
             return known;
         }
         return ccxtGoSafeCollectionLocalType (this, declaration, dictFamilies);
-    };
-    goTranspiler.goSafeListLocalUnbox = function (declaration) {
+    });
+    goInstAround (goTranspiler, 'goSafeListLocalUnbox', function (shippedListType, declaration) {
         const known = shippedListType.call (this, declaration);
         if (known !== undefined) {
             return ccxtGoSafeListGuardOnly (this, declaration) ? undefined : known;
         }
         return ccxtGoSafeCollectionLocalType (this, declaration, listFamilies);
-    };
+    });
     const valueFamilies = { 'goSafeDictUnboxValue': dictFamilies, 'goSafeListUnboxValue': listFamilies };
     for (const method of Object.keys (valueFamilies)) {
         const families = valueFamilies[method];
@@ -3355,17 +3353,15 @@ export function installCcxtGoArrayBindingHolders (goTranspiler) {
     }
     // declaration shape: `const [ a, b ] = this.handleM (...)`
     if (typeof goTranspiler.printVariableDeclarationList === 'function') {
-        const upstreamDeclaration = goTranspiler.printVariableDeclarationList;
-        goTranspiler.printVariableDeclarationList = function (node, identation) {
+        goInstAround (goTranspiler, 'printVariableDeclarationList', function (upstreamDeclaration, node, identation) {
             return retypeArrayBindingHolder (this, node, upstreamDeclaration.call (this, node, identation), identation);
-        };
+        });
     }
     // assignment shape: `[ a, b ] = this.handleM (...)` (printBinaryExpression returns this hook verbatim)
     if (typeof goTranspiler.printCustomBinaryExpressionIfAny === 'function') {
-        const upstreamBinary = goTranspiler.printCustomBinaryExpressionIfAny;
-        goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+        goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (upstreamBinary, node, identation) {
             return retypeArrayBindingHolder (this, node, upstreamBinary.call (this, node, identation), identation);
-        };
+        });
     }
 }
 
@@ -4619,8 +4615,7 @@ function ccxtGoNilDeclaredStringArgumentRead (goTranspiler, node) {
 }
 
 function installNilDeclaredJoin (goTranspiler) {
-    const upstream = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (upstream, node, identation) {
         const declaration = node?.declarations?.[0];
         const joinType = ccxtGoNilDeclaredJoinType (this, declaration) ?? goStrNilDeclaredJoinType (this, declaration);
         if (joinType !== undefined) {
@@ -4628,7 +4623,7 @@ function installNilDeclaredJoin (goTranspiler) {
             return this.getIden (identation) + 'var ' + this.printNode (declaration.name) + ' ' + joinType + ' = ' + this.NULL_TOKEN;
         }
         return upstream.call (this, node, identation);
-    };
+    });
 }
 
 // The nil-declared later-write join: `var x any = nil` gets the map/slice type of its writes only when every
@@ -5529,10 +5524,9 @@ function goNonNullishParts (type): any[] {
 
 // goLocalIsSafeToType answers true when the installed check does, else when `admits` does
 function goOrLocalIsSafeToType (goTranspiler, admits) {
-    const shippedIsSafe = goTranspiler.goLocalIsSafeToType;
-    goTranspiler.goLocalIsSafeToType = function (scope, declaration, varName, goType) {
+    goInstAround (goTranspiler, 'goLocalIsSafeToType', function (shippedIsSafe, scope, declaration, varName, goType) {
         return shippedIsSafe.call (this, scope, declaration, varName, goType) || admits (this, scope, declaration, varName, goType);
-    };
+    });
 }
 
 // ----------------- array-literal locals: `let x = []; if (Array.isArray (y)) { x = y; }` -----------------
@@ -5637,8 +5631,7 @@ function installCcxtGoArrayLiteralWrites (goTranspiler) {
     }
     goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === '[]any') && (scope !== undefined)
         && ccxtGoArrayLiteralLocalIsSafe (go, scope, declaration, varName));
-    const shippedBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (node, identation) {
+    goInstAround (goTranspiler, 'printBinaryExpression', function (shippedBinary, node, identation) {
         const h = h28a19ArrayIdentityWrite (this, node); if (h !== undefined) return h;
         if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && ts.isIdentifier (node.left)
             && (ccxtGoArrayLiteralDeclarationOf (this, node.left) !== undefined)
@@ -5650,7 +5643,7 @@ function installCcxtGoArrayLiteralWrites (goTranspiler) {
             }
         }
         return shippedBinary.call (this, node, identation);
-    };
+    });
 }
 
 // ----------------- identity tuple rebind: `[ request, params ] = this.handleUntilOption (k, request, params)` -----------------
@@ -7292,8 +7285,7 @@ function ccxtGoElideBoxedForward (printed) {
 
 // `var retResN T = ..` + `ch <- retResN`: a nil map/slice is forwarded as untyped nil (BoxAbsent)
 function installCcxtGoAsyncForwardRebox (goTranspiler) {
-    const printReturn = goTranspiler.printReturnStatement;
-    goTranspiler.printReturnStatement = function (node, identation) {
+    goInstAround (goTranspiler, 'printReturnStatement', function (printReturn, node, identation) {
         const printed = printReturn.call (this, node, identation);
         const m = /\n(\s*)var (retRes\d+) (?:map\[string\]any|\[\]any) = [^\n]*\n/.exec (printed);
         if (m === null) {
@@ -7308,7 +7300,7 @@ function installCcxtGoAsyncForwardRebox (goTranspiler) {
             const inner = ind + ((ind.indexOf ('\t') >= 0) ? '\t' : '    ');
             return ind + 'if ' + m[2] + ' == nil {\n' + inner + 'ch <- nil\n' + ind + '} else {\n' + inner + 'ch <- ' + m[2] + tail + '\n' + ind + '}';
         });
-    };
+    });
 }
 
 // `this.<field>` reads of BaseExchange fields declared concretely in go/v4/exchange.go
@@ -7336,12 +7328,11 @@ function ccxtGoBaseFieldType (goTranspiler, initializer, printedValue) {
 
 // `const r = c ? this.safeMarket (id, market) : market` / `let r: Market = market`: the `any` alias
 function installCcxtGoGetArgMapAlias (goTranspiler) {
-    const shipped = goTranspiler.goGetArgUsesAreSafe;
-    goTranspiler.goGetArgUsesAreSafe = function (body, param, name, goType, nilable, seen, boxed = false) {
+    goInstAround (goTranspiler, 'goGetArgUsesAreSafe', function (shipped, body, param, name, goType, nilable, seen, boxed = false) {
         const alias = boxed && nilable && (goType === CCXT_GO_PRODUCER_DICT_TYPE)
             && (param?.kind === SyntaxKind.VariableDeclaration) && !this.goAnyLocalHoldsNonPointer (param);
         return shipped.call (this, body, param, name, goType, nilable, seen, alias ? false : boxed);
-    };
+    });
 }
 
 // `since + d * 1000 - 1`: a GetArg pointer as an operand of a printed Add(...) inside an admitted arithmetic or
@@ -7463,10 +7454,9 @@ function installCcxtGoUnifiedInt64Params (goTranspiler, table, goType = 'int64')
         }
         return verdicts.get (param);
     };
-    const upstreamType = goTranspiler.goNativeParameterType;
-    goTranspiler.goNativeParameterType = function (param) {
+    goInstAround (goTranspiler, 'goNativeParameterType', function (upstreamType, param) {
         return isTabled (param) ? goType : upstreamType.call (this, param);
-    };
+    });
     const tabledRead = (node) => {
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
@@ -7474,13 +7464,12 @@ function installCcxtGoUnifiedInt64Params (goTranspiler, table, goType = 'int64')
         const decl = goTranspiler.checkerOrUndefined?.()?.getSymbolAtLocation (node)?.valueDeclaration?.resolve ();
         return (decl?.kind === SyntaxKind.Parameter) && isTabled (decl);
     };
-    const upstreamEquality = goTranspiler.printInlineEquality;
-    goTranspiler.printInlineEquality = function (left, right, leftText, rightText, isEq) {
+    goInstAround (goTranspiler, 'printInlineEquality', function (upstreamEquality, left, right, leftText, rightText, isEq) {
         if ((ccxtGoIsNilLiteral (right) && tabledRead (left)) || (ccxtGoIsNilLiteral (left) && tabledRead (right))) {
             return isEq ? 'false' : 'true';
         }
         return upstreamEquality.call (this, left, right, leftText, rightText, isEq);
-    };
+    });
 }
 
 // A unified string argument the printer proves a non-nil `*string` (checker narrowing or a
@@ -7561,21 +7550,19 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         return (param?.initializer !== undefined) && (param.dotDotDotToken === undefined);
     });
     installCcxtGoTypedConcat (goTranspiler);
-    const upstreamKeeps = goTranspiler.goParameterKeepsNilCompareNative;
-    goTranspiler.goParameterKeepsNilCompareNative = function (body, param, goType) {
+    goInstAround (goTranspiler, 'goParameterKeepsNilCompareNative', function (upstreamKeeps, body, param, goType) {
         // a unified-table param is `string` in every public Go signature, so any nil compare on it is a constant
         const fn = param.parent;
         const tabled = (goType === 'string') && (fn?.name?.kind === SyntaxKind.Identifier) && this.goIsUnifiedStringParameter?.(fn.name.text, fn.parameters.indexOf (param));
         return upstreamKeeps.call (this, body, param, goType) || ((goType === 'string') && (tabled || ccxtGoNilComparesAreThrowGuards (body, param)));
-    };
-    const upstreamEquality = goTranspiler.printInlineEquality;
-    goTranspiler.printInlineEquality = function (left, right, leftText, rightText, isEq) {
+    });
+    goInstAround (goTranspiler, 'printInlineEquality', function (upstreamEquality, left, right, leftText, rightText, isEq) {
         if ((ccxtGoIsNilLiteral (right) && ccxtGoIsStringParameter (this, left))
             || (ccxtGoIsNilLiteral (left) && ccxtGoIsStringParameter (this, right))) {
             return isEq ? 'false' : 'true';
         }
         return upstreamEquality.call (this, left, right, leftText, rightText, isEq);
-    };
+    });
     installCcxtGoUnifiedStringDerefArgs (goTranspiler);
     installCcxtGoUnifiedInt64Params (goTranspiler, unifiedInt64Params);
     // required `number` params (withdraw / transfer amount): the typed wrapper passes a float64, dynamic callers Float64Arg
@@ -7583,13 +7570,11 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installStringPtrParams (goTranspiler); // nullable string params fed proven Go strings
     // A venue-local `Str`/`string` parameter prints `*string` when no name-based dispatch reaches the method
     // venue string params every caller hands a *string, a never-rebound string or nil
-    const upstreamOf = goTranspiler.goNativeParameterTypeOf;
-    goTranspiler.goNativeParameterTypeOf = function (param) {
+    goInstAround (goTranspiler, 'goNativeParameterTypeOf', function (upstreamOf, param) {
         return upstreamOf.call (this, param) ?? (goStringPtrParamProven (this, param) ? '*string' : undefined)
             ?? (goStringValueParamProven (this, param) ? 'string' : undefined);
-    };
-    const upstream = goTranspiler.goTypeOfInitializer;
-    goTranspiler.goTypeOfInitializer = function (initializer, printedValue) {
+    });
+    goInstAround (goTranspiler, 'goTypeOfInitializer', function (upstream, initializer, printedValue) {
         const known = upstream.call (this, initializer, printedValue);
         if (known !== undefined) {
             return known;
@@ -7645,13 +7630,12 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             return undefined;
         }
         return goType;
-    };
+    });
     installCcxtGoNilDeclaredStringJoins (goTranspiler);
     installCcxtGoNilDeclaredValueJoins (goTranspiler);
     // `var x string = Ternary(...)` needs `.(string)` (Ternary returns `any`); the assertion cannot fail on the
     // classification above and is emitted only where the printer printed the proven declaration type.
-    const upstreamPrint = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (upstreamPrint, node, identation) {
         const printed = upstreamPrint.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if (ccxtGoTernaryDeclaration (declaration?.initializer) === undefined) {
@@ -7669,7 +7653,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             return printed;
         }
         return printed + '.' + '(' + declaredType + ')';
-    };
+    });
     // printVariableDeclarationList prints `var x any = nil` for a nil declaration before it
     ccxtGoWrapSingleDeclaration (goTranspiler, (printed, declaration) => {
         if (declaration.name?.kind !== SyntaxKind.Identifier) {
@@ -7743,15 +7727,14 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     installCcxtGoNilDeclaredParseNumberJoins (goTranspiler);
     // the emitted signature of the same helpers: `any` → `*string` for the methods the predicate above accepts,
     // so the coercion and the local typing never disagree
-    const upstreamMethodDefinition = goTranspiler.printMethodDefinition;
-    goTranspiler.printMethodDefinition = function (node, identation) {
+    goInstAround (goTranspiler, 'printMethodDefinition', function (upstreamMethodDefinition, node, identation) {
         const methodDef = upstreamMethodDefinition.call (this, node, identation);
         const goType = ccxtGoFamilyMethodReturnType (this, node) ?? ccxtGoCounterMethodReturnType (this, node);
         if (goType === undefined) {
             return methodDef;
         }
         return methodDef.replace (/(\)\s+)any(\s*)$/, '$1' + goType + '$2');
-    };
+    });
     goTranspiler.__ccxtGoLocalTypesInstalled = true;
     // the arithmetic / currency / sum types need the `.(T)` unbox at the declaration
     goInstRewrite (goTranspiler, '__ccxtGoDeclarationUnboxInstalled', 'printVariableDeclarationList', function (printed, node, identation) {
@@ -7772,14 +7755,13 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         return;
     }
     goOrLocalIsSafeToType (goTranspiler, ccxtGoWriteSiteVetoesAreConvertible);
-    const shippedBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (node, identation) {
+    goInstAround (goTranspiler, 'printBinaryExpression', function (shippedBinary, node, identation) {
         const assignment = ccxtGoWriteSiteAssignment (this, node, identation);
         if (assignment !== undefined) {
             return assignment;
         }
         return shippedBinary.call (this, node, identation);
-    };
+    });
     // the type half admits the local, the value half prints the rebind through MapTyped (same map, no copy)
     if ((goTranspiler === undefined) || !goInstallOnce (goTranspiler, '__ccxtGoIdentityTupleRebindInstalled')) {
         return;
@@ -7787,8 +7769,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // a map-literal local whose only vetoed writes are identity rebinds stays map[string]any
     goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === 'map[string]any')
         && ccxtGoRebindLocalIsSafe (go, scope, declaration, varName, (n) => ccxtGoIsIdentityTupleRebind (go, n)));
-    const shippedCustom = goTranspiler.printCustomBinaryExpressionIfAny;
-    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+    goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (shippedCustom, node, identation) {
         const printed = shippedCustom.call (this, node, identation);
         const target = node?.left?.elements?.[0];
         if ((typeof printed !== 'string') || (node.left.kind !== SyntaxKind.ArrayLiteralExpression)
@@ -7804,7 +7785,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         const indent = lines[index].substring (0, lines[index].length - lines[index].trimStart ().length);
         lines[index] = indent + this.printNode (target, 0) + ' = MapTyped(' + lines[index].trimStart ().substring (read.length - 'GetValue('.length) + ')';
         return lines.join ('\n');
-    };
+    });
     installCcxtGoArrayLiteralWrites (goTranspiler);
     // the container locals the printer's own predicate leaves out: cast-wrapped initializers,
     // non-empty (kept) defaults, the two-key accessors and the Safe* read shapes of the list family
@@ -7845,10 +7826,9 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => ccxtGoElementReadDeclarationType (go, declaration, varName) === goType);
     }
     if (typeof goTranspiler.printCustomBinaryExpressionIfAny === 'function') {
-        const upstreamBinary = goTranspiler.printCustomBinaryExpressionIfAny;
-        goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+        goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (upstreamBinary, node, identation) {
             return retypeElementReadAssignment (this, node, upstreamBinary.call (this, node, identation));
-        };
+        });
     }
     // the scalar-literal locals of the same shape
     installCcxtGoScalarLiteralLift (goTranspiler);
@@ -7869,8 +7849,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === '*string')
         && ccxtGoNarrowedSelfConcatJoinIsSafe (go, scope, declaration, varName));
     // while that verdict is open, a grown write of the local converts like any Go string write
-    const shippedConversion = goTranspiler.goPointerWriteConversion;
-    goTranspiler.goPointerWriteConversion = function (right, goType) {
+    goInstAround (goTranspiler, 'goPointerWriteConversion', function (shippedConversion, right, goType) {
         const shipped = shippedConversion.call (this, right, goType);
         const write = right?.parent;
         if ((shipped !== undefined) || (goType !== '*string') || (write?.kind !== SyntaxKind.BinaryExpression) || (write.right !== right)
@@ -7879,7 +7858,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         }
         const declaration = this.checkerOrUndefined ()?.getSymbolAtLocation (write.left)?.valueDeclaration?.resolve ();
         return (this.__ccxtGoNarrowedSelfConcatProven?.has (declaration) && ccxtGoNarrowedSelfConcatWriteOk (this, declaration, right)) ? 'wrap' : undefined;
-    };
+    });
     installCcxtGoScalarElementReads (goTranspiler);
     installCcxtGoTupleStringJoin (goTranspiler);
     installCcxtGoTupleParamsElement (goTranspiler);
@@ -7908,14 +7887,13 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         'mergeBalanceAccount', (go, right, left) => (selfMapWrite (go, right, ccxtGoParamDeclarationOf (go, left)) !== undefined));
     // the helper derefs a pointer value; on these locals a native write needs a proven non-pointer value
     if (typeof goTranspiler.printNativeElementAssignment === 'function') {
-        const shippedWrite = goTranspiler.printNativeElementAssignment;
-        goTranspiler.printNativeElementAssignment = function (containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = undefined) {
+        goInstAround (goTranspiler, 'printNativeElementAssignment', function (shippedWrite, containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = undefined) {
             if ((selfMapWriteTypedLocal (this, containerNode) !== undefined)
                 && (compound || (valueNode === undefined) || (typeof this.goIsNonPointerValue !== 'function') || !this.goIsNonPointerValue (valueNode))) {
                 return undefined;
             }
             return shippedWrite.call (this, containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);
-        };
+        });
     }
     // the self-map-write scan with `x = this.safeBalance (x)` admitted as one more self-write
     // safeBalance map locals
@@ -7952,9 +7930,8 @@ function ccxtGoCallDestructuredElement (decl) {
 }
 
 function installCcxtGoDestructuredPointerBoxes (goTranspiler) {
-    const shipped = goTranspiler.goAnyLocalHoldsPointer;
     const visiting = new Set ();
-    goTranspiler.goAnyLocalHoldsPointer = function (decl) {
+    goInstAround (goTranspiler, 'goAnyLocalHoldsPointer', function (shipped, decl) {
         if (ccxtGoCallDestructuredElement (decl)) {
             return true;
         }
@@ -7979,7 +7956,7 @@ function installCcxtGoDestructuredPointerBoxes (goTranspiler) {
         } finally {
             visiting.delete (decl);
         }
-    };
+    });
 }
 
 // Tuple params element: `const [ t, query ] = this.handleMarketTypeAndParams (…)` element 1.
@@ -8012,6 +7989,54 @@ function ccxtGoTupleDictFromLooseParam (method, goType) {
         ? (p.initializer === undefined) : [ 'object', 'any', 'unknown' ].includes (p.type.getText ().trim ()));
 }
 
+// per shared root: the parsed methods of each file by name, and the transitive importer set of each file
+const CCXT_GO_TUPLE_METHODS = new WeakMap<object, Map<string, any[]>> ();
+function ccxtGoTupleMethodsNamed (item: { file: string; text: string }, name: string): any[] {
+    let byName = CCXT_GO_TUPLE_METHODS.get (item);
+    if (byName === undefined) {
+        byName = new Map<string, any[]> ();
+        const visit = (n) => {
+            if ((n.kind === SyntaxKind.MethodDeclaration) && (n.name?.text !== undefined) && (n.body !== undefined)) {
+                const list = byName!.get (n.name.text);
+                if (list === undefined) { byName!.set (n.name.text, [ n ]); } else { list.push (n); }
+            }
+            n?.forEachChild (visit);
+        };
+        visit (ts.createSourceFile (item.file, item.text));
+        CCXT_GO_TUPLE_METHODS.set (item, byName);
+    }
+    return byName.get (name) ?? [];
+}
+const CCXT_GO_TUPLE_IMPORTERS = new WeakMap<object, Map<string, Set<string>>> ();
+function ccxtGoTupleImporterIds (shared: GoSharedTsRoot, fileName: string): Set<string> {
+    let byFile = CCXT_GO_TUPLE_IMPORTERS.get (shared);
+    if (byFile === undefined) {
+        byFile = new Map<string, Set<string>> ();
+        CCXT_GO_TUPLE_IMPORTERS.set (shared, byFile);
+    }
+    let ids = byFile.get (fileName);
+    if (ids !== undefined) {
+        return ids;
+    }
+    ids = new Set ([ path.basename (fileName, '.ts') ]);
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const item of shared.proAndRoot) {
+            if (!ids.has (item.base)) {
+                for (const imp of item.importIds) {
+                    if (ids.has (imp)) {
+                        ids.add (item.base);
+                        grew = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    byFile.set (fileName, ids);
+    return ids;
+}
+
 function ccxtGoTupleOverridesAgree (declaration, name, index, goType) {
     // drivers pass relative names (`ts/src/x.ts`): resolve so the marker matches
     const fileName = path.resolve (declaration.getSourceFile ().fileName);
@@ -8031,36 +8056,18 @@ function ccxtGoTupleOverridesAgree (declaration, name, index, goType) {
     // Exchange.ts reaches every exchange; an exchange file only files importing it (transitively)
     const base = fileName.endsWith ('/base/Exchange.ts');
     const entries = shared.proAndRoot;
-    const ids = new Set ([ path.basename (fileName, '.ts') ]);
-    for (let grew = true; grew && !base;) {
-        grew = false;
-        for (const item of entries) {
-            if (!ids.has (item.base)) {
-                for (const imp of item.importIds) {
-                    if (ids.has (imp)) {
-                        ids.add (item.base);
-                        grew = true;
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    const ids = base ? new Set<string> () : ccxtGoTupleImporterIds (shared, fileName);
     for (const item of entries) {
         if ((!base && !ids.has (item.base)) || !item.text.includes (name) || !pattern.test (item.text)) {
             continue;
         }
-        const visit = (n) => {
-            if ((n.kind === SyntaxKind.MethodDeclaration) && (n.name?.text === name) && (n.body !== undefined)) {
-                const onlySuper = collectReturnStatements (n.body).every ((r) => (r.expression?.kind === SyntaxKind.CallExpression)
-                    && (r.expression.expression?.expression?.kind === SyntaxKind.SuperKeyword));
-                if (!onlySuper && ((ccxtGoTupleAnnotationElement (n.type, index) !== goType) || ccxtGoTupleDictFromLooseParam (n, goType))) {
-                    agreed = undefined;
-                }
+        for (const n of ccxtGoTupleMethodsNamed (item, name)) {
+            const onlySuper = collectReturnStatements (n.body).every ((r) => (r.expression?.kind === SyntaxKind.CallExpression)
+                && (r.expression.expression?.expression?.kind === SyntaxKind.SuperKeyword));
+            if (!onlySuper && ((ccxtGoTupleAnnotationElement (n.type, index) !== goType) || ccxtGoTupleDictFromLooseParam (n, goType))) {
+                agreed = undefined;
             }
-            n?.forEachChild (visit);
-        };
-        visit (ts.createSourceFile (item.file, item.text));
+        }
     }
     CCXT_GO_TUPLE_OVERRIDE_CACHE.set (key, agreed);
     return agreed === goType;
@@ -8188,8 +8195,7 @@ function ccxtGoTupleParamsElementTypeUncached (goTranspiler, element) {
 }
 
 function installCcxtGoTupleParamsElement (goTranspiler) {
-    const shipped = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (shipped, node, identation) {
         const printed = shipped.call (this, node, identation);
         const pattern = node?.declarations?.[0]?.name;
         if ((typeof printed !== 'string') || (pattern?.kind !== SyntaxKind.ArrayBindingPattern)) {
@@ -8210,7 +8216,7 @@ function installCcxtGoTupleParamsElement (goTranspiler) {
             }
         });
         return lines.join ('\n');
-    };
+    });
 }
 
 // Tuple-element *string join: `let t: Str = undefined; [ t, params ] = this.handleMarketTypeAndParams (…)`.
@@ -8592,8 +8598,7 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
     goInstFirst (goTranspiler, '', 'goDeclaredTypeOfIdentifier', function (this: any, node) {
         return (ccxtGoTupleStringDeclarationOf (this, node) !== undefined) ? '*string' : undefined;
     });
-    const shippedDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (shippedDeclaration, node, identation) {
         const printed = shippedDeclaration.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if ((typeof printed !== 'string') || (ccxtGoTupleStringJoinType (this, declaration) !== '*string')) {
@@ -8602,10 +8607,9 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
         const head = this.getIden (identation) + 'var ' + this.printNode (declaration.name, 0) + ' ';
         const value = isNilDeclaredInitializer (declaration.initializer) ? this.UNDEFINED_TOKEN : this.printNode (declaration.initializer, 0);
         return (printed === head + 'any = ' + value) ? (head + '*string = ' + value) : printed;
-    };
+    });
     // the direct form `a := GetValue(h, i)` of a destructuring declaration
-    const shippedBinding = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (shippedBinding, node, identation) {
         const printed = shippedBinding.call (this, node, identation);
         const pattern = node?.declarations?.[0]?.name;
         if ((typeof printed !== 'string') || (pattern?.kind !== SyntaxKind.ArrayBindingPattern)) {
@@ -8625,9 +8629,8 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
             }
         });
         return lines.join ('\n');
-    };
-    const shippedCustom = goTranspiler.printCustomBinaryExpressionIfAny;
-    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+    });
+    goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (shippedCustom, node, identation) {
         const printed = shippedCustom.call (this, node, identation);
         const target = node?.left?.elements?.[0];
         if ((typeof printed !== 'string') || (node.left.kind !== SyntaxKind.ArrayLiteralExpression)
@@ -8643,9 +8646,8 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
         const indent = lines[index].substring (0, lines[index].length - lines[index].trimStart ().length);
         lines[index] = indent + this.printNode (target, 0) + ' = SafeStringPtr(' + lines[index].trimStart ().substring (read.length - 'GetValue('.length) + ')';
         return lines.join ('\n');
-    };
-    const shippedBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (node, identation) {
+    });
+    goInstAround (goTranspiler, 'printBinaryExpression', function (shippedBinary, node, identation) {
         const right = node?.right;
         if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && ts.isIdentifier (node.left)
             && ccxtGoTupleStringWriteNeedsLift (this, right)
@@ -8655,7 +8657,7 @@ function installCcxtGoTupleStringJoin (goTranspiler) {
                 ?? (this.printNode (node.left, 0) + ' = SafeStringPtr(' + value + ')');
         }
         return shippedBinary.call (this, node, identation);
-    };
+    });
 }
 
 // Container element reads: `var x map[string]any = MapTyped(GetValue(c, k))` / `ArrayTyped(...)`.
@@ -9024,8 +9026,7 @@ function installCcxtGoScalarElementReads (goTranspiler) {
         const known = inner.call (this, initializer, printedValue);
         return (known !== undefined) ? known : own (this, initializer);
     };
-    const innerPrint = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (innerPrint, node, identation) {
         const printed = innerPrint.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         const initializer = declaration?.initializer;
@@ -9041,11 +9042,10 @@ function installCcxtGoScalarElementReads (goTranspiler) {
             return printed;
         }
         return head + CCXT_GO_SCALAR_ELEMENT_READERS[goType] + '(' + printed.substring (head.length) + ')';
-    };
+    });
     // `y = x` into an untyped local stores the value, not the pointer: a boxed *string
     // never equals a string literal in a later raw `y == "spot"`
-    const shippedBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (node, identation) {
+    goInstAround (goTranspiler, 'printBinaryExpression', function (shippedBinary, node, identation) {
         const right = node?.right;
         if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && ts.isIdentifier (node.left) && ts.isIdentifier (right)) {
             const decl = this.checkerOrUndefined?.()?.getSymbolAtLocation (right)?.valueDeclaration?.resolve ();
@@ -9055,7 +9055,7 @@ function installCcxtGoScalarElementReads (goTranspiler) {
             }
         }
         return shippedBinary.call (this, node, identation);
-    };
+    });
 }
 
 // Producer declarations: `var x T = <generated producer>(...)`
@@ -9374,8 +9374,7 @@ function ccxtGoElement1ElementIsMap (goTranspiler, element, depth) {
 
 // rewrite the printed `p := GetValue(<holder>, 1)` read of a typed element 1
 function installCcxtGoElement1Params (goTranspiler) {
-    const upstream = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (upstream, node, identation) {
         const printed = upstream.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         const element = declaration?.name?.elements?.[1];
@@ -9391,11 +9390,10 @@ function installCcxtGoElement1Params (goTranspiler) {
         const name = this.printNode (element.name, 0);
         const re = new RegExp ('^([ \\t]*)' + name + ' := (GetValue\\(\\w+Variable, 1\\))$', 'm');
         return printed.replace (re, (all, indent, read) => indent + 'var ' + name + ' map[string]any = MapTyped(' + read + ')');
-    };
+    });
     // `[ v, p ] = f (…)` into a local already declared map[string]any: the element read needs the map view
     if (typeof goTranspiler.printCustomBinaryExpressionIfAny === 'function') {
-        const upstreamBinary = goTranspiler.printCustomBinaryExpressionIfAny;
-        goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+        goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (upstreamBinary, node, identation) {
             const printed = upstreamBinary.call (this, node, identation);
             if ((typeof printed !== 'string') || (node?.operatorToken?.kind !== SyntaxKind.EqualsToken)
                 || (node.left?.kind !== SyntaxKind.ArrayLiteralExpression) || (typeof this.goDeclaredTypeOfIdentifier !== 'function')) {
@@ -9414,7 +9412,7 @@ function installCcxtGoElement1Params (goTranspiler) {
                 const match = /^([ \t]*)([A-Za-z_]\w*) = (GetValue\([A-Za-z_]\w*, \d+\))$/.exec (line);
                 return ((match !== null) && mapped.has (match[2])) ? match[1] + match[2] + ' = MapTyped(' + match[3] + ')' : line;
             }).join ('\n');
-        };
+        });
     }
 }
 
@@ -10642,23 +10640,20 @@ function ccxtGoTupleBoolElementTypeUncached (goTranspiler, element) {
 }
 
 function installCcxtGoTupleBoolElement (goTranspiler) {
-    const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
-    goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
+    goInstAround (goTranspiler, 'goDeclaredTypeOfIdentifier', function (shippedDeclared, node) {
         const known = shippedDeclared.call (this, node);
         if ((known !== undefined) || (node?.kind !== SyntaxKind.Identifier)) {
             return known;
         }
         const element = ccxtGoParamDeclarationOf (this, node);
         return (element?.kind === SyntaxKind.BindingElement) ? ccxtGoTupleBoolElementType (this, element) : undefined;
-    };
+    });
     if (typeof goTranspiler.goAnyLocalHoldsPointer === 'function') {
-        const shippedHolds = goTranspiler.goAnyLocalHoldsPointer;
-        goTranspiler.goAnyLocalHoldsPointer = function (decl) {
+        goInstAround (goTranspiler, 'goAnyLocalHoldsPointer', function (shippedHolds, decl) {
             return (ccxtGoTupleBoolElementType (this, decl) !== 'bool') && shippedHolds.call (this, decl);
-        };
+        });
     }
-    const shipped = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (shipped, node, identation) {
         const printed = shipped.call (this, node, identation);
         const element = node?.declarations?.[0]?.name?.elements?.[0];
         if ((typeof printed !== 'string') || (node.declarations[0].name.kind !== SyntaxKind.ArrayBindingPattern)
@@ -10668,7 +10663,7 @@ function installCcxtGoTupleBoolElement (goTranspiler) {
         const name = this.printNode (element.name, 0);
         const re = new RegExp ('^([ \\t]*)' + name + ' := ((?:ccxt\\.)?)GetValue\\((\\w+), 0\\)$', 'm');
         return printed.replace (re, (all, indent, pkg, holder) => indent + 'var ' + name + ' bool = ' + pkg + 'GetValueBool(' + holder + ', 0, false)');
-    };
+    });
 }
 
 // `let p: Dict = {}; [ x, p ] = this.handleX (…, <map>, …)`: every write hands back a map, so the
@@ -11455,18 +11450,16 @@ function installCcxtGoTupleResults (goTranspiler) {
         return (known !== undefined) ? known : ccxtGoVenuePairElementType (this, node);
     };
     // a store into such a map keeps the helper (nil map, pointer value); the build's never-nil slot proof lowers it
-    const shippedStore = goTranspiler.printNativeElementAssignment;
-    goTranspiler.printNativeElementAssignment = function (containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = undefined) {
+    goInstAround (goTranspiler, 'printNativeElementAssignment', function (shippedStore, containerNode, containerStr, keyNode, keyStr, valueStr, compound = false, valueNode = undefined) {
         if ((ccxtGoVenuePairElementType (this, containerNode) === 'map[string]any') && (shippedDeclared.call (this, containerNode) === undefined)) {
             return undefined;
         }
         return shippedStore.call (this, containerNode, containerStr, keyNode, keyStr, valueStr, compound, valueNode);
-    };
-    const printFunctionType = goTranspiler.printFunctionType;
-    goTranspiler.printFunctionType = function (node) {
+    });
+    goInstAround (goTranspiler, 'printFunctionType', function (printFunctionType, node) {
         const pair = (node?.kind === SyntaxKind.MethodDeclaration) ? ccxtGoVenuePairOf (node) : undefined;
         return (pair !== undefined) ? '(' + pair.type + ((pair.slots === 3) ? ', ' + pair.type : '') + ', map[string]any)' : printFunctionType.call (this, node);
-    };
+    });
     goInstRewrite (goTranspiler, '', 'printCallExpression', function (this: any, printed, node, identation) {
         if (ccxtGoTupleBoolCallIsNullable (node) && ((node.expression.expression?.kind === SyntaxKind.ThisKeyword)
             || isIdentifierNamed (node.expression.expression, 'exchange'))) {
@@ -11484,8 +11477,7 @@ function installCcxtGoTupleResults (goTranspiler) {
         const lead = /^\s*/.exec (printed)[0];
         return lead + 'TupleSlice(' + printed.slice (lead.length) + ')';
     });
-    const printDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (printDeclaration, node, identation) {
         const declaration = node?.declarations?.[0];
         const holderSlots = (node?.declarations?.length === 1) ? ccxtGoPairHolderSlots (this, declaration) : undefined;
         if (holderSlots !== undefined) {
@@ -11550,13 +11542,11 @@ function installCcxtGoTupleResults (goTranspiler) {
             }
         }
         return joined ?? (ofBase ? undefined : pairBind ()) ?? printed;
-    };
-    const printElement = goTranspiler.printElementAccessExpression;
-    goTranspiler.printElementAccessExpression = function (node, ...rest) {
+    });
+    goInstAround (goTranspiler, 'printElementAccessExpression', function (printElement, node, ...rest) {
         return ccxtGoPairHolderRead (this, node) ?? printElement.call (this, node, ...rest);
-    };
-    const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
-    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+    });
+    goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (printCustom, node, identation) {
         if ((node?.left?.kind === SyntaxKind.ArrayLiteralExpression) && (node.operatorToken?.kind === SyntaxKind.EqualsToken)) {
             const armBind = ccxtGoVenuePairTernaryBind (this, node.left, node.right, identation, false)
                 ?? ccxtGoVenueTripleBind (this, node.left, node.right, identation, false);
@@ -11577,10 +11567,9 @@ function installCcxtGoTupleResults (goTranspiler) {
             return pairBind () ?? printed;
         }
         return ccxtGoTupleResultJoin (printed, node.left.elements.length, false, false, ccxtGoTupleResultFirst (node.right)) ?? pairBind () ?? printed;
-    };
+    });
     // an override of a tuple-result method returns the pair: a forwarded call as is, `[ a, b ]` as two unwrapped results
-    const printReturn = goTranspiler.printReturnStatement;
-    goTranspiler.printReturnStatement = function (node, identation) {
+    goInstAround (goTranspiler, 'printReturnStatement', function (printReturn, node, identation) {
         const printed = printReturn.call (this, node, identation);
         let method = node?.parent;
         while ((method !== undefined) && !ts.isFunctionLike (method)) {
@@ -11611,7 +11600,7 @@ function installCcxtGoTupleResults (goTranspiler) {
         const [ a, b ] = expr.elements.map ((e) => this.printNode (e, 0).trim ());
         const bare = ccxtGoJoinedParamsLocal (this, expr.elements[1]);
         return m[1] + ((first === 'Raw') ? a : first + '(' + a + ')') + ', ' + (bare ? b : 'MapTyped(' + b + ')') + m[3];
-    };
+    });
 }
 
 // An async venue method annotated `Promise<[ int, Dict ]>` whose every own return is `[ <never-nil int>, <params> ]` sends
@@ -11837,8 +11826,7 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         return ((typed.split (carrier).length - 1) === 3) ? typed + funcBody : printed;
     });
     // `return [ a, b ]` sends the pair
-    const printReturn = goTranspiler.printReturnStatement;
-    goTranspiler.printReturnStatement = function (node, identation) {
+    goInstAround (goTranspiler, 'printReturnStatement', function (printReturn, node, identation) {
         const printed = printReturn.call (this, node, identation);
         let method = node?.parent;
         while ((method !== undefined) && !ts.isFunctionLike (method)) {
@@ -11860,10 +11848,9 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         }
         const p = ccxtGoVenueSlotText (this, expr.elements[1], 'map[string]any', 'MapTyped');
         return m[1] + ccxtGoAsyncVenuePairCarrier (slot0) + '{Value: MapPair[' + slot0 + ']{V: ' + sent + ', P: ' + p + '}}' + m[2];
-    };
+    });
     // `const [ a, b ] = await this.m (..)` / `const h = await this.m (..)`
-    const printDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (printDeclaration, node, identation) {
         const declaration = node?.declarations?.[0];
         const call = ((node?.declarations?.length === 1) && ((node.flags & ts.NodeFlags.Const) !== 0)) ? ccxtGoAsyncVenuePairAwait (this, declaration.initializer) : undefined;
         if ((call === undefined) && (node?.declarations?.length === 1) && ccxtGoAsyncVenuePairSlot0Local (this, declaration)) {
@@ -11892,10 +11879,9 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
             return printDeclaration.call (this, node, identation);
         }
         return lines.concat ([ iden + 'var ' + names[0] + ' ' + slot0 + ' = ' + holder + '.Value.V', iden + 'var ' + names[1] + ' map[string]any = ' + holder + '.Value.P' ]).join ('\n');
-    };
+    });
     // `[ a, b ] = await this.m (..)` into existing locals (boxed slot 0 only: the target is any already)
-    const printAssign = goTranspiler.printCustomBinaryExpressionIfAny;
-    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+    goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (printAssign, node, identation) {
         const left = node?.left;
         const call = ((left?.kind === SyntaxKind.ArrayLiteralExpression) && (node.operatorToken?.kind === SyntaxKind.EqualsToken) && (left.elements.length === 2)
             && left.elements.every ((e) => ts.isIdentifier (e)) && (ts.isExpressionStatement (node.parent))) ? ccxtGoAsyncVenuePairAwait (this, node.right) : undefined;
@@ -11915,10 +11901,9 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         const iden = this.getIden (identation);
         lines[0] = lines[0].trimStart ();
         return lines.concat ([ iden + left.elements[0].text + ' = ' + holder + '.Value.V', iden + left.elements[1].text + ' = ' + holder + '.Value.P' ]).join ('\n');
-    };
+    });
     // a holder's `h[0]` / `h[1]`
-    const printElement = goTranspiler.printElementAccessExpression;
-    goTranspiler.printElementAccessExpression = function (node, ...rest) {
+    goInstAround (goTranspiler, 'printElementAccessExpression', function (printElement, node, ...rest) {
         const index = (node?.argumentExpression?.kind === SyntaxKind.NumericLiteral) ? node.argumentExpression.text : undefined;
         const declaration = ((index === '0') || (index === '1')) && (node.expression?.kind === SyntaxKind.Identifier) ? ccxtGoParamDeclarationOf (this, node.expression) : undefined;
         if ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
@@ -11926,10 +11911,9 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
             return declaration.name.text + '.Value.' + ((index === '0') ? 'V' : 'P');
         }
         return printElement.call (this, node, ...rest);
-    };
+    });
     // the int64 slot is never nil: `x === undefined` is `false` (what IsEqual(int64, nil) answers), `!==` is `true`
-    const printCustom = goTranspiler.printCustomBinaryExpressionIfAny;
-    goTranspiler.printCustomBinaryExpressionIfAny = function (node, identation) {
+    goInstAround (goTranspiler, 'printCustomBinaryExpressionIfAny', function (printCustom, node, identation) {
         const op = node?.operatorToken?.kind;
         const eq = (op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsToken);
         const ne = (op === SyntaxKind.ExclamationEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken);
@@ -11939,9 +11923,8 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
             return eq ? 'false' : 'true';
         }
         return printCustom.call (this, node, identation);
-    };
-    const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
-    goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
+    });
+    goInstAround (goTranspiler, 'goDeclaredTypeOfIdentifier', function (shippedDeclared, node) {
         const known = shippedDeclared.call (this, node);
         // a `string` pair slot is never nil, whatever the tuple element rule answered
         if ((known === '*string') && (ccxtGoAsyncVenuePairBinding (this, node) === 0) && (ccxtGoAsyncVenuePairBindingSlot0 (this, node) === 'string')) {
@@ -11953,7 +11936,7 @@ function installCcxtGoAsyncVenuePairs (goTranspiler) {
         const slot = ccxtGoAsyncVenuePairBinding (this, node);
         const slot0 = (slot === 0) ? ccxtGoAsyncVenuePairBindingSlot0 (this, node) : undefined;
         return (slot === 0) ? ((slot0 === 'any') ? undefined : slot0) : ((slot === 1) ? 'map[string]any' : ccxtGoAsyncVenuePairHolderLocal (this, node));
-    };
+    });
 }
 
 // A ts/src venue method annotated `[ Str|string, Str|string ]` whose every own return is a two-element literal, and every
@@ -12051,8 +12034,7 @@ function ccxtGoVenueStrPairElement (goTranspiler, node) {
 
 function installCcxtGoVenueStringPairs (goTranspiler) {
     goInstRewrite (goTranspiler, '__ccxtGoVenueStringPairsInstalled', 'printFunctionType', function (printed, node) { return ccxtGoVenueStrPairOf (node) ? '(*string, *string)' : printed; });
-    const printReturn = goTranspiler.printReturnStatement;
-    goTranspiler.printReturnStatement = function (node, identation) {
+    goInstAround (goTranspiler, 'printReturnStatement', function (printReturn, node, identation) {
         const printed = printReturn.call (this, node, identation);
         let method = node?.parent;
         while ((method !== undefined) && !ts.isFunctionLike (method)) {
@@ -12063,9 +12045,8 @@ function installCcxtGoVenueStringPairs (goTranspiler) {
             return printed;
         }
         return m[1] + node.expression.elements.map ((e) => ccxtGoVenueStrSlot (this, e)).join (', ') + m[3];
-    };
-    const printDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    });
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (printDeclaration, node, identation) {
         const declaration = node?.declarations?.[0];
         const names = declaration?.name?.elements;
         if ((node?.declarations?.length !== 1) || (declaration.name.kind !== SyntaxKind.ArrayBindingPattern) || (names.length !== 2)
@@ -12074,10 +12055,9 @@ function installCcxtGoVenueStringPairs (goTranspiler) {
         }
         const call = String (this.printNode (declaration.initializer, 0)).trim ();
         return this.getIden (identation) + names.map ((e) => String (this.printNode (e.name, 0)).trim ()).join (', ') + ' := ' + call;
-    };
-    const shippedDeclared = goTranspiler.goDeclaredTypeOfIdentifier;
+    });
     const outerDeclaredCache = new WeakMap<any, string | undefined> ();
-    goTranspiler.goDeclaredTypeOfIdentifier = function (node) {
+    goInstAround (goTranspiler, 'goDeclaredTypeOfIdentifier', function (shippedDeclared, node) {
         if ((node === undefined) || (node === null) || (node.kind !== SyntaxKind.Identifier)) {
             return undefined;
         }
@@ -12098,7 +12078,7 @@ function installCcxtGoVenueStringPairs (goTranspiler) {
             outerDeclaredCache.set (node, result);
         }
         return result;
-    };
+    });
 }
 
 // map declarations retyped after printing are invisible to the declared-type table: the outermost
@@ -12106,8 +12086,7 @@ function installCcxtGoVenueStringPairs (goTranspiler) {
 const CCXT_GO_PRINTED_MAP_DECLARATIONS = new WeakSet ();
 
 function installCcxtGoPrintedMapDeclarations (goTranspiler) {
-    const shipped = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node, identation) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (shipped, node, identation) {
         const printed = shipped.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if ((typeof printed === 'string') && (node?.declarations?.length === 1) && (declaration.name?.kind === SyntaxKind.Identifier)
@@ -12115,7 +12094,7 @@ function installCcxtGoPrintedMapDeclarations (goTranspiler) {
             CCXT_GO_PRINTED_MAP_DECLARATIONS.add (declaration);
         }
         return printed;
-    };
+    });
     goInstRewrite (goTranspiler, '', 'goIndexableTypeOf', function (this: any, known, node, printed) {
         if ((known !== undefined) || (node?.kind !== SyntaxKind.Identifier)) {
             return known;
@@ -12206,8 +12185,7 @@ function selfMapWriteTypedLocal (goTranspiler, node) {
 function goWrapMapLocalRebind (goTranspiler, classify, callee, rebinds) {
     goOrLocalIsSafeToType (goTranspiler, (go, scope, declaration, varName, goType) => (goType === 'map[string]any')
         && goMapLocalWritesAreSafe (go, scope, declaration, varName, (right) => classify (go, right, declaration)));
-    const shippedBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (node, identation) {
+    goInstAround (goTranspiler, 'printBinaryExpression', function (shippedBinary, node, identation) {
         // syntactic test first: a type query on every assignment reorders the printer's type cache
         const right = node?.right;
         if ((node?.operatorToken?.kind === SyntaxKind.EqualsToken) && (node.left?.kind === SyntaxKind.Identifier)
@@ -12216,7 +12194,7 @@ function goWrapMapLocalRebind (goTranspiler, classify, callee, rebinds) {
             return this.printNode (node.left, 0) + ' = MapTyped(' + this.printNode (right, identation).trim () + ')';
         }
         return shippedBinary.call (this, node, identation);
-    };
+    });
 }
 
 // `: Dict[]` / `: any[]` returns print `[]any` (the List mapping) on methods no related file redeclares
@@ -12338,14 +12316,13 @@ function goStrNilDeclaredJoinType (goTranspiler, declaration) {
 // `(x as List).length` / `(x)[i]`: a type assertion or parentheses print as the bare operand, so the
 // list-read verdict of the wrapped local is the verdict of the outermost wrapper
 function installCcxtGoSafeListWrappedReads (goTranspiler) {
-    const shipped = goTranspiler.goSafeListUseReadsTheList;
-    goTranspiler.goSafeListUseReadsTheList = function (node) {
+    goInstAround (goTranspiler, 'goSafeListUseReadsTheList', function (shipped, node) {
         let outer = node;
         while ((outer.parent?.kind === SyntaxKind.AsExpression) || (outer.parent?.kind === SyntaxKind.ParenthesizedExpression)) {
             outer = outer.parent;
         }
         return shipped.call (this, outer);
-    };
+    });
 }
 
 // Base SafeBalance writes free/used/total into its argument and returns that same value: a self-map-write-typed
@@ -12672,7 +12649,6 @@ function objectKeysElementArg (argText, fileText, at) {
 
 let goStrPtrProvingDepth = 0;
 function installStringPtrParams (goTranspiler) {
-    const upstreamSites = goTranspiler.goParameterCallSitesPassType;
     const upstreamArgType = goTranspiler.goPrintedArgType;
     // the upstream proof with one extra accepted argument shape: a proven Go `string`
     // (same file, by the printer's own type) or a string literal (other files, by text)
@@ -12705,15 +12681,14 @@ function installStringPtrParams (goTranspiler) {
         }
         return true;
     };
-    goTranspiler.goParameterCallSitesPassType = function (fn, index, goType) {
+    goInstAround (goTranspiler, 'goParameterCallSitesPassType', function (upstreamSites, fn, index, goType) {
         if (upstreamSites.call (this, fn, index, goType)) {
             return true;
         }
         return (goType === '*string') && widenedSites (this, fn, index);
-    };
+    });
     let proving = 0;
-    const upstreamParamType = goTranspiler.goNativeParameterType;
-    goTranspiler.goNativeParameterType = function (param) {
+    goInstAround (goTranspiler, 'goNativeParameterType', function (upstreamParamType, param) {
         proving++;
         goStrPtrProvingDepth++;
         try {
@@ -12722,7 +12697,7 @@ function installStringPtrParams (goTranspiler) {
             proving--;
             goStrPtrProvingDepth--;
         }
-    };
+    });
     const probeParam = (self, param) => {
         const caches = [ self.goNativeParameterTypeCache, self.goDeclaredTypeCache ].filter ((c) => c instanceof Map);
         if ((proving === 0) || (caches.length === 0) || self.goNativeParameterTypeCache?.has?.(param)) {
@@ -13630,8 +13605,7 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
         return;
     }
     const slots = new TupleSlots (goTranspiler);
-    const printDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node: any, identation: number) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (printDeclaration, node: any, identation: number) {
         const printed = printDeclaration.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if ((typeof printed !== 'string') || (declaration?.name?.kind !== SK.ArrayBindingPattern)
@@ -13641,7 +13615,7 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
         const holder = declaration.name.elements.map ((e: any) => ((e.name === undefined) ? '' : this.printNode (e.name, 0))).join ('') + 'Variable';
         if (!slots.holderIsUnique (node.parent ?? node, holder)) { return printed; }
         return slots.rewrite (printed, holder, declaration.initializer, node);
-    };
+    });
     const printBinary = goTranspiler.printCustomBinaryExpressionIfAny;
     if (typeof printBinary === 'function') {
         goTranspiler.printCustomBinaryExpressionIfAny = function (node: any, identation: number) {
@@ -13688,8 +13662,7 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
         tupleLocals.set (declaration, result);
         return result;
     };
-    const printTupleDeclaration = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (node: any, identation: number) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (printTupleDeclaration, node: any, identation: number) {
         const printed = printTupleDeclaration.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if ((typeof printed !== 'string') || (node?.declarations?.length !== 1) || (tupleLocalInfo (this, declaration) === undefined)) {
@@ -13698,9 +13671,8 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
         const name = this.printNode (declaration.name, 0);
         const m = new RegExp ('^(\\s*var ' + name + ' )any( = this\\.)').exec (printed);
         return (m === null) ? printed : printed.replace (m[0], m[1] + '[]any' + m[2]);
-    };
-    const printTupleRead = goTranspiler.printElementAccessExpression;
-    goTranspiler.printElementAccessExpression = function (node: any, identation: number) {
+    });
+    goInstAround (goTranspiler, 'printElementAccessExpression', function (printTupleRead, node: any, identation: number) {
         const base = node?.expression;
         if ((base?.kind === SK.Identifier) && (node.argumentExpression?.kind === SK.NumericLiteral)) {
             const info = tupleLocalInfo (this, this.goDeclarationOfIdentifier (base));
@@ -13709,7 +13681,7 @@ export function installCcxtGoTupleSlotReads (goTranspiler: any): void {
             }
         }
         return printTupleRead.call (this, node, identation);
-    };
+    });
 }
 
 // An `any`-declared parameter of an exchange-local, non-async, non-parse*/handle* method takes the one
@@ -14762,6 +14734,15 @@ function goAttachPre (target: any, method: string, fn: (this: any, ...args: any[
     wrapped.__goChainPre = list;
     target[method] = wrapped;
 }
+// wraps the instance's current `method`; `fn` receives that previous function first
+function goInstAround (goTranspiler: any, method: string, fn: (this: any, prev: any, ...args: any[]) => any) {
+    const prev: any = goTranspiler[method];
+    goTranspiler[method] = function (this: any, a?: any, b?: any, c?: any, d?: any) {
+        const n = arguments.length;
+        return n === 2 ? fn.call (this, prev, a, b) : n === 1 ? fn.call (this, prev, a) : n === 3 ? fn.call (this, prev, a, b, c)
+            : n === 0 ? fn.call (this, prev) : n === 4 ? fn.call (this, prev, a, b, c, d) : fn.call (this, prev, ...Array.from (arguments));
+    };
+}
 function goInstOr (goTranspiler: any, flag: string, method: string, fn: (this: any, ...args: any[]) => boolean) {
     if ((goTranspiler !== undefined) && (!flag || goInstallOnce (goTranspiler, flag, method))) { goAttachOr (goTranspiler, method, fn); }
 }
@@ -14785,30 +14766,26 @@ function goTextDigestHashCall (node: any): boolean {
 
 export function installCcxtGoSignTyping (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goSignTypingInstalled')) { return; }
-    const printLiteral = goTranspiler.printArrayLiteralExpression;
-    goTranspiler.printArrayLiteralExpression = function (this: any, node: any, ...rest: any[]) {
+    goInstAround (goTranspiler, 'printArrayLiteralExpression', function (this: any, printLiteral, node: any, ...rest: any[]) {
         if (signApiParameter (node?.parent)) { this.goSliceLiteralTypes.set (node, '[]string'); }
         return printLiteral.call (this, node, ...rest);
-    };
+    });
     // `api[0]` on the typed slice is Go's own bounds-checked index, never the GetValue closure
-    const printElement = goTranspiler.printElementAccessExpression;
-    goTranspiler.printElementAccessExpression = function (this: any, node: any, ...rest: any[]) {
+    goInstAround (goTranspiler, 'printElementAccessExpression', function (this: any, printElement, node: any, ...rest: any[]) {
         if (signApiElement (this, node) && !this.isGoElementAccessAssignmentTarget (node)) {
             return node.expression.text + '[' + node.argumentExpression.text + ']';
         }
         return printElement.call (this, node, ...rest);
-    };
+    });
     // the element of the typed slice is a Go string, so `const apiName = api[0]` declares a string
-    const initType = goTranspiler.goTypeOfInitializer;
-    goTranspiler.goTypeOfInitializer = function (this: any, node: any, printed: string) {
+    goInstAround (goTranspiler, 'goTypeOfInitializer', function (this: any, initType, node: any, printed: string) {
         if (signApiElement (this, node)) { return 'string'; }
         return initType.call (this, node, printed);
-    };
+    });
     // a text digest `this.hash (x, h, 'hex'|'base64')` is the Go string HashString answers (exchange_crypto.go)
-    const digestType = goTranspiler.goTypeOfInitializer;
-    goTranspiler.goTypeOfInitializer = function (this: any, node: any, printed: string) {
+    goInstAround (goTranspiler, 'goTypeOfInitializer', function (this: any, digestType, node: any, printed: string) {
         return goTextDigestHashCall (node) ? 'string' : digestType.call (this, node, printed);
-    };
+    });
     goInstRewrite (goTranspiler, '', 'goGetArgParameterType', function (this: any, answer, decl: any) {
         if ((answer !== undefined) || !signApiParameter (decl)) { return answer; }
         if (!this.goLocalIsSafeToType (decl.parent.body, decl, decl.name.text, '[]string')) { return undefined; }
@@ -14860,15 +14837,13 @@ export function installFmGo5G01 (goTranspiler: any) {
         const printed = go.printNode (access.expression, 0);
         return printed;
     };
-    const printAccess = goTranspiler.printPropertyAccessExpression;
-    goTranspiler.printPropertyAccessExpression = function (this: any, node: any, identation: number) {
+    goInstAround (goTranspiler, 'printPropertyAccessExpression', function (this: any, printAccess, node: any, identation: number) {
         if (clientSubscriptions (this, node) !== undefined) {
             return owner (this, node) + '.SubscriptionsSnapshot()';
         }
         return printAccess.call (this, node, identation);
-    };
-    const printElement = goTranspiler.printElementAccessExpression;
-    goTranspiler.printElementAccessExpression = function (this: any, node: any, ...rest: any[]) {
+    });
+    goInstAround (goTranspiler, 'printElementAccessExpression', function (this: any, printElement, node: any, ...rest: any[]) {
         if (this.isGoElementAccessAssignmentTarget (node)) {
             return printElement.call (this, node, ...rest);
         }
@@ -14899,18 +14874,16 @@ export function installFmGo5G01 (goTranspiler: any) {
             acc = this.ELEMENT_ACCESS_WRAPPER_OPEN + acc + ', ' + this.printNode (keys[i], 0) + this.ELEMENT_ACCESS_WRAPPER_CLOSE;
         }
         return acc;
-    };
-    const printDelete = goTranspiler.printDeleteExpression;
-    goTranspiler.printDeleteExpression = function (this: any, node: any, identation: number) {
+    });
+    goInstAround (goTranspiler, 'printDeleteExpression', function (this: any, printDelete, node: any, identation: number) {
         const target = node.expression;
         const table = (target?.kind === SK.ElementAccessExpression) ? clientSubscriptions (this, target.expression) : undefined;
         if (table !== undefined) {
             return owner (this, table) + '.SubscriptionDel(' + this.printNode (target.argumentExpression, 0) + ')';
         }
         return printDelete.call (this, node, identation);
-    };
-    const printBinary = goTranspiler.printBinaryExpression;
-    goTranspiler.printBinaryExpression = function (this: any, node: any, identation: number) {
+    });
+    goInstAround (goTranspiler, 'printBinaryExpression', function (this: any, printBinary, node: any, identation: number) {
         const op = node.operatorToken?.kind;
         if (op === SK.InKeyword) {
             const table = clientSubscriptions (this, node.right);
@@ -14939,7 +14912,7 @@ export function installFmGo5G01 (goTranspiler: any) {
             }
         }
         return printBinary.call (this, node, identation);
-    };
+    });
     const tableCall = (original: any, suffix: string) => function (this: any, node: any, identation: number, parsedArg: any = undefined) {
         const table = clientSubscriptions (this, node.arguments?.[0]);
         if (table !== undefined) {
@@ -15007,8 +14980,7 @@ function negativeIntegerLiteral (node: any) {
 
 export function installFmGo5G04 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goNegativeLiteralsInstalled', 'printInlineEquality')) { return; }
-    const upstream = goTranspiler.printInlineEquality;
-    goTranspiler.printInlineEquality = function (this: any, left: any, right: any, leftText: string, rightText: string, isEq: boolean) {
+    goInstAround (goTranspiler, 'printInlineEquality', function (this: any, upstream, left: any, right: any, leftText: string, rightText: string, isEq: boolean) {
         const op = isEq ? [ '==', '!=' ] : [ '!=', '==' ];
         // 1. nil test of a base field
         if (ccxtGoIsNilLiteral (right) && nilTestableBaseField (this, left)) {
@@ -15036,7 +15008,7 @@ export function installFmGo5G04 (goTranspiler: any) {
                 : `(${ptrText} == nil || ${lhs} != ${rhs})`;
         }
         return upstream.call (this, left, right, leftText, rightText, isEq);
-    };
+    });
 }
 
 // ---- tuple helper first-result binding ----
@@ -15119,8 +15091,7 @@ function readerOf (go: any, holderDeclaration: any) {
 
 export function installFmGo5GP08 (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goPairReadsInstalled', 'printVariableDeclarationList')) { return; }
-    const upstream = goTranspiler.printVariableDeclarationList;
-    goTranspiler.printVariableDeclarationList = function (this: any, node: any, identation: number) {
+    goInstAround (goTranspiler, 'printVariableDeclarationList', function (this: any, upstream, node: any, identation: number) {
         const printed = upstream.call (this, node, identation);
         const declaration = node?.declarations?.[0];
         if ((typeof printed !== 'string') || (node.declarations.length !== 1) || (node.parent?.kind !== SyntaxKind.FirstStatement)) {
@@ -15138,7 +15109,7 @@ export function installFmGo5GP08 (goTranspiler: any) {
         const folded = this.goPairReadShape (declaration, source, identation);
         if (folded === undefined) { return printed; }
         return source.held ? ABSORBED : folded;
-    };
+    });
     goInstRewrite (goTranspiler, '', 'printSourceFileStatements', function (this: any, out, node: any, identation: number) {
         return (typeof out === 'string' && out.includes (ABSORBED)) ? out.split (ABSORBED + '\n').join ('').split (ABSORBED).join ('') : out;
     });
@@ -15384,8 +15355,7 @@ export function installFmGo5OG02 (goTranspiler: any) {
     installGoGuardedTypedArgHoist (goTranspiler);
     installGoGuardedRowSplit (goTranspiler);
 
-    const printBlock = goTranspiler.printBlock;
-    goTranspiler.printBlock = function (this: any, node: any, identation: number, chainBlock = false) {
+    goInstAround (goTranspiler, 'printBlock', function (this: any, printBlock, node: any, identation: number, chainBlock = false) {
         const plan = blockPlan (this, node);
         if (plan === undefined) {
             return printBlock.call (this, node, identation, chainBlock);
@@ -15416,20 +15386,18 @@ export function installFmGo5OG02 (goTranspiler: any) {
             }
         }
         return this.getBlockOpen (identation) + parts.join ('\n') + this.getBlockClose (identation, chainBlock);
-    };
+    });
 
     // the base incrementingNonce answers an int64 (Nonce () and the owner's counter are int64 end to end)
-    const printFunctionType = goTranspiler.printFunctionType;
-    goTranspiler.printFunctionType = function (this: any, node: any) {
+    goInstAround (goTranspiler, 'printFunctionType', function (this: any, printFunctionType, node: any) {
         if (nonceShape (this, node) !== undefined) {
             return 'int64';
         }
         return printFunctionType.call (this, node);
-    };
+    });
 
     // `this.last_http_response` is the book owner's field: a read through `this` is the owner's snapshot
-    const printAccess = goTranspiler.printPropertyAccessExpression;
-    goTranspiler.printPropertyAccessExpression = function (this: any, node: any, identation: number) {
+    goInstAround (goTranspiler, 'printPropertyAccessExpression', function (this: any, printAccess, node: any, identation: number) {
         if ((node?.name?.text === 'last_http_response') && (baseMemberDecl (this, node, 'last_http_response') !== undefined)) {
             const parent = node.parent;
             const written = (parent?.kind === SK.BinaryExpression) && (parent.left === node) && (parent.operatorToken?.kind === SK.EqualsToken);
@@ -15438,7 +15406,7 @@ export function installFmGo5OG02 (goTranspiler: any) {
             }
         }
         return printAccess.call (this, node, identation);
-    };
+    });
 }
 
 // ---- owned tables ----
@@ -15468,14 +15436,13 @@ function isWrapperCall (node: any, name: string, args: number) {
 
 export function installRfGo5OwnedTables (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'rfGo5OwnedTablesInstalled')) { return; }
-    const printAccess = goTranspiler.printPropertyAccessExpression;
-    goTranspiler.printPropertyAccessExpression = function (this: any, node: any, identation: number) {
+    goInstAround (goTranspiler, 'printPropertyAccessExpression', function (this: any, printAccess, node: any, identation: number) {
         const table = ownedTable (this, node);
         if (table !== undefined) {
             return this.printNode (node.expression, 0) + '.' + table.read + '()';
         }
         return printAccess.call (this, node, identation);
-    };
+    });
     const printBinary = goTranspiler.printBinaryExpression;
     goTranspiler.printBinaryExpression = function (this: any, node: any, identation: number) {
         const table = (node.operatorToken?.kind === SK.EqualsToken) ? ownedTable (this, node.left) : undefined;
@@ -15629,10 +15596,9 @@ function goFeeTierLiteral (node: any): string | undefined {
 
 export function installCcxtGoFeeTierLiterals (goTranspiler: any) {
     if (!goInstallOnce (goTranspiler, 'goFeeTierLiteralsInstalled')) { return; }
-    const printCall = goTranspiler.printCallExpression;
-    goTranspiler.printCallExpression = function (this: any, node: any, ...rest: any[]) {
+    goInstAround (goTranspiler, 'printCallExpression', function (this: any, printCall, node: any, ...rest: any[]) {
         return goFeeTierLiteral (node) ?? printCall.call (this, node, ...rest);
-    };
+    });
 }
 
 import { NodeFlags } from 'typescript/unstable/ast';
@@ -16354,51 +16320,48 @@ const GO_TS_SRC_MAP_PRODUCERS = goThisCallPatterns([ 'extend', 'deepExtend', 'ke
 function goBalancedArgs (text: string, open: number, opens: string, closes: string): string[] | undefined {
     const args: string[] = [];
     let depth = 0;
-    let current = '';
-    let quote: string | undefined;
-    for (let i = open; i < text.length; i++) {
+    // `parts` holds slices of the current argument split around skipped `//` comments
+    let parts = '';
+    let start = open;
+    const n = text.length;
+    for (let i = open; i < n; i++) {
+        const c = text.charCodeAt (i);
+        if ((c === 34) || (c === 39) || (c === 96)) { // quote: skip to its unescaped close
+            for (i++; (i < n) && (text.charCodeAt (i) !== c); i++) {
+                if (text.charCodeAt (i) === 92) { i++; }
+            }
+            if (i >= n) { return undefined; }
+            continue;
+        }
+        if ((c === 47) && (text.charCodeAt (i + 1) === 47)) {
+            parts += text.slice (start, i);
+            while ((i < n) && (text.charCodeAt (i) !== 10)) { i++; }
+            start = i + 1; // the newline is dropped with the comment
+            continue;
+        }
         const ch = text[i];
-        if (quote !== undefined) {
-            current += ch;
-            if (ch === '\\') {
-                current += text[i + 1] ?? '';
-                i++;
-                continue;
-            }
-            if (ch === quote) {
-                quote = undefined;
-            }
-            continue;
-        }
-        if ((ch === '"') || (ch === "'") || (ch === '`')) {
-            quote = ch;
-            current += ch;
-            continue;
-        }
-        if ((ch === '/') && (text[i + 1] === '/')) {
-            while ((i < text.length) && (text[i] !== '\n')) { i++; }
-            continue;
-        }
         if (opens.includes (ch)) {
             depth++;
-            if (depth > 1) { current += ch; }
+            if (depth <= 1) { // an outermost opener is not argument text
+                parts += text.slice (start, i);
+                start = i + 1;
+            }
             continue;
         }
         if (closes.includes (ch)) {
             depth--;
             if (depth === 0) {
-                if (current.trim().length > 0) { args.push (current.trim ()); }
+                const last = (parts + text.slice (start, i)).trim ();
+                if (last.length > 0) { args.push (last); }
                 return args;
             }
-            current += ch;
             continue;
         }
-        if ((ch === ',') && (depth === 1)) {
-            args.push (current.trim ());
-            current = '';
-            continue;
+        if ((c === 44) && (depth === 1)) {
+            args.push ((parts + text.slice (start, i)).trim ());
+            parts = '';
+            start = i + 1;
         }
-        current += ch;
     }
     return undefined;
 }
