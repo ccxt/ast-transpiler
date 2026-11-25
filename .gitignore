@@ -6,3 +6,5 @@ out/
 target/
 tests/integration/cpp/test
 tests/integration/cpp/test.dSYM/
+tests/files/tmp-*
+*.orig

@@ -158,7 +158,7 @@ partial class Test
     public virtual void funcWithParams(object a = null, object parameters = null)
     {
         parameters ??= new Dictionary<string, object>();
-        if (((a is IList<object>) || (a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))
+        if (((a is IList<object>) || (a is not null && a.GetType().IsGenericType && a.GetType().GetGenericTypeDefinition().IsAssignableFrom(typeof(List<>)))))
         {
             Console.WriteLine(getArrayLength(a));
         }

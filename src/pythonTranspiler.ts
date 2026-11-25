@@ -1,6 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { regexAll } from "./utils.js";
 import { SyntaxKind } from "typescript/unstable/ast";
+import { isCallExpression, isElementAccessExpression, isIdentifier, isNumericLiteral, isPropertyAccessExpression } from "typescript/unstable/ast/is";
 
 const parserConfig = {
     'STATIC_TOKEN': '', // to do static decorator
@@ -95,6 +96,12 @@ export class PythonTranspiler extends BaseTranspiler {
             // 'length',
             // 'toString',
         ];
+    }
+
+    printArrayBindingPattern(node, identation) {
+        // a skipped slot (`[ , x ]`) binds `_`: an empty slot is invalid Python
+        const elements = node.elements.map((e) => (e.name === undefined ? '_' : this.printNode(e.name, identation))).join(", ");
+        return this.getIden(identation) + this.ARRAY_OPENING_TOKEN + elements + this.ARRAY_CLOSING_TOKEN;
     }
 
     printArrayIsArrayCall(node, identation, parsedArg = undefined) {
@@ -235,7 +242,13 @@ export class PythonTranspiler extends BaseTranspiler {
     printForStatement(node, identation) {
         const varName = node.initializer.declarations[0].name.text;
         const initValue = this.printNode(node.initializer.declarations[0].initializer, 0);
-        const roofValue = this.printNode(node.condition.right,0);
+        let roofValue = this.printNode(node.condition.right,0);
+        // `i <= n` is inclusive: range() stops before its end, so print `n + 1`
+        if (node.condition.operatorToken?.kind === SyntaxKind.LessThanEqualsToken) {
+            const r = node.condition.right;
+            const simple = isIdentifier(r) || isNumericLiteral(r) || isPropertyAccessExpression(r) || isCallExpression(r) || isElementAccessExpression(r);
+            roofValue = (simple ? roofValue : "(" + roofValue + ")") + " + 1";
+        }
 
         const forStm =  this.getIden(identation) + this.FOR_TOKEN +  " " + varName + " in range(" + initValue + ", " + roofValue + "):\n" + node.statement.statements.map(st => this.printNode(st, identation+1)).join("\n");
         return this.printNodeCommentsIfAny(node, identation, forStm);

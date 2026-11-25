@@ -163,6 +163,8 @@ declare class BaseTranspiler {
     getSrc(): SourceFile;
     getChecker(): Checker;
     hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean;
+    annotatedMapRowSource(declaration: any): any;
+    annotatedMapRowUse(node: any): any;
     checkerOrUndefined(): Checker | undefined;
     getProgram(): Program;
     initOperators(): void;
@@ -237,6 +239,7 @@ declare class BaseTranspiler {
     printCallExpression(node: any, identation: any): any;
     /** `callee(args)` of a plain call; a language may name the callee's path from the node. */
     printCallHead(node: any, parsedExpression: string, parsedArgs: string): string;
+    isOverloadSignature(member: any): boolean;
     printClassBody(node: any, identation: any): any;
     getCustomClassName(node: any): any;
     getClassModifier(node: any): string;

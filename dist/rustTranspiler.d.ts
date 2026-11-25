@@ -1,5 +1,5 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type BinaryExpression, type BindingElement, type Block, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
+import { type BinaryExpression, type BindingElement, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
 import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
 /** A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no
  *  dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it can vanish or change mid-scan). */
@@ -69,8 +69,8 @@ interface RustScopeIndex {
     end: number[];
     byName: Map<string, number[]> | undefined;
 }
-export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'other';
-export type RustDispatchReturnKind = 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'other';
+export type RustDispatchParamKind = 'value' | 'slice' | 'map' | 'strvec' | 'flag' | 'str' | 'optstr' | 'f64' | 'optf64' | 'opti64' | 'i64' | 'optstrvec' | 'strvecvec' | 'params' | 'orderreqs' | 'dict' | 'list' | 'optdict' | 'optlist' | 'optmarket' | 'optcurrency' | 'side' | 'book' | 'vlist' | 'mapref' | 'optmapref' | 'dictrows' | 'client' | 'dictref' | 'mutclient' | 'other';
+export type RustDispatchReturnKind = 'optlist' | 'value' | 'void' | 'typed' | 'ostr' | 'oint' | 'keptostr' | 'keptint' | 'keptstr' | 'keptbool' | 'keptobool' | 'keptstruct' | 'int' | 'string' | 'bool' | 'dict' | 'list' | 'optdict' | 'struct' | 'dictpair' | 'other';
 export interface RustMethodSignature {
     file: any;
     name: string;
@@ -98,6 +98,10 @@ export declare const rustDispatch: {
     slotParams: (args: string[]) => string;
     /** The `sign` slot's `path` (every declaration of the override group spells `path: string`) is a lent `&str`. */
     isSlotStr: (arg: string, i: number) => boolean;
+    isSlotInt: (arg: string, i: number) => boolean;
+    isSlotOptStr: (arg: string, i: number) => boolean;
+    isSlotMapRef: (arg: string, i: number) => boolean;
+    isSlotOptMapRef: (arg: string, i: number) => boolean;
     /** A slot written `name: type` carries its own parameter type (printed as is); `slotName` is its argument. */
     isSlotTyped: (slot: string) => boolean;
     slotName: (slot: string) => string;
@@ -242,7 +246,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printNativeEqualityComparison(left: any, right: any, op: any): string;
     typeOfNodeIfAny(node: Node): Type | undefined;
     isValueLengthType(type: Type | undefined): boolean;
-    printArrayLength(node: any, identation: any, leftExpr?: any): string;
+    printArrayLength(node: any, identation: any, leftExpr?: any): any;
     private rustNativeLengths;
     printNativeLength(node: any, place: string): string;
     /** `orderbook['bids']` / `orderbook.asks` on an `OrderBook`-typed receiver, or a
@@ -302,6 +306,23 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  helper. A `[ x, params ] = this.handle…(…)` tuple re-assigns the
      *  hand-written handler's own dict arguments. */
     rustInsertReceiverBuildsPlainDict(declaration: VariableDeclaration): boolean;
+    /** `const row = this.safeDict (this.<plain field>, k, {})`, never rebound: the row of a field the base never
+     *  tags, or the fresh plain literal, so a book-meta key needs no `__book_id` guard. */
+    rustPlainFieldRowLocal(declaration: VariableDeclaration): boolean;
+    /** A REST-tier local annotated with a map type, initialised by a base `extend` / `deepExtend` / `clone` copy and rebound only
+     *  to such copies or plain literals: a fresh untagged map on every path, so the helper's tag hooks are dead and the native
+     *  insert is the whole write. */
+    rustDeclaredFreshDictLocal(declaration: VariableDeclaration): boolean;
+    /** A literal-key write on a boxed (`Value`-printed) rustDeclaredFreshDictLocal: the native insert receiver. A dynamic key
+     *  would retype the key local and add a clone, so it keeps the helper. */
+    rustFreshDictInsertReceiver(ident: any, keyNode: any): {
+        text: string;
+        isField: boolean;
+        plain: boolean;
+        nameNode: any;
+    } | undefined;
+    static readonly RUST_FRESH_DICT_COPIES: Set<string>;
+    rustFreshDictProducer(node: any): boolean;
     /** An object literal with no runtime tag key — the transpiler built it, so
      *  it is a fresh plain `Value::Map` on every path. */
     rustPlainDictLiteral(node: Node | undefined): boolean;
@@ -345,7 +366,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A string-literal operand of a `format!` concat prints as the `&str` literal itself:
      *  `Display` of `Value::Str(s)` is `s`, so the text is identical and the box is gone. */
     rustConcatLiteralText(node: any, text: string, other: any): string;
-    printNativeStringConcat(leftText: string, rightText: string): string;
     rustFormatConcatText(leftText: string, rightText: string): string;
     /** ral-57x: the `format!(..)` a `+` / `.toString()` node took at its latest print (the printer's own arm decision,
      *  recorded where the box is built), cleared whenever that node is printed again; never read back from printed text. */
@@ -361,16 +381,24 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_TYPEOF_HELPERS;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
     printBinaryExpression(node: any, identation: any): any;
+    /** The boxed own-container call converted straight back (`Value::Dict(c).into_dict()`) is the call `c` itself. */
+    rustOwnContainerUnwrap(init: any, text: string): string;
     printDateNowCall(node: any, identation: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
-    printVariableDeclarationList(node: any, identation: any): string;
+    printVariableDeclarationList(node: any, identation: any): any;
+    printVariableDeclarationListInner(node: any, identation: any): any;
     /** ral-57e: `const lvl = side[i]` off an order-book side handle (`Side::level` hands out the stored level, an `Arr` built
      *  by `storeArray` / `store`, or `Null` out of range), read only as `const parts = lvl[K]` (numeric literal K) where
      *  `parts` is itself read only at numeric literal keys. `lvl` holds the list (`into_list()`: the same `Arr`, an empty
      *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
      *  `get_value` cloned, `Null` where it answered `Null`. */
     printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined;
+    /** `const parts = lvl[K]` off a ral-57e side level: printed as a `&Value` borrow, which is `Copy` (no clone to hand it on). */
+    rust57eSidePartLocal(declaration: any): boolean;
+    /** A map row `xs[i]` (i64 counter) of a typed `List` local reads through the base `safe_dict_t`, the form `safeDict (xs, i)`
+     *  prints: the element's map, or the empty map for a missing / non-map element, as `.into_dict()` of the slice read answered. */
+    rustDictRowReaderText(declaration: any, read: string): string | undefined;
     /** ral-58e: `const e = xs[k]` where `xs` is a typed `Vec<Value>` local of the same function (rustVecLocalDeclarationOf)
      *  that no earlier container arm claims (read bearer, opt list, lent list, param shadow), so its element read is the
      *  slice read `xs.get(K).cloned().unwrap_or(Value::Null)`. When `xs` is only read and every use of `e` is the receiver of
@@ -378,7 +406,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  (`xs.get(K).unwrap_or(&Value::Null)`): the same element, `Null` where the clone was `Null`. Decided on the AST and the
      *  printer's own Vec decision; nothing is read back from printed text. */
     printRust58eBorrowedElement(declaration: any, indent: string, varName: string): string | undefined;
-    rust58eBorrowedElementLocal(declaration: any): boolean;
     /** Which arm of printNativeContainerAccess prints `xs[k]` as a slice read: a read-only list bearer, or a typed Vec local. */
     rust58eBorrowedElementArm(declaration: any): 'bearer' | 'vec' | undefined;
     private rust57eSideLevels;
@@ -387,7 +414,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `const e = x[k]` (one const declarator, identifier receiver, same function). */
     rust57eConstElementOf(declaration: any): boolean;
     /** Every use of the local is the receiver of an rvalue element read at a numeric literal key (no write-back bind). */
-    rust57eLiteralReadOnly(declaration: any): boolean;
+    rust57eLiteralReadOnly(declaration: any, safeStringArg?: boolean): boolean;
+    /** `n` is the first argument of `this.safeString (n, K)` / `this.safeString (n, K, d)` with K a non-negative integer literal. */
+    rust57eSafeStringLiteralRead(n: any): boolean;
     private static readonly RUST_NIL_INT_HELPERS;
     private static readonly RUST_NIL_BOOL_HELPERS;
     private static readonly RUST_NIL_PRECISE_STR;
@@ -587,6 +616,30 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustMethodReferencedAsValue(method: any): boolean;
     private rustValueReferencedMethods;
     rustValueReferenceCensus(file: any): Set<string>;
+    private static readonly RUST_EXCHANGE_FIELD_KINDS;
+    static rustIsBaseExchangeFile(name: string): boolean;
+    /** The base `Exchange` / `BaseExchange` class of ts/src/base/Exchange.ts (or a union with undefined). */
+    rustIsBaseExchangeClassType(type: Type | undefined): boolean;
+    /** A parameter of a base method annotated as the base exchange class whose every use is a read of a known struct field. */
+    rustExchangeParam(param: any): boolean;
+    /** `p.f` / `p['f']` on a base-exchange parameter: the receiver text and the field kind, else undefined. */
+    rustExchangeParamFieldOf(node: any): {
+        field: string;
+        kind: string;
+        receiver: string;
+    } | undefined;
+    /** The field info when `node` reads a field of a parameter printed as `&crate::exchange::Exchange`. */
+    rustExchangeParamRead(node: any): {
+        field: string;
+        kind: string;
+        receiver: string;
+    } | undefined;
+    /** A value read of a base-exchange parameter field: the struct field boxed once (a dict / list shares its handle). */
+    printExchangeParamFieldRead(node: any): string | undefined;
+    /** `p.options[k]` on a base-exchange parameter: the dict entry by the key's text, `Null` when missing. */
+    printExchangeParamDictEntry(node: any): string | undefined;
+    /** `p.f === undefined` and `this.f = p.f` on a base-exchange parameter field: the native test / copy. */
+    printExchangeParamFieldOp(node: any): string | undefined;
     /** Native type text of a parameter in the emitted signature. */
     rustParamType(param: any): string;
     rustBoolParamUseAccepted(node: any): boolean;
@@ -756,6 +809,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Test tier: every non-moving box of the string is a by-value `Value` argument / element of a call (the
      *  harness helpers take `Value`), where the `Value` form printed `x.clone()`: lending there costs that copy. */
     rustTestLendBoxes(declaration: any): boolean;
+    /** `String` locals that key a proven map read through the plain lend rule (rustScalarUseFormOwn). */
+    rustLentStrKeyLocals: Set<any>;
+    /** Some insert-key (`key`) use of the local is not its last use, so a `String` key would be cloned there. */
+    rustStrKeyInsertCopies(declaration: any): boolean;
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
     rustInitKeyLocal(n: any): boolean;
     /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
@@ -772,7 +829,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust66s3ReturnedWholeRead(n: any): boolean;
     /** A local some `return` of a method with a declared string return hands back as-is. */
     rustStrReturnedLocal(declaration: any, scope: any): boolean;
-    private static readonly RUST_COPY_SCALAR_KINDS;
     /** ral-76f: a write `x = p.m(..)` of a string alias `x = p` calls a method on its own source parameter: the typed
      *  write would copy the parameter again (a second copy), so such an alias keeps the `Value` binding. */
     rust76fSourceMethodWrite(declaration: any, scope: any): boolean;
@@ -870,8 +926,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBaseTypedBare;
     /** The native kind a method declaration returns under the table, else undefined. */
     rustMethodTypedReturnKind(node: any): string | undefined;
-    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    /** The scalar kind of rustBaseTypedReturnKindAll (an `odict` call is no scalar). */
     rustBaseTypedReturnKind(expr: any): string | undefined;
+    /** `x.m(..)` whose member resolves to a table method of the base tier (or a typed override of one). */
+    rustBaseTypedReturnKindAll(expr: any): string | undefined;
     /** pg: a call of a precision formatter of the typed-return table (`-> Option<String>`); its locals carry the venue copy veto. */
     rustPrecisionCall(expr: any): boolean;
     /** pg: the local is written from a precision formatter, or returned by one of the typed precision methods. */
@@ -901,6 +959,16 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBaseTypedText(kind: string, expr: any): string | undefined;
     /** Call hook: a `Value` position takes the native result boxed once. */
     printRustBaseTypedReturnCall(node: any): string | undefined;
+    /** The bare `Option<Dict>` call text of an `odict` table call (safeDictN), else undefined. */
+    rustOdictCallText(expr: any): string | undefined;
+    /** A Dict local from an `odict` call: the empty map for `None`, as `.into_dict()` answered for Null. */
+    rustOdictDefaultText(expr: any): string | undefined;
+    /** The bare `Option<List>` call text of an `olist` table call (safeListN), else undefined. */
+    rustOlistCallText(expr: any): string | undefined;
+    /** `return x` of an `-> Option<Dict>` method: the map a `Value` holds is moved out, anything else is `None`. */
+    rustOdictReturnText(exp: any): string;
+    /** `return x` of an `-> Dict` method: a map literal or `deep_extend` as its typed twin, else the held map (empty otherwise). */
+    rustDictReturnText(exp: any): string;
     /** `return x` in a typed method: the native value, converting a `Value` once. */
     printRustBaseTypedReturn(fn: any, exp: any): string | undefined;
     /** `format!(..)` of a whole `Value::Str(format!(..).into())` print (balanced, nothing after), else undefined. */
@@ -925,8 +993,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.arraySlice (b, s, e)` of a byte-buffer local `b` with integer-literal bounds `0 <= s <= e`: the runtime copies
      *  `b[min(s, len) .. min(e, len)]` into a fresh list, so the slice is itself a byte buffer. Answers `b`'s identifier. */
     rustBytesSliceSource(node: any): Node | undefined;
-    /** `this.packb (..)` / `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
-     *  (`packb` always a list, `ethAbiEncode` a list or `Null` on an unsupported type). Only a local initializer takes
+    /** `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
+     *  (a list or `Null` on an unsupported type). Only a local initializer takes
      *  it, unboxed once into the `Bytes` handle (`Null` reads as no bytes, as every byte slot reads it). */
     rustBoxedBytesProducer(node: Node): boolean;
     rustBytesBareText(node: any, identation?: number): string;
@@ -982,8 +1050,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Option<f64>` (rustOptParamKind). Its result local is typed only for a native use (rustScalarNeedsNativeUse): boxed
      *  straight back it stays the `Value` it is handed as. */
     rust90rgParseNumberOfNumParam(call: Node): boolean;
+    /** The whole initializer of a local annotated `number`: `this.parseNumber (x)` (base tier, one argument). The runtime answers
+     *  `x` for an `Int` / `Float`, `Float` or `Null` for a `Str`, `Null` otherwise, so its `as_f64()` is what every native
+     *  compare or arithmetic read of the `Value` takes. Boxed uses are vetoed by rustScalarLocalKindCore. */
+    rustParseNumberNumLocalInit(node: Node): boolean;
     rustDerivedScalarKind(call: any): string | undefined;
     rustListLengthInit(node: any): boolean;
+    rustTypedOwnerLength(node: any): string | undefined;
     /** ral-67b: `(x as T[]).length` (any array type T): the receiver is a local or parameter cast to an array type in the
      *  source, so the read prints the same native `len()` (or `get_array_length`) as a list receiver, an `Int` every time. */
     rust67bCastListLengthRecv(recv: any): boolean;
@@ -1086,6 +1159,8 @@ export declare class RustTranspiler extends BaseTranspiler {
         moved: boolean;
         solved: boolean;
     };
+    /** The nil-declared receiver is handed back by `return` (its printed type then follows the method's return). */
+    rustNilTargetReturned(target: any): boolean;
     /** uc: `const y = c ? x : z` in the local's own function, `y` a scalar-shape candidate: decided with the local. */
     rustStrTernaryArmSolved(ternary: any, declaration: any): boolean;
     rustReaderStrHandedOn(declaration: any): boolean;
@@ -1300,6 +1375,15 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  value of `a = x` / `a[..] = x`, a property value or an array element (through parentheses and `as string`): the box
      *  converts the `Str` / `Null` the boxed reader held, cloned unless it is the last use (ccxt's narrowStrNullLocals pass
      *  printed exactly `x[.clone()].map(Value::from).unwrap_or(Value::Null)` there). */
+    /** `n` is the key of `this.safeString (o, n[, d])`: `safe_string` / `safe_string_opt` take the key as `impl ScalarArg`,
+     *  whose `&String` arm reads the same key the `Str` box gave (`scalar_key`). */
+    rustSafeStringScalarKey(n: Node): boolean;
+    /** r04b: `n` is the key argument of `this.safeDict (this.balance, n, d)`; the declared `Dict` field read takes the lent key
+     *  (`None` keys as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceSafeDictKey(n: Node): boolean;
+    /** r04b: `n` is the key of a statement `row[n] = v` on a const local read by `this.safeDict (this.balance, k, d)`: the
+     *  native insert takes the key text (`None` as \"null\", the `stringify_param(&Null)` the boxed key gave). */
+    rustBalanceRowInsertKey(n: Node): boolean;
     /** ral-70f: the identifier under `(x as string)` / parentheses (or `n` itself). */
     rust70fCastBase(n: Node): Identifier | undefined;
     /** ral-70f: `access` is (through parentheses) the target of an assignment or update, or a `delete` operand. */
@@ -1384,6 +1468,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `rustLocalLastUse`, also admitting earlier reads in the same statement that end before the hand-off: the
      *  condition of a ternary whose branch holds the use, and the target of `x = f(.., x, ..)` (written after). */
     rustOwnedLastUse(node: any, declaration: any): boolean;
+    /** A bare object-literal value moves when no read runs after it: inside a `return` (which leaves the function, a loop
+     *  too), or when every later read sits in the other arm of an enclosing `if`; never under a `try` or a closure. */
+    rustReturnedLiteralValueMoves(node: any, declaration: any): boolean;
+    /** Every later read of the local sits in the other arm of an enclosing `if` (no read in this statement, no loop,
+     *  `try` or closure between the use and the declaration): no read runs after this use, so it moves. */
+    rustOwnedOtherArmLastUse(node: any, declaration: any): boolean;
+    /** `throw new XError (x)` with a local `x`: the throw leaves the function (no `try` around it), so the use is the
+     *  local's last one unless the same statement reads it again. */
+    rustOwnedThrownErrorArg(node: any, declaration: any): boolean;
+    /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
+     *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
+    rustOwnedDeadBeforeWrite(node: any, declaration: any): boolean;
     rustLocalLastUse(node: any, declaration: any): boolean;
     rustWsSettleCall(call: any): boolean;
     /** ral-73c E1: `const e = new XError (msg)` (a ccxt error class the printer routes to `crate::exchange_errors::<x>(msg)`,
@@ -1400,6 +1496,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A string local read as a ws hash or key slot: the settle hash, a handle `in` test or a handle keyed read. */
     rustWsKeyUse(n: any): boolean;
     rustWsStrKey(node: any): boolean;
+    rustSpawnKeyParamRead(node: any): boolean;
     /** A key slot's text: `x.as_str()` / `x.as_deref()` for a string local, else the `Value` by reference. */
     rustWsKeyText(node: any): string;
     rustWsKeySharesStatement(node: any): boolean;
@@ -1425,16 +1522,24 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustClientHandleClassType(type: any): boolean;
     /** `client.<field>` on the planned handle: its plan, field and whether it is written; undefined
      *  when the access is not on the handle or reads a field after the method wrote it. */
-    rustClientHandleAccess(node: any): {
+    rustClientHandleAccess(node: any, live?: boolean): {
         plan: any;
         key: string;
         write: boolean;
     } | undefined;
+    /** `client.<key> = v` anywhere in the method: the field itself is replaced, so key methods keep the old guard. */
+    rustClientHandleWholeWrite(node: Node, key: string): boolean;
     /** ral-90b: `k in client.subscriptions` after a write of that field reads the handle's snapshot when every write of
      *  `client.subscriptions` in the method is a whole statement `client.subscriptions[k] = v` / `delete client.subscriptions[k]`:
      *  both print through the handle (`add_subscription` / `remove_subscription`), which update the snapshot's key set with the
      *  live client's, so the key test sees what the live read did. Decided from the AST. */
     rust90bHandleSyncedInTest(node: Node, plan: {
+        bindPos: number;
+    }): boolean;
+    /** `this.safeX (client.subscriptions, k, ..)` after a write reads the handle's snapshot when every write of the field
+     *  is a whole `client.subscriptions[k] = v` / `delete` statement (both update the snapshot with the live client) and no
+     *  await or whole hand-off of `client` can run before the read (earlier in the method, or in a loop around it). */
+    rustHandleSyncedSafeRead(node: Node, plan: {
         bindPos: number;
     }): boolean;
     /** ral-80b: a `const client = this.client (url)` local whose declaration has not printed yet. A scalar decision made
@@ -1455,6 +1560,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printClientHandleKeyedRead(node: any): string | undefined;
     /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
     printClientHandleKeys(init: any): string | undefined;
+    /** `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)`:
+     *  the alias is the live field, so its key list is the handle's key list and the alias itself is never printed. */
+    rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined;
+    rustClientHandleKeysAliasPrintsKeys(declaration: any): boolean;
     /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
     printClientHandleDelete(node: any): string | undefined;
     /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
@@ -1528,6 +1637,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-90rg R2: a `const x = this.safeCurrencyCode (id)` (one argument, the base method: printed `-> Option<String>`) that is
      *  never written after its declaration. */
     rust90rgCurrencyCodeLocal(declaration: Node): boolean;
+    /** A never-written `const x = this.safeString (o, k, '<lit>')` local (the base reader's `string` overload: never `undefined`). */
+    rustDefaultedStrReaderLocal(declaration: Node): boolean;
     rust70fWritten(declaration: VariableDeclaration): boolean;
     /** ral-64b: a local declared from a base safeString-family reader with no default argument (its box is `Str` or `Null`). */
     rust64bReaderLocal(declaration: any): boolean;
@@ -1692,6 +1803,10 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `let mut key: Value = key.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustSafeDictKeyParam(param: any): boolean;
     private static readonly RUST_LENT_PRECISION_SLOTS;
+    /** Methods whose leading `Str` parameter is lent as `Option<&str>`, with that parameter's name. */
+    private static readonly RUST_SAFE_MARKET_ID_SLOTS;
+    private static readonly RUST_LENT_SYMBOL_PRECISION;
+    private static readonly RUST_LENT_OUTCOME_KEY;
     /** The value parameter (slot 1) of a `price|amount|costToPrecision` body (base or venue override): prints `impl Into<crate::Value>`
      *  and binds `let mut price: Value = price.into();` (every `Value` argument still passes; a number local passes unboxed). */
     rustPriceSlotParam(param: Node | undefined): boolean;
@@ -1926,6 +2041,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-43a: `!x` / `x || y` / `x && y` (nested, parenthesised) whose leaves are identifiers of locals declared in the
      *  same function (never a parameter or a member): the shape the bool seed above reads through the solver. */
     rustBoolLeafLogical(expr: any): boolean;
+    /** A non-negative integer literal compared with a local: rustBoolNativeText still has to print the compare natively. */
+    rustH26r13IntLitLeaf(n: any): boolean;
     /** Native `bool` text of a comparison proven native, `!x`, a bool local, or `&&`/`||` over those. */
     rustBoolNativeText(expr: any): string | undefined;
     /** Native text of an ordered/equality comparison over typed operands (`dry`: shape check only). */
@@ -1969,8 +2086,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  and the partner may also be a base `safe*` scalar read off `this` (rust59nValueReaderPartner), which prints a `Value`. */
     rustScalarPayloadPartnerTest(self: any, partner: any, kind: string, sign: string, dry: boolean): string | undefined;
     private static readonly RUST_59N_VALUE_READERS;
-    /** ral-59n: some read of the local is the argument of an element access `m[x]` (decided on the TS AST). */
-    rust59nKeysElementRead(self: any): boolean;
     /** ral-59n: `this.safeString|Integer|Number|Bool(..)` declared in the base tier (no venue override): printed as the
      *  generated `self.safe_*` reader, a `Value`. The boxed compare against it was the payload pair `a.<p>() == r.<p>()`
      *  (printNativeEqualityComparison, both sides `Value`, same checker kind), so the typed side prints its own payload. */
@@ -1999,6 +2114,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarExpressionText(kind: string, node: any): string | undefined;
     /** `a OP b` with an optional operand: `Some(..)` only when every optional side is present, as the helpers
      *  (`add`/`subtract`/`multiply`/`divide` by a non-zero literal) answer `Null` when either operand is `Null`. */
+    /** `k / x`: a numeric literal over an `Option<f64>` local seeded from `parseNumber` (rustParseNumberNumLocalInit). */
+    rustLitOverOptNumDivision(node: any): boolean;
     rustScalarOptArithText(base: string, node: any, sign: string): string;
     /** The `Value` box of a native scalar text. */
     rustScalarBoxText(kind: string, text: string, node: any): string;
@@ -2050,6 +2167,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustKeyWrapped(n: any): any;
     /** The insert key of a `String` scalar local, else undefined. */
     rustScalarInsertKeyArg(keyNode: any): string | undefined;
+    /** A `String` local (a `let` of this function) whose insert key is its last use, outside any loop or closure between
+     *  it and the declaration, with no other use in the statement: the insert takes the key by move, no clone. */
+    rustInsertKeyMoves(key: any): boolean;
     /** ral-55x K1: `let id = this.safeString(o, k)` inserted as `m[id] = v` only inside an `if (id !== undefined ..)` block: the
      *  insert never sees a `None` key, so the key text is the `Str` the boxed key held (removeRepeatedTradesFromArray `id`). */
     rust55xGuardedSafeStringKey(n: any, local: any): boolean;
@@ -2197,8 +2317,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust93reCastLengthRecv(cast: Node): boolean;
     /** `(x as string).split(..)` on a string local: the split prints from the local itself (`rustStrLocalSplitText`). */
     rustCastSplitRecv(cast: any): boolean;
-    /** 42b: the `(x as string).indexOf("lit") >= 0` call of a scalar contains test. */
-    rust42bCastContainsTest(call: any): boolean;
     /** The ws cache classes whose hand-written `::new` takes `impl Into<Value>`. */
     private static readonly RUST_CACHE_CTORS;
     /** An integer local as the size argument of `new ArrayCache*(limit)`: passed natively (`i64` / `Option<i64>` into `impl Into<Value>`). */
@@ -2237,10 +2355,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustVenueKeptStrArm(node: any): boolean;
     /** A `: Str` method of the table declared in the base tier, or an override of one. */
     rustBaseNativeStrMethod(node: any): boolean;
-    /** Every `return` of the method's own body converts, and the body's last
-     *  statement is one of them (so Rust sees no `()`-valued tail the
-     *  `-> Value` post-passes would have patched with `Value::Null`). */
-    rustStrReturnPathsConvert(body: Block): boolean;
     /** A `return` value of a native-`Str` method: a nullish literal, an
      *  expression already printing an `Option<String>` (a nested retyped call
      *  or a typed string local), or a `Value`-printing expression the checker
@@ -2285,14 +2399,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** True when this identifier is a use of the given declaration's binding.
      *  Without a checker answer the callers stay conservative (reject). */
     private rustIdentifierRefersToDeclaration;
-    /** Census of the current source file's table, for reports and tests. */
-    rustDeclaredDictLocalCensus(): {
-        declarators: number;
-        dict: number;
-        alwaysDict: number;
-        kindUnstable: number;
-        retypeEligible: number;
-    };
     private collectRustDeclaredDictLocals;
     /** The Dict-proven initialiser shape of a declaration, or undefined. */
     private rustDictInitializerInfo;
@@ -2320,7 +2426,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `delete x[k]`), or something that would need the local to still be a
      *  `Value`. */
     private rustDictLocalClassifyUse;
-    printPropertyDeclaration(node: any, identation: any): string;
     getStructFields(node: any): Array<{
         name: string;
         init: string;
@@ -2402,6 +2507,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustTypedResultElemKind(init: any): 'vec' | 'map' | 'map2' | undefined;
     /** `xs.length`, `xs[i]` (int literal / int-literal counter) on a Vec result, `xs[k]` (a `Value` key) on a map result. */
     rustTypedResultElemUse(n: any, elem: 'vec' | 'map' | 'map2'): boolean;
+    /** `n` is the sole argument of `Object.keys (n)`. */
+    rustTypedResultKeysUse(n: any): boolean;
+    /** `Object.keys (r)` on a typed keyed result local (`HashMap<String, T>`): its own keys, in the order `into_raw` listed them. */
+    printTypedResultKeys(node: any): string | undefined;
     /** ral-65k: the checker types `k` as plain `string` (no `undefined` / `null` member). */
     rust65kPlainStringKey(k: any): boolean;
     /** `x` is read only: not written, deleted, updated or called. */
@@ -2427,13 +2536,32 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBookSideParam(param: any): boolean;
     private static readonly RUST_BOOK_SIDE_GROUP;
     rustBookSideGroupParam(param: any): boolean;
+    /** A required list parameter (`deltas: any[]`) of a side-group method (handleDeltas, base and every pro override):
+     *  a lent `&[crate::Value]` like the other list slots; callers lend their list, the by-name arm reads Null as empty. */
+    rustBookDeltasParam(param: any): boolean;
+    private static readonly RUST_STRLIST_GROUP_PARAMS;
+    rustStrListGroupParam(param: any): boolean;
+    /** `this.safeString (xs, i[, default])` on a lent string-list group slot: the reader takes the slice (`impl KeyRead`). */
+    rustStrListGroupSafeReadUse(id: any): boolean;
+    /** `this.safeValue / safeList (deltas, i)` on a lent deltas list: the reader takes the slice (`impl KeyRead`). */
+    rustBookDeltasSafeReadUse(id: any): boolean;
     /** Every use of the parameter is a side operation statement, a `length` read, a level read or a side-slot hand-on. */
     rustBookSideUsesOnly(param: any, allowNone: boolean): boolean;
+    rustBookSideAnnotation(type: any): boolean;
     rustBookSideParamUncached(param: any): boolean;
     /** The argument lands in a side parameter slot of a `this.<m>(..)` call. */
     rustBookSideArgSlot(n: any): boolean;
     /** Argument text for a side slot: a side handle passes whole, anything else is wrapped once. */
     printBookSideArg(arg: any, identation: number): string;
+    private static readonly RUST_BOOK_PARAM_GROUP;
+    private rustBookParams;
+    rustBookParam(param: any): boolean;
+    /** Proves every use of a book parameter with the book-local forms (no write of the parameter itself). */
+    rustBookParamUses(param: any): 'opt' | undefined;
+    /** The argument lands in a book parameter slot of a `this.<m>(..)` call. */
+    rustBookParamArgSlot(n: any): boolean;
+    /** Argument text for a book slot: an optional book local or book parameter is lent, anything else is boxed once. */
+    printBookParamArg(arg: any, identation: number): string;
     printBookSideLocal(declaration: any, indent: string, varName: string): string | undefined;
     /** `s.length` / `s[i]` on a side handle: the marker's own length and level reads. */
     printBookSideRead(node: any): string | undefined;
@@ -2628,9 +2756,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** The whole call printed through its trait path (`rustSlotCallPath`), or undefined when method syntax stays. */
     rustSlotCallHead(node: any, args: string): string | undefined;
-    printCallExpression(node: any, identation: any): string;
+    printCallExpression(node: any, identation: any): any;
     printFreeFnDefaultArgsCall(node: any, identation: any): string | undefined;
     printDynamicSelfRead(node: any): string | undefined;
+    rustDynamicSelfCallee(callee: any): boolean;
     printDynamicSelfCall(node: any, identation: any): string | undefined;
     printThisKeyword(node: any, identation: any): string;
     private static readonly RUST_ERROR_CONSTRUCTOR_ARGS;
@@ -2730,6 +2859,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** An optional `params: Dict = {}` of a transpiled `handle*` / `fetchPaginatedCall*` method (the base one or a venue
      *  override): the argument rides in the `optional_args` slice, where a dict local is the shared map (`From<&Dict>`). */
     rustOptionalParamsSlot(call: any, arg: any): boolean;
+    /** The trailing `params: Dict = {}` of a venue's own non-unified method (the wide optional slot), handed the typed `params` slot. */
+    rustParamsHelperSlot(call: any, arg: any): boolean;
     /** `Value::from(&x)` for a handed dict local riding in an optional params slot. */
     printOptionalParamsArg(node: any, text: string): string | undefined;
     /** `let mut a: Option<String> | bool = <temp>.get(i)..` for a typed tuple slot, else undefined. */
@@ -2768,6 +2899,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Int` index by value (a negative or out-of-range index misses), a
      *  numeric string by parse, anything else a miss. */
     printNativeDynamicListIndex(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    /** A typed `i64` / `Option<i64>` local as the index of a proven list: the array arm of `get_value` (a negative or
+     *  out-of-range index and an absent key read `Null`). */
+    printTypedIntKeyListIndex(receiverText: string, keyNode: Node): string | undefined;
     /** True when this read initialises a local that the very next statement in
      *  the same block mutates (`x['k'] = v` -> `add_element_to_object(&mut x…)`,
      *  `x.push(v)` -> `append_to_array(&mut x…)`). */
@@ -2778,10 +2912,6 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  prints the `let mut v: Value = ..` line ccxt's write-back pass keys on: a mutation of `v` adds no write-back to `m`. */
     rust90rdTypedRowBind(bind: Node): boolean;
     rustExplicitWriteBackBind(read: any): boolean;
-    /** yb: the ccxt write-back pass (`writeBackIndexedMutations`) only fires when the line right after the bind is a top-level
-     *  element / property write or push on the bound local; any other next statement (an `if`, a plain reassignment) leaves
-     *  the bind alone, so its counter key may print boxed (`get_value(&xs, &Value::Int(i))`, the same helper call and value). */
-    rustWriteBackPassBind(read: any): boolean;
     /** A statement containing a write into a local (`x['k'] = v`, `x.k = v`,
      *  `x.push(v)`). */
     rustStatementMutatesLocal(node: Node, name: string): boolean;
@@ -2836,6 +2966,11 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  comparison, a marker key) answers undefined and the parameter keeps its
      *  box. */
     private rustParamShadowUseCensus;
+    /** A param read by `Object.keys/values` whose `x[k]` / `k in x` key is a local: the local's own typing
+     *  depends on the box, so the parameter keeps it. */
+    private rustShadowEnumKeysLocal;
+    /** `k` is `const k = keys[i]` with `const keys = Object.keys (p)` on the same parameter `p`: a key the map holds. */
+    private rustParamOwnKeysElementKey;
     /** One reference of a shadow candidate: true only for a read the shadow can
      *  print exactly (same proofs the emitted forms re-check). */
     private rustParamUseIsRead;
@@ -2844,6 +2979,9 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  inline takes the literal key form only. Marker-route key names and keys
      *  whose text needs escaping are excluded. */
     private rustShadowKeyIsReadable;
+    /** A safe-read key that is a parameter of the reading function declared string (`string` / `Str`): a `Value::Str`
+     *  or `Value::Null` in the port, read as `K.as_str()` (a Null key answers the default, as the helper does). */
+    private rustShadowSafeReadKeyParam;
     private rustShadowKeyIsLiteral;
     /** Keys whose text is safe to inline into a rust string literal. */
     private rustShadowKeyLiteral;
@@ -3029,7 +3167,7 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  match the `get_value(&…)` / `x.k` text to reach the real container, so a
      *  native read would write into a discarded clone. */
     isNativeWriteTargetBase(node: Node): boolean;
-    transformPropertyAcessExpressionIfNeeded(node: any): string;
+    transformPropertyAcessExpressionIfNeeded(node: any): any;
     staticKeyLookup(node: any, container: any): string | undefined;
     printElementAccessExpression(node: any, identation: any): any;
     printForStatement(node: any, identation: any): string;
@@ -3136,13 +3274,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustObjectLiteralBlock(node: any, identation: any): string;
     printArrayLiteralExpression(node: any, identation: any): string;
     printDeleteExpression(node: any, identation: any): string;
+    /** `delete this.options['k'][key]`: remove inside the stored sub-dict itself, not from a cloned read of it. */
+    rustOptionsSubDictDelete(node: DeleteExpression): string | undefined;
     printInstanceOfExpression(node: any, identation: any): string;
     printConditionalExpression(node: any, identation: any): string;
     private static readonly BOOL_VALUE_PREFIXES;
     private static isBoolValueExpression;
     printTernaryArm(node: any, identation?: number): string;
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
-    printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
+    /** `Object.keys/values(p)` on a shadowed Dict parameter (`IndexMap`; `Null` shadows the empty map, the helper's `[]`). */
+    printShadowEnum(node: any, kind: 'keys' | 'values'): string | undefined;
+    printObjectKeysCall(node: any, identation: any, parsedArg?: any): any;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
     /** `Object.keys/values(x)` on a typed bearer — the map's own iterators. A bearer is built
      *  from an object literal, so the helper's ws/tag filters have nothing to strip. */
@@ -3182,6 +3324,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToStringCall(node: any, identation: any, name?: any): string;
+    /** `x` is a local of the base `Precise` class: a typed `Precise` struct in Rust (precise.rs) with `integer`, `decimals: i64`. */
+    rustPreciseLocal(x: any): boolean;
+    /** `p.toString ()` on a `Precise` local: its `Display` text (the TS `toString` port), boxed as the `Str` it always is. */
+    printRustPreciseToString(node: any): string | undefined;
+    /** `p.decimals = this.sum (p.decimals, k)` with `k` an `int` / `oint` operand, or
+     *  `p.decimals = Math.max (p.decimals, k)` with `k` an `Int` local under a `k !== undefined` guard, on a `Precise` local:
+     *  the `i64` field written natively. `sum` skips a missing operand (adds 0); the guarded `Math.max` never sees one. */
+    printRustPreciseDecimalsWrite(left: any, right: any): string | undefined;
+    /** `k` is declared `Int`-typed and the write sits directly in `if (k !== undefined) { .. }`. */
+    rustPreciseGuardedInt(k: any, write: any): boolean;
+    printRustStrRuntimeCase(node: any, method: string): string | undefined;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
@@ -3214,16 +3367,107 @@ export declare class RustTranspiler extends BaseTranspiler {
     printPresenceFlagTest(left: any, right: any, op: any): string | undefined;
     rustCatchBindingIsRead(block: Node, name: string): boolean;
     printTryStatement(node: any, identation: any): string;
+    /** A statement every path of which returns or throws. */
+    rustStatementAlwaysExits(s: any): boolean;
+    printRustBoolReturnTry(node: any, identation: any, read: boolean, caught: boolean): string | undefined;
+    rustLabelledTryBlocks: Set<object>;
+    /** The node sits in a try block printed as `'__try: {`, with no function or nested try in between. */
+    rustInLabelledTry(node: any): boolean;
+    /** Every throw is `throw new K (..)` of a ccxt error class and every call is a `this.safe*` reader, so nothing
+     *  but those throws can panic; no loop exit, nested try, function or bare `throw x`. */
+    rustTryBlockOnlyOwnThrows(block: any): boolean;
     printReturnStatement(node: any, identation: any): string;
+    printReturnStatementPlain(node: any, identation: any): string;
     printBreakStatement(node: any, identation: any): string;
     printContinueStatement(node: any, identation: any): string;
-    printConstructorDeclaration(node: any, identation: any): string;
     printSpreadElement(node: any, identation: any): string;
     /** Base-tier methods whose every return is a fresh tag-free object
      *  literal (no venue override, no hand-written stub replaces them). */
     private static readonly RUST_PLAIN_DICT_BUILDERS;
     /** Base-tier `[Dict, Dict]` tuple helpers that hand back their `request` argument (index 1). */
     private static readonly RUST_REQUEST_TUPLE_HELPERS;
+    /** The base `handleUntilOption` declaration itself. */
+    rustUntilPairMethod(node: any): boolean;
+    /** A `this.handleUntilOption (..)` call resolving to the base declaration. */
+    rustUntilPairCall(node: any): boolean;
+    /** `return [ a, b ]` in the base helper: each slot is a map argument (or its `omit`), unboxed once. */
+    printRustUntilPairReturn(fn: any, exp: any): string | undefined;
+    /** The pair call as printed, unboxed (`undefined` when `node` is not one). */
+    rustUntilPairText(node: any): string | undefined;
+    private rustUntilPairRaw;
+    private rustOwnContainerDecisions;
+    private rustOwnContainerBare;
+    rustOwnContainerReturn(node: any): 'dict' | 'list' | 'odict' | undefined;
+    private static readonly RUST_OWN_RECORD_RETURNS;
+    rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined;
+    /** A venue method declared `NullableDict` whose every return is undefined, an optional map local or a no-default
+     *  `safeDict` read: it returns `Option<Dict>` (None exactly where the boxed answer was Null). */
+    rustOwnOptDictReturn(node: any): 'odict' | undefined;
+    /** The `Option<Dict>` text of a return operand of an `rustOwnOptDictReturn` method, else undefined. */
+    rustOwnOptDictOperand(exp: any): string | undefined;
+    /** A sync base-tier method declared `string[]` / `Dict[]` that no venue redeclares, every return a literal list or a list
+     *  local the body builds: it returns `List` (a list on every path, never Null). */
+    rustBaseStringListReturn(node: any): 'list' | undefined;
+    /** `Value::from(vec![..])` / `Value::from(v)` of a built `Vec<Value>`: the `Arc` of that vector. */
+    rustBaseListPayload(exp: any): string | undefined;
+    /** A checker type that is a map (object, never any / unknown / nullable / array) or a list (array or tuple). */
+    rustStaticContainerType(type: any, kind: 'dict' | 'list'): boolean;
+    /** The venue container decision of a declaration (the call-site rule's own cache). */
+    rustVenueContainerDecisionOf(declaration: any): {
+        kind: 'dict' | 'list';
+        nullable: boolean;
+    } | undefined;
+    /** `[await] this.m (..)` of an own-container method: its kind. */
+    rustOwnContainerCallKind(expr: any): 'dict' | 'list' | 'odict' | undefined;
+    private rustFilterTwinTexts;
+    private rustFilterTwinRaw;
+    rustFilterTwinKind(call: any): 'dict' | 'list' | undefined;
+    rustFilterTwinText(call: any, kind: 'dict' | 'list'): string | undefined;
+    /** Top-level comma-separated parts of printed argument text (brackets and string literals respected). */
+    rustTopLevelArgs(text: string): string[];
+    /** The bare twin call where the own-container rule asks for the native result. */
+    printRustFilterTwinBare(node: any): string | undefined;
+    rustOwnContainerBareText(node: any): string;
+    /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
+    printOwnContainerCallBox(node: any): string | undefined;
+    /** The native text of `[await] this.m (..)` for a typed local of the same kind, else undefined. */
+    rustOwnContainerNativeText(expr: any, kind: 'dict' | 'list'): string | undefined;
+    /** Brackets balance and never close below depth 0 (string contents aside, as the literal rule does). */
+    rustBalancedText(text: string): boolean;
+    /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
+    rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    /** A venue method another venue source calls as `this.m (..)`: the child struct reaches the base stub, which keeps `Value`. */
+    rustCalledFromOtherVenueFile(fn: any): boolean;
+    /** `[await] this.m (..)` whose declaration lives in another venue file than `fn` (an inherited venue method). */
+    rustOtherVenueCall(exp: any, fn: any): boolean;
+    /** `this.filterBy*SinceLimit (..)` (optionally `as T[]`) of the base, printed as the bare call. */
+    rustBaseListFilterOperand(exp: any, printed: string): boolean;
+    /** `this.parseX (..)` whose declaration (not nullable) names the same record as `fn`'s own `Promise<Record>` return. */
+    rustOwnRecordParserReturn(exp: any, fn: any): boolean;
+    /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
+    rustUntypedLocalCaller(fn: any): boolean;
+    /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
+    rustBoxedElementList(exp: any): boolean;
+    /** A runtime-base `this.keysort (..)` (and `this.omit (..)` when `omit` is set) read into a map: its typed twin answers
+     *  the map, or the empty map for a non-map, exactly what `.into_dict()` answered on the boxed result. */
+    rustDictTwinText(init: any, printed: string, omit: boolean): string | undefined;
+    /** `this.extend (..)` of the runtime base (never a venue override). */
+    rustRuntimeExtendCall(exp: any): boolean;
+    /** `return x` in an own-container method hands on the payload its operand already holds (never a new conversion). */
+    printOwnContainerReturn(fn: any, exp: any): string | undefined;
+    /** `this.safeDict (x, 'k', {})` / `this.safeList (x, 'k', [])`: the member when it is that container, else the empty one,
+     *  which is exactly the typed `safe_dict_k_t` / `safe_list_k_t` answer (missing key, Null, wrong kind -> empty). */
+    rustEmptyDefaultReaderPayload(exp: any, printed: string, kind: 'dict' | 'list'): string | undefined;
+    /** Any other use of the pair call takes the `Value` it printed before (a two-map list). */
+    printRustUntilPairBox(node: any): string | undefined;
+    /** `this.handleUntilOption (..)[i]` with a literal 0 / 1: that map, boxed where the read took a `Value`. */
+    printRustUntilPairSlotRead(node: any): string | undefined;
+    /** Each slot written from map `__untilN`: the typed slot printer's own `Value::Dict(m).into_dict()` collapses to the move of `m`. */
+    rustUntilSlotText(line: string, slot: string): string;
+    /** `const [ a, b ] = this.handleUntilOption (..)`: `let (__until0, __until1) = ..;` then each slot from its map. */
+    printRustUntilPairDestructure(declaration: any, parsedElements: string[], indent: string): string | undefined;
+    /** `[ a, b ] = this.handleUntilOption (..)`: one block, each slot written from its map. */
+    printRustUntilPairWrite(left: any, right: any): string | undefined;
     rustNativeDictInsert(baseExpr: any, keyNode: any, keyText: string, valueText: string): string | undefined;
     /** A local (single binding in its function, no closure capture of a write)
      *  whose declaration and every write is a plain-dict source or nullish. A
@@ -3317,8 +3561,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-73a: `this.f = x` (statement, a direct property of `this`, outside the test tier): the field is a `Value` slot that
      *  stores the reference, so a native map moves into it whole as `Value::Map(x)` at x's last use. */
     rust73aThisFieldStore(n: any): boolean;
-    /** `client.resolve|reject (x, ..)` on a ws handle, x the settled value. */
-    rustWsSettleMove(n: any): boolean;
     /** A prediction venue: `ts/src/prediction/<id>.ts` builds nested request maps in one method. */
     private static readonly RUST_PREDICTION_VENUE_FILE;
     /** The declaration behind `node` when it is a local typed as a dict bearer. */
@@ -3560,6 +3802,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustContainerBoxForm(n: any, neverNull: boolean): 'clone' | 'move' | undefined;
     /** The sole argument of a base `this.json (x)` (printed `json_stringify(&x)`, not a `self.` field). */
     rustIsJsonOperand(node: any): boolean;
+    /** A `this.json (x)` operand inside a method that returns no value and is reached only by name (a ws ack handler):
+     *  it lends the dict handle. A direct caller may hold the message boxed, so it keeps the slot as it is. */
+    rustVoidHandlerJsonOperand(node: any): boolean;
     /** `Value::Map(x.clone())` / `Value::from(x.clone())` at an admitted boxing use, else undefined. */
     printRustContainerLocalBox(node: any, text: string): string | undefined;
     private static readonly RUST_BORROWED_DICT_READERS;
@@ -3600,6 +3845,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust65iSelfExtendLiteral(up: any, d: any): boolean;
     /** The source side: `t = n` (statement) whose target `t` holds the optional form of n's kind through rustOptAliasSourceKind. */
     rustOptAliasTargetUse(n: any, declaration: any, fn: any): boolean;
+    /** `x = s` (statement) where `s` is a `const s = this.safeDict (..)` with no default (43f source) and the write sits directly in
+     *  the then-branch of `if (s !== undefined)` (no else): the map there is never Null, so `x` keeps its map. */
+    private rustGuardedOptDictWrites;
+    rustGuardedOptDictWrite(write: any, fn: any): boolean;
+    rustGuardedOptDictSourceUse(n: any, declaration: any, fn: any): boolean;
+    /** The guarded write printed by the source's form: `s.unwrap_or_default()` (optional) or `s.into_dict()` (boxed). */
+    printGuardedOptDictWrite(node: any, left: any, right: any): string | undefined;
     /** ral-45f: the source side of `let t = n` whose target holds the optional form through the initialised alias rule. */
     rustOptAliasInitTargetUse(n: any, declaration: any, fn: any): boolean;
     private rustBorrowedIndexReads;
@@ -3785,6 +4037,51 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** pb: `x['k'] = v` (statement, literal non-meta key) on a local initialised from a base `safeDict*` read of a REST-tier
      *  (`ts/src/<venue>.ts`) local or response: no ws subscription, cache or book store, so the map carries no runtime tag. */
     rustSafeDictKeyWriteOk(n: any, init: any): boolean;
+    /** A row read by key out of a ws cache bucket (`const b = this.safeDict (c.hashmap, sym, {})`, `b` a const never written):
+     *  the runtime tags only the bucket (`__cache_backref`), never its rows, so a row write is the helper's plain insert. */
+    rustCacheBucketRow(head: any): boolean;
+    /** `row = this.safeDictN (bucket, [..])` (no default) on a row read from the same cache bucket: the native `Option<Dict>`
+     *  replaces the optional row as is (None for a missing / non-map row, the Null the boxed write held). */
+    rustCacheRowOdictRewrite(rhs: any, init: any): boolean;
+    /** `row = this.m (..)` of a same-venue method typed `-> Option<Dict>` (NullableDict table row): the row's own optional
+     *  form takes the result as is (None where the method answered undefined, the Null the boxed write held). */
+    rustCacheRowVenueOdictRewrite(rhs: any, head: any): boolean;
+    /** `row = this.safePosition ({ .. })` (a plain literal) on a cache-bucket row: the base builder answers `Dict` on every path
+     *  (build `rustTypedParsePositionFamilies`), so the optional row takes `Some(map)`, the Dict the boxed write held. */
+    rustCacheRowBuiltRewrite(rhs: any, init: any): boolean;
+    /** The callee resolves to the base tier's `safePosition` (no venue override). */
+    rustCacheRowBuiltRewriteDecl(rhs: any): boolean;
+    /** `(row as Dict)['k'] = v` on a cache-bucket row: the cast only retypes the TS side, so the write is the row's own
+     *  literal-key write; answers the parenthesised head the key-write rules take, else undefined. */
+    rustCacheRowCastWriteHead(n: any, init: any): any;
+    /** `row[k] = v` (statement, any key, value not reading `row`) on a `safeDict*` row of a cache bucket: the typed local keeps
+     *  the helper (`impl AddTarget for Option<Dict>` / `Dict`), whose map arm is the boxed helper's. */
+    rustCacheRowDynamicWrite(n: any, init: any): boolean;
+    /** `c.append (x)` (statement, sole argument) on a local ws cache (`CacheSlot::append` takes the item as a `Value`). */
+    rustLocalCacheAppendArg(n: any): boolean;
+    /** `bucket[k] = row` (statement, the row whole) back into the cache bucket the `safeDict*` row was read from: the bucket
+     *  write keeps its helper (tag hooks run), the row boxes once (`None` to the `Null` the boxed row held). */
+    rustCacheRowStoreBack(n: any, init: any): boolean;
+    private rustCacheRowNestedUses;
+    /** `row['k'][..] = v` (statement, first key a plain literal, value and keys not reading `row`) or `row['k'].push (v)`
+     *  (statement, one argument) on a `safeDict*` row of a cache bucket. */
+    rustCacheRowNestedUse(n: any, init: any): boolean;
+    private rustCacheRowNestedReads;
+    /** `row['k1']['k2']..` read (plain literal keys, not a write target, call receiver or key) on a `safeDict*` cache-bucket row:
+     *  the first hop prints `KeyRead::key_read` (Null for a `None` row or a missing key, as the boxed read), lower hops keep `get_value_k`. */
+    rustCacheRowNestedRead(n: any, init: any): boolean;
+    /** The `&mut` map of a typed cache-row local: `if let Some(__d) = &mut row {` on the optional form (a `None` row skips the
+     *  write, as the helper skipped `Null`), else the plain map; undefined when the local is not typed. */
+    rustCacheRowMapHead(recv: any): [string, string] | undefined;
+    /** `row['k1'][..]['kN'] = v` on a typed cache row: the first hop is the map's own `entry("k1").or_insert(Value::Null)`
+     *  (the arm `get_value_mut` runs on a `Value::Dict` with a `Str` key); lower hops and the write keep their helpers. */
+    printCacheRowNestedWrite(baseExpr: any, keyStrs: string[], valueText: string): string | undefined;
+    /** `row['k'].push (v)` on a typed cache row: `append_to_object_array`'s map arm (`entry(k).or_insert_with(empty list)`, a
+     *  push when the entry is a list). Its book-cache route needs a tagged order book at `row['k']`; cache rows are parsed
+     *  orders / positions and never hold one. */
+    printCacheRowFieldPush(node: any, parsedArg: string | undefined): string | undefined;
+    /** A multi-line value written into a cache-bucket row: only its first printed line joins the insert line (400-char budget). */
+    rustCacheRowFirstLineOk(n: any, init: any): boolean;
     /** ral-40g: `row['k'] = v` (statement, literal non-meta key) on a row of a typed `Dict[]` list local (`rows[i]`, the checker
      *  proves a map element) in a REST or prediction venue file: the list comes from a parsed response (no ws subscription,
      *  cache or book tag), and the row's copy is written exactly as the boxed copy was (the list is never written back). */
@@ -3876,9 +4173,17 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustStrKeyParam(declaration: any): boolean;
     rustBorrowedStrKeyTest(name: string, node: any): string;
     rustBorrowedDictName(node: any): string | undefined;
+    /** The printed name of a typed `const x: Dict = this.extend (..)` local (rustDeclaredDictExtendCopy). */
+    rustExtendCopyDictName(recv: any): string | undefined;
     /** ral-61n: the printed name of an optional map local admitted for key-set uses (see rustOptKeySetLocals). */
     rustOptKeySetDictName(node: any): string | undefined;
+    /** The printed name of a borrowed venue `Dict` slot (`&crate::value::Dict`): already the map, no `as_map` view. */
+    rustVenueDictSlotName(node: any): string | undefined;
+    /** The bound handler view of an unwritten `message: Dict` handler parameter (a non-map binds the empty map, the helper's `[]`). */
+    rustProHandlerViewName(node: any): string | undefined;
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined;
+    /** `k in message` on a borrowed venue `Dict` slot: the key test on the map itself (on the handler view where one is bound). */
+    printProHandlerViewInOp(key: any, obj: any): string | undefined;
     printBorrowedInOp(key: any, obj: any): string | undefined;
     /** The `contains_key` test of `key` on the map printed as `name` (boxed `Value::Bool(..)` when `boxed`). */
     printBorrowedInOpOn(name: string | undefined, key: any, boxed?: boolean): string | undefined;
@@ -3934,6 +4239,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     } | undefined;
     /** `let mut x: Option<crate::value::Dict> = <init>.into_opt_dict()` (`None` when declared empty). */
     printOptContainerDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
+     *  as `safe_dict_o` beside `None`, and the 67g typed row read as the row's own map (`None` out of range / non-dict). */
+    rustOptDictNativeInit(init: any, printed: string): string | undefined;
+    private static readonly RUST_RECORD_MAP_TYPES;
+    /** `this.safeDict (r, k)` with no default, `r` (printed `name`) a const local of a typed call whose result is a record map. */
+    rustRecordMapLocalRead(init: any, name: string): boolean;
     /** `x = None` / `x = <container read>.into_opt_dict()` for the optional form. */
     printOptContainerWrite(left: any, right: any, identation?: number): string | undefined;
     /** `x.is_some()` / `x.is_none()` for a null test of the optional form. */
@@ -3947,6 +4258,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustByRefParamDecisions;
     rustParamReadsByReference(param: any): boolean;
     rustParamReadsByReferenceUncached(param: any): boolean;
+    /** A venue-only method's first `any` / `Market` parameter that is only key-read (`m['k']` with a literal key, or the
+     *  container of a by-reference reader) takes `impl KeyRead`: a typed market is lent, a `Value` still passes. */
+    rustVenueKeyReadParam(method: any, param: any, name: string): boolean;
+    /** A typed market local (plain or optional) handed to a `rustVenueKeyReadParam` slot: lent as `&m` (both read its map). */
+    printVenueKeyReadMarketArg(node: any): string | undefined;
+    /** `m['k']` on a parameter `rustVenueKeyReadParam` lends: the `KeyRead` read of the same slot. */
+    printVenueKeyReadParamRead(node: any): string | undefined;
     /** A call to a generated base reader (any overload) whose container parameter prints `impl KeyRead`. */
     rustReaderTakesContainerByReference(call: any): boolean;
     rustBuiltReturnSourceKind(call: any): 'dict' | 'list' | undefined;
@@ -3957,6 +4275,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOmitLiteralKeys(call: any): boolean;
     private static readonly RUST_BUILT_BOX_RECEIVER_METHODS;
     private static readonly RUST_BUILT_HELPER_RETURNS;
+    private static readonly RUST_BUILT_RECORD_BUILDERS;
     private static readonly RUST_BASE_FILTER_LISTS;
     /** The container a base list filter answers, `undefined` when it is unproven, `null` when `method` is none of them. */
     rustBaseFilterReturnKind(call: any, method: string): 'dict' | 'list' | undefined | null;
@@ -4007,6 +4326,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-50a: a destructured `handle*AndParams` slot already handed as a map (`requestParams = paramsIsMargin`). */
     rustHandedSlotIdentifier(rhs: any): boolean;
     rustOmitOfDict(init: any): boolean;
+    /** A base-tier `params: Dict` parameter, never reassigned: `omit` of it answers the map its `Dict` declaration names (a
+     *  non-map passes through and every consumer takes it back as the empty map, which the typed `omit_t` answers too). */
+    rustBaseDictParam(d: any): boolean;
     /** `this.deepExtend (m, p, ..)` whose every operand is a proven map: a tag-free literal, a built map, an omit of a
      *  proven map, or the `params` of a typed unified method. The runtime then merges map into map on every path. */
     rustDeepExtendOfMaps(call: any): boolean;
@@ -4028,6 +4350,15 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  rebound by `get_arg(.., Value::Map({}))`, so it is always a map (`From<Value> for Params` drops a non-map, and
      *  the empty set's `Value::Null` takes the `{}` default). A list body only reaches untyped `sign` / `request`. */
     rustTypedParamsParam(d: any): boolean;
+    /** The optional `params` of a typed unified method bound as `Dict` (`get_arg_dict`: the map, else the empty map, which is
+     *  all `Into<Params>` can hand over): every use takes a map by reference (a base literal-key / any-key reader, a base
+     *  two-argument omit) or is the plain arm of a `Dict` ternary whose other arm is a base omit of it. */
+    rustParamsDictSlot(d: any): boolean;
+    private rustParamsDictDecisions;
+    rustParamsDictSlotOmit(call: any): boolean;
+    rustParamsDictSlotUncached(d: any): boolean;
+    /** The never-reassigned `params: Dict = {}` of a base-tier method declared to return a `[.., Dict]` pair. */
+    rustBaseTupleParamsParam(d: any): boolean;
     /** ONE params-map proof for an omit / keysort head (and so for 46g's slot-1 write-back, which takes the handed map
      *  whose omit head this proves): a typed unified method's `params` (rustTypedParamsParam) or, ral-47g, a venue
      *  `*Request` helper's `params` proven a map by every in-file caller (rustHelperParamsProvenMap). */
@@ -4107,6 +4438,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     printTestReaderArg(node: any, text: string): string | undefined;
     /** `&x` for a borrowed local (or a typed container local) passed to a hand-written any-key reader. */
     printBorrowedReaderArg(node: any, text: string): string | undefined;
+    /** A local whose declaration printed `Value`, read through `impl KeyRead`: `&Value` reads the same map / list the clone held.
+     *  Refused when another argument of the call names the local (a moved default would conflict with the borrow). */
+    private rustPlainValueDecls;
+    rustPlainValueReaderLend(node: any, declaration: any, call: any): boolean;
     /** A base `safeDict*` / `extend` / `omit` call, or an implicit-API endpoint call. */
     rustBorrowedDictSource(call: any): boolean;
     private static readonly RUST_RECORD_LOOKUP_SOURCES;
@@ -4149,6 +4484,13 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal: the write prints `add_element_to_object(get_value_mut(&mut xs, &Value::Int(i)), ..)` as before, and the
      *  runtime `get_value_mut` hops a held `List` exactly as the `Value::Arr` arm did (the same padded slot). */
     rustLentListRowWrite(access: any): boolean;
+    /** `xs[i]['k'] = v` (statement, REST tier) on a never-reassigned `[]`-defaulted base `safeList*` local, inside its own
+     *  `for (let i = 0; i < xs.length; i++)` whose body never resizes `xs` nor writes `i`: the slot is in bounds, so the helper's
+     *  padding is dead; a fresh response row carries no tag, so the native insert is the whole write (a non-map row is skipped). */
+    printBoundedListRowInsert(left: any, keyText: string, valueText: string): string | undefined;
+    /** `xs[0]['k'] = v` under `if (first !== undefined && ..)` where `const first = this.safeDict (xs, 0)` sits in the same
+     *  block and nothing in between touches xs: row 0 exists, so the helper's Null padding never runs. */
+    printGuardedFirstRowInsert(left: any, keyText: string, valueText: string): string | undefined;
     /** ral-64i: a never-reassigned local initialised from a base `this.arraySlice (src, ..)` whose `src` is an identifier the
      *  checker types `string[]` (a split): every element is a `Str`, so `Display` joins exactly what the helper joined. */
     rust64iStringSliceDeclaration(declaration: any): boolean;
@@ -4254,6 +4596,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustWsCacheFieldWriteBack(n: any): boolean;
     /** 'opt' for a local bound to a typed field, 'cache' for one bound to a constructor; undefined when it stays `Value`. */
     rustWsCacheLocal(declaration: any): 'opt' | 'cache' | undefined;
+    /** `const x: ArrayCache* = await this.w (..)` where w is a venue wrapper of the same ws class that awaits a watch:
+     *  the venue declares the awaited cache, and the marker test converts any other resolved value to None. */
+    rustWsDeclaredCacheWatch(declaration: any): boolean;
     /** ral-54w: a slot of `const [ a, b, c ] = await this.m (..)` (a proven watch, see rustWsWatchResultKind) where every
      *  resolve that can match the awaited hash passes an array literal (or an unreassigned local bound to one) whose
      *  element at the slot's index is a cache: the slot holds that cache. Any other matching resolve (another kind,
@@ -4262,7 +4607,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-84a: a slot of a proven watch tuple whose element at the slot's index is checker-typed `string` in every
      *  matching resolve (the ohlcv `[ symbol, timeframe, stored ]` tuples): the slot holds that string or Null. */
     rustWsTupleStrSlot(element: BindingElement): boolean;
-    rustWsTupleSlotProof(element: BindingElement, want: 'cache' | 'str'): boolean;
+    /** A watch tuple destructure where every matching resolve is an array literal with no spread. */
+    rustWsTupleListProof(declaration: VariableDeclaration): boolean;
+    rustWsTupleSlotProof(element: BindingElement, want: 'cache' | 'str' | 'tuple'): boolean;
     /** ral-84a: a resolved tuple element the checker types `string` (`market['symbol']`, a `Str` reader result). */
     rustWsResolvedStr(x: Node): boolean;
     /** ral-55w: a resolved value that is a plain map, never a cache / book marker: a fresh or proven map, or an entry of
@@ -4759,6 +5106,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-58i: `let x: T = undefined` / `let x: T;` (one `let` declarator, nil or no initializer). */
     rustOptListNilInit(declaration: any): boolean;
     printOptListDeclaration(declaration: any, varName: string, indent: string): string | undefined;
+    /** `safeList (message, 'k')` with no default on the ws-handler view: a list moves into `Some`, any other kind,
+     *  an absent key or `Null` is `None` (the answer of `into_opt_list` on the `_k` read). */
+    rustProHandlerOptListRead(init: any): string | undefined;
     printOptListWrite(left: any, right: any): string | undefined;
     printOptListNullTest(left: any, right: any, op: any): string | undefined;
     printOptListIsArray(node: any): string | undefined;
@@ -4768,6 +5118,12 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptListIdentifier(node: any, text: string): string | undefined;
     /** `[..]` without spread is always a list, so `into_opt_list` keeps exactly what the box held. */
     rustOptListLiteralWrite(node: any): boolean;
+    /** A spread-free `[..]` written to an optional list builds the list straight into `Some` (`into_opt_list` of the box
+     *  `Value::from(vec![..])` is always `Some` of that same `Arc`), so no box is made and converted. */
+    rustOptListLiteralSome(right: any): string | undefined;
+    /** A spread-free `{..}` always prints `Value::Map({..})`, which is `Value::Dict(Arc::new(..))`, so `into_dict()` of it
+     *  answers that same map: a typed dict local takes the `Arc` straight, with no box made and converted. */
+    rustDictLiteralArc(right: any, printed: string): string | undefined;
     rustOptListExtraUse(n: any, declaration: any): 'join' | 'move' | 'clone' | undefined;
     /** A plain local (not this list, no container rule of its own) that takes a whole optional list as a `Value`. */
     rustOptListAliasTarget(place: any): boolean;
@@ -4778,6 +5134,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `this.m (..)` resolved to the base tier, `m` in `names`. */
     rustBaseCallNamed(call: any, names: Set<string>): boolean;
     rustHandedDictLocalUncached(declaration: any): boolean;
+    /** `const x: Dict = this.extend (..)` (base `extend`, which builds a `Value::Map` on every input). */
+    rustDeclaredDictExtendCopy(declaration: any): boolean;
     private static readonly RUST_ALWAYS_MAP_HELPERS;
     private static readonly RUST_84G_GROUP_HELPERS;
     /** The initialiser of a reassigned handed local answers a map on every path. */
@@ -4846,8 +5204,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustUntilHeadReaderUse(n: any): boolean;
     /** `x` (moved at its last use) or `&x` for a shared-map local as the head of a base `extend`, else undefined. */
     printExtendHeadArg(node: any, text: string): string | undefined;
-    /** ral-qd: a local initialised from a `this.parse*(..)` call. */
-    rustParseResultLocal(declaration: any): boolean;
     /** The literal key of a statement write `n['k'] = v` (one level, not a book-meta or replaced key). */
     rustUntilHeadKeyWrite(n: any): string | undefined;
     /** ral-40f: the literal keys of a statement write `n['k1']..['kN'] = v` (N >= 2) rooted at `n`: every key a plain string
@@ -4861,6 +5217,21 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  key), every hop below and the write keep their helpers (`get_value_mut` / `add_element_to_object`, so a `Null` /
      *  non-map inner is skipped and tagged inner maps keep their routes; value.rs nested_slot_insert_tests). */
     printSlotNestedInsert(left: any, right: any, valueText: string): string | undefined;
+    private rustHeadSeedCache;
+    private rustHeadSeedGuards;
+    private rustHeadSeedParams;
+    rustHeadSeedParam(param: any): boolean;
+    rustHeadSeedOf(declaration: any): {
+        param: any;
+        guard: any;
+    } | undefined;
+    rustHeadSeedUncached(declaration: any): {
+        param: any;
+        guard: any;
+    } | undefined;
+    /** The literal key of `x['k'] = v` (a statement whose value does not read `x`), else undefined. */
+    rustHeadSeedKeyWrite(access: any, x: any): string | undefined;
+    printHeadSeedKeyWrite(left: any, right: any): string | undefined;
     /** `std::sync::Arc::make_mut(&mut x).insert("k".into(), v)` for a literal-key write on a typed request slot. */
     printUntilHeadKeyWrite(left: any, right: any, valueText: string): string | undefined;
     private rustLentListParamDecisions;
@@ -4987,10 +5358,18 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueMethodDeclCountsByRoot;
     /** Class-member method declarations per name over the base tier and the venue sources (base counts twice). */
     rustVenueMethodDeclCounts(srcRoot: string): Map<string, number>;
+    private rustAsyncNoValueByRoot;
+    /** An async venue method (no base-tier declaration) whose every declaration returns no value and whose every
+     *  reference is a statement call or a `spawn` / `delay` handle: nothing reads its result, so it prints no return. */
+    rustAsyncNoValueMethod(node: any): boolean;
+    /** Index of the bracket closing the one at `open` in raw source text, or -1. */
+    rustIndexMatchClose(text: string, open: number, o: string, c: string): number;
     /** The callee parameter a call argument lands in, when that parameter takes a lent dict. */
     rustLentParamsSlot(call: any, arg: any): boolean;
     /** `&x` for a handed dict local lent to a lent-params slot. */
     printLentParamsArg(node: any, text: string): string | undefined;
+    /** A parameter named anywhere in the body (an unread typed slot needs no `Value` binding). */
+    rustParamIsRead(node: any, param: any): boolean;
     /** `let mut params: Value = params.into();` heading a method whose params dict is lent: the body reads the `Value`. */
     rustLentParamsBinding(node: any, identation: number): string;
     /** A base `handleUntilOption` / `handleParam*` call, or any `this.handle*` call whose slot 1 the checker types as a
@@ -5051,19 +5430,19 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  `Promise<List>` endpoint, a non-overridden venue method declared `Promise<List | X[]>`, or a typed unified core
      *  whose `Vec<T>` result boxes through `IntoRaw` as an Arr); `promise_all` hands it back as it came. */
     rustPromiseAllListProducer(element: any): any;
-    /** zf: a venue-private async method (no override, no typed signature) whose every family declaration returns `Promise<Market[]>`. */
-    rustVenueMarketListMethod(declaration: any): boolean;
     private rustPromiseAllListKinds;
     rustPromiseAllListSlotKind(element: any): 'list' | undefined;
+    /** `const [ a, b ] = await Promise.all ([ x, y ])` where every operand is a once-read local printed as a map: `promise_all`
+     *  hands each operand back as it came, so each slot takes its operand's map (a `Value` slot boxes it). */
+    printPromiseAllDictLocals(declaration: any, names: string[], indent: string): string | undefined;
     /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */
     printPromiseAllListSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
     /** zi: `const [ a, b ] = c ? this.f (..) : this.g (..)`: slot `at` is a map when each arm's own callee declares it one
      *  (the venue-pair form of `rustDeclaredDictSlot`; the temp keeps its `Vec<Value>` head). */
     rustTernaryDictSlot(element: any): boolean;
-    /** ral-54f: the last slot of a base `this.handle*AndParams (..)` whose own tuple return declares it a bare `Dict`
-     *  (`handleTriggerPricesAndParams`: `[Str, Str, Str, Dict]`) is the params map handed back, exactly as slot 1 of the
-     *  two-slot helpers. Non-test sources only (the caller checks the tier). */
+    /** The last slot of a base-tier `this.handle* (..)` reader whose own tuple return declares it a bare `Dict` (`[Str, Dict]`,
+     *  `[Str, Str, Str, Dict]`) is that map (the readers the port returns as a native pair). Non-test sources only. */
     rustBaseHandleLastDictSlot(element: any): boolean;
     /** ral-66s1: slot 1 of `const [ a, p ] = super.handle*AndParams (..)` inside a venue override, the base helper's own
      *  tuple return declaring that slot a bare `Dict`: the params map handed back, exactly as for a `this.` call. */
@@ -5074,9 +5453,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustReturnsBuildMapSlot(declaration: any, at: number): boolean;
     /** One element read rooted at the bearer: a plain read the native op serves. */
     rustReadBearerElementUse(access: any, kind: 'list' | 'map'): boolean;
+    /** `xs[i].length` read (not written, not stepped): the element read feeds `Value::len` alone. */
+    rustElementLengthRead(access: any): boolean;
     /** Key a read-only bearer serves natively: a literal string for a map, a
      *  literal (or proven-number `Value`) index for a list. */
     rustReadBearerKeyOk(kind: 'list' | 'map', keyNode: any): boolean;
+    /** A typed `i64` sum/difference index (`n - j - 1`): `as usize` wraps a negative out of range, as `get_list_value` does. */
+    rustI64ArithIndexText(key: any, print?: boolean): string | undefined;
     /** Native read of one bearer level; undefined keeps the helper. */
     printReadBearerAccess(kind: 'list' | 'map', receiverText: string, keyNode: any): string | undefined;
     /** Container kind a printed `Value` expression provably yields on every path. */
@@ -5123,6 +5506,13 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A key the native `if let` can borrow beside `&mut RECV`: one expression
      *  (no statement), naming neither the receiver nor its owner — the tuple
      *  would borrow `self` twice — and never a bare `self`. */
+    /** `delete x['lit']` (statement) on a REST-tier `const x = this.m (..)` local where `m` is `extend` or a method whose every
+     *  return is `this.extend (..)` or a never-reassigned literal-built const: `x` is a fresh plain map (no ws tag), so the
+     *  helper's Dict/Str arm is the whole answer and the native `shift_remove` runs it. */
+    rustRestCallLocalDelete(node: any, base: any, key: any): string | undefined;
+    /** `this.extend ({..}, ..)`, or `this.m ({..}, ..)` whose single return is `this.extend (<first param>, ..)`. */
+    rustPredictionHeadIsLiteral(call: any): boolean;
+    rustFreshMapCall(init: any, depth: number): boolean;
     rustDeleteKeyBorrowable(keyExpr: string, recv: string): boolean;
     /** `this.<field>` with a declared plain-dict type that is no ws container: the
      *  hand-written base builds these maps itself and never tags them. */
@@ -5189,6 +5579,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  literal, a plain local, or `this.extend|omit|keysort (plain, …unshared)`. */
     rustPlainBuilder(call: any, depth: number): boolean;
     rustPlainReturn(expr: any, depth: number): boolean;
+    /** A prediction-venue parameter declared as a map type (a list `any` would pass through `omit` unchanged), unshared. */
+    mapParamCopy(arg: any): boolean;
     /** The single bodied method declaration `this.m (…)` resolves to (implementation of an
      *  overload set), in the calling file or the base tier. */
     /** A sync base method no venue source declares and outside virtual dispatch: a base-tier `self.m()` runs this body. */
@@ -5335,12 +5727,6 @@ export declare class RustTranspiler extends BaseTranspiler {
     plainValueOperand(node: any): boolean;
     nativeCoercingArithmetic(op: any, left: any, right: any, leftText: string, rightText: string): string | undefined;
     nativeLooseOrderedComparison(node: any, op: any, left: any, right: any): string | undefined;
-    nativeStrOrNullConcat(left: any, right: any, leftText: string, rightText: string): string | undefined;
-    strOrNull(node: any, depth: number): boolean;
-    /** Every dict `node` can evaluate to holds `key` as Str/Null or lacks it (a read of a missing key / non-dict is Null). */
-    dictFieldStrOrNull(node: any, key: string, depth: number): boolean;
-    /** `this.m(..)` resolved to a same-file method with a body whose every return holds `key` as Str/Null. */
-    methodFieldStrOrNull(call: any, key: string, depth: number): boolean;
     private static readonly PARAMS_SLOT_ARG;
     paramsSlot(rhs: Node, selfName: string | undefined, depth: number): boolean;
     looseI64(expr: string): string;
@@ -5377,10 +5763,27 @@ export declare class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_OSTR_PARAMS;
+    private static readonly RUST_OVERRIDE_GROUP_MAP_PARAMS;
+    private static readonly RUST_INHERENT_GROUP_OSTR_PARAMS;
+    private static readonly RUST_INHERENT_GROUP_STR_PARAMS;
+    private static readonly RUST_INHERENT_GROUP_NUM_PARAMS;
     private rustOverrideGroupAgreeByRoot;
-    /** The first parameter of a listed override group when ALL declarations (base, prediction base, every venue,
+    private static readonly RUST_INHERENT_GROUP_LIST_PARAMS;
+    rustListGroupParam(param: any): boolean;
+    /** A use of a list group slot outside its slice view: the shared list boxed by reference (no copy). */
+    rustListGroupParamBoxedUse(node: any): boolean;
+    /** A listed parameter of an override group when ALL declarations (base, prediction base, every venue,
      *  pro and prediction override) spell it `<name>: string`; one disagreeing declaration keeps the whole group `Value`. */
     rustOverrideGroupParam(method: any, param: any, file: string): boolean;
+    /** A `Dict` / `NullableDict` override-group parameter (handleErrors `headers` / `requestHeaders`): a lent map /
+     *  an optional lent map when every declaration spells it alike; the body reads it through `impl KeyRead`. */
+    rustGroupMapParamType(param: any): string | undefined;
+    /** Argument text for a group map slot: `{}` / `undefined` natively, a held dict local lent, any other value viewed once. */
+    rustGroupMapArgText(arg: any, type: string, identation: number): string;
+    /** The group map type of the callee parameter at `at`. */
+    rustGroupMapSlot(params: any[] | undefined, at: number): string | undefined;
     /** A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed
      *  signature: every call resolves to this one body, so typing its parameter changes no other declaration. */
     rustBaseOnlyMethod(method: any, file: string): boolean;
@@ -5409,6 +5812,27 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrUnbound;
     rustVenueStrParamUnbound(param: any): boolean;
     rustVenueStrParamUnboundUncached(param: any): boolean;
+    /** A `&str` parameter never written whose every read is the receiver of `x.slice (n)` with one integer literal bound. */
+    rustStrParamTailSliceOnly(param: any): boolean;
+    /** `x.slice (n)` on an unbound `&str` parameter: the runtime's char slice read from the borrow, boxed once. */
+    rustStrParamTailSliceValue(node: any): string | undefined;
+    /** `&str` of the last `n` chars of the string `s` (the whole string when shorter): a char-boundary sub-slice, no copy. */
+    rustStrTailSliceNative(s: string, n: number): string;
+    /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
+    rustVenueF64ParamUnbound(param: any): boolean;
+    /** An `int` override-group slot (`handleErrors` code, printed `i64`) the body never writes: no `Value` binding;
+     *  a native scalar operand reads the `i64` as is, any other read boxes it on the spot (`Value::from`, an `Int`). */
+    rustGroupIntParamUnbound(param: any): boolean;
+    /** `code === 429` / `code >= 400` over an unbound `int` group slot and an integer literal: the `i64` compare
+     *  (is_equal / the ordered helpers compare an `Int` and an integer literal exactly so). */
+    printGroupIntParamCompare(leftNode: any, rightNode: any, op: any): string | undefined;
+    rustGroupIntParamUnboundRead(node: any): boolean;
+    /** A required `string` parameter of an async pro method that is only named as the first argument of statement
+     *  `this.spawn (this.m, ..)` calls (by-name dispatch, the arm decodes the text once), never written, whose every read
+     *  is a ws client futures key slot (`k in client.futures`, `client.futures[k]`, `safeValue (client.futures, k)`). */
+    rustSpawnKeyParam(method: any, param: any): boolean;
+    /** `n` is the key of a futures read on the ws client handle (in-test, keyed read or base `safeValue`). */
+    rustSpawnKeySlot(n: any): boolean;
     rustVenueStrParamUnboundRead(node: any): boolean;
     /** Scalar-local kind of a per-venue string parameter read through its `Value` binding. */
     rustVenueStrParamKind(param: any): string | undefined;
@@ -5427,6 +5851,10 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustScalarBoxCopies(u: any): boolean;
     /** A literal, an identifier, a field read, or a call: the converted argument stays short. */
     rustVenueStrSimpleArg(arg: any): boolean;
+    /** `x.slice (n)` with one integer literal bound on an identifier the checker types `string`: its receiver. */
+    rustStrTailSliceRecv(arg: any): any;
+    /** `&str` argument text of `x.slice (n)` on a `&str` parameter or a `String` local: the chars past the clamped start. */
+    rustStrTailSliceText(arg: any): string | undefined;
     /** Order request builders whose amount / price slots stay as they are (held). */
     private static readonly RUST_HELD_ORDER_REQUEST;
     /** `(x as string)` over a simple operand the checker already types `string` / `Str`: a string slot takes the
@@ -5442,6 +5870,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** An `f64` rebinding turns an integer argument into a `Float`: admit it only when every body read is blind to
      *  that variant (a null / truthiness test, an ordered comparison, or `numberToString` / `parseToInt`). */
     rustVenueFloatUsesStayInside(method: any, param: any): boolean;
+    /** Every in-file caller passes its own unwritten typed `number` / `Num` parameter by name: the argument already is
+     *  a `Float` (or `Null`), so an `f64` rebinding keeps every variant and any body read stays as it was. */
+    rustVenueFloatArgsAllFloat(method: any, param: any): boolean;
     rustVenueArithmeticArg(arg: any): boolean;
     /** `!x` over a simple operand: a `bool` slot reads it once as a native negation. */
     rustVenueNegatedArg(arg: any): boolean;
@@ -5562,8 +5993,165 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCalledFromWsSibling(method: any): boolean;
     /** A market slot argument that lends without a decode (`rustMarketSlotArgText` takes no `FromRaw` path). */
     rustMarketArgLends(arg: any): boolean;
+    /** The leading `marketId: Str` of base `safeMarket` / `safeSymbol` / every venue `safeMarket`, or `code: Str` of `currency`: a borrowed
+     *  `Option<&str>` (callers lend their string, the body binds the `Value` once); undefined for any other parameter. */
+    rustSafeMarketIdParam(param: any): boolean | undefined;
+    /** `n` is the first argument of a call landing in a borrowed `marketId` slot (rustSafeMarketIdParam). */
+    rustSafeMarketIdArg(n: any): boolean;
     /** `safeMarket`'s first parameter `marketId: Str = undefined`: a positional `Value` (padded with `Value::Null`). */
     rustPositionalValueParam(param: any): boolean;
+    private rustVenueStrListDecisions;
+    /** A required `string[]` parameter of a venue-only method whose body only indexes it, reads its length or hands it
+     *  to another such slot: a lent `&[crate::Value]` (callers lend their list, by-name arms decode once, Null -> empty). */
+    rustVenueStrListParam(param: any): boolean;
+    private rustVenueDictDecisions;
+    private rustVenueDictPending;
+    private rustVenueDictGuardHits;
+    rustVenueDictParam(param: any): boolean;
+    /** `bidAsks: any[]` beside a leading book-side handle (`handleBidAsks (bookSide, bidAsks)`). */
+    rustBookSideListShape(param: any): boolean;
+    rustVenueStrListParamUncached(param: any): boolean;
+    /** `arg` lands in a lent string-list slot of the `this.` callee `call`. */
+    rustVenueStrListSlotOf(call: any, arg: any): boolean;
+    /** A lent string-list parameter handed whole to a base reader that takes a slice: the `watchMultiple` hash lists
+     *  (`impl WsHashList`) or the `inArray` haystack (`impl ContainerArg`). */
+    rustStrListSliceUse(id: any): boolean;
+    /** A number key of a lent string-list read: an `i64` / `Option<i64>` local, a `Value` number parameter, or `xs[N]` of a
+     *  held `Vec<Value>`. Int indexes the slice, anything else misses (Null), as `get_list_value` answers a number box. */
+    rustStrListNumberKeyText(key: any): string | undefined;
+    /** A slice-slot use whose parameter itself prints as a lent `&[crate::Value]` slice. */
+    rustStrListSliceLent(id: any): boolean;
+    /** `this.safeString (xs, i)` on a lent string-list parameter with a loop-counter key: `&[Value]` is a `KeyRead`. */
+    rustStrListSafeStringUse(id: any): boolean;
+    rustStrListNumberKeyUse(id: any): boolean;
+    printStrListNumberKeyRead(name: string, key: any): string | undefined;
+    /** The argument of a lent string-list slot: a held list is lent, anything else is boxed and viewed once. */
+    rustVenueStrListArgText(arg: any): string;
+    /** An optional `Str` slot of a sync ws method with no arm whose every caller passes a literal, `undefined`, or a
+     *  typed `Option<String>` local / native string call: `Option<&str>`, callers lend `x.as_deref()` (no box). */
+    rustVenueOptStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
+    /** A required `string` slot of a sync ws method with no arm, never reassigned or compared to `undefined`, whose
+     *  every caller passes a string literal or a local / parameter the checker types exactly `string`: callers lend. */
+    rustVenueStrParam(method: MethodDeclaration, param: ParameterDeclaration, rustType: string): boolean;
+    rustVenueDictParamUncached(param: any): boolean;
+    /** A `handleMessage` override reached only by the base routeMessage (its by-name arm lends the frame's map, an
+     *  empty map for a non-dict, as the shadow reads it): the frame is a borrowed dict when every use is admitted. */
+    rustRoutedMessageDictParam(method: any, param: any): boolean;
+    /** The identifier names the `message` parameter of a routed `handleMessage` override. */
+    rustRoutedFrameUse(id: any): boolean;
+    /** A sync REST venue method whose slot no plain shadow read covers: a whole hand-off to a boxed sibling slot
+     *  boxes the shared handle (`Value::from(x)`), as a ws handler does; slots the shadow already covers stay as they are. */
+    rustSyncVenueDictWholeSlot(method: any, param: any): boolean;
+    /** A pro method named only as the target of `this.spawn (this.m, ..)` / `this.delay (ms, this.m, ..)` in its own
+     *  file, and never called directly: every argument reaches it through the by-name dispatch arm. */
+    rustSpawnOnlyTarget(method: any): boolean;
+    /** A `this.json (x)` operand of a pro method called by name only from routed `handleMessage` frames, each handing
+     *  its own borrowed frame: every caller holds the dict handle, so the slot takes it too. */
+    rustFrameLentJsonOperand(node: any): boolean;
+    /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
+    rustParamOnlyExtendOperand(method: any, param: any): boolean;
+    /** The `message: Dict` of a pro `handleX (client: Client, message: Dict)`: a by-name reference prints the handler
+     *  name, and the dispatch arm lends the boxed map (an empty map for a non-dict, as the shadow reads it). */
+    rustWsHandlerMessageSlot(method: any, param: any): boolean;
+    /** Every `this.<handler> (..)` and every `f.call (this, ..)` that may reach the handler passes all its parameters
+     *  (a short `.call` is ruled out only when `f` is read from a local table literal not naming the handler). */
+    rustWsHandlerExtrasPassed(method: any): boolean;
+    /** No identifier in the body names the parameter (shadowing locals included, so the answer is conservative). */
+    rustParamNeverNamed(method: any, param: any): boolean;
+    /** A local whose initializer and every reassignment is a fresh map or `this.safeDict (r, k [, fresh])` with `r` a
+     *  `this.` member or such a local (derive `account = this.safeDict (subBalance, code)`): never a row of the message. */
+    rustOwnStateRowLocal(decl: any, name: string, depth?: number): boolean;
+    /** `this.safeDict (this.balance, k, ..)`: a row of the exchange's own state, not of the message. */
+    rustReadOffThisMember(init: any): boolean;
+    /** A local typed as the ws order book class or read off `this.orderbooks` (a stored book, never a message row), or set from a `this.m (..)` whose
+     *  every `return` is an object literal of primitive-typed values: a key write cannot reach the message. */
+    rustLocalHoldsFreshBook(decl: any, init: any): boolean;
+    /** An expression the checker types as string, number, boolean, null or undefined only (never a shared map or list). */
+    rustPrimitiveValue(e: any): boolean;
+    /** `this.m ()` with no arguments whose declaration's only statement returns an object literal of literal values
+     *  (`account ()`): each call builds a fresh map, so a key write into it cannot reach the message. */
+    rustCallReturnsFreshLiteral(init: any): boolean;
+    /** `this.m (..)` whose every `return` is an object literal (`parseOrderBook`): each call builds a fresh top-level
+     *  map, so a key write into it cannot reach the message. */
+    rustCallReturnsObjectLiteral(init: any): boolean;
+    /** `this.m (..)` whose every `return` is `this.r ({ .. })`, where `r` hands back its own first parameter (`safePosition`):
+     *  each call builds a fresh top-level map, so a key write into it cannot reach the message. */
+    rustCallReturnsFreshRecord(init: any): boolean;
+    /** Another ts/src/pro file calls `.name (` and declares no method of that name (an inherited copy answers it). */
+    rustWsHandlerCalledElsewhere(method: any, name: string): boolean;
+    /** `.name (` calls in the method's own file and ws sibling (`own` when every other file calling it declares its own
+     *  `name`, -1 when one does not); -1 for a quoted use anywhere in ts/src. */
+    rustVenueDictTextCallCount(method: any, name: string, own: number): number;
+    /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
+    rustVenueDictArgLends(arg: any): boolean;
+    /** `const row = rows[i]` (no annotation, never reassigned) of a `Dict[]` local converted once by `dict_rows`. */
+    rustP21RowLocalLends(declaration: any): boolean;
+    /** The argument lands in an async method slot whose every use is a `this.extend` operand. */
+    rustExtendOnlySlotOf(arg: any): boolean;
+    /** A `const x: Dict = { .. }` local the printer holds as `indexmap::IndexMap<String, Value>`, never reassigned. */
+    rustVenueDictLiteralLocalArg(declaration: any): boolean;
+    /** A never-reassigned reader-produced local the declared-Dict locals table proves a map: it prints the shared handle. */
+    rustTableDictLocalArg(arg: any): boolean;
+    /** The value of an object-literal entry (`'info': x`): the borrowed map is copied into a fresh `Value::Map` there. */
+    rustVenueDictValueUse(id: any): boolean;
+    /** An object-literal entry value (`'info': x`) at the last use: the dict handle is shared into the box (`Value::from(x)`). */
+    rustVenueDictLastEntryUse(id: any): boolean;
+    /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
+     *  the dict handle is shared into the box, no copy. */
+    rustVenueDictLentValueUse(id: any): boolean;
+    /** A ws handler's message resolved whole with an explicit hash on its own client (`client.resolve (message, hash)`):
+     *  `resolve` takes `impl Into<Value>`, so the dict handle is shared into the box. */
+    rustClientResolveValueArg(id: any): boolean;
+    /** `Value::Dict(Arc::clone(x))` for a rustVenueDictParam handed whole to a lent `impl Into<crate::Value>` slot. */
+    printVenueDictLentValue(node: any, text: string): string | undefined;
+    /** The container of a base by-reference reader (`this.safeString2 (x, ..)`): it reads the borrowed map as is. */
+    rustVenueDictReaderUse(id: any): boolean;
+    /** Handed whole to a `this.` venue method whose slot takes a boxed value: the dict handle is boxed there
+     *  (`Value::from(x)`, the same shared map the box held). */
+    rustVenueDictWholeArgUse(id: any): boolean;
+    /** `Value::from(x)` for a borrowed dict handle handed whole to a boxed slot. */
+    printVenueDictWholeArg(node: any, text: string): string | undefined;
+    /** An argument landing in another venue method's borrowed-map slot (`this.handleBidAsk (client, message)`): the
+     *  borrowed map is passed on as is. A slot that takes the dict handle cannot take a map view. */
+    rustVenueDictLentSlotUse(id: any): boolean;
+    /** A rustVenueDictParam handed to a base by-reference reader: lent as `&x` (no copy). */
+    printVenueDictReaderArg(node: any, text: string): string | undefined;
+    /** A borrowed rustVenueDictParam handed to the runtime `this.extend`: the head and the operands take the map by reference. */
+    printVenueDictExtendArg(node: any, text: string): string | undefined;
+    /** `Value::Map(x.clone())` for a rustVenueDictParam read as an object-literal entry value. */
+    printVenueDictValue(node: any, text: string): string | undefined;
+    /** A ws handler's message handed whole to an untyped `Value` slot of `this.m (..)`, or returned: the dict handle boxes as is. */
+    rustVenueDictWholeUse(id: any): boolean;
+    /** `Value::from(x)` (the shared dict handle) for a rustVenueDictParam handed whole to a `Value` slot or returned. */
+    printVenueDictWhole(node: any, text: string): string | undefined;
+    /** A dict-handle parameter as an object-literal entry value at its last use: the box shares the handle. */
+    printVenueDictHandleEntry(node: any, text: string): string | undefined;
+    /** The argument lands in a slot whose body stores the row whole: that slot takes the dict handle, which a boxed
+     *  caller parameter cannot lend as a map view. */
+    rustArgSlotTakesDictHandle(arg: any): boolean;
+    private rustVenueDictValuePending;
+    /** Lent on to a sibling's borrowed slot that takes the dict handle: the handle is passed on as is. */
+    rustVenueDictLentHandleUse(id: any): boolean;
+    /** A rustVenueDictParam stored whole as an object-literal value: it takes the dict handle, so the store shares it. */
+    rustVenueDictValueParam(param: any): boolean;
+    /** The caller's own required, never-reassigned `x: Dict` parameter still printed as a `Value` box (no shadow):
+     *  it lends its map view, an empty map for a non-dict (as the callee's shadow reads answer for Null). */
+    rustBoxedDictParamLends(param: any): boolean;
+    /** An inline `this.safeDict (list, i, {})` on a plain list local with a loop counter: the row (the empty map for a
+     *  missing / non-map element, as `safe_dict_t` answers) is read off the slice. Answers [list local, counter]. */
+    rustVenueDictRowReadArg(arg: any): [any, any] | undefined;
+    /** The row read above, lent to a rustVenueDictParam slot: a map view, or the dict handle for a handle slot. */
+    printVenueDictRowReadArg(node: any): string | undefined;
+    /** A local initialised by an awaited endpoint whose abstract declaration answers `Promise<Dict>`. */
+    rustEndpointDictLocal(arg: any): boolean;
+    /** The argument lands in a rustVenueDictParam slot of its `this.` call. */
+    rustVenueDictSlotOf(call: any, arg: any): boolean;
+    /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
+    printVenueDictArg(node: any, text: string): string | undefined;
+    /** A read of an `f64` venue parameter blind to the Int/Float variant: the amount of base `amountToPrecision` /
+     *  `priceToPrecision` / `costToPrecision` (stringified like `numberToString`: `3.0` prints `3`). */
+    rustVenueNumParam(call: any, arg: any, param: any): boolean;
+    private static readonly RUST_VENUE_NUM_PRECISION;
     /** The text a call leaves in an omitted positional slot. */
     rustPositionalPad(param: any): string;
     /** `this.safeMarket (..)` / `super.safeMarket (..)` resolving to a method that returns the typed market. */
@@ -5617,5 +6205,171 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** A checker-`boolean` argument for a `bool` slot: native where it already is one, an `Option<bool>` local or a
      *  `Value` compared with `Some(true)` (its variant is `Bool` or `Null`), else its truthiness. */
     rustVenueBoolArgText(arg: any, identation: number): string;
+    printVariableStatement(node: any, identation: any): string;
+    /** A list-ternary local handed whole to a lent `&[crate::Value]` slot of a `this.` method: the slot views the held
+     *  list in place (`as_deref` slice, None reads as the empty list, as the boxed Null did), so no box is taken. */
+    rustH26r01LentStrListArg(n: Node): boolean;
+    private static readonly RUST_H26R14_RECORD_FNS;
+    /** `x = this.parseOrder (..)` (and the other record parsers of the table): the ccxt build types each as `Dict` and
+     *  drops a trailing `.into_dict()`, so a nil local written only from them holds `Option<Dict>` (None = the old Null). */
+    rustH26r14RecordWrite(rhs: any): boolean;
+    /** `row['k'] = x` (statement, literal key) on a row copy `const row = this.safeDict (this.balance|options[..], k, {})`:
+     *  the same by-value store the `this.balance[k]['k'] = x` write took, so x keeps its typed local and is boxed there
+     *  once (`Value::from(&x)`, or moved at its last use). */
+    rustH26r05BalanceRowStore(n: any): boolean;
+    /** A local-identifier-key write on a boxed Dict-annotated REST local whose every binding is a plain literal, a
+     *  base copy call or a base `groupBy`/`indexBy` (all fresh untagged maps): the native insert with the helper's key
+     *  conversion (`stringify_param`), so the key local keeps its type and no clone is added. */
+    rustFreshDictDynamicKeyReceiver(ident: any, keyNode: any): {
+        text: string;
+        isField: boolean;
+        plain: boolean;
+        nameNode: any;
+        ownedKey: boolean;
+    } | undefined;
+    rustFreshGroupedDictProducer(node: any): boolean;
+    /** The map's own iterators in insertion order, the order `object_keys` keeps; such a field never carries the
+     *  ws tags the helper filters, and a non-map (`None` / Null) lists nothing, as the helper answered. */
+    h26r11FieldAliasEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `const v = m[k]` whose next statement only rebinds `v` (no keyed write or push through it): no write-back is due. */
+    rustH26r12RebindOnlyBind(read: Node): boolean;
+    /** The statement after a bind `v = m[k]` writes through the bound copy (`v[f] = x`, `v.push (x)`): only then must the
+     *  copy go back into `m`. Rebinding the whole local (`v = x`, `v += x`) leaves `m[k]` untouched in TS too. */
+    rustH26r12MutatesThrough(node: Node, name: string): boolean;
+    /** `this.f` (declared plain-dict, untagged), `{}`, or a ternary whose arms are each one of those. */
+    h26r11UntaggedMapSource(node: any): boolean;
+    /** The settled value of a ws `client.resolve (x, hash)` or the item of a cache `.append (x)`: both take `impl Into<Value>`. */
+    rustH26r14RecordBoxUse(n: any): boolean;
+    /** `n.toString ()` of an `i64` scalar local whose checker type is `any` (an all-int `sum`): the `String` `format!` makes,
+     *  whatever the `any` the checker gives the call. */
+    h27r02IntToStringSeed(declaration: any, kind: string | undefined, checked: string | undefined): boolean;
+    /** `xs[i]['k'] = v` (statement, REST tier) inside `for (let i = 0; i < xs.length; i++)` on a boxed list local whose every
+     *  binding is `[]` or a base `this.toArray (..)` (always a `Value::Arr`): the slot is in bounds, so the helper's padding is
+     *  dead; the hop through a non-map row is skipped as the helper skipped it; a fresh REST row carries no tag. */
+    h27r05ArrayRowInsert(left: any, keyText: string, valueText: string): string | undefined;
+    /** Such a result is built by the parser (or is the stored markets table): never a ws-tagged snapshot, so the map's own
+     *  insertion-order iterators list what `object_keys` / `object_values` listed; a non-map (Null) lists nothing, as before. */
+    h27r06FreshParseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `this.parseX (..)` or `super.setMarkets (..)` whose declared return is a proven map type. */
+    h27r06FreshParseCall(node: any): boolean;
+    private static readonly H27R07_BASE_HANDLE_METHODS;
+    h27r07BaseHandlePlan(method: any, file: string): any;
+    /** On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`)
+     *  keeps the helper: a handle key use would leave `k` a `Value` (ws key locals are not typed as method receivers). */
+    h27r07KeepBoxedKey(node: any, plan: any): boolean;
+    private rustWsHandleParamCache;
+    private rustWsHandleParamWriters;
+    private rustWsHandleParamMut;
+    rustWsHandleParam(param: any): boolean;
+    /** The `client` params linked to `param` by a direct `this.h (.., client, ..)` hand-off (either way), or undefined when it
+     *  cannot take the handle. */
+    rustWsHandleParamLinks(param: any): any[] | undefined;
+    /** The caller's own `client` param when `call` passes it bare at `at`. */
+    rustWsHandleArgParam(call: any, at: number): any;
+    /** The callee's `client` param when bare `client` is argument `n` of a `this.h (..)` call to a method with a body. */
+    rustWsHandleSlotOf(n: any): any;
+    rustWsHandleParamUncached(param: any, links: any[]): boolean;
+    /** `client.subscriptions[k] = v` / `delete client.subscriptions[k]` as a whole statement (`p` is `client.subscriptions`):
+     *  printed through the handle's `add_subscription` / `remove_subscription`. */
+    rustWsHandleSubscriptionStatement(p: any): boolean;
+    /** `client` as a later argument of `this.spawn (this.m, ..)` whose target is a method reference. */
+    rustWsSpawnHandoff(call: any, n: any): boolean;
+    /** A `handleMessage` override whose every direct call site is in the base tier (`routeMessage`, not printed in Rust)
+     *  or a ws test file. The frame-shape handlers keep the box: their dispatch arms pass Value. */
+    rustWsRoutedHandler(method: any): boolean;
+    private static readonly RUST_H27R08_WS_FNS;
+    private static readonly RUST_H27R08_RECORD_RETURN;
+    /** `x = this.parseWsTrade|Order|Ticker (..)` resolved to a venue override whose every `return` answers a record parser
+     *  of the h26-R14 table (`safeTrade (..)` ...): the ccxt build types such an override `Dict` and drops `.into_dict()`.
+     *  The base declaration (it throws) or any other return keeps the box. */
+    rustH27r08WsRecordWrite(rhs: any): boolean;
+    /** `c.append (x)` on a local whose checker type is a ws cache (`ArrayCache*`): the hand-written `append` takes `impl Into<Value>`. */
+    rustH27r08CacheAppendUse(n: any): boolean;
+    /** The box at such an append: moved at the last use, else the Arc bump; `None` is `Value::Null`. */
+    rustH27r08CacheAppendBox(node: any, text: string): string | undefined;
+    /** `row[n] = <literal>` on a const `row = this.safeDict (client.subscriptions, k, {})`: no native insert takes that tagged
+     *  ws-store copy, so the write stays `add_element_to_object` and lends the key box exactly as ral-63k does for plain locals. */
+    h27r10SubscriptionRowKey(n: any): boolean;
+    /** `xs[c][k] = v` on a boxed local bound once to `[]` that only grows by `xs.push ([..])` of fixed-length array literals and is
+     *  otherwise only read: every row is a `Value::Arr` longer than the literal `k`, so the helper's padding is dead; a missing
+     *  row (c out of range or negative) or a non-integer c is skipped, where the helper wrote nothing into a real row either. */
+    h28r04GrowOnlyRowSlotWrite(left: any, keyText: string, valueText: string): string | undefined;
+    /** `c` is `xs.length - 1` (directly, or through `const` locals): on a grow-only list it is in range or -1. */
+    h28r04LastRowIndex(node: any, list: any): boolean;
+    /** A non-negative integer literal, or a local bound once (`const`) to one. */
+    h28r04ConstIndex(node: any): number | undefined;
+    /** with a const bound to a fresh `this.parse*|index*|fetch* (..)` map (one const alias hop): never a ws-tagged snapshot, so
+     *  the map's own iterators list what the helper listed; a non-map (Null) lists nothing, as before. */
+    private h28r05Decisions;
+    h28r05BaseDictParamEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    h28r05ParamProven(param: any): boolean;
+    private static readonly H28R05_MAP_RETURNS;
+    /** Every `this.name (..)` in ts/src (parsed, no other spelling, no override, no quoted use) passes at `at` a const bound
+     *  in its method to `[await] this.p (..)` whose base declaration returns a map (one const alias hop). */
+    h28r05CallersProven(method: any, name: string, at: number): boolean;
+    /** `a` names a const of the enclosing function bound to `[await] this.p (..)` with a map return, or (one hop) to such a const. */
+    h28r05FreshMapIdent(a: any, site: any, hops: number, returns: (p: string) => string | undefined): boolean;
+    /** `client.resolve (x, hash)` of a string nil local: every ws client `resolve` takes `impl Into<Value>`, so the
+     *  local boxes into that slot (`None` -> Null, as the `Value` local held). Receiver must be a plain identifier. */
+    h28R07ResolveBox(n: any, kind: string): string | undefined;
+    /** `client.subscriptions[k] = x` of a string nil local: the handle's `add_subscription` takes a `Value`. */
+    h28R07SubscriptionBox(n: any, kind: string): string | undefined;
+    /** `xs[i]['k'] = v` (statement) inside `for (let i = 0; i < xs.length; i++)` on a `const` list local that is always a
+     *  `Value::Arr`: a base `this.safeList (o, k, [])` or a bucket `g[k]` of a `const g = this.groupBy (..)`. The slot is in
+     *  bounds, so the helper's padding is dead; a non-map row is skipped as the helper skipped it (a list row ignores a Str key). */
+    h29r04BoundedArrRowWrite(left: any, keyText: string, right: any, rhs: string): string | undefined;
+    /** Always a `Value::Arr`: base `this.safeList (o, k, [])`, or `g[k]` of a `const g = this.groupBy (..)` (every bucket a list). */
+    h29r04ArrSource(init: any): boolean;
+    /** method parameter that every ts/src caller omits or fills with a dict cut from `this.options` (never a ws-tagged
+     *  snapshot): the map's own insertion-order iterators list what the helper listed; a non-map (Null) lists nothing. */
+    private h29r05Decisions;
+    h29r05OptionsDictEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `p` is an optional, never reassigned `Dict` / `NullableDict` parameter of a method whose ts/src callers are proven. */
+    h29r05OptionsParam(id: any): boolean;
+    /** Every `.name (..)` in ts/src is `this.name (..)` (no quoted use) and omits argument `at` or passes an options dict. */
+    h29r05CallersProven(root: string, name: string, at: number): boolean;
+    /** `this.options[k]`, `this.safeDict (O, k[, {}])` with `O` such a value, or a const of the caller's function bound to one. */
+    h29r05OptionsValue(node: any, site: any, hops: number): boolean;
+    /** (`this.features` / `this.markets` / `this.markets_by_id`) through safeDict / omit / extend / deepExtend, the method's
+     *  own result, or nullish: no marker key can sit in such a map, so `get_value` is the map's own `get` (Null on a miss). */
+    private static readonly H29R06_FIELDS;
+    private static readonly H29R06_CALLEES;
+    private static readonly H29R06_MARKER_KEYS;
+    private h29r06Memo;
+    h29r06ConfigDictRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
+    h29r06Binding(decl: any, seen: Set<any>): boolean;
+    h29r06BindingUncached(decl: any, seen: Set<any>): boolean;
+    /** An expression whose map value derives only from the config fields (or is nullish). */
+    h29r06Origin(node: any, scope: any, seen: Set<any>): boolean;
+    /** The method's own result: every `return` gives an origin value (a recursive call holds by induction). */
+    h29r06OwnResult(method: any, seen: Set<any>): boolean;
+    /** A `Dict` parameter of a base method no venue declares or names, every `this.m (..)` call in its own file passing an
+     *  origin value (its own parameter forwarded counts by induction). */
+    h29r06ParamProven(method: any, param: any, seen: Set<any>): boolean;
+    /** A nil-declared `Str` local's in-place concat read may take a `format!` line past 400 chars: ccxt build/
+     *  `splitLongRustLines` breaks such a line at its `, ` separators, so only a line too long to split in two keeps the box. */
+    h29R07NilStrConcatSplits(nilStr: boolean, lines: string[], column: number, width: (l: string) => number): boolean | undefined;
+    /** A clock / id string local (`this.seconds ().toString ()`) as a property value of an object literal: the slot prints
+     *  `Value::from(x)` of the `String`, the same `Str` text the `Value` local held, whatever local the literal feeds. */
+    h29r08ClockLiteralValue(n: any, declaration: any): boolean;
+    /** A bare argument of the call a `return` hands back: nothing after that statement runs, so a later mention of the
+     *  local does not read it again. The statement holds no other mention; no loop, closure or try lies between. */
+    h28t01ReturnedCallArgLastUse(node: any, declaration: any): boolean;
+    /** Hooked from printOptionalArgsSliceCall: the by-value arguments of such a returned call (fixed ones and `&[x]`
+     *  elements) move instead of cloning; the clone text becomes the owned mark. */
+    h28t01ReturnedSliceMoves(node: any, cloned: string[]): void;
+    /** `row['fee']['k'] = v` / `row['fees'][i]['k'] = v` on a typed cache row (`printCacheRowNestedWrite`'s receivers): the first
+     *  hop is the same `entry(..).or_insert(Value::Null)`; the write is a native insert on a map, skipped on anything else as the
+     *  helper skipped it. The `[i]` hop needs `i` in bounds: a loop over a copy of `row['fees']` with the row unwritten since. */
+    h30r06CacheRowFeeWrite(baseExpr: any, keys: any[], right: any, rhs: string, identation: number): string | undefined;
+    /** `i` of `row[k][i]`: the index of `for (let i = 0; i < xs.length; i++)` (i never written) where `const xs` is a
+     *  `this.safeList (row, k[, []])` copy of the same row's list, and nothing writes `row` between that read and the write. */
+    h30r06BoundedRowIndex(row: any, key: string, indexNode: any): string | undefined;
+    /** maps (h29-R06 proof: features / markets / markets_by_id through safeDict / omit / extend / deepExtend, literal
+     *  non-marker keyed writes only): no ws tag can sit in it, so the map's own iterators list what the helper listed. */
+    h30r07ConfigDictEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
+    /** `xs[i]` read inside the value of a statement-level write into the same list local (`xs[i] = f (xs[i])`,
+     *  `xs[j]['k'] = g (xs[j])`): that write binds its value first (`let __be_tmp = ..`), so the read runs before `&mut xs`. */
+    h30r08ListRowRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
 }
 export {};
