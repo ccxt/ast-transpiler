@@ -25093,16 +25093,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if ((parent.expression !== child) || (parent.expression === undefined)) {
                     return false;
                 }
-                let reads = 0;
-                const count = (n) => {
-                    if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)
-                        && (this.goUnwrapParenthesizedNode(n.right)?.kind === SyntaxKind.Identifier)) {
-                        reads += 1;
-                    }
-                    n.forEachChild(count);
-                };
-                count (parent.expression);
-                return reads === 1;
+                return [parent.expression, ...this.goDescendantsOf(parent.expression)].filter((n) => (n.kind === SyntaxKind.BinaryExpression)
+                    && (n.operatorToken?.kind === SyntaxKind.InKeyword) && (this.goUnwrapParenthesizedNode(n.right)?.kind === SyntaxKind.Identifier)).length === 1;
             }
             if ((parent.kind === SyntaxKind.ParenthesizedExpression)
                 || (parent.kind === SyntaxKind.PrefixUnaryExpression)
@@ -26184,22 +26176,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const then: any = st.thenStatement;
             return (then?.kind === SyntaxKind.Block) ? then.statements.some((s: any) => isLiteralStore(s)) : isLiteralStore(then);
         };
-        const storesOther = (st: any): boolean => {
-            let found = false;
-            const visit = (n: any): void => {
-                if (found) {
-                    return;
-                }
-                if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind >= SyntaxKind.FirstAssignment)
-                    && (n.operatorToken.kind <= SyntaxKind.LastAssignment) && isField(n.left) && (n.right?.kind !== SyntaxKind.ObjectLiteralExpression)) {
-                    found = true;
-                    return;
-                }
-                n.forEachChild(visit);
-            };
-            visit(st);
-            return found;
-        };
+        const storesOther = (st: any): boolean => [st, ...this.goDescendantsOf(st)].some((n: any) => (n.kind === SyntaxKind.BinaryExpression)
+            && (n.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= SyntaxKind.LastAssignment)
+            && isField(n.left) && (n.right?.kind !== SyntaxKind.ObjectLiteralExpression));
         let child: any = access;
         for (let parent: any = access.parent; parent !== undefined; child = parent, parent = parent.parent) {
             if (isFunctionLike(parent) || (parent.kind === SyntaxKind.SourceFile)) {
@@ -28245,7 +28224,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const reads = [];
         const inCount = this.goDescendantsOf(condition).filter((n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)).length
             + (((condition?.kind === SyntaxKind.BinaryExpression) && (condition.operatorToken?.kind === SyntaxKind.InKeyword)) ? 1 : 0);
-        const visit = (n) => {
+        for (const n of [condition, ...this.goDescendantsOf(condition)]) {
             const ohlcvsRead = ((inCount === 1) && (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword))
                 ? this.goOhlcvsInRead(n, statement) : undefined;  // a lone `in` only; a second one keeps the existing single-read rule
             if (ohlcvsRead !== undefined) {
@@ -28282,9 +28261,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     }
                 }
             }
-            n.forEachChild(visit);
-        };
-        visit(condition);
+        }
         return (reads.length === 1) ? reads[0] : undefined;
     }
 
