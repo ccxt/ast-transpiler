@@ -3400,6 +3400,7 @@ export class RustTranspiler extends BaseTranspiler {
         let writes = 0;
         let baseFieldWrite = false;
         let passThroughWrite = false;
+        let readerWrite = false;
         for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
             if (isIdentifier(n) && this.rustNilSlotWrite(n) && this.rustDeclaredNode(n) === declaration) {
                 if (this.primitiveKindOfType(this.typeOfNodeIfAny(n)) !== 'string') return undefined;
@@ -3417,6 +3418,7 @@ export class RustTranspiler extends BaseTranspiler {
             // method (rustVenueTypedCall) is admitted only for a native read (below)
             if (this.rustBaseStrFieldRead(rhs) || this.rustWsUrlRead(rhs) || this.rustVenueTypedCall(rhs) === 'ostr') baseFieldWrite = true;
             if (this.rustPassThroughStrCallIn(rhs)) passThroughWrite = true;
+            else if (this.rustOptReaderName(rhs) !== undefined) readerWrite = true;
             // `x = symbols` where the checker narrows the source to `never` (a `Strings` past `!Array.isArray`): no string
             // ever arrives, the boxed list read back as text was `None` (printed `None`, rustScalarNativeText)
             if (this.rustNilNeverWrite(rhs)) continue;
@@ -3478,7 +3480,8 @@ export class RustTranspiler extends BaseTranspiler {
         });
         // without a native read, only repeated native writes (no `Value` decode) or a moving hand-off earn the type
         // a write from a pass-through venue string helper earns the type only with a native read (boxed straight back it moves the conversion)
-        if (ok && native === 0 && passThroughWrite) return undefined;
+        // (a local also written from a base string reader keeps its type: that write prints the reader's `_opt` twin)
+        if (ok && native === 0 && passThroughWrite && !readerWrite) return undefined;
         if (!ok || (native === 0 && (baseFieldWrite || (writes <= 1 && !this.rustNilScalarHandOff(declaration, scope, kind, boxed))))
             || (boxed.length > 0 && scope.kind !== SyntaxKind.MethodDeclaration)) return undefined;
         // boxed uses are checked against the printed method lines
