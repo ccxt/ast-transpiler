@@ -25970,6 +25970,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!this.rustBorrowedKinds.has(declaration)) {
             this.rustBorrowedKinds.set(declaration, undefined); // re-entrancy guard
             this.rustBorrowedPending.add(declaration);
+            const venueHits = this.rustVenueDictGuardHits;
             let kind: 'dict' | 'list' | undefined;
             try {
                 kind = this.rustBorrowedLocalKindUncached(declaration);
@@ -25979,6 +25980,8 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustBorrowedPending.delete(declaration);
             }
             this.rustBorrowedKinds.set(declaration, kind);
+            // a refusal made while a venue Dict slot decision was pending (its guard answered false) is asked again later
+            if (kind === undefined && this.rustVenueDictPending.size > 0 && this.rustVenueDictGuardHits !== venueHits) { this.rustBorrowedKinds.delete(declaration); return undefined; }
             // sb: an alias refused while its slot source was still deciding is asked again once that source settles
             if (kind === undefined && this.rustSbAliasDeferred.has(declaration)) { this.rustSbAliasDeferred.delete(declaration); this.rustBorrowedKinds.delete(declaration); this.rustSbAliasReask.add(declaration); return undefined; }
         }
