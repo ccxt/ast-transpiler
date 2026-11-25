@@ -44728,6 +44728,8 @@ export class RustTranspiler extends BaseTranspiler {
     const recv: any = this.rustSkipWrappers(call.arguments[0]);
     // the base config fields `options` / `urls` / `fees` print as plain `Dict` fields, never a ws marker map
     const field = [ 'options', 'urls', 'fees' ].includes(this.rustDictField(recv) ?? '') ? String(recv.name.text) : undefined;
+    const nested = field === undefined ? (this as any).rustP22ConfigPath(recv) : undefined;
+    if (nested !== undefined) return !/ts[/]src[/](pro|prediction)[/]/.test(file) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call) ? undefined : (this as any).rustP22NestedRead(call, nested, optional);
     // a pro local built by `this.indexBy (..)` is a fresh runtime map (`index_by -> Dict`), never a ws marker map
     const fresh = isIdentifier(recv) && this.rustP22IndexByLocal(recv);
     if (!file.includes('ts/src/') || (field === undefined && !fresh && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
@@ -44745,6 +44747,38 @@ export class RustTranspiler extends BaseTranspiler {
     if (d?.kind !== SyntaxKind.VariableDeclaration || d.name === recv || !isIdentifier(d.name) || !((d.parent?.flags ?? 0) & NodeFlags.Const)) return false;
     const init: any = this.rustSkipWrappers(d.initializer);
     return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword && String(init.expression.name.text) === 'indexBy';
+};
+// `this.urls['api']['ws']`-style literal paths (at most two steps) under a config field: each step reads a map or answers empty
+(RustTranspiler.prototype as any).rustP22ConfigPath = function (this: any, recv: any): { field: string, path: string[] } | undefined {
+    const path: string[] = [];
+    let n: any = recv;
+    while (n !== undefined && isElementAccessExpression(n) && path.length < 2) {
+        const a: any = this.rustSkipWrappers(n.argumentExpression);
+        if (a === undefined || !isStringLiteral(a)) return undefined;
+        path.unshift(String(a.text));
+        n = this.rustSkipWrappers(n.expression);
+    }
+    if (path.length === 0 || n === undefined || !isPropertyAccessExpression(n)) return undefined;
+    const field = this.rustDictField(n);
+    return [ 'options', 'urls', 'fees' ].includes(field ?? '') ? { field: String(n.name.text), path } : undefined;
+};
+(RustTranspiler.prototype as any).rustP22NestedRead = function (this: any, call: any, cfg: { field: string, path: string[] }, optional: boolean): string | undefined {
+    const key: any = this.rustSkipWrappers(call.arguments[1]);
+    let k: string | undefined;
+    if (isStringLiteral(key)) k = JSON.stringify(String(key.text));
+    else if (isIdentifier(key)) {
+        const kind = this.rustScalarLocalOf(key)?.kind;
+        if (kind !== 'str' && kind !== 'ostr') return undefined;
+        k = `${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}`;
+    }
+    if (k === undefined || cfg.path.some((p) => /[\\"]/.test(p))) return undefined;
+    const none = optional ? 'None' : 'Default::default()';
+    let out = `if let Some(Value::Dict(__m)) = __p${cfg.path.length}.get(${k}) { ${optional ? 'Some(std::sync::Arc::clone(__m))' : 'std::sync::Arc::clone(__m)'} } else { ${none} }`;
+    for (let i = cfg.path.length; i >= 1; i--) {
+        const from = i === 1 ? `self.${cfg.field}` : `__p${i - 1}`;
+        out = `if let Some(Value::Dict(__p${i})) = ${from}.get(${JSON.stringify(cfg.path[i - 1])}) { ${out} } else { ${none} }`;
+    }
+    return `(${out})`;
 };
 // ===== end h34-H34-P22
 
