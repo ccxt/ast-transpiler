@@ -29201,9 +29201,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goUnwrapParenthesizedNode(node) {
-        let current = node;
-        current = goUnwrapParens(current);
-        return current;
+        return goUnwrapParens(node);
     }
 
     // an operand a short-circuit may skip without any observable difference: no calls,
@@ -29565,11 +29563,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         } else if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === use)
             && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left?.kind === SyntaxKind.Identifier)
             && (parent.parent?.kind === SyntaxKind.ExpressionStatement)) {
-            try {
-                target = this.getChecker().getSymbolAtLocation(parent.left)?.valueDeclaration?.resolve();
-            } catch (e) {
-                target = undefined;
-            }
+            target = this.goSymbolValueDecl(parent.left);
         }
         if ((target?.kind !== SyntaxKind.VariableDeclaration) || (target.name?.kind !== SyntaxKind.Identifier)) {
             return undefined;
@@ -29579,19 +29573,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             inBody = inBody || (p === body);
         }
         // a value-typed write (`r = "s"`) may type the copy as the pointer's value family
-        let valueWrite = false;
-        const visit = (n: any): void => {
-            if (valueWrite) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
-                && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === target.name.text)) {
-                valueWrite = this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0))))
-                    && !this.goGetArgWriteIsNativeArithmetic(n.right);
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
+        const valueWrite = this.hasNodeWhere(body, (n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
+            && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === target.name.text)
+            && this.goGetArgIsValueType(String(this.goTypeOfInitializer(n.right, this.printNode(n.right, 0)))) && !this.goGetArgWriteIsNativeArithmetic(n.right));
         return (inBody && !valueWrite) ? target : undefined;
     }
 
@@ -29754,26 +29738,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // no longer compare equal to nil there, so both keep the box
             return !pointer && !nilable;
         };
-        const visit = (n: any): void => {
-            if (!safe) {
-                return;
-            }
-            if ((n?.kind === SyntaxKind.Identifier) && (n.text === name)) {
-                let symbol;
-                try {
-                    symbol = this.getChecker().getSymbolAtLocation(n);
-                } catch (e) {
-                    symbol = undefined;
-                }
-                if (symbol?.valueDeclaration?.resolve() === param) {
-                    safe = useIsSafe(n);
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
-        return safe;
+        return !this.goScopeIdents(body, name).some((n: any) => (this.goSymbolValueDecl(n) === param) && !useIsSafe(n));
     }
 
     // `this.balance[x]` with a nil-guarded `*string` x: the native Balance store/step indexes `[*x]`,
@@ -29945,8 +29910,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const name = element.name.text;
-        const unread = this.hasNodeWhere(scope, (n: any) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === element.name)) {
+        const unread = this.goScopeIdents(scope, name).some((n: any) => {
+            if ((n === element.name)) {
                 return (n !== element) && (n.kind === SyntaxKind.BindingElement || n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter)
                     && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name); // a shadowing binding
             }
@@ -30038,13 +30003,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || (initializer.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
             return false;
         }
-        const checker: any = this.checkerOrUndefined();
-        let declared: any;
-        try {
-            declared = checker?.getSymbolAtLocation(initializer.expression.name)?.valueDeclaration?.resolve();
-        } catch (e) {
-            declared = undefined;
-        }
+        const declared: any = this.goSymbolValueDecl(initializer.expression.name);
         if (declared === undefined) {
             return false;
         }
@@ -30183,8 +30142,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 || ((parent.kind === SyntaxKind.ConditionalExpression) && (child === parent.whenTrue) && this.goConditionProvesNonNil(parent.condition, ident))
                 || ((parent.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.AmpersandAmpersandToken)
                     && (child === parent.right) && this.goConditionProvesNonNil(parent.left, ident))) {
-                return !this.hasNodeWhere(parent, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === ident.text)
-                    && (n !== ident) && (this.goRebindingTargetOf(n) !== undefined));
+                return !this.goScopeIdents(parent, ident.text).some((n: any) =>
+                    (n !== ident) && (this.goRebindingTargetOf(n) !== undefined));
             }
             child = parent;
             parent = parent.parent;
@@ -30398,12 +30357,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((leftElement?.kind !== SyntaxKind.Identifier) || !this.goTupleElementIsDict(right, index)) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(leftElement);
-        } catch (e) {
-            decl = undefined;
-        }
+        const decl: any = this.goValueDecl(leftElement);
         if ((decl?.kind !== SyntaxKind.Parameter) || (decl.initializer === undefined) || (decl.parent?.body === undefined)) {
             return false;
         }
@@ -30437,11 +30391,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goGetArgCalleeDeclaration(callee): any {
-        try {
-            return this.getChecker().getSymbolAtLocation(callee)?.valueDeclaration?.resolve();
-        } catch (e) {
-            return undefined;
-        }
+        return this.goSymbolValueDecl(callee);
     }
 
     // argument `argIndex` of the callee binds a parameter with a TypeScript default (GetArg-bound)
@@ -30462,12 +30412,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         let symbol;
-        try {
-            symbol = this.getChecker().getSymbolAtLocation(callee);
-        } catch (e) {
-            symbol = undefined;
-        }
-        const decl: any = symbol?.valueDeclaration?.resolve();
+        const decl: any = this.goSymbolValueDecl(callee);
         const params: any[] = decl?.parameters ?? [];
         const param: any = params[argIndex];
         const initializer: any = param?.initializer;
@@ -30809,15 +30754,17 @@ ${this.getIden(identation)}${returnStatement}`;
         // an identifier argument derefs in printIdentifier, so a build-layer pass that re-prints
         const derefable = (arg) => [ SyntaxKind.CallExpression, SyntaxKind.PropertyAccessExpression,
             SyntaxKind.ParenthesizedExpression, SyntaxKind.NonNullExpression, SyntaxKind.AsExpression ].includes(arg.kind);
+        if (!args.some(derefable)) {
+            return undefined; // fast path: only derefable shapes can print `*arg`
+        }
+        const callee: any = node.expression;
+        const calleeName = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
         const deref: boolean[] = args.map((arg, i) => {
-            const param = this.goCallParamAt(node, i);
-            const callee: any = node.expression;
-            const calleeName = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
-            if ((typeof calleeName === 'string') && this.goIsUnifiedStringParameter(calleeName, i)) {
+            if (!derefable(arg) || ((typeof calleeName === 'string') && this.goIsUnifiedStringParameter(calleeName, i))) {
                 return false; // a unified string argument prints through its own decision
             }
-            return (param !== undefined) && (this.goNativeParameterType(param) === 'string')
-                && derefable(arg) && this.goNilProvenStringPtrArg(arg);
+            const param = this.goCallParamAt(node, i);
+            return (param !== undefined) && (this.goNativeParameterType(param) === 'string') && this.goNilProvenStringPtrArg(arg);
         });
         if (!deref.some((x) => x)) {
             return undefined;
@@ -30835,11 +30782,9 @@ ${this.getIden(identation)}${returnStatement}`;
             return rowUse;
         }
         const row: any = (node?.parent?.kind === SyntaxKind.ElementAccessExpression) && (node.parent.expression === node)
-            ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+            ? this.goSymbolValueDecl(node) : undefined;
         if ((row !== undefined) && (row.name !== node) && this.goAssertedRowDeclaration(row)) {
-            let init: any = row.initializer;
-            init = goUnwrapTypeExpr(init);
-            return this.printNode(init, 0);
+            return this.printNode(goUnwrapTypeExpr(row.initializer), 0);
         }
         const printed = super.printIdentifier(node);
         if (this.goTuplePointerSlotLocalStoreRead(node)) {
@@ -30847,10 +30792,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
         const h27g37Arg = this.h27g37SpawnArgDeref(node, printed); if (h27g37Arg !== undefined) return h27g37Arg;
         const parent: any = node.parent;
-        if ((parent?.kind !== SyntaxKind.CallExpression) || !(parent.arguments ?? []).includes(node)) {
+        const index = (parent?.kind === SyntaxKind.CallExpression) ? (parent.arguments ?? []).indexOf(node) : -1;
+        if (index < 0) {
             return printed;
         }
-        const index = parent.arguments.indexOf(node);
         // a unified string argument prints through its own deref/StringArg decision
         const callee: any = parent.expression;
         const calleeName = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
@@ -30883,24 +30828,8 @@ ${this.getIden(identation)}${returnStatement}`;
             return false;
         }
         const name = nameNode.text;
-        let used = false;
-        const visit = (n) => {
-            if (used) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== nameNode)) {
-                const parent = n.parent;
-                const isDeclarationName = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n);
-                const isPropertyName = (parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n);
-                if (!isDeclarationName && !isPropertyName) {
-                    used = true;
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
-        return used;
+        return this.goScopeIdents(scope, name).some((n: any) => (n !== nameNode)
+            && !(((n.parent?.kind === SyntaxKind.VariableDeclaration) || (n.parent?.kind === SyntaxKind.PropertyAccessExpression)) && (n.parent.name === n)));
     }
 
     // `Array.isArray (x)` on a single-write safeList / safeDict local: printed as a Go bool
@@ -31015,7 +30944,7 @@ ${this.getIden(identation)}${returnStatement}`;
         const goType = isKeys ? GO_STRING_LIST_LOCAL_TYPE : GO_SAFE_LIST_LOCAL_TYPE;
         const loopVariable = isKeys ? 'objectKey' : 'objectValue';
         if ((scope === undefined) || this.goTypeNameIsShadowed(scope, goType)
-            || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === loopVariable))) {
+            || (this.goScopeIdents(scope, loopVariable).length > 0)) {
             return undefined;
         }
         const receiverText = this.printNode(receiver, 0);
@@ -31124,8 +31053,8 @@ ${this.getIden(identation)}${returnStatement}`;
         if (this.goLocalIsRebound(scope, declaration.name)) {
             return false;
         }
-        const observed = this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-            && (n !== declaration.name) && (n.parent !== undefined) && this.goIsNilComparisonOperand(n, n.parent));
+        const observed = this.goScopeIdents(scope, name).some((n: any) =>
+            (n !== declaration.name) && (n.parent !== undefined) && this.goIsNilComparisonOperand(n, n.parent));
         return !observed && this.goLocalIsSafeToType(scope, declaration, name, GO_SAFE_LIST_LOCAL_TYPE);
     }
 
@@ -31713,7 +31642,7 @@ ${this.getIden(identation)}${returnStatement}`;
         const keyNode = this.goUnwrapParenthesizedNode(access.argumentExpression);
         let clientUrl = this.goIsClientUrl(keyNode);
         if (!clientUrl && (keyNode?.kind === SyntaxKind.PropertyAccessExpression) && (keyNode.name?.text === 'url') && (keyNode.expression?.kind === SyntaxKind.Identifier)) {
-            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(keyNode.expression)?.valueDeclaration?.resolve?.();
+            const decl: any = this.goSymbolValueDecl(keyNode.expression);
             const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
             // `const client = this.client (url)`: the base accessor returns the Client the url names
             clientUrl = (decl?.kind === SyntaxKind.VariableDeclaration) && (init?.kind === SyntaxKind.CallExpression)
@@ -32541,7 +32470,7 @@ ${tryBodyBlock}
         if (checker === undefined) {
             return false;
         }
-        const keyDeclaration: any = checker.getSymbolAtLocation(key)?.valueDeclaration?.resolve?.();
+        const keyDeclaration: any = this.goSymbolValueDecl(key);
         const keyList: any = keyDeclaration?.parent;
         const loop: any = keyList?.parent;
         if ((keyDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (keyList?.kind !== SyntaxKind.VariableDeclarationList)
@@ -32578,7 +32507,7 @@ ${tryBodyBlock}
         let from: number = loop.pos; // the list is unwritten from here to the end of the loop
         if (bound?.kind === SyntaxKind.Identifier) {
             // `const n = x.length` ahead of the loop, n never written
-            const boundDeclaration: any = checker.getSymbolAtLocation(bound)?.valueDeclaration?.resolve?.();
+            const boundDeclaration: any = this.goSymbolValueDecl(bound);
             const init: any = boundDeclaration?.initializer;
             if ((boundDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (this.goEnclosingFunction(boundDeclaration) !== scope)
                 || (boundDeclaration.end > loop.pos) || (init?.kind !== SyntaxKind.PropertyAccessExpression)
@@ -32596,7 +32525,7 @@ ${tryBodyBlock}
         if (keyWrites.length > 0) {
             return false;
         }
-        const listDeclaration: any = checker.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+        const listDeclaration: any = this.goSymbolValueDecl(list);
         if (this.goEnclosingFunction(listDeclaration) !== scope) {
             return false;
         }
@@ -32609,7 +32538,7 @@ ${tryBodyBlock}
         if (container?.kind !== SyntaxKind.Identifier) {
             return true;
         }
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(container)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(container);
         return (declaration?.kind !== SyntaxKind.VariableDeclaration) || this.goJsonOriginContainer(container);
     }
 
@@ -32704,7 +32633,7 @@ ${tryBodyBlock}
             }
             if ((value?.kind === SyntaxKind.Identifier) && (hops < 3)) {
                 // one single-declaration hop: `const rows = await this.privateGet…()`; `rows` itself unwritten
-                const hop: any = checker.getSymbolAtLocation(value)?.valueDeclaration?.resolve?.();
+                const hop: any = this.goSymbolValueDecl(value);
                 if ((hop?.kind === SyntaxKind.VariableDeclaration) && (hop.initializer !== undefined)
                     && (this.goEnclosingFunction(hop) === this.goEnclosingFunction(value))
                     && (this.goNameWriteSites(this.goEnclosingFunction(hop), value.text, hop).length === 0)) {
@@ -32728,7 +32657,7 @@ ${tryBodyBlock}
                 return false;
             }
         };
-        const declaration: any = checker.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(list);
         if (declaration === undefined) {
             return false;
         }
@@ -32770,7 +32699,7 @@ ${tryBodyBlock}
 
     // `const row = rows[i] as T[]` read only as `row[N]`, with `rows` and `i` never rebound past the loop step: Go has no
     goAssertedRowLocal(base): boolean {
-        const declaration: any = (base?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.() : undefined;
+        const declaration: any = (base?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(base) : undefined;
         return (declaration !== undefined) && this.goAssertedRowDeclaration(declaration);
     }
 
@@ -32830,7 +32759,7 @@ ${tryBodyBlock}
         if ((scope === undefined) || (checker === undefined)) {
             return false;
         }
-        const declOf = (n: any): any => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const declOf = (n: any): any => this.goSymbolValueDecl(n);
         const rowsDecl = declOf(rows);
         const keyDecl = declOf(key);
         // the counter of the enclosing `for`: its only write is the loop step
@@ -32874,7 +32803,7 @@ ${tryBodyBlock}
         const h27g11 = this.h27g11GuardedParamRead(node, containerStr, keyStr); if (h27g11 !== undefined) return h27g11;
         const readBase: any = node?.expression;
         if ((readBase?.kind === SyntaxKind.Identifier)
-            && this.goSliceParamKeepsGetValue(this.checkerOrUndefined()?.getSymbolAtLocation(readBase)?.valueDeclaration?.resolve?.())) {
+            && this.goSliceParamKeepsGetValue(this.goSymbolValueDecl(readBase))) {
             return undefined;
         }
         // an inlined asserted row (goAssertedRowLocal) prints its `rows[i]` source, which is not a slice
@@ -32906,7 +32835,7 @@ ${tryBodyBlock}
     // every pushed value of the local must carry a checker type with no any/unknown part
     goListWritesCarryNoAny(list): boolean {
         const checker: any = this.checkerOrUndefined();
-        const declaration: any = (list?.kind === SyntaxKind.Identifier) ? checker?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.() : undefined;
+        const declaration: any = (list?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(list) : undefined;
         // a call result can be a tuple another pass destructures from the guarded read's text
         if ((checker === undefined) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
             || (this.goUnwrapParenthesizedNode(declaration.initializer)?.kind === SyntaxKind.CallExpression)) {
@@ -33067,7 +32996,7 @@ ${tryBodyBlock}
     }
     // `const xs = await this.m (..)` whose receive the printer declares `[]any` (goAwaitReceiveUnbox): the
     goAwaitedListLocal(base): boolean {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(base);
         const awaited: any = decl?.initializer;
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
             || (awaited?.kind !== SyntaxKind.AwaitExpression) || this.goDeclaredTypeInProgress.has(decl)) {
@@ -33191,7 +33120,7 @@ ${tryBodyBlock}
     }
 
     goAwaitedMapRowList(base): boolean {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(base);
         const call: any = (decl?.kind === SyntaxKind.VariableDeclaration) ? decl.initializer?.expression : undefined;
         const callee: any = call?.expression;
         if ((decl.initializer?.kind !== SyntaxKind.AwaitExpression) || (call?.kind !== SyntaxKind.CallExpression)
@@ -33291,26 +33220,35 @@ ${tryBodyBlock}
         });
     }
 
-    goJsonOriginContainer(node, depth = 0): boolean {
-        if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
-            return false;
-        }
+    // the const/let box local seeded by an endpoint/stub await or a keyed safeDict hop of a `recurse`-proven container
+    goJsonOriginSeedDecl(node, depth: number, constOnly: boolean, numericKey: boolean, identContainer: boolean, recurse: (c: any, d: number) => boolean): any {
         const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
-            return false;
+        if ((depth > 5) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (constOnly && ((declaration.parent.flags & ts.NodeFlags.Const) === 0))) {
+            return undefined;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
-        let fromJson = false;
         if (init?.kind === SyntaxKind.AwaitExpression) {
-            fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
-        } else {
-            const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-            fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
-                && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
-                && this.goJsonOriginContainer(args.container, depth + 1);
+            return (this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression)) ? declaration : undefined;
         }
-        return fromJson && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
+        const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
+        const fromJson = (args !== undefined) && ((args.key?.kind === SyntaxKind.StringLiteral) || (numericKey && (args.key?.kind === SyntaxKind.NumericLiteral)))
+            && (!identContainer || (args.container?.kind === SyntaxKind.Identifier))
+            && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE) && recurse(args.container, depth + 1);
+        return fromJson ? declaration : undefined;
+    }
+
+    // the single-identifier box local of a statement-level declaration the identifier binds
+    goStatementBoxLocal(node): any {
+        const declaration: any = this.goAnyBoxLocalDeclaration(node);
+        return ((declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.name?.kind === SyntaxKind.Identifier)
+            && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement)) ? declaration : undefined;
+    }
+
+    goJsonOriginContainer(node, depth = 0): boolean {
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) && (depth <= 5)
+            ? this.goJsonOriginSeedDecl(node, depth, false, false, false, (c, d) => this.goJsonOriginContainer(c, d)) : undefined;
+        return (declaration !== undefined) && this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => this.goJsonOriginUseIsReadOnly(n, name));
     }
 
     // one use of a JSON list local: its length, or a read of one element that nothing writes through
@@ -33575,7 +33513,7 @@ ${tryBodyBlock}
         if ((checker === undefined) || (base?.kind !== SyntaxKind.Identifier) || (keyNode?.kind !== SyntaxKind.Identifier)) {
             return false;
         }
-        const listDecl: any = checker.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+        const listDecl: any = this.goSymbolValueDecl(base);
         const awaited: any = listDecl?.initializer;
         if ((listDecl?.kind !== SyntaxKind.VariableDeclaration) || (listDecl.name?.kind !== SyntaxKind.Identifier)
             || (awaited?.kind !== SyntaxKind.AwaitExpression) || this.goDeclaredTypeInProgress.has(listDecl)
@@ -33833,12 +33771,7 @@ ${tryBodyBlock}
         if (checker === undefined) {
             return undefined;
         }
-        let decl: any;
-        try {
-            decl = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
-        } catch (e) {
-            return undefined;
-        }
+        const decl: any = this.goSymbolValueDecl(node);
         if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
             return undefined;
         }
@@ -34242,7 +34175,7 @@ ${tryBodyBlock}
     // handleOptionStringAndParams(2) / handleMarginModeAndParams with a string-literal default resolve to the `[string, Dict]` overload:
     // the Go base returns that default or a present string option (another type panics), never nil
     goNonNilStringOverloadSlot(node) {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(node);
         const call: any = decl?.parent?.parent?.initializer;
         const name = call?.expression?.name?.text;
         const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4, 'handleMarginModeAndParams': 2 }[name];
@@ -34251,7 +34184,7 @@ ${tryBodyBlock}
     }
     // slot 0 of `const [ x, p ] = this.<guardedStringTupleCall> (…)`: a Go *string read only by the guarded concat proof
     goGuardedTupleSlot0(node) {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(node);
         const isSlot0 = (decl?.kind === SyntaxKind.BindingElement) && (decl.parent?.kind === SyntaxKind.ArrayBindingPattern) && (decl.parent.elements[0] === decl);
         const holder = isSlot0 ? decl.parent.parent : undefined;
         const init = holder?.initializer;
@@ -34334,12 +34267,7 @@ ${tryBodyBlock}
                         || !this.goIdentifierRefersToDeclaration(arg, param)) {
                         continue;
                     }
-                    let declaration;
-                    try {
-                        declaration = this.getChecker().getResolvedSignature(node)?.declaration?.resolve();
-                    } catch (e) {
-                        declaration = undefined;
-                    }
+                    const declaration = this.goResolvedCallDecl(node);
                     const calleeParam = declaration?.parameters?.[i];
                     const text = ((calleeParam?.type === undefined) ? '' : String(calleeParam.type.getText()).trim());
                     if (GO_NULLABLE_PARAM_ALIASES.test(text) || text.includes('undefined')) {
@@ -34385,12 +34313,7 @@ ${tryBodyBlock}
         if ((typeof name !== 'string') || !Object.prototype.hasOwnProperty.call(GO_BASE_CACHE_FIELDS, name)) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node.name);
-        } catch (e) {
-            declaration = undefined;
-        }
+        const declaration: any = this.goValueDecl(node.name);
         const owner: any = declaration?.parent;
         const ownerName = owner?.name?.text;
         if ((declaration?.kind !== SyntaxKind.PropertyDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration)
@@ -34549,7 +34472,7 @@ ${tryBodyBlock}
             || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.name?.text !== 'reusableFuture')) {
             return false;
         }
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(call.expression.name)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(call.expression.name);
         const owner: any = declaration?.parent;
         const fileName = String(declaration?.getSourceFile?.()?.fileName ?? '').replace(/\\/g, '/');
         return (declaration?.kind === SyntaxKind.MethodDeclaration) && (owner?.kind === SyntaxKind.ClassDeclaration)
@@ -34570,8 +34493,8 @@ ${tryBodyBlock}
         const own: any = checker?.getSymbolAtLocation(declaration.name);
         const scope: any = this.goEnclosingFunction(declaration);
         const name = declaration.name.text;
-        const verdict = (own !== undefined) && (scope !== undefined) && !this.hasNodeWhere(scope, (n: any) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+        const verdict = (own !== undefined) && (scope !== undefined) && !this.goScopeIdents(scope, name).some((n: any) => {
+            if ((n === declaration.name)) {
                 return false;
             }
             const parent: any = n.parent;
@@ -34627,8 +34550,8 @@ ${tryBodyBlock}
         }
         const scope = this.goEnclosingFunction(declaration);
         const name = declaration.name.text;
-        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-            && (n !== declaration.name) && !this.goTernaryJoinNilMapReadOk(n))) {
+        if ((scope === undefined) || this.goScopeIdents(scope, name).some((n: any) =>
+            (n !== declaration.name) && !this.goTernaryJoinNilMapReadOk(n))) {
             return undefined;
         }
         return { goType: GO_SAFE_DICT_LOCAL_TYPE, derefTrue: false, derefFalse: false };
@@ -34713,22 +34636,14 @@ ${tryBodyBlock}
             || /promise$/i.test(declaration.name.text)) {
             return false;
         }
-        if (this.goClientFutureLocalCache === undefined) {
-            this.goClientFutureLocalCache = new WeakMap<object, boolean>();
-        }
-        if (this.goClientFutureLocalCache.has(declaration)) {
-            return this.goClientFutureLocalCache.get(declaration);
-        }
-        this.goClientFutureLocalCache.set(declaration, false); // re-entry answers box
-        let verdict = false;
-        try {
+        return this.goSeededProof(this.goClientFutureLocalCache ??= new WeakMap<object, boolean>(), declaration, () => {
             if (this.goClientFutureReadKey(declaration.initializer) !== undefined) {
                 const checker: Checker | undefined = this.checkerOrUndefined();
                 const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
                 const scope: Node | undefined = this.goEnclosingFunction(declaration);
                 const name = declaration.name.text;
-                verdict = (own !== undefined) && (scope !== undefined) && !this.goTypeNameIsShadowed(scope, '*Future') && !this.hasNodeWhere(scope, (n) => {
-                    if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                return (own !== undefined) && (scope !== undefined) && !this.goTypeNameIsShadowed(scope, '*Future') && !this.goScopeIdents(scope, name).some((n: any) => {
+                    if ((n === declaration.name)) {
                         return false;
                     }
                     const parent = n.parent;
@@ -34749,10 +34664,8 @@ ${tryBodyBlock}
                     return !this.goIsNilComparisonOperand(n, parent);
                 });
             }
-        } finally {
-            this.goClientFutureLocalCache.set(declaration, verdict);
-        }
-        return verdict;
+            return false;
+        });
     }
     // `const x = this.safeValue (client.subscriptions, k)` (k a Go string key or literal, client the ws Client
     goSubscriptionPresenceLocal(declaration) {
@@ -34765,25 +34678,15 @@ ${tryBodyBlock}
             || !clientIsInterfaceFrame(declaration)) {
             return false;
         }
-        if (this.goSubscriptionPresenceCache === undefined) {
-            this.goSubscriptionPresenceCache = new WeakMap<object, boolean>();
-        }
-        if (this.goSubscriptionPresenceCache.has(declaration)) {
-            return this.goSubscriptionPresenceCache.get(declaration);
-        }
-        this.goSubscriptionPresenceCache.set(declaration, false);
-        let verdict = false;
-        try {
+        return this.goSeededProof(this.goSubscriptionPresenceCache ??= new WeakMap<object, boolean>(), declaration, () => {
             const key = call.arguments[1];
             if ((key.kind === SyntaxKind.StringLiteral) || ((key.kind === SyntaxKind.Identifier) && this.goIsStringKeyExpression(key))) {
-                verdict = this.goDeclaredLocalTypeIfSafe(declaration, 'bool', (n) => this.goIsNilComparisonOperand(n, n.parent),
+                return this.goDeclaredLocalTypeIfSafe(declaration, 'bool', (n) => this.goIsNilComparisonOperand(n, n.parent),
                     (n) => ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
                         || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.name === n))) === 'bool';
             }
-        } finally {
-            this.goSubscriptionPresenceCache.set(declaration, verdict);
-        }
-        return verdict;
+            return false;
+        });
     }
     goOhlcvsReadCacheType(declaration) {
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
@@ -34890,7 +34793,7 @@ ${tryBodyBlock}
         }
         return this.hasNodeWhere(scope, (n) => {
             if ((n.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.EqualsToken) || (n.left?.kind !== SyntaxKind.Identifier)
-                || !this.hasNodeWhere(n.right, (r) => (r.kind === SyntaxKind.Identifier) && (r.text === name))) {
+                || !(this.goScopeIdents(n.right, name).length > 0)) {
                 return false;
             }
             const target = checker.getSymbolAtLocation(n.left)?.valueDeclaration?.resolve();
@@ -35055,10 +34958,7 @@ ${tryBodyBlock}
             if (!ours(n)) {
                 return false;
             }
-            let current = n;
-            while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-                current = current.parent;
-            }
+            const current = this.goMapParamOuterParens(n);
             if (this.goIsNilComparisonOperand(current, current.parent)) {
                 nilTests += 1;
                 return true;
@@ -35114,15 +35014,12 @@ ${tryBodyBlock}
         // a binding named like the Go builtin (`Math.min` itself is a property name, not a binding)
         const shadowsBuiltin = (n) => (n.kind === SyntaxKind.Identifier) && ((n.text === 'min') || (n.text === 'max'))
             && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n));
-        const used = this.hasNodeWhere(scope, (n) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+        const used = this.goScopeIdents(scope, declaration.name.text).some((n: any) => {
+            if ((n === declaration.name)
                 || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
                 return false;
             }
-            let current = n;
-            while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-                current = current.parent;
-            }
+            const current = this.goMapParamOuterParens(n);
             const parent = current.parent;
             return (parent?.kind === SyntaxKind.BinaryExpression) && (GO_90_ARITHMETIC_TOKENS.indexOf(parent.operatorToken.kind) >= 0);
         });
@@ -35155,8 +35052,8 @@ ${tryBodyBlock}
         }
         const isNil = (e) => goIsNilNode(e);
         let args = 0;
-        const foreign = this.hasNodeWhere(scope, (n) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+        const foreign = this.goScopeIdents(scope, declaration.name.text).some((n: any) => {
+            if ((n === declaration.name)
                 || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
                 return false;
             }
@@ -35184,12 +35081,7 @@ ${tryBodyBlock}
         if ((method === 'filterBySymbolSinceLimit') && (index === 1)) {
             return true;
         }
-        let target;
-        try {
-            target = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
-        } catch (e) {
-            return false;
-        }
+        const target = this.goResolvedCallDecl(call);
         const param = target?.parameters?.[index];
         const fileName = target?.getSourceFile?.()?.fileName ?? '/base/';
         return (method === 'getUrlByMarketType') && (index === 0) && !/[\\/]base[\\/]/.test(fileName) && (param?.initializer !== undefined)
@@ -35252,8 +35144,8 @@ ${tryBodyBlock}
         if ((scope === undefined) || (checker === undefined) || (declaration?.name?.kind !== SyntaxKind.Identifier)) {
             return false;
         }
-        return this.hasNodeWhere(scope, (n) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== declaration.name.text) || (n === declaration.name)
+        return this.goScopeIdents(scope, declaration.name.text).some((n: any) => {
+            if ((n === declaration.name)
                 || (checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve() !== declaration)) {
                 return false;
             }
@@ -35325,48 +35217,42 @@ ${tryBodyBlock}
             || (this.goOrderBookCacheAccessor(declaration.initializer) === undefined)) {
             return false;
         }
-        if (this.goOrderBookCacheLocalCache === undefined) {
-            this.goOrderBookCacheLocalCache = new WeakMap<object, boolean>();
-        }
-        if (this.goOrderBookCacheLocalCache.has(declaration)) {
-            return this.goOrderBookCacheLocalCache.get(declaration);
-        }
-        this.goOrderBookCacheLocalCache.set(declaration, false);
-        const checker: Checker | undefined = this.checkerOrUndefined();
-        const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
-        const scope: Node | undefined = this.goEnclosingFunction(declaration);
-        const name: string = declaration.name.text;
-        const verdict = (own !== undefined) && (scope !== undefined) && !this.hasNodeWhere(scope, (n: Node) => {
-            if ((n.kind !== SyntaxKind.Identifier) || ((n as unknown as { text: string }).text !== name) || (n === declaration.name)) {
-                return false;
-            }
-            const parent = n.parent as unknown as { kind: SyntaxKind, name?: Node, expression?: Node, parent?: Node };
-            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
-                return false;
-            }
-            if (checker.getSymbolAtLocation(n) !== own) {
+        return this.goSeededProof(this.goOrderBookCacheLocalCache ??= new WeakMap<object, boolean>(), declaration, () => {
+            const checker: Checker | undefined = this.checkerOrUndefined();
+            const own: TsSymbol | undefined = checker?.getSymbolAtLocation(declaration.name);
+            const scope: Node | undefined = this.goEnclosingFunction(declaration);
+            const name: string = declaration.name.text;
+            const verdict = (own !== undefined) && (scope !== undefined) && !this.hasNodeWhere(scope, (n: Node) => {
+                if ((n.kind !== SyntaxKind.Identifier) || ((n as unknown as { text: string }).text !== name) || (n === declaration.name)) {
+                    return false;
+                }
+                const parent = n.parent as unknown as { kind: SyntaxKind, name?: Node, expression?: Node, parent?: Node };
+                if (((parent?.kind === SyntaxKind.PropertyAccessExpression) || (parent?.kind === SyntaxKind.PropertyAssignment)) && (parent.name === n)) {
+                    return false;
+                }
+                if (checker.getSymbolAtLocation(n) !== own) {
+                    return true;
+                }
+                if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
+                    && ((parent.name as unknown as { text: string })?.text === 'length') && !this.isGoElementAccessAssignmentTarget(parent)) {
+                    const up = parent.parent as unknown as { kind: SyntaxKind, left?: Node, operatorToken?: { kind: SyntaxKind } };
+                    return (up?.kind === SyntaxKind.BinaryExpression) && (up.left === (parent as unknown as Node))
+                        && (up.operatorToken.kind >= SyntaxKind.FirstAssignment) && (up.operatorToken.kind <= SyntaxKind.LastAssignment);
+                }
+                if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
+                    return this.isGoElementAccessAssignmentTarget(parent);
+                }
+                // `this.safeX (m, i)` reads an element of the list like GetValue does
+                if ((parent?.kind === SyntaxKind.CallExpression)) {
+                    const call = parent as unknown as CallExpression;
+                    const callee = call.expression as unknown as { kind: SyntaxKind, expression?: Node, name?: { text: string } };
+                    return !((call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+                        && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(Value|Dict|Integer|String|Number)$/.test(callee.name?.text ?? ''));
+                }
                 return true;
-            }
-            if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
-                && ((parent.name as unknown as { text: string })?.text === 'length') && !this.isGoElementAccessAssignmentTarget(parent)) {
-                const up = parent.parent as unknown as { kind: SyntaxKind, left?: Node, operatorToken?: { kind: SyntaxKind } };
-                return (up?.kind === SyntaxKind.BinaryExpression) && (up.left === (parent as unknown as Node))
-                    && (up.operatorToken.kind >= SyntaxKind.FirstAssignment) && (up.operatorToken.kind <= SyntaxKind.LastAssignment);
-            }
-            if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
-                return this.isGoElementAccessAssignmentTarget(parent);
-            }
-            // `this.safeX (m, i)` reads an element of the list like GetValue does
-            if ((parent?.kind === SyntaxKind.CallExpression)) {
-                const call = parent as unknown as CallExpression;
-                const callee = call.expression as unknown as { kind: SyntaxKind, expression?: Node, name?: { text: string } };
-                return !((call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
-                    && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(Value|Dict|Integer|String|Number)$/.test(callee.name?.text ?? ''));
-            }
-            return true;
+            });
+            return verdict;
         });
-        this.goOrderBookCacheLocalCache.set(declaration, verdict);
-        return verdict;
     }
     // R1: an ordered comparison of a ternary int64 local with a Go `int` operand (or of an `int` local with an
     goTernaryJoinHasForeignComparison(declaration, goType: string): boolean {
@@ -35375,14 +35261,11 @@ ${tryBodyBlock}
         if (scope === undefined) {
             return true;
         }
-        return this.hasNodeWhere(scope, (n) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+        return this.goScopeIdents(scope, name.text).some((n: any) => {
+            if ((n === name)) {
                 return false;
             }
-            let current = n;
-            while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-                current = current.parent;
-            }
+            const current = this.goMapParamOuterParens(n);
             const parent = current.parent;
             const ordered = (parent?.kind === SyntaxKind.BinaryExpression) && (ORDERED_COMPARISON_OPERATORS[parent.operatorToken.kind] !== undefined);
             if ((parent?.kind !== SyntaxKind.BinaryExpression) || ((COMPARISON_TOKENS.indexOf(parent.operatorToken.kind) < 0) && !ordered)) {
@@ -35406,14 +35289,11 @@ ${tryBodyBlock}
         const scope = this.goEnclosingFunction(declaration);
         const name = declaration.name;
         const checker: Checker | undefined = this.checkerOrUndefined();
-        return (scope === undefined) || (checker === undefined) || this.hasNodeWhere(scope, (n) => {
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name.text) || (n === name)) {
+        return (scope === undefined) || (checker === undefined) || this.goScopeIdents(scope, name.text).some((n: any) => {
+            if ((n === name)) {
                 return false;
             }
-            let current = n;
-            while (current.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-                current = current.parent;
-            }
+            const current = this.goMapParamOuterParens(n);
             const consumer = current.parent;
             if ((consumer?.kind !== SyntaxKind.ConditionalExpression) || (consumer.condition === current)) {
                 return false;
@@ -35613,7 +35493,7 @@ ${tryBodyBlock}
         }
         const name = this.goH21g03BodyTextName(node);
         const fn = this.goEnclosingFunction(node);
-        return this.hasNodeWhere(fn, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)) ? undefined : previous;
+        return (this.goScopeIdents(fn, name).length > 0) ? undefined : previous;
     }
     goH21g03BodyTextName(node): string {
         return node.text + 'Text';
@@ -35698,7 +35578,7 @@ ${tryBodyBlock}
         if ((arg?.kind !== SyntaxKind.Identifier) || !this.goGuardedTupleSlot0(arg) || !this.goCheckerTypeHasFlags(arg, TypeFlags.StringLike)) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         const call: any = decl?.parent?.parent?.initializer;
         const at = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4, 'handleMarginModeAndParams': 2 }[call?.expression?.name?.text];
         if (at === undefined) {
@@ -35755,7 +35635,7 @@ ${tryBodyBlock}
             }
             return !((k?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(k) === 'string'));
         };
-        return this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        return this.goScopeIdents(scope, name).some((n: any) => (n !== declaration.name)
             && (((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && nullable(n.parent.argumentExpression))
                 || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword) && (n.parent.right === n) && nullable(n.parent.left))));
     }
@@ -35809,7 +35689,7 @@ ${tryBodyBlock}
         if (n?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        const d: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const d: any = this.goSymbolValueDecl(n);
         return (h26g27Width0(this, d) > 0) ? d : undefined;
     }
     // a pushed row literal appends to the [][]any slice itself
@@ -35935,7 +35815,7 @@ ${tryBodyBlock}
         if (expr.text === 'undefined') {
             return true;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(expr)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(expr);
         const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
         return (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0)
             && ((init?.kind === SyntaxKind.ObjectLiteralExpression) || (init?.kind === SyntaxKind.ArrayLiteralExpression));
@@ -35959,12 +35839,7 @@ ${tryBodyBlock}
         if (this.goTuplePointerSlotProbing || (this.goTuplePointerSlotOfBinding(decl) !== undefined)) {
             return undefined;
         }
-        try {
-            const signature: any = this.getChecker().getResolvedSignature(call)?.declaration?.resolve?.();
-            return (signature?.parent?.name?.text === 'BaseExchange') ? 'string' : undefined;
-        } catch (e) {
-            return undefined;
-        }
+        return (this.goResolvedCallDecl(call)?.parent?.name?.text === 'BaseExchange') ? 'string' : undefined;
     }
     // the pair bind of such a declaration list: slot 0 is read as `x := *xPtr` (never nil, see above)
     h26g32SlotIsString(list) {
@@ -35973,12 +35848,12 @@ ${tryBodyBlock}
     }
     // a read of such a slot is a Go string operand (concat leaves)
     h26g32StringSlotOperand(node) {
-        const decl: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+        const decl: any = (node?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(node) : undefined;
         return (decl?.kind === SyntaxKind.BindingElement) && (this.h26g32LiteralDefaultStringSlot(decl) === 'string');
     }
     // a required `string` parameter of the enclosing method: Go prints it as a `string`, never nil
     h51g52RequiredStringParam(arg) {
-        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.() : undefined;
+        const decl: any = (arg?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(arg) : undefined;
         return (decl?.kind === SyntaxKind.Parameter) && (decl.type?.kind === SyntaxKind.StringKeyword)
             && (decl.initializer === undefined) && (decl.questionToken === undefined) && (decl.dotDotDotToken === undefined);
     }
@@ -35988,7 +35863,7 @@ ${tryBodyBlock}
         if ((arg?.kind !== SyntaxKind.Identifier) || !this.goCheckerTypeHasFlags(arg, TypeFlags.StringLike)) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         const isSlot0 = (decl?.kind === SyntaxKind.BindingElement) && (decl.parent?.kind === SyntaxKind.ArrayBindingPattern) && (decl.parent.elements[0] === decl);
         const holder = isSlot0 ? decl.parent.parent : undefined;
         const call: any = holder?.initializer;
@@ -36019,7 +35894,7 @@ ${tryBodyBlock}
         if (node?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(node);
         const fn: any = decl?.parent;
         if ((decl?.kind !== SyntaxKind.Parameter) || (fn?.name?.kind !== SyntaxKind.Identifier)) {
             return undefined;
@@ -36085,7 +35960,7 @@ ${tryBodyBlock}
             return false;
         }
         const checker: Checker | undefined = this.checkerOrUndefined();
-        const param: any = checker?.getSymbolAtLocation(node.expression)?.valueDeclaration?.resolve?.();
+        const param: any = this.goSymbolValueDecl(node.expression);
         // only the `client: any` parameter the ccxt base build prints as `client *Client`
         return (param?.kind === SyntaxKind.Parameter) && (param.type?.kind === SyntaxKind.AnyKeyword)
             && (checker.getSymbolAtLocation(node.name) === undefined);
@@ -36160,8 +36035,8 @@ ${tryBodyBlock}
             && (n.left.expression.text === map.text) && (n.left.argumentExpression?.kind === SyntaxKind.Identifier)
             && (n.left.argumentExpression.text === key.text) && (n.right?.kind === SyntaxKind.ArrayLiteralExpression) && (n.right.elements.length === 0));
         // a source that already stores the local back (`m[k] = xs`) needs no second store
-        const storedBack = this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
-            && (n !== decl.name) && this.h26g51StoreBackOf(n));
+        const storedBack = this.goScopeIdents(scope, decl.name.text).some((n: any) =>
+            (n !== decl.name) && this.h26g51StoreBackOf(n));
         if (!seeded || storedBack) {
             return '';
         }
@@ -36178,30 +36053,13 @@ ${tryBodyBlock}
             return true;
         }
         const name = declaration.name.text;
-        let rebound = false;
-        const visit = (n: any): void => {
-            if (rebound) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && (this.goRebindingTargetOf(n) !== undefined)) {
-                let target: any;
-                try {
-                    target = this.goValueDecl(n);
-                } catch (e) {
-                    target = undefined;
-                }
-                rebound = (target === undefined) || (target === declaration);
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        visit(scope);
-        return rebound;
+        return this.goScopeIdents(scope, name).some((n: any) => (n !== declaration.name) && (this.goRebindingTargetOf(n) !== undefined)
+            && [ undefined, declaration ].includes(this.goValueDecl(n)));
     }
     // a `const` local initialised from a comparison (===, !==, <, ...), a negation, a true/false literal or an
     // &&/|| of those is a Go `bool` that is never nil: it proves a required boolean parameter of the callee
     h26g53ConstComparisonLocal(arg, checker) {
-        const decl: any = checker?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.type !== undefined)
             || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0)) {
             return false;
@@ -36397,37 +36255,30 @@ ${tryBodyBlock}
         if (this.goJsonOriginContainer(node)) {
             return true;
         }
-        if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
-            return false;
-        }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
-            return false;
-        }
-        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
-        let fromJson = false;
-        if (init?.kind === SyntaxKind.AwaitExpression) {
-            fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
-        } else {
-            const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-            fromJson = (args !== undefined) && ((args.key?.kind === SyntaxKind.StringLiteral) || (args.key?.kind === SyntaxKind.NumericLiteral))
-                && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
-                && this.h27a02JsonOrigin(args.container, depth + 1);
-        }
-        return fromJson && this.goJsonOriginBindingIsReadOnly(declaration,
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) && (depth <= 5)
+            ? this.goJsonOriginSeedDecl(node, depth, false, true, false, (c, d) => this.h27a02JsonOrigin(c, d)) : undefined;
+        return (declaration !== undefined) && this.goJsonOriginBindingIsReadOnly(declaration,
             (n, name) => this.goJsonOriginUseIsReadOnly(n, name) || (!this.goWritesOrRebindsName(n, name, []) && this.h27a02ScalarReaderUse(n)));
     }
     // `const d = this.safeDict (R, 'k', {})` on a JSON-origin map receiver R (an awaited map endpoint, or a typed safeDict of
-    h27a03SafeDictDefaultSite(node) {
+    // `const x = this.m(..)` as the only declarator of a statement: its declaration, call and callee
+    goStatementThisCall(node, unwrapType: boolean): any {
         if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
             return undefined;
         }
         const decl: any = node.declarations[0];
-        const init: any = this.goUnwrapParenthesizedNode(decl.initializer);
-        const callee: any = init?.expression;
-        if ((decl.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
+        const unwrapped: any = this.goUnwrapParenthesizedNode(decl.initializer);
+        const call: any = unwrapType ? goUnwrapTypeExpr(unwrapped) : unwrapped;
+        const callee: any = call?.expression;
+        if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+            || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return undefined;
+        }
+        return { decl, call, callee };
+    }
+    h27a03SafeDictDefaultSite(node) {
+        const { decl, call: init, callee } = this.goStatementThisCall(node, false) ?? {};
+        if ((callee?.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
             return undefined;
         }
         const [ container, key, fallback ] = init.arguments;
@@ -36465,8 +36316,8 @@ ${tryBodyBlock}
             return false;
         }
         const scope: any = this.goEnclosingFunction(declaration);
-        return (scope !== undefined) && !this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === node.text)
-            && (n !== declaration.name) && this.goIsNilComparisonOperand(n, n.parent));
+        return (scope !== undefined) && !this.goScopeIdents(scope, node.text).some((n: any) =>
+            (n !== declaration.name) && this.goIsNilComparisonOperand(n, n.parent));
     }
     h27a04JsonListRead(node, printed: string): string | undefined {
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
@@ -36486,8 +36337,8 @@ ${tryBodyBlock}
         const name: string = declaration.name.text;
         // an element write (`xs[i][k] = v`) is printed from the SafeListSlice declaration line: keep that form
         const scope: any = this.goEnclosingFunction(declaration);
-        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-            && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+        if ((scope === undefined) || this.goScopeIdents(scope, name).some((n: any) =>
+            (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
             return undefined;
         }
         const key = JSON.stringify(call.arguments[1].text);
@@ -36502,20 +36353,8 @@ ${tryBodyBlock}
             + ind + 'if ' + name + ' == nil {\n' + ind + '\t' + name + ' = []any{}\n' + ind + '}';
     }
     // `const x = this.safeDict (doc, k)` / `this.safeList (doc, k)` on a decoded JSON document with a Go string key (or a
-    h27a05JsonOriginContainer(node) {
-        if (this.goJsonOriginContainer(node)) {
-            return true;
-        }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
-            return false;
-        }
-        const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeDict');
-        if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE)
-            || !this.goJsonOriginContainer(args.container, 1)) {
-            return false;
-        }
+    // every use a JSON-origin read or the sole argument of `Object.keys (x)`
+    goJsonOriginKeysReadOnly(declaration): boolean {
         const keysRead = (n: any): boolean => {
             const call: any = n.parent;
             return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === n)
@@ -36523,6 +36362,21 @@ ${tryBodyBlock}
                 && (call.expression.expression.text === 'Object') && (call.expression.name?.text === 'keys');
         };
         return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => keysRead(n) || this.goJsonOriginUseIsReadOnly(n, name));
+    }
+    h27a05JsonOriginContainer(node) {
+        if (this.goJsonOriginContainer(node)) {
+            return true;
+        }
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
+            return false;
+        }
+        const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeDict');
+        if ((args === undefined) || (args.key?.kind !== SyntaxKind.StringLiteral) || (this.goSafeDictLocalUnbox(declaration) !== GO_SAFE_DICT_LOCAL_TYPE)
+            || !this.goJsonOriginContainer(args.container, 1)) {
+            return false;
+        }
+        return this.goJsonOriginKeysReadOnly(declaration);
     }
     h27a05KeyText(keyNode) {
         if (keyNode?.kind !== SyntaxKind.Identifier) {
@@ -36689,30 +36543,18 @@ ${tryBodyBlock}
     }
     // the printer's own JSON origin, or the same chain whose locals are also read by scalar safe readers
     h27a12JsonOrigin(node, depth: number): boolean {
-        if (this.goJsonOriginContainer (node)) {
-            return true;
-        }
-        const declaration = this.goAnyBoxLocalDeclaration (node);
-        if ((depth > 5) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
-            return false;
-        }
-        const init = this.goUnwrapParenthesizedNode (declaration.initializer);
-        let fromJson = false;
-        if (init?.kind === SyntaxKind.AwaitExpression) {
-            fromJson = this.goAwaitedCallIsImplicitEndpoint (init.expression) || this.goAwaitedCallIsRequestStub (init.expression);
-        } else {
-            const args = this.goSafeAccessorLocalArgs (init, 'safeDict');
-            fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && (args.container?.kind === SyntaxKind.Identifier)
-                && (this.goSafeDictLocalUnbox (declaration) === GO_SAFE_DICT_LOCAL_TYPE) && this.h27a12JsonOrigin (args.container, depth + 1);
-        }
-        return fromJson && this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
+        return this.goJsonOriginContainer (node) || this.goJsonOriginChain (node, depth, 'h27a12JsonOrigin', undefined);
+    }
+    // a const box seeded by an endpoint/stub await or a literal-keyed safeDict of an origin `recurse` proves
+    goJsonOriginChain(node, depth: number, recurse: string, extraUse: ((n: any) => boolean) | undefined): boolean {
+        const declaration = this.goJsonOriginSeedDecl(node, depth, true, false, true, (c, d) => this[recurse](c, d));
+        return (declaration !== undefined) && this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
             const call = n.parent;
             if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
                 && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && H27A12_SCALAR_READERS.has (call.expression.name?.text)) {
                 return true;
             }
-            return this.goJsonOriginUseIsReadOnly (n, name);
+            return ((extraUse !== undefined) && extraUse (n)) || this.goJsonOriginUseIsReadOnly (n, name);
         });
     }
     h27a12JsonNestedRead(node, printed: string): string | undefined {
@@ -36794,13 +36636,17 @@ ${tryBodyBlock}
         return goType;
     }
     // `const first = this.safeDict (cache, 0)` on a ws list receive the printer typed ArrayCacheInterface: row 0 is read
+    // `const x = this.safeDict (a, b)` as a statement-level single declarator
+    goSafeDict2Site(declaration, call): boolean {
+        return (declaration?.name?.kind === SyntaxKind.Identifier) && (declaration.parent?.parent?.kind === SyntaxKind.FirstStatement)
+            && (call?.kind === SyntaxKind.CallExpression) && (call.arguments?.length === 2)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (call.expression.name?.text === 'safeDict');
+    }
     h27a15CacheRowZero(node) {
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
         const call: any = declaration?.initializer;
-        if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
-            || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
-            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
-            || (call.expression.name?.text !== 'safeDict') || (call.arguments[0].kind !== SyntaxKind.Identifier)
+        if (!this.goSafeDict2Site(declaration, call) || (call.arguments[0].kind !== SyntaxKind.Identifier)
             || (call.arguments[1].kind !== SyntaxKind.NumericLiteral) || (call.arguments[1].text !== '0')) {
             return undefined;
         }
@@ -36963,7 +36809,7 @@ ${tryBodyBlock}
             return false;
         }
         // the same syntactic pre-filter goPushedStringPointerIsNonNil applies before it dereferences
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
             || ((init?.kind !== SyntaxKind.Identifier) && !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`)))) {
@@ -37017,7 +36863,7 @@ ${tryBodyBlock}
             || !H27G11_DEREF_READERS.has(callee.name?.text)) {
             return undefined;
         }
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(list);
         const scope: any = this.goEnclosingFunction(node);
         if ((declaration?.kind !== SyntaxKind.Parameter) || (declaration.parent !== scope) || (this.goNativeParameterType(declaration) !== '[]any')
             || (this.goNameWriteSites(scope, list.text, declaration).length > 0)) {
@@ -37135,7 +36981,7 @@ ${tryBodyBlock}
                 && (n.left?.kind === SyntaxKind.PropertyAccessExpression) && (n.left.expression?.kind === SyntaxKind.ThisKeyword) && (n.left.name?.text === name)) {
                 const right = this.goUnwrapParenthesizedNode(n.right);
                 if (right?.kind === SyntaxKind.Identifier) {
-                    const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(right)?.valueDeclaration?.resolve?.();
+                    const decl: any = this.goSymbolValueDecl(right);
                     const init = this.goUnwrapParenthesizedNode(decl?.initializer);
                     ok = (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.name?.kind === SyntaxKind.Identifier)
                         && (init?.kind === SyntaxKind.ObjectLiteralExpression) && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
@@ -37270,23 +37116,12 @@ ${tryBodyBlock}
         if ((scope === undefined) || (scope.kind === SyntaxKind.SourceFile) || this.goLocalIsRebound(scope, decl.name)) {
             return false;
         }
-        let ok = true;
-        const visit = (n) => {
-            if (!ok) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n !== decl.name) && (n.text === decl.name.text) && (checker.getSymbolAtLocation(n) === symbol)) {
-                const p: any = n.parent;
-                if ((p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && [ 'pop', 'shift', 'splice', 'length' ].includes(p.name?.text)
-                    && ((p.name.text !== 'length') || (this.goRebindingTargetOf(p) !== undefined))) {
-                    ok = false;
-                }
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        visit(scope);
-        return ok;
+        return !this.goScopeIdents(scope, decl.name.text).some((n: any) => {
+            const p: any = n.parent;
+            return (n !== decl.name) && (checker.getSymbolAtLocation(n) === symbol)
+                && (p?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression === n) && [ 'pop', 'shift', 'splice', 'length' ].includes(p.name?.text)
+                && ((p.name.text !== 'length') || (this.goRebindingTargetOf(p) !== undefined));
+        });
     }
     // a string literal, a value the printer types as a non-pointer scalar, or a never-rebound map local seeded by a
     // literal-defaulted safeDict (never nil)
@@ -37315,15 +37150,19 @@ ${tryBodyBlock}
     // a `[][]any` table slot also types a required `number[][]` row list: every element prints boxed in `any`,
     // and every caller must already hand a [][]any (the table row is the caller proof, as for string[][])
     h27g22NumberRowSliceParameterType(fn, param, goType) {
-        if ((goType !== '[][]any') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        return this.goRowSliceParameterType(fn, param, goType, '[][]any', 'number[][]');
+    }
+    // a required, never-rewritten `<tsType>` param typed as the table's `slot` slice; a wrong write throws
+    goRowSliceParameterType(fn, param, goType, slot: string, tsType: string) {
+        if ((goType !== slot) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
             || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
-            || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'number[][]')) {
+            || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== tsType)) {
             return undefined;
         }
-        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[][]any')) {
-            throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than [][]any`);
+        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, slot)) {
+            throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than ${slot}`);
         }
-        return '[][]any';
+        return slot;
     }
     // `side[i]` on a local the printer declares as the order-book side, with an int index: the row GetValue answers
     // (`obs.GetData()[i]`, unchecked there too); the side is proven non-nil by an earlier `side.length` statement
@@ -37486,14 +37325,7 @@ ${tryBodyBlock}
             || (this.goResolvedLocalGoType(baseExpr) !== GO_STRING_LIST_LOCAL_TYPE) || !this.h26g24GuardedLiteralRead(node, true)) {
             return undefined;
         }
-        // a `*string` target keeps its address-of hoist (the bare string would be re-wrapped in SafeStringPtr)
-        const parent: any = node.parent;
-        const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
-            : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
-        if ((target?.kind === SyntaxKind.Identifier) && (this.goResolvedLocalGoType(target) !== 'any')) {
-            return undefined;
-        }
-        return `${containerStr}[${keyStrs[0]}]`;
+        return this.goPlainSlotTargetRead(node, containerStr, keyStrs);
     }
     // `client.url === p` with `client: Client` (Url is a Go string) and p a `*string` local: IsEqual derefs p, so a nil p
     // answers false and any other p compares its string; the native form repeats p, a plain local read
@@ -37561,12 +37393,7 @@ ${tryBodyBlock}
         if ((index < 1) || (ref?.kind !== SyntaxKind.PropertyAccessExpression) || (ref.expression?.kind !== SyntaxKind.ThisKeyword)) {
             return undefined;
         }
-        let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(ref.name)?.valueDeclaration?.resolve();
-        } catch (e) {
-            return undefined;
-        }
+        const declaration = this.goSymbolValueDecl(ref.name);
         const param = (declaration?.kind === SyntaxKind.MethodDeclaration) ? declaration.parameters?.[index - 1] : undefined;
         if ((param === undefined) || (param.dotDotDotToken !== undefined) || (this.goNativeParameterType(param) !== 'string')) {
             return undefined;
@@ -37590,17 +37417,18 @@ ${tryBodyBlock}
     h28a01ReadOnlyArg(node): boolean {
         return this.goReadOnlyCalleeArg(node, (fn, param) => this.h28a01ParamReadOnly(fn, param), true);
     }
-    h28a01JsonParam(node, depth: number): boolean {
+    // a read-only parameter of a same-file method every caller hands an argument `argOk` accepts
+    goReadOnlyParamCallers(node, readOnly: (fn: any, param: any) => boolean, argOk: (arg: any) => boolean): boolean {
         const param: any = this.goAnyBoxLocalDeclaration(node);
         const fn: any = param?.parent;
-        if ((param?.kind !== SyntaxKind.Parameter) || !this.h28a01ParamReadOnly(fn, param)) {
+        if ((param?.kind !== SyntaxKind.Parameter) || !readOnly(fn, param)) {
             return false;
         }
         const index: number = fn.parameters.indexOf(param);
-        return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => {
-            const arg: any = this.goUnwrapParenthesizedNode(call.arguments?.[index]);
-            return (arg?.kind === SyntaxKind.Identifier) && this.goJsonOriginContainer(arg, depth + 1);
-        });
+        return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => argOk(this.goUnwrapParenthesizedNode(call.arguments?.[index])));
+    }
+    h28a01JsonParam(node, depth: number): boolean {
+        return this.goReadOnlyParamCallers(node, (fn, param) => this.h28a01ParamReadOnly(fn, param), (arg) => (arg?.kind === SyntaxKind.Identifier) && this.goJsonOriginContainer(arg, depth + 1));
     }
     // `const rows = this.safeList (R, 'lit')` where R is an awaited map endpoint whose receive the printer declares
     h28a02EndpointListRead(node, identation: number, printed: string, proofOnly = false) {
@@ -37656,9 +37484,8 @@ ${tryBodyBlock}
         return goAwaitsMapEndpoint(this, this.goUnwrapParenthesizedNode(parent.right));
     }
     h28a03JoinedEndpointLocal(node: any): boolean {
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
             return false;
         }
         // the endpoint join declares a nil-seeded local map[string]any; an awaited-map seed is one more such write
@@ -37678,15 +37505,8 @@ ${tryBodyBlock}
     }
     // `const d = this.safeDict (R, 'k', R)` on a decoded JSON map R (goJsonOriginContainer, R's own default use admitted):
     h28a05SelfDefaultSite(node) {
-        if ((node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
-            return undefined;
-        }
-        const decl: any = node.declarations[0];
-        let init: any = this.goUnwrapParenthesizedNode(decl.initializer);
-        init = goUnwrapTypeExpr(init);
-        const callee: any = init?.expression;
-        if ((decl.name?.kind !== SyntaxKind.Identifier) || (init?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
+        const { decl, call: init, callee } = this.goStatementThisCall(node, true) ?? {};
+        if ((callee?.name?.text !== 'safeDict') || (init.arguments.length !== 3)) {
             return undefined;
         }
         const [ container, key, fallback ] = init.arguments;
@@ -37694,9 +37514,8 @@ ${tryBodyBlock}
             || (fallback.text !== container.text)) {
             return undefined;
         }
-        const source: any = this.goAnyBoxLocalDeclaration(container);
-        if ((source?.kind !== SyntaxKind.VariableDeclaration) || (source.name?.kind !== SyntaxKind.Identifier)
-            || (source.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const source: any = this.goStatementBoxLocal(container);
+        if (source === undefined) {
             return undefined;
         }
         const sourceInit: any = this.goUnwrapParenthesizedNode(source.initializer);
@@ -37720,8 +37539,8 @@ ${tryBodyBlock}
             || this.goJsonOriginUseIsReadOnly(n, name));
         // the result may alias R: nothing may write through it, so R keeps holding decoded JSON only
         const scope: any = this.goEnclosingFunction(decl);
-        if (!readOnly || (scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text)
-            && (n !== decl.name) && ((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent)
+        if (!readOnly || (scope === undefined) || this.goScopeIdents(scope, decl.name.text).some((n: any) =>
+            (n !== decl.name) && ((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent)
                 || this.goWritesOrRebindsName(n, n.text, [])))) {
             return undefined;
         }
@@ -37778,9 +37597,8 @@ ${tryBodyBlock}
         if (this.goJsonOriginContainer(node)) {
             return true;
         }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -37795,9 +37613,8 @@ ${tryBodyBlock}
             || this.h27a09SafeReaderArg(n, name) || (!this.goWritesOrRebindsName(n, name, []) && this.h28a08ReturnedLiteralValue(n)));
     }
     h28a08JsonList(list) {
-        const declaration: any = this.goAnyBoxLocalDeclaration(list);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(list);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -37855,9 +37672,8 @@ ${tryBodyBlock}
     // a never-rebound list local `this.safeList (C, 'lit'[, []])` cut from a ws frame (C proven by h27a11JsonContainer)
     // holds only decoded JSON rows, so the literal-index (h27a08) and loop-index (h27a09) row reads admit it too
     h28a13FrameList(list) {
-        const declaration: any = this.goAnyBoxLocalDeclaration(list);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(list);
+        if (declaration === undefined) {
             return false;
         }
         const args: any = this.goSafeAccessorLocalArgs(this.goUnwrapParenthesizedNode(declaration.initializer), 'safeList');
@@ -37897,31 +37713,7 @@ ${tryBodyBlock}
     }
     // h27a12JsonOrigin, also admitting the store of the root into such a result holder
     h28a14JsonOrigin(node, depth: number): boolean {
-        if (this.h27a12JsonOrigin (node, depth)) {
-            return true;
-        }
-        const declaration = this.goAnyBoxLocalDeclaration (node);
-        if ((depth > 5) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
-            return false;
-        }
-        const init = this.goUnwrapParenthesizedNode (declaration.initializer);
-        let fromJson = false;
-        if (init?.kind === SyntaxKind.AwaitExpression) {
-            fromJson = this.goAwaitedCallIsImplicitEndpoint (init.expression) || this.goAwaitedCallIsRequestStub (init.expression);
-        } else {
-            const args = this.goSafeAccessorLocalArgs (init, 'safeDict');
-            fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral) && (args.container?.kind === SyntaxKind.Identifier)
-                && (this.goSafeDictLocalUnbox (declaration) === GO_SAFE_DICT_LOCAL_TYPE) && this.h28a14JsonOrigin (args.container, depth + 1);
-        }
-        return fromJson && this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => {
-            const call = n.parent;
-            if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (call.expression?.kind === SyntaxKind.PropertyAccessExpression)
-                && (call.expression.expression?.kind === SyntaxKind.ThisKeyword) && H27A12_SCALAR_READERS.has (call.expression.name?.text)) {
-                return true;
-            }
-            return this.h28a14InfoHolderUse (n) || this.goJsonOriginUseIsReadOnly (n, name);
-        });
+        return this.h27a12JsonOrigin (node, depth) || this.goJsonOriginChain (node, depth, 'h28a14JsonOrigin', (n) => this.h28a14InfoHolderUse (n));
     }
     h28a14JsonList(list): boolean {
         const declaration = this.goAnyBoxLocalDeclaration (list);
@@ -38056,15 +37848,12 @@ ${tryBodyBlock}
             && (slot.parent?.kind === SyntaxKind.ObjectLiteralExpression)
             && ((key?.kind === SyntaxKind.Identifier) || (key?.kind === SyntaxKind.StringLiteral)) && (String(key.text) === 'info');
     }
-    h28a17InfoReceive(declaration: any): boolean {
-        if (h28a17Proven.has(declaration)) {
-            return h28a17Proven.get(declaration) === true;
-        }
-        h28a17Proven.set(declaration, false);
+    // one-line typed Dict stub receive only (the build pass hoists it); `notInfo` vetoes h28a17 receives first
+    goDictStubReceiveDecl(declaration: any, notInfo: boolean): boolean {
         const init: any = declaration?.initializer;
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
             || (init?.kind !== SyntaxKind.AwaitExpression) || (declaration.parent?.declarations?.length !== 1)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (notInfo && this.h28a17InfoReceive(declaration))) {
             return false;
         }
         let element = undefined;
@@ -38074,22 +37863,36 @@ ${tryBodyBlock}
             return false;
         }
         const printed = (element === GO_SAFE_DICT_LOCAL_TYPE) ? this.printNode(init, 0).trim() : '';
-        if (!printed.startsWith('(<-this.') || !printed.endsWith(').Raw') || printed.includes('\n')) {
-            return false;                           // one-line typed Dict stub receive only (the build pass hoists it)
+        return printed.startsWith('(<-this.') && printed.endsWith(').Raw') && !printed.includes('\n');
+    }
+    // memoized per declaration; re-entry while `prove` runs answers false
+    goSeededProof(memo: Map<any, boolean> | WeakMap<any, boolean>, declaration: any, prove: () => boolean): boolean {
+        if (memo.has(declaration)) {
+            return memo.get(declaration) === true;
         }
-        let infos = 0;
-        let reads = 0;
-        const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
-            if (this.h28a17InfoUse(n)) {
-                infos += 1;
-                return true;
-            }
-            reads += 1;
-            return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
-        }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
-        const proven = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (infos > 0) && (reads > 0);
-        h28a17Proven.set(declaration, proven);
+        memo.set(declaration, false);
+        const proven = prove();
+        memo.set(declaration, proven);
         return proven;
+    }
+    h28a17InfoReceive(declaration: any): boolean {
+        return this.goSeededProof(h28a17Proven, declaration, () => {
+            if (!this.goDictStubReceiveDecl(declaration, false)) {
+                return false;
+            }
+            let infos = 0;
+            let reads = 0;
+            const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
+                if (this.h28a17InfoUse(n)) {
+                    infos += 1;
+                    return true;
+                }
+                reads += 1;
+                return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
+            }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
+            const proven = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (infos > 0) && (reads > 0);
+            return proven;
+        });
     }
     // `<name>Reply`, numbered past every identifier of the function and every holder this rule already named there
     h28a17HolderName(declaration: any): string {
@@ -38117,9 +37920,8 @@ ${tryBodyBlock}
     }
     // `const m = this.indexBy (L, 'lit')` / `this.groupBy (L, 'lit')` of a decoded JSON list L holds only L's map rows
     h28a22JsonList(node, depth: number, producer): boolean {
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -38137,9 +37939,8 @@ ${tryBodyBlock}
         if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
             return false;
         }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -38156,10 +37957,7 @@ ${tryBodyBlock}
     h28a24CacheDeltaRead(node) {
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
         const call: any = declaration?.initializer;
-        if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
-            || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
-            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
-            || (call.expression.name?.text !== 'safeDict') || (call.arguments[0].kind !== SyntaxKind.Identifier)) {
+        if (!this.goSafeDict2Site(declaration, call) || (call.arguments[0].kind !== SyntaxKind.Identifier)) {
             return undefined;
         }
         const cacheNode: any = call.arguments[0];
@@ -38197,12 +37995,7 @@ ${tryBodyBlock}
         if ((index !== 1) && (index !== 3)) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve?.();
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goResolvedCallDecl(call);
         // only the base declaration: a venue override would take its own parameter types
         return (declaration?.kind === SyntaxKind.MethodDeclaration) && (declaration.name?.text === 'watchMultiple')
             && ['Exchange', 'BaseExchange'].includes(this.goEnclosingClassName(declaration))
@@ -38369,7 +38162,7 @@ ${tryBodyBlock}
                 || ((p?.kind === SyntaxKind.BinaryExpression) && ((p.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) || (p.operatorToken.kind === SyntaxKind.BarBarToken)))
                 || (p?.kind === SyntaxKind.IfStatement) || (p?.kind === SyntaxKind.WhileStatement) || (p?.kind === SyntaxKind.ConditionalExpression);
         };
-        if ((scope === undefined) || !this.hasNodeWhere(scope, (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== element.name) && !conditionLike(n))) {
+        if ((scope === undefined) || !this.goScopeIdents(scope, name).some((n: any) => (n !== element.name) && !conditionLike(n))) {
             return undefined;
         }
         // the same temp name the pair bind picked; it is declared only on the boxed path
@@ -38524,7 +38317,7 @@ ${tryBodyBlock}
         } else {
             const width = h26g27Width0(this, accumulator);
             const key: any = this.goUnwrapParenthesizedNode(column);
-            const keyDecl: any = (key?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(key)?.valueDeclaration?.resolve?.() : undefined;
+            const keyDecl: any = (key?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(key) : undefined;
             const literal: any = (keyDecl !== undefined) ? this.goUnwrapParenthesizedNode(keyDecl.initializer) : key;
             if (((goType !== undefined) && (goType !== 'any')) || !h26g27ColumnBelow(this, column, width) || !h28g16PlainColumn(this, accumulator, Number(literal.text))) {
                 return undefined;
@@ -38547,7 +38340,7 @@ ${tryBodyBlock}
         if ((rFam !== 'nil') || (n?.kind !== SyntaxKind.Identifier)) {
             return undefined;
         }
-        const d: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const d: any = this.goSymbolValueDecl(n);
         return ((d !== undefined) && h28g16Cells.has(d)) ? nilText : undefined;
     }
     h28g17BranchEnsuresEntry(branch, read) {
@@ -38648,7 +38441,7 @@ ${tryBodyBlock}
             return false;
         }
         const checker: any = this.checkerOrUndefined();
-        const declaration: any = checker?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(list);
         const scope: any = this.goEnclosingFunction(node);
         if ((declaration === undefined) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)) {
             return false;
@@ -38736,7 +38529,7 @@ ${tryBodyBlock}
             return false;
         }
         const scope: any = this.goEnclosingFunction(split);
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(r)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(r);
         let child: any = split;
         for (let up: any = split.parent; (up !== undefined) && (up !== scope); child = up, up = up.parent) {
             if (isFunctionLike(up) || GO_ITERATION_STATEMENT_KINDS.has(up.kind)) {
@@ -38756,17 +38549,21 @@ ${tryBodyBlock}
         if (list?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(list)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(list);
         return (this.goGetArgParameterType(declaration) === GO_STRING_LIST_LOCAL_TYPE) || (this.goDeclaredTypeOfIdentifier(list) === GO_STRING_LIST_LOCAL_TYPE);
     }
     // `xs[K]` on a defaulted `[]string` parameter (GetArgStringSlice) proven in range: the plain slice index, read as
     // in h27g33 (a typed non-any target keeps its old form)
     h28g24StringParamLiteralRead(node, baseExpr, keys: any[], containerStr: string, keyStrs: string[]) {
-        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(baseExpr)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(baseExpr);
         if ((keys.length !== 1) || (baseExpr?.kind !== SyntaxKind.Identifier) || containerStr.includes('\n') || this.isGoElementAccessAssignmentTarget(node)
             || (this.goGetArgParameterType(declaration) !== GO_STRING_LIST_LOCAL_TYPE) || !this.h26g24GuardedLiteralRead(node, true)) {
             return undefined;
         }
+        return this.goPlainSlotTargetRead(node, containerStr, keyStrs);
+    }
+    // a `*string` target keeps its address-of hoist (the bare string would be re-wrapped in SafeStringPtr)
+    goPlainSlotTargetRead(node, containerStr: string, keyStrs: string[]) {
         const parent: any = node.parent;
         const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
             : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
@@ -38867,12 +38664,7 @@ ${tryBodyBlock}
             || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || !H28G31_DEREFED_READERS.includes (callee.name?.text)) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.checkerOrUndefined ()?.getSymbolAtLocation (callee)?.valueDeclaration?.resolve ();
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goSymbolValueDecl(callee);
         // only the base declaration: a venue override could answer anything
         const file: string = declaration?.getSourceFile?.()?.fileName ?? '';
         if (!/[\\/]base[\\/]Exchange\.ts$/.test (file)) {
@@ -38967,15 +38759,7 @@ ${tryBodyBlock}
     // a `[]any` table slot types a required `object[]` row list (`object` is a non-primitive, not an Object
     // type, so the generic rule skips it); the body must keep it a slice
     h28t05ObjectRowSliceParameterType(fn, param, goType) {
-        if ((goType !== '[]any') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
-            || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)
-            || (String(param.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'object[]')) {
-            return undefined;
-        }
-        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]any')) {
-            throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
-        }
-        return '[]any';
+        return this.goRowSliceParameterType(fn, param, goType, '[]any', 'object[]');
     }
     // `const x = this.safeList|safeDict (R, 'lit')` where R is an uninitialised `let` map local whose every write is an
     h28t07AwaitedJsonLet(container) {
@@ -39094,13 +38878,7 @@ ${tryBodyBlock}
             || !(this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression))) {
             return false;
         }
-        const keysRead = (n: any): boolean => {
-            const call: any = n.parent;
-            return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 1) && (call.arguments[0] === n)
-                && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.Identifier)
-                && (call.expression.expression.text === 'Object') && (call.expression.name?.text === 'keys');
-        };
-        return this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => keysRead(n) || this.goJsonOriginUseIsReadOnly(n, name));
+        return this.goJsonOriginKeysReadOnly(declaration);
     }
     h29a05MapReceiver(container) {
         if (this.goDeclaredTypeOfIdentifier(container) === GO_SAFE_DICT_LOCAL_TYPE) {
@@ -39112,15 +38890,14 @@ ${tryBodyBlock}
             ? (ccxtGoEndpointElement(this, this.goUnwrapParenthesizedNode(init.expression)) === GO_SAFE_DICT_LOCAL_TYPE)
             : (this.goSafeDictLocalUnbox(source) === GO_SAFE_DICT_LOCAL_TYPE);
     }
+    goLocalWrittenThrough(decl: any, name: string): boolean {
+        const scope: any = this.goEnclosingFunction(decl);
+        return (scope === undefined) || this.goScopeIdents(scope, name).some((n: any) =>
+            (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent));
+    }
     h29a05VarKeyDefaultRead(node, printed) {
-        if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
-            return undefined;
-        }
-        const decl: any = node.declarations[0];
-        const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
-        const callee: any = call?.expression;
-        if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments.length !== 3)) {
+        const { decl, call, callee } = ((typeof printed === 'string') ? this.goStatementThisCall(node, false) : undefined) ?? {};
+        if ((callee === undefined) || (call.arguments.length !== 3)) {
             return undefined;
         }
         const [ container, key, fallback ] = call.arguments;
@@ -39140,9 +38917,7 @@ ${tryBodyBlock}
         const goType = isDict ? GO_SAFE_DICT_LOCAL_TYPE : GO_SAFE_LIST_LOCAL_TYPE;
         if (isList) {
             // an element write (`xs[i][k] = v`) is printed from the SafeListSlice declaration line: keep that form
-            const scope: any = this.goEnclosingFunction(decl);
-            if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-                && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+            if (this.goLocalWrittenThrough(decl, name)) {
                 return undefined;
             }
         }
@@ -39168,16 +38943,7 @@ ${tryBodyBlock}
         return this.goReadOnlyCalleeArg(node, (fn, param) => this.h29a06ParseParamReadOnly(fn, param), false, /^parse[A-Z]/);
     }
     h29a06JsonParam(node, depth: number): boolean {
-        const param: any = this.goAnyBoxLocalDeclaration(node);
-        const fn: any = param?.parent;
-        if ((param?.kind !== SyntaxKind.Parameter) || !this.h29a06ParseParamReadOnly(fn, param)) {
-            return false;
-        }
-        const index: number = fn.parameters.indexOf(param);
-        return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => {
-            const arg: any = this.goUnwrapParenthesizedNode(call.arguments?.[index]);
-            return (arg?.kind === SyntaxKind.Identifier) && this.goJsonOriginContainer(arg, depth + 1);
-        });
+        return this.goReadOnlyParamCallers(node, (fn, param) => this.h29a06ParseParamReadOnly(fn, param), (arg) => (arg?.kind === SyntaxKind.Identifier) && this.goJsonOriginContainer(arg, depth + 1));
     }
     // a `map[string]any` row parameter of a pro parseWs* / handle* helper holds decoded JSON when every caller in this
     // file (resolved by declaration, none by reference or name elsewhere) hands it a ws frame or a JSON-origin value
@@ -39188,16 +38954,7 @@ ${tryBodyBlock}
         return this.goReadOnlyCalleeArg(node, (fn, param) => this.h29a07ParamReadOnly(fn, param), true);
     }
     h29a07JsonParam(node, depth: number): boolean {
-        const param: any = this.goAnyBoxLocalDeclaration(node);
-        const fn: any = param?.parent;
-        if ((param?.kind !== SyntaxKind.Parameter) || !this.h29a07ParamReadOnly(fn, param)) {
-            return false;
-        }
-        const index: number = fn.parameters.indexOf(param);
-        return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => {
-            const arg: any = this.goUnwrapParenthesizedNode(call.arguments?.[index]);
-            return (arg?.kind === SyntaxKind.Identifier) && (this.goJsonOriginContainer(arg, depth + 1) || this.h27a11JsonContainer(arg));
-        });
+        return this.goReadOnlyParamCallers(node, (fn, param) => this.h29a07ParamReadOnly(fn, param), (arg) => (arg?.kind === SyntaxKind.Identifier) && (this.goJsonOriginContainer(arg, depth + 1) || this.h27a11JsonContainer(arg)));
     }
     // a `[]any` parameter of a venue-internal method holds a decoded JSON list when every caller (resolved by
     h29a08ListParamReadOnly(fn, param): boolean {
@@ -39214,20 +38971,13 @@ ${tryBodyBlock}
                 || h29a08CutList(this, node, depth));
     }
     h29a08JsonListParam(node, depth: number): boolean {
-        const param: any = this.goAnyBoxLocalDeclaration(node);
-        const fn: any = param?.parent;
-        if ((depth > 5) || (param?.kind !== SyntaxKind.Parameter) || !this.h29a08ListParamReadOnly(fn, param)) {
-            return false;
-        }
-        const index: number = fn.parameters.indexOf(param);
-        return this.goSameFileCallsOf(fn, fn.name.text).every((call: any) => this.h29a08JsonListArg(this.goUnwrapParenthesizedNode(call.arguments?.[index]), depth));
+        return (depth <= 5) && this.goReadOnlyParamCallers(node, (fn, param) => this.h29a08ListParamReadOnly(fn, param), (arg) => this.h29a08JsonListArg(arg, depth));
     }
     // `const r = await this.<endpoint> (..)` whose endpoint receive prints `var r []any = rRecv.Value` (declared `Promise<List>`,
     // decoded JSON) is a []any JSON-origin list while every use only reads it: the row readers above may index it
     h29a09EndpointList(node): boolean {
-        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(node) : undefined;
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goStatementBoxLocal(node) : undefined;
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -39245,9 +38995,8 @@ ${tryBodyBlock}
         if (list?.kind === SyntaxKind.ArrayLiteralExpression) {
             return list.elements.every((e: any) => this.h29a10EndpointTask(e));
         }
-        const declaration: any = this.goAnyBoxLocalDeclaration(list);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(list);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -39271,9 +39020,8 @@ ${tryBodyBlock}
         });
     }
     h29a10PromiseAllList(list) {
-        const declaration: any = this.goAnyBoxLocalDeclaration(list);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(list);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -39399,7 +39147,7 @@ ${tryBodyBlock}
         }
         // the result may alias the frame: nothing may write through it or rebind it
         const scope: any = this.goEnclosingFunction(declaration);
-        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
+        if ((scope === undefined) || this.goScopeIdents(scope, name).some((n: any) => (n !== declaration.name)
             && (((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent)) || this.goWritesOrRebindsName(n, name, [])))) {
             return undefined;
         }
@@ -39430,27 +39178,11 @@ ${tryBodyBlock}
     // JSON origin by resolved declaration: an endpoint receive (or safeDict chain from one) whose name is also declared
     // in a sibling or nested scope of the same function; the other binding's identifiers are not uses of this one.
     h29A16JsonOrigin(node, depth: number): boolean {
-        if ((depth > 5) || (node?.kind !== SyntaxKind.Identifier)) {
-            return false;
-        }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & ts.NodeFlags.Const) === 0)) {
-            return false;
-        }
-        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
-        let fromJson = false;
-        if (init?.kind === SyntaxKind.AwaitExpression) {
-            fromJson = this.goAwaitedCallIsImplicitEndpoint(init.expression) || this.goAwaitedCallIsRequestStub(init.expression);
-        } else {
-            const args: any = this.goSafeAccessorLocalArgs(init, 'safeDict');
-            fromJson = (args !== undefined) && (args.key?.kind === SyntaxKind.StringLiteral)
-                && (this.goSafeDictLocalUnbox(declaration) === GO_SAFE_DICT_LOCAL_TYPE)
-                && this.goJsonOriginContainer(args.container, depth + 1);
-        }
-        const name: string = declaration.name.text;
-        const scope: any = this.goEnclosingFunction(declaration);
-        if (!fromJson || (scope === undefined)) {
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) && (depth <= 5)
+            ? this.goJsonOriginSeedDecl(node, depth, true, false, false, (c, d) => this.goJsonOriginContainer(c, d)) : undefined;
+        const scope: any = (declaration !== undefined) ? this.goEnclosingFunction(declaration) : undefined;
+        const name: string = declaration?.name.text;
+        if (scope === undefined) {
             return false;
         }
         let shadowed = false;
@@ -39469,59 +39201,40 @@ ${tryBodyBlock}
     }
     // (1) the typed Dict endpoint receive whose uses are reads the shipped typed-receive scanner accepts or self-default reads
     h29a17Receive(declaration: any): boolean {
-        if (h29a17Proven.has(declaration)) {
-            return h29a17Proven.get(declaration) === true;
-        }
-        h29a17Proven.set(declaration, false);
-        const init: any = declaration?.initializer;
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (init?.kind !== SyntaxKind.AwaitExpression) || (declaration.parent?.declarations?.length !== 1)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || this.h28a17InfoReceive(declaration)) {
-            return false;
-        }
-        let element = undefined;
-        try {
-            element = ccxtGoEndpointElement(this, init.expression);
-        } catch (e) {
-            return false;
-        }
-        const printed = (element === GO_SAFE_DICT_LOCAL_TYPE) ? this.printNode(init, 0).trim() : '';
-        if (!printed.startsWith('(<-this.') || !printed.endsWith(').Raw') || printed.includes('\n')) {
-            return false;
-        }
-        let selfDefaults = 0;
-        const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
-            if (this.h29a17SelfDefault(n)) {
-                selfDefaults += 1;
-                return true;
+        return this.goSeededProof(h29a17Proven, declaration, () => {
+            if (!this.goDictStubReceiveDecl(declaration, true)) {
+                return false;
             }
-            return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
-        }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
-        const readOnly = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (selfDefaults > 0)
-            && this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name));
-        h29a17Proven.set(declaration, readOnly);
-        return readOnly;
+            let selfDefaults = 0;
+            const typed = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_DICT_LOCAL_TYPE, (n: any) => {
+                if (this.h29a17SelfDefault(n)) {
+                    selfDefaults += 1;
+                    return true;
+                }
+                return ccxtGoAsyncReceiveReadsTheValue(this, n, GO_SAFE_DICT_LOCAL_TYPE) || ccxtGoEndpointLocalParserRead(n);
+            }, (n: any) => ccxtGoIsNotAReference(this, n, declaration));
+            const readOnly = (typed === GO_SAFE_DICT_LOCAL_TYPE) && (selfDefaults > 0)
+                && this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name));
+            return readOnly;
+        });
     }
     // (2) the endpoint join's nil-seeded map local: every write an awaited Dict endpoint, every other use a read
     h29a17Joined(declaration: any): boolean {
-        if (h29a17JoinedProven.has(declaration)) {
-            return h29a17JoinedProven.get(declaration) === true;
-        }
-        h29a17JoinedProven.set(declaration, false);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !goAwaitedMapWritesOnlyLocal(this, declaration)) {
-            return false;
-        }
-        let writes = 0;
-        const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
-            if (this.h28a03EndpointWrite(n, name)) {
-                writes += 1;
-                return true;
+        return this.goSeededProof(h29a17JoinedProven, declaration, () => {
+            if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+                || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !goAwaitedMapWritesOnlyLocal(this, declaration)) {
+                return false;
             }
-            return this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name);
+            let writes = 0;
+            const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n: any, name: string) => {
+                if (this.h28a03EndpointWrite(n, name)) {
+                    writes += 1;
+                    return true;
+                }
+                return this.h29a17SelfDefault(n) || this.goJsonOriginUseIsReadOnly(n, name);
+            });
+            return readOnly && (writes > 0);
         });
-        h29a17JoinedProven.set(declaration, readOnly && (writes > 0));
-        return readOnly && (writes > 0);
     }
     h29a17Site(node: any) {
         const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
@@ -39557,62 +39270,59 @@ ${tryBodyBlock}
         return parent.arguments.includes(n);
     }
     h29a18Row(declaration: any): boolean {
-        if (h29a18Proven.has(declaration)) {
-            return h29a18Proven.get(declaration) === true;
-        }
-        h29a18Proven.set(declaration, false);
-        const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
-        const list: any = init?.expression;
-        const key: any = init?.argumentExpression;
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.declarations?.length !== 1) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
-            || (init?.kind !== SyntaxKind.ElementAccessExpression) || (list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
-            || (list.text === key.text) || !this.goDeclaredListIdentifier(list) || !this.h27a09JsonOriginList(list)
-            || (this.goLoopBoundedIndexRead(init, list, key, list.text, key.text) === undefined)) {
-            return false;
-        }
-        const name: string = declaration.name.text;
-        const printed: string = printVariableDeclarationListH29a18.call(this, declaration.parent, 0);
-        if (!new RegExp(`^\\s*var ${name} any = ${list.text}\\[${key.text}\\]$`).test(printed)) {
-            return false;
-        }
-        const scope: any = this.goEnclosingFunction(declaration);
-        let lastRead = -1;
-        let firstRaw = Number.MAX_SAFE_INTEGER;
-        const vetoed = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
-            if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n !== declaration)
-                && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
-                return !h29a18DisjointBlocks(declaration, n);
-            }
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+        return this.goSeededProof(h29a18Proven, declaration, () => {
+            const init: any = this.goUnwrapParenthesizedNode(declaration?.initializer);
+            const list: any = init?.expression;
+            const key: any = init?.argumentExpression;
+            if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+                || (declaration.parent?.declarations?.length !== 1) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+                || (init?.kind !== SyntaxKind.ElementAccessExpression) || (list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)
+                || (list.text === key.text) || !this.goDeclaredListIdentifier(list) || !this.h27a09JsonOriginList(list)
+                || (this.goLoopBoundedIndexRead(init, list, key, list.text, key.text) === undefined)) {
                 return false;
             }
-            // a namesake declared in a sibling block is another variable
-            const own: any = this.goAnyBoxLocalDeclaration(n);
-            if ((own !== undefined) && (own !== declaration) && h29a18DisjointBlocks(declaration, own)) {
+            const name: string = declaration.name.text;
+            const printed: string = printVariableDeclarationListH29a18.call(this, declaration.parent, 0);
+            if (!new RegExp(`^\\s*var ${name} any = ${list.text}\\[${key.text}\\]$`).test(printed)) {
                 return false;
             }
-            if ((this.goEnclosingFunction(n) !== scope) || this.goWritesOrRebindsName(n, name, [])) {
+            const scope: any = this.goEnclosingFunction(declaration);
+            let lastRead = -1;
+            let firstRaw = Number.MAX_SAFE_INTEGER;
+            const vetoed = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
+                if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n !== declaration)
+                    && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
+                    return !h29a18DisjointBlocks(declaration, n);
+                }
+                if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+                    return false;
+                }
+                // a namesake declared in a sibling block is another variable
+                const own: any = this.goAnyBoxLocalDeclaration(n);
+                if ((own !== undefined) && (own !== declaration) && h29a18DisjointBlocks(declaration, own)) {
+                    return false;
+                }
+                if ((this.goEnclosingFunction(n) !== scope) || this.goWritesOrRebindsName(n, name, [])) {
+                    return true;
+                }
+                const call: any = n.parent;
+                const callee: any = call?.expression;
+                const k: any = call?.arguments?.[1];
+                if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29A18_READERS.has(callee.name?.text)
+                    && (k?.kind === SyntaxKind.StringLiteral) && !/^\d+$/.test(k.text)) {
+                    lastRead = Math.max(lastRead, n.pos);
+                    return false;
+                }
+                if (this.h29a18RawUse(n)) {
+                    firstRaw = Math.min(firstRaw, n.pos);
+                    return false;
+                }
                 return true;
-            }
-            const call: any = n.parent;
-            const callee: any = call?.expression;
-            const k: any = call?.arguments?.[1];
-            if ((call?.kind === SyntaxKind.CallExpression) && (call.arguments[0] === n) && (callee?.kind === SyntaxKind.PropertyAccessExpression)
-                && (callee.expression?.kind === SyntaxKind.ThisKeyword) && H29A18_READERS.has(callee.name?.text)
-                && (k?.kind === SyntaxKind.StringLiteral) && !/^\d+$/.test(k.text)) {
-                lastRead = Math.max(lastRead, n.pos);
-                return false;
-            }
-            if (this.h29a18RawUse(n)) {
-                firstRaw = Math.min(firstRaw, n.pos);
-                return false;
-            }
-            return true;
+            });
+            const proven = !vetoed && (lastRead >= 0) && (firstRaw < Number.MAX_SAFE_INTEGER) && (lastRead < firstRaw);
+            return proven;
         });
-        const proven = !vetoed && (lastRead >= 0) && (firstRaw < Number.MAX_SAFE_INTEGER) && (lastRead < firstRaw);
-        h29a18Proven.set(declaration, proven);
-        return proven;
     }
     // the read `x = this.safeList (R, 'lit', [])` into a `[]`-seeded local ts declares a list leaves R untouched:
     // it counts as a read-only use of R for the JSON-origin proof, as the declaration-initializer form does
@@ -39730,19 +39440,11 @@ ${tryBodyBlock}
     h29g08HashmapRowEntryRead(node) {
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
         const call: any = declaration?.initializer;
-        if ((declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)
-            || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)
-            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
-            || (call.expression.name?.text !== 'safeDict') || (call.arguments[1].kind !== SyntaxKind.Identifier)
+        if (!this.goSafeDict2Site(declaration, call) || (call.arguments[1].kind !== SyntaxKind.Identifier)
             || !this.h29g08HashmapRow(call.arguments[0])) {
             return undefined;
         }
-        const keyNode: any = call.arguments[1];
-        const keyType = this.goLocalStaticType(keyNode) ?? this.goDeclaredParamStaticType(keyNode);
-        if ((keyType !== 'string') && (keyType !== '*string')) {
-            return undefined;
-        }
-        return { name: declaration.name.text, row: call.arguments[0].text, key: keyNode.text, pointer: keyType === '*string' };
+        return this.goStringKeyedRowEntry(declaration, call);
     }
     h29g11CopyOrFreshMapSource(expr) {
         expr = this.goUnwrapParenthesizedNode(expr);
@@ -39773,17 +39475,8 @@ ${tryBodyBlock}
             // a later `[ x, p ] = ...` or `x = ...` write of the binding must be proven too
             const name = decl.name.text;
             const scope = this.goEnclosingFunction(declaration);
-            let unproven = (scope === undefined);
-            const visit = (n) => {
-                if (unproven) { return; }
-                if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
-                    && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)) {
-                    unproven = true;
-                    return;
-                }
-                n.forEachChild(visit);
-            };
-            scope?.forEachChild(visit);
+            const unproven = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.BinaryExpression)
+                && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name));
             return unproven ? undefined : true;
         }
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)) {
@@ -39810,24 +39503,10 @@ ${tryBodyBlock}
         }
         const name = decl.name.text;
         const scope = this.goEnclosingFunction(decl);
-        let holds = (scope !== undefined);
-        const visit = (n) => {
-            if (!holds) { return; }
-            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment)
-                && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)
-                && ((n.operatorToken.kind !== SyntaxKind.EqualsToken) || (n.left.kind !== SyntaxKind.Identifier) || !this.goIsNonPointerValueSource(n.right))) {
-                holds = false;
-                return;
-            }
-            if (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression))
-                && (n.operand?.kind === SyntaxKind.Identifier) && (n.operand.text === name)) {
-                holds = false;
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        scope?.forEachChild(visit);
-        return holds;
+        return (scope !== undefined) && !this.hasNodeWhere(scope, (n: any) => ((n.kind === SyntaxKind.BinaryExpression)
+            && (n.operatorToken?.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken?.kind <= SyntaxKind.LastAssignment) && this.goAssignmentWritesName(n.left, name)
+            && ((n.operatorToken.kind !== SyntaxKind.EqualsToken) || (n.left.kind !== SyntaxKind.Identifier) || !this.goIsNonPointerValueSource(n.right)))
+            || (((n.kind === SyntaxKind.PrefixUnaryExpression) || (n.kind === SyntaxKind.PostfixUnaryExpression)) && (n.operand?.kind === SyntaxKind.Identifier) && (n.operand.text === name)));
     }
     h29g11CopyNilCompare(left, rFam, nilText) {
         const n: any = this.goUnwrapParenthesizedNode(left);
@@ -39864,7 +39543,7 @@ ${tryBodyBlock}
         return `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${containerStr}[${keyStrs[0]}], ${keyStrs[1]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
     }
     h29g15RebindGuardProves(id) {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(id)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(id);
         const scope: any = (decl?.kind === SyntaxKind.VariableDeclaration) ? this.goEnclosingFunction(decl) : undefined;
         const read = (scope === undefined) ? undefined : this.goOrderBookCacheRead(decl.initializer);
         if (read === undefined) {
@@ -39911,12 +39590,7 @@ ${tryBodyBlock}
             || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'getWsUrl')) {
             return undefined;
         }
-        let method: any;
-        try {
-            method = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
-        } catch (e) {
-            method = undefined;
-        }
+        const method: any = this.goSymbolValueDecl(callee.name);
         if ((method?.kind !== SyntaxKind.MethodDeclaration) || (method.body === undefined) || ((method.parameters?.length ?? 0) !== 0)
             || (method.type?.kind !== SyntaxKind.StringKeyword)) {
             return undefined;
@@ -39945,12 +39619,7 @@ ${tryBodyBlock}
     }
     // `const u = this.safeString (x, k, '<literal>')` never rebound: a string on every input
     h29g23LiteralDefaultedConst(ident: any): boolean {
-        let d: any;
-        try {
-            d = this.checkerOrUndefined()?.getSymbolAtLocation(ident)?.valueDeclaration?.resolve?.();
-        } catch (e) {
-            d = undefined;
-        }
+        const d: any = this.goSymbolValueDecl(ident);
         const init: any = d?.initializer;
         const name = init?.expression?.name?.text;
         const args = init?.arguments ?? [];
@@ -39964,9 +39633,8 @@ ${tryBodyBlock}
         if ((bound?.kind !== SyntaxKind.Identifier) || (baseExpr?.kind !== SyntaxKind.Identifier)) {
             return false;
         }
-        const checker: any = this.checkerOrUndefined();
-        const declaration: any = checker?.getSymbolAtLocation(bound)?.valueDeclaration?.resolve?.();
-        const listDeclaration: any = checker?.getSymbolAtLocation(baseExpr)?.valueDeclaration?.resolve?.();
+        const declaration: any = this.goSymbolValueDecl(bound);
+        const listDeclaration: any = this.goSymbolValueDecl(baseExpr);
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
             || ((listDeclaration?.kind !== SyntaxKind.Parameter) && (listDeclaration?.kind !== SyntaxKind.VariableDeclaration))) {
             return false;
@@ -39977,13 +39645,13 @@ ${tryBodyBlock}
         }
         const isLength = (n: any) => (n?.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'length')
             && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === baseExpr.text)
-            && (checker.getSymbolAtLocation(n.expression)?.valueDeclaration?.resolve?.() === listDeclaration);
+            && (this.goSymbolValueDecl(n.expression) === listDeclaration);
         const safeValue = (n: any) => ((n?.kind === SyntaxKind.NumericLiteral) && (n.text === '0')) || isLength(n);
         if (!safeValue(declaration.initializer)) {
             return false;
         }
         const mutators = [ 'push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin' ];
-        const own = (n: any) => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const own = (n: any) => this.goSymbolValueDecl(n);
         return !this.hasNodeWhere(scope, (n: any) => {
             if ((n.kind !== SyntaxKind.Identifier) || isFunctionLike(n.parent)) {
                 return false;
@@ -40029,9 +39697,7 @@ ${tryBodyBlock}
         }
         // a nil test of the read keeps the map form: "" is not the nil the test asks about
         let outer: any = node;
-        while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-            outer = outer.parent;
-        }
+        outer = this.goMapParamOuterParens(outer);
         if (this.goIsNilComparisonOperand(outer, outer.parent)) {
             return undefined;
         }
@@ -40056,9 +39722,7 @@ ${tryBodyBlock}
         let used = false;
         const ok = this.goJsonOriginBindingIsReadOnly(declaration, (n: any) => {
             let outer: any = n;
-            while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-                outer = outer.parent;
-            }
+            outer = this.goMapParamOuterParens(outer);
             const parent: any = outer.parent;
             used = true;
             return (parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken.kind === SyntaxKind.PlusToken)
@@ -40294,14 +39958,8 @@ ${tryBodyBlock}
     }
     // `const d = this.safeDict (R, k)` / `safeList (R, k)` (optionally with a `{}` / `[]` default) on a decoded-JSON map
     h30a08PointerKeyRead(node, printed) {
-        if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
-            return undefined;
-        }
-        const decl: any = node.declarations[0];
-        const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
-        const callee: any = call?.expression;
-        if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
+        const { decl, call, callee } = ((typeof printed === 'string') ? this.goStatementThisCall(node, false) : undefined) ?? {};
+        if ((callee === undefined) || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
             return undefined;
         }
         const [ container, key, fallback ] = call.arguments;
@@ -40325,9 +39983,7 @@ ${tryBodyBlock}
         }
         if (isList) {
             // an element write (`xs[i][k] = v`) is printed from the wrap declaration line: keep that form
-            const scope: any = this.goEnclosingFunction(decl);
-            if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-                && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n) && this.h27a04WrittenThrough(n.parent))) {
+            if (this.goLocalWrittenThrough(decl, name)) {
                 return undefined;
             }
         }
@@ -40488,9 +40144,8 @@ ${tryBodyBlock}
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const declaration: any = this.goAnyBoxLocalDeclaration(node);
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = this.goStatementBoxLocal(node);
+        if (declaration === undefined) {
             return false;
         }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -40518,16 +40173,14 @@ ${tryBodyBlock}
             && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'toArray')) ? call : undefined;
     }
     h30a16ToArrayList(baseExpr: any): boolean {
-        const declaration: any = (baseExpr?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(baseExpr) : undefined;
-        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const declaration: any = (baseExpr?.kind === SyntaxKind.Identifier) ? this.goStatementBoxLocal(baseExpr) : undefined;
+        if (declaration === undefined) {
             return false;
         }
         const call: any = this.h30a16ToArrayCall(declaration.initializer);
         const source: any = this.goUnwrapParenthesizedNode(call?.arguments?.[0]);
-        const sourceDeclaration: any = (source?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration(source) : undefined;
-        if ((sourceDeclaration?.kind !== SyntaxKind.VariableDeclaration) || (sourceDeclaration.name?.kind !== SyntaxKind.Identifier)
-            || (sourceDeclaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
+        const sourceDeclaration: any = (source?.kind === SyntaxKind.Identifier) ? this.goStatementBoxLocal(source) : undefined;
+        if (sourceDeclaration === undefined) {
             return false;
         }
         const awaited: any = this.goUnwrapParenthesizedNode(sourceDeclaration.initializer);
@@ -40586,8 +40239,8 @@ ${tryBodyBlock}
             return false;
         }
         let uses = 0;
-        const bad = this.hasNodeWhere(scope, (m: any) => {
-            if ((m.kind !== SyntaxKind.Identifier) || (m.text !== decl.name.text) || (m === decl.name)
+        const bad = this.goScopeIdents(scope, decl.name.text).some((m: any) => {
+            if ((m === decl.name)
                 || ((m.parent?.kind === SyntaxKind.PropertyAccessExpression) && (m.parent.name === m))
                 || ((m.parent?.kind === SyntaxKind.PropertyAssignment) && (m.parent.name === m))) {
                 return false;
@@ -40621,7 +40274,7 @@ ${tryBodyBlock}
         if (arg?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
             || !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`))) {
@@ -40832,6 +40485,9 @@ ${tryBodyBlock}
             || !this.h29g08HashmapRow(call.arguments[0])) {
             return undefined;
         }
+        return this.goStringKeyedRowEntry(declaration, call);
+    }
+    goStringKeyedRowEntry(declaration, call) {
         const keyNode: any = call.arguments[1];
         const keyType = this.goLocalStaticType(keyNode) ?? this.goDeclaredParamStaticType(keyNode);
         if ((keyType !== 'string') && (keyType !== '*string')) {
@@ -40840,8 +40496,7 @@ ${tryBodyBlock}
         return { name: declaration.name.text, row: call.arguments[0].text, key: keyNode.text, pointer: keyType === '*string' };
     }
     h30g29ForCounterKind(node) {
-        const checker: any = this.checkerOrUndefined();
-        const declaration = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const declaration = this.goSymbolValueDecl(node);
         if (declaration?.kind !== SyntaxKind.VariableDeclaration) {
             return undefined;
         }
@@ -40921,9 +40576,7 @@ ${tryBodyBlock}
             return undefined;
         }
         let outer: any = node;
-        while (outer.parent?.kind === SyntaxKind.ParenthesizedExpression) {
-            outer = outer.parent;
-        }
+        outer = this.goMapParamOuterParens(outer);
         const parent: any = outer.parent;
         const argument = (parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== outer) && parent.arguments.includes(outer);
         const element = (parent?.kind === SyntaxKind.ArrayLiteralExpression);
@@ -40972,7 +40625,7 @@ ${tryBodyBlock}
         const shipped = `var ${name} map[string]any = this.SafeDictMap(${container.text}, ${lit}, ${container.text})`;
         const nilTest = (n: any) => (n.parent?.kind === SyntaxKind.BinaryExpression) && this.goIsNilComparisonOperand(n, n.parent);
         if ((scope === undefined) || !this.h29a13FrameMap(container) || h27a11WritesInto(this, scope, name, declaration)
-            || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name) && nilTest(n))) {
+            || this.goScopeIdents(scope, name).some((n: any) => (n !== declaration.name) && nilTest(n))) {
             return undefined;
         }
         const read = this.h29a13FrameDictRead(declaration, m[1] + m[2] + shipped);
@@ -41127,12 +40780,12 @@ ${tryBodyBlock}
         if (d.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const target: any = this.checkerOrUndefined()?.getSymbolAtLocation(d)?.valueDeclaration?.resolve?.();
+        const target: any = this.goSymbolValueDecl(d);
         return (target === declaration) || (this.goDeclaredTypeOfIdentifier(d) === 'string');
     }
     // an identifier in slot 0 of such a write whose local the printer declares `string`
     h37p11StringOptionLocal(node): boolean {
-        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
+        const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goSymbolValueDecl(node) : undefined;
         return (declaration?.kind === SyntaxKind.VariableDeclaration) && (this.goDeclaredTypeOfIdentifier(node) === 'string');
     }
     // a JSON-origin local handed whole to `this.parseX (local, ..)` stays JSON-origin when the callee, resolved by
@@ -41158,7 +40811,7 @@ ${tryBodyBlock}
     // `slot - other` under a nil guard, other an int64 operand: the difference prints `*slot - other` (int64)
     h38p10Int64Difference(binary, current, ident) {
         const other: any = (binary.left === current) ? binary.right : binary.left;
-        if (!this.goTuplePointerSlotNilProven(ident) || this.hasNodeWhere(other, (n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === ident.text))) {
+        if (!this.goTuplePointerSlotNilProven(ident) || (this.goScopeIdents(other, ident.text).length > 0)) {
             return false;
         }
         const operand = this.goInt64ProductOperand(other, this.printNode(other, 0));
@@ -41335,15 +40988,8 @@ ${tryBodyBlock}
         });
     }
     h45g36LiteralTableRead(node, printed) {
-        if ((typeof printed !== 'string') || (node?.parent?.kind !== SyntaxKind.FirstStatement) || (node.declarations?.length !== 1)) {
-            return undefined;
-        }
-        const decl: any = node.declarations[0];
-        const call: any = this.goUnwrapParenthesizedNode(decl.initializer);
-        const callee: any = call?.expression;
-        if ((decl.name?.kind !== SyntaxKind.Identifier) || (call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'safeDict')
-            || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
+        const { decl, call, callee } = ((typeof printed === 'string') ? this.goStatementThisCall(node, false) : undefined) ?? {};
+        if ((callee?.name?.text !== 'safeDict') || ((call.arguments.length !== 2) && (call.arguments.length !== 3))) {
             return undefined;
         }
         const [ container, key, fallback ] = call.arguments;
