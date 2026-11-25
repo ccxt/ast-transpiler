@@ -28,7 +28,7 @@ describe ('h48r16: a string slot filled with a literal tail slice of a typed str
     test ('the slot prints &str and the caller lends the sliced chars', () => {
         const out = build (venue ('privateKey: string', 'privateKey.slice (-64)'));
         expect (out).toMatch (/fn signHash\(&self, hash: &str, privateKey: &str\)/);
-        expect (out).toContain ('privateKey.chars().skip(privateKey.chars().count().saturating_sub(64)).collect::<String>().as_str())');
+        expect (out).toContain ('&privateKey[privateKey.char_indices().rev().nth(63).unwrap_or_default().0..])');
     });
     test ('a slice of an untyped value keeps the box', () => {
         const out = build (venue ('privateKey: string', 'this.note (privateKey).slice (-64)'));

@@ -12495,6 +12495,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (method === 'slice' && this.rustStrSliceBounds(args) === undefined) return this.rustStrSliceVarText(s, this.rustStrSliceVarBounds(args));
         if (method === 'slice') {
             const { start, end } = this.rustStrSliceBounds(args);
+            if (start < 0 && end === undefined) return `(${this.rustStrTailSliceNative(s, -start)}).to_string()`;
             const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
             const take = end === undefined ? '' : `.take(${Math.max(end - start, 0)})`;
             return `${s}.chars().skip(${skip})${take}.collect::<String>()`;
@@ -12591,7 +12592,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (start === undefined || (args.length === 2 && (end === undefined || end < 0 || start < 0))) return undefined;
         const skip = start >= 0 ? `${start}` : `${s}.chars().count().saturating_sub(${-start})`;
         const take = end === undefined ? '' : `.take(${Math.max(end - start, 0)})`;
-        const text = `Value::from(${s}.chars().skip(${skip})${take}.collect::<String>())`;
+        const text = start < 0 && end === undefined ? `Value::from(${this.rustStrTailSliceNative(s, -start)})` : `Value::from(${s}.chars().skip(${skip})${take}.collect::<String>())`;
         return recvKind === 'str' ? text : `(if let Some(__s) = ${super.printIdentifier(recv)}.as_deref() { ${text} } else { Value::Null })`;
     }
 
@@ -40734,7 +40735,12 @@ export class RustTranspiler extends BaseTranspiler {
         if (recv === undefined || !this.rustVenueStrParamUnboundRead(recv)) return undefined;
         const s = super.printIdentifier(recv);
         const n = this.rustSliceLiteralBound(this.unwrapParens(node).arguments[0]);
-        return `Value::from(${s}.chars().skip(${n >= 0 ? `${n}` : `${s}.chars().count().saturating_sub(${-n})`}).collect::<String>())`;
+        return n < 0 ? `Value::from(${this.rustStrTailSliceNative(s, -n)})` : `Value::from(${s}.chars().skip(${n}).collect::<String>())`;
+    }
+
+    /** `&str` of the last `n` chars of the string `s` (the whole string when shorter): a char-boundary sub-slice, no copy. */
+    rustStrTailSliceNative(s: string, n: number): string {
+        return `&${s}[${s}.char_indices().rev().nth(${n - 1}).unwrap_or_default().0..]`;
     }
 
     /** A per-venue `f64` parameter read only as a whole argument of typed unified `f64` slots: no `Value` binding. */
@@ -40918,8 +40924,8 @@ export class RustTranspiler extends BaseTranspiler {
             : this.rustOptParamKind(recv) === 'str' && /^[A-Za-z_]\w*$/.test(printed) ? `${printed}.as_str().unwrap_or_default()` : undefined;
         if (s === undefined) return undefined;
         const n = this.rustSliceLiteralBound(this.unwrapParens(arg).arguments[0]);
-        const skip = n >= 0 ? `${n}` : `${s}.chars().count().saturating_sub(${-n})`;
-        return `${s}.chars().skip(${skip}).collect::<String>().as_str()`;
+        if (n < 0) return this.rustStrTailSliceNative(s, -n);
+        return `${s}.chars().skip(${n}).collect::<String>().as_str()`;
     }
 
     /** Order request builders whose amount / price slots stay as they are (held). */

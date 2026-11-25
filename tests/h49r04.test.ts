@@ -32,9 +32,9 @@ describe ('h49r04: a string parameter read only through literal tail slices', ()
         const out = build (venue (slices, 'privateKey.slice (-64)'));
         expect (out).toMatch (/fn signHash\(&self, hash: &str, privateKey: &str\)/);
         expect (out).not.toMatch (/let (mut )?(hash|privateKey): Value = \w+\.into\(\);/);
-        expect (out).toContain ('Value::from(privateKey.chars().skip(privateKey.chars().count().saturating_sub(64)).collect::<String>())');
-        expect (out).toContain ('Value::from(hash.chars().skip(hash.chars().count().saturating_sub(64)).collect::<String>())');
-        expect (out).toContain ('privateKey.chars().skip(privateKey.chars().count().saturating_sub(64)).collect::<String>().as_str())');
+        expect (out).toContain ('Value::from(&privateKey[privateKey.char_indices().rev().nth(63).unwrap_or_default().0..])');
+        expect (out).toContain ('Value::from(&hash[hash.char_indices().rev().nth(63).unwrap_or_default().0..])');
+        expect (out).toContain ('&privateKey[privateKey.char_indices().rev().nth(63).unwrap_or_default().0..])');
     });
     test ('a positive start skips from the borrow', () => {
         const out = build (venue ("const signature = ecdsa (hash.slice (2), privateKey.slice (-64), 'x', undefined);", 'privateKey'));

@@ -11537,7 +11537,7 @@ describe('safe scalar locals, third pass: element-write sources, field writes, c
         expect(out).toContain('let mut raw: String = ');
         expect(out).toContain('Value::from(raw.chars().skip(2).take(2).collect::<String>())');
         expect(out).toContain('Value::from(raw.chars().skip(3).collect::<String>())');
-        expect(out).toContain('Value::from(raw.chars().skip(raw.chars().count().saturating_sub(2)).collect::<String>())');
+        expect(out).toContain('Value::from((&raw[raw.char_indices().rev().nth(1).unwrap_or_default().0..]).to_string())');
         // ral-lc: a slice of a typed Option<String> receiver keeps its receiver type and boxes once at the use
         expect(out).toContain('(if let Some(__s) = d.as_deref() { Some(__s.chars().skip(0).take(13).collect::<String>()) } else { None }).map(Value::from).unwrap_or(Value::Null)');
         expect(out).not.toContain('|__s|');
@@ -12317,7 +12317,7 @@ describe('method on a typed string local: pad / slice results typed with their r
         // literal slices: char-indexed skip / take on the borrowed str
         expect(out).toContain('let mut raw: Option<String> = ');
         expect(out).toContain('let mut day: Option<String> = (if let Some(__s) = raw.as_deref() { Some(__s.chars().skip(0).take(2).collect::<String>()) } else { None });');
-        expect(out).toContain('let mut rest: Option<String> = (if let Some(__s) = raw.as_deref() { Some(__s.chars().skip(__s.chars().count().saturating_sub(4)).collect::<String>()) } else { None });');
+        expect(out).toContain('let mut rest: Option<String> = (if let Some(__s) = raw.as_deref() { Some((&__s[__s.char_indices().rev().nth(3).unwrap_or_default().0..]).to_string()) } else { None });');
         // Object.keys read only through join: the lent list, joined without a copy or closure
         expect(out).toContain('let mut keys: crate::value::List = ');
         expect(out).toContain('Value::Str(keys.iter().map(Value::to_string).collect::<Vec<String>>().join(", ").into())');
