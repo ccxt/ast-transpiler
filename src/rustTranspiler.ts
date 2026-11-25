@@ -2504,7 +2504,9 @@ export class RustTranspiler extends BaseTranspiler {
             const bearerChain = keyStrs.length > 1
                 ? this.rustBearerChainedWrite(baseExpr, keys, keyStrs, rhs) : undefined;
             if (bearerChain !== undefined) return bearerChain;
-            const nativeInsert = keyStrs.length === 1 ? (this.rustBearerDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustMapParamDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeBookMetaWrite(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs)) : undefined;
+            // a bare `let` local (never a parameter) at its last use moves into a typed map insert (owned, never cloned)
+            const ownedRhs = keyStrs.length === 1 && isIdentifier(this.unwrapParens(right)) && isVariableDeclaration(this.rustDeclarationOfIdentifier(this.unwrapParens(right)) ?? right) ? this.rustOwnedArgText(right, rhs.trim()) : rhs;
+            const nativeInsert = keyStrs.length === 1 ? (this.rustBearerDictInsert(baseExpr, keys[0], keyStrs[0], ownedRhs) ?? this.rustMapParamDictInsert(baseExpr, keys[0], keyStrs[0], ownedRhs) ?? this.printNativeBookMetaWrite(baseExpr, keys[0], keyStrs[0], rhs) ?? this.printNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs) ?? this.rustNativeDictInsert(baseExpr, keys[0], keyStrs[0], rhs)) : undefined;
             if (nativeInsert === undefined && counterKeyText !== undefined) this.rustI64CounterUse(counterKey);
             return nativeInsert ?? helperWrite;
         }
