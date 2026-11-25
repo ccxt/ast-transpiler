@@ -43421,8 +43421,14 @@ function goListElementIsPlainValue (goTranspiler: GoTranspiler, node): boolean {
     if ((node?.kind === SyntaxKind.CallExpression) && (node.arguments.length === 0) && (node.expression?.kind === SyntaxKind.PropertyAccessExpression)) {
         return /^to(Lower|Upper)Case$/.test (`${node.expression.name?.text ?? ''}`);
     }
+    // `xs.join (sep)` prints strings.Join or the Join helper: a Go string either way
+    if ((node?.kind === SyntaxKind.CallExpression) && (node.arguments.length === 1) && (node.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (node.expression.name?.text === 'join') && goTranspiler.goCheckerTypeHasFlags (node, TypeFlags.String)) {
+        return true;
+    }
     if (node?.kind === SyntaxKind.Identifier) {
-        return GO_PLAIN_VALUE_LOCAL_TYPES.has (`${goTranspiler.goDeclaredTypeOfIdentifier (node) ?? ''}`);
+        // a `for (let i = 0; ..)` counter prints as a Go int
+        return GO_PLAIN_VALUE_LOCAL_TYPES.has (`${goTranspiler.goDeclaredTypeOfIdentifier (node) ?? ''}`) || goTranspiler.goIntOperandIdentifier (node);
     }
     return false;
 }
