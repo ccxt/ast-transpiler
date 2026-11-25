@@ -9216,6 +9216,12 @@ export class JavaTranspiler extends BaseTranspiler {
             && !String(parsedArg).startsWith('Helpers.')) {
             return `${name}.indexOf(${parsedArg})`;
         }
+        // `(x as string)` around a local the embedding layer declares String: the local itself is the target
+        const inner = isParenthesizedExpression(arg) && isAsExpression(arg.expression) ? arg.expression.expression : undefined;
+        if (inner !== undefined && isIdentifier(inner) && this.javaDeclaredStringType(inner) === true
+            && argType.getAliasSymbol?.() === undefined && this.isStringType(argType.flags)) {
+            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${this.printNode(inner, 0)})`;
+        }
         return undefined;
     }
 
