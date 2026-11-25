@@ -35692,7 +35692,9 @@ function goRowListArgAfterPassThrough(goTranspiler: GoTranspiler, n): boolean {
 // a sync venue `Dict[]` parameter whose every element read sits in a counting loop over its own length prints
 // the plain slice index (goBoundedLoopListRead, object elements), so the `[]any` slot costs no guarded closure
 function goRowSliceParamBoundedReads(goTranspiler: GoTranspiler, fn, param): boolean {
-    if (goTranspiler.isAsyncFunction(fn) || (String(param.type?.getText() ?? '') !== 'Dict[]') || (param.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    if (goTranspiler.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    // `Dict[]`, or a declared structure list (`Transaction[]`): object elements, never `any[]`
+    if ((String(param.type?.getText() ?? '') !== 'Dict[]') && !goTranspiler.goListElementsAreObjects(param.name)) { return false; }
     const name = param.name.text;
     return !goTranspiler.hasNodeWhere(fn.body, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
         && (n.expression.text === name) && (goTranspiler.isGoElementAccessAssignmentTarget(n) || !goTranspiler.goBoundedLoopListRead(n)));
