@@ -18763,6 +18763,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustFormatPrints.delete(node);
         const expression = node.expression;
         const bookCall = this.printWsBookMapRead(node) ?? this.printWsBookCtorCall(node, identation); if (bookCall !== undefined) return bookCall;
+        const rowArg = this.printVenueDictRowReadArg(node); if (rowArg !== undefined) return rowArg;
         const typed67g = this.printTyped67gSafeDict(node, identation); if (typed67g !== undefined) return typed67g;
         const p21Row = (this as any).printRustP21RowCall(node); if (p21Row !== undefined) return p21Row;
         const mapLookup = this.printWsCacheMapRead(node); if (mapLookup !== undefined) return mapLookup;
@@ -42176,7 +42177,7 @@ export class RustTranspiler extends BaseTranspiler {
         // another pro file calls this name directly without declaring its own copy: the call may reach this one
         if (handler && this.rustWsHandlerCalledElsewhere(method, name)) return false;
         // syntactic test first: a typed-local decision is asked only when every argument could lend
-        if (!calls.every((call: any) => call.arguments.length >= at + 1 && isIdentifier(call.arguments[at]))) return false;
+        if (!calls.every((call: any) => call.arguments.length >= at + 1 && (isIdentifier(call.arguments[at]) || this.rustVenueDictRowReadArg(call.arguments[at]) !== undefined))) return false;
         // a table-proven local lends only beside callers that need no map view of a boxed slot
         const boxedLend = (a: any) => { const d: any = this.rustDeclarationOfIdentifier(a); return d?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(d); };
         if (calls.some((call: any) => this.rustTableDictLocalArg(call.arguments[at])) && calls.some((call: any) => boxedLend(call.arguments[at]))) return false;
@@ -42524,6 +42525,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** A plain (never-null) dict local, or the caller's own borrowed `Dict` slot. */
     rustVenueDictArgLends(arg: any): boolean {
+        if (this.rustVenueDictRowReadArg(arg) !== undefined) return true;
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
         if (declaration?.kind !== SyntaxKind.Parameter && this.rustTableDictLocalArg(arg)) return true;
@@ -42795,6 +42797,33 @@ export class RustTranspiler extends BaseTranspiler {
         if (type === undefined || !isTypeReferenceNode(type) || !isIdentifier(type.typeName) || String(type.typeName.text) !== 'Dict' || type.typeArguments !== undefined) return false;
         if (!isMethodDeclaration(param.parent) || this.rustLocalIsReassigned(param, String(param.name.text)) || this.rustParamShadowTable(param.parent).has(String(param.name.text))) return false;
         return this.rustParamType(param) === 'Value';
+    }
+
+    /** An inline `this.safeDict (list, i, {})` on a plain list local with a loop counter: the row (the empty map for a
+     *  missing / non-map element, as `safe_dict_t` answers) is read off the slice. Answers [list local, counter]. */
+    rustVenueDictRowReadArg(arg: any): [any, any] | undefined {
+        const call: any = arg === undefined ? undefined : this.unwrapParens(arg);
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+        if (String(call.expression.name.text) !== 'safeDict' || call.arguments.length !== 3 || this.rustTestTierSource(call)) return undefined;
+        const [ recv, key, dflt ] = Array.from(call.arguments).map((a: any) => this.unwrapParens(a));
+        if (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0 || !isIdentifier(recv) || !isIdentifier(key) || this.rustI64CounterOf(key) === undefined) return undefined;
+        const d: any = this.rustDeclarationOfIdentifier(recv);
+        if (d?.kind !== SyntaxKind.VariableDeclaration || d.name === recv || this.rustBorrowedLocalKind(d) !== 'list' || this.rustOptContainerLocals.has(d)) return undefined;
+        return [ recv, key ];
+    }
+
+    /** The row read above, lent to a rustVenueDictParam slot: a map view, or the dict handle for a handle slot. */
+    printVenueDictRowReadArg(node: any): string | undefined {
+        const call: any = node?.parent;
+        if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression)) return undefined;
+        const at = Array.from(call.arguments).indexOf(node);
+        const param: any = at < 0 ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
+        const read = this.rustVenueDictRowReadArg(node);
+        if (param === undefined || read === undefined || !this.rustVenueDictParam(param) || !this.rustI64CounterUse(read[1])) return undefined;
+        const list = super.printIdentifier(read[0]);
+        const row = `${list}.get(${String(read[1].text)} as usize)`;
+        if (this.rustVenueDictValueParam(param)) return `&(if let Some(Value::Dict(__m)) = ${row} { std::sync::Arc::clone(__m) } else { Default::default() })`;
+        return `${row}.and_then(crate::Value::as_map).unwrap_or(&Default::default())`;
     }
 
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */

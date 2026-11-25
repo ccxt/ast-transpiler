@@ -27693,8 +27693,9 @@ describe ('rust borrowed venue dict parameter stored whole', () => {
         expect (printed).toMatch (/"info"[^\n]*Value::Dict\(fee\.clone\(\)\)/);
         expect (printed).toMatch (/self\.parseFeeRow\(&first\)/);
     });
-    test ('an info entry on the last use keeps the boxed slot (it moved with no copy)', () => {
-        expect (printed).not.toMatch (/fn parseLastRow\(&self, row: &/);
+    test ('an info entry on the last use shares the dict handle', () => {
+        expect (printed).toMatch (/fn parseLastRow\(&self, row: &crate::value::Dict\)/);
+        expect (printed).toMatch (/"info"[^\n]*Value::from\(row\)\)/);
     });
 });
 
