@@ -62353,3 +62353,37 @@ GoTranspiler.prototype.h51g07ListSlotSeed = function (declaration) {
     };
 }
 // ===== end H51-G07 =====
+// ===== H51-G44
+// a decoded-JSON local stored as `'info'` in the literal that initialises a local whose every use comes after the read:
+// nothing can reach the stored value before the read runs, so the store counts as a read-only use for that read
+{
+    const h51g44BeforeRead = GoTranspiler.prototype.h27a02JsonOriginBeforeRead;
+    GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read) {
+        const outer = this.h51g44Read;
+        this.h51g44Read = read;
+        try {
+            return h51g44BeforeRead.call(this, container, read);
+        } finally {
+            this.h51g44Read = outer;
+        }
+    };
+    const h51g44UseIsReadOnly = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string) {
+        if (h51g44UseIsReadOnly.call(this, node, name)) {
+            return true;
+        }
+        const read: any = this.h51g44Read;
+        const prop: any = node?.parent;
+        const holder: any = prop?.parent?.parent;
+        if ((read === undefined) || this.goWritesOrRebindsName(node, name, []) || (prop?.kind !== SyntaxKind.PropertyAssignment)
+            || (prop.initializer !== node) || ((prop.name?.kind !== SyntaxKind.Identifier) && (prop.name?.kind !== SyntaxKind.StringLiteral))
+            || (String(prop.name.text) !== 'info') || (prop.parent?.kind !== SyntaxKind.ObjectLiteralExpression)
+            || (holder?.kind !== SyntaxKind.VariableDeclaration) || (holder.initializer !== prop.parent) || (holder.name?.kind !== SyntaxKind.Identifier)
+            || (node.pos >= read.pos) || (this.goEnclosingFunction(holder) !== this.goEnclosingFunction(read))) {
+            return false;
+        }
+        const after = read.end;
+        return this.goJsonOriginBindingIsReadOnly(holder, (n: any) => n.pos >= after);
+    };
+}
+// ===== end H51-G44
