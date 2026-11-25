@@ -31977,6 +31977,9 @@ ${this.getIden(identation)}${returnStatement}`;
             return undefined;
         }
         const receiver: any = call.arguments[0];
+        if ((method === 'keys') && (this.goDefaultedEntryKeysRead(receiver) !== undefined)) {
+            return this.goDefaultedEntryKeysDeclaration(declaration, receiver, identation);
+        }
         if (!this.goIsMapRangeFieldReceiver(receiver, method)
             && ((receiver?.kind !== SyntaxKind.Identifier) || !this.goIsRebindFreeMapReceiver(receiver))) {
             return undefined;
@@ -32012,6 +32015,44 @@ ${this.getIden(identation)}${returnStatement}`;
             `${inner}${nameText} = make(${goType}, 0, len(${receiverText}))`,
             `${inner}${header}`,
             `${body}${nameText} = append(${nameText}, ${loopVariable})`,
+            `${inner}}`,
+            `${indent}}`,
+        ].join('\n');
+    }
+
+    // `Object.keys (this.safeDict (m, k, {}))` on a declared map[string]any `m` and a Go string `k`: the entry's
+    // keys when it is a map, else the empty default's (no keys); the receiver and key printed, or undefined
+    goDefaultedEntryKeysRead(receiver): { container: string, key: string } | undefined {
+        const args: any = this.goSafeAccessorLocalArgs(receiver, 'safeDict');
+        if ((args === undefined) || (receiver.arguments.length !== 3) || (args.container?.kind !== SyntaxKind.Identifier)
+            || !this.goIsRebindFreeMapReceiver(args.container)) {
+            return undefined;
+        }
+        const key: any = this.goUnwrapParenthesizedNode(args.key);
+        const isString = (key?.kind === SyntaxKind.StringLiteral)
+            || ((key?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(key) === 'string'));
+        const container = this.printNode(args.container, 0);
+        const keyText = isString ? this.printNode(key, 0) : '';
+        return ((keyText === '') || keyText.includes('\n')) ? undefined : { container, key: keyText };
+    }
+
+    goDefaultedEntryKeysDeclaration(declaration, receiver, identation: number): string | undefined {
+        const scope: any = this.goEnclosingFunction(declaration);
+        const read = this.goDefaultedEntryKeysRead(receiver);
+        const taken = (n: any) => (n.kind === SyntaxKind.Identifier) && ((n.text === 'objectKey') || (n.text === 'objectEntry'));
+        if ((read === undefined) || (scope === undefined) || this.goTypeNameIsShadowed(scope, GO_STRING_LIST_LOCAL_TYPE) || this.hasNodeWhere(scope, taken)
+            || (this.getGoLocalType(declaration, `ObjectKeys(${read.container})`) !== GO_STRING_LIST_LOCAL_TYPE)) {
+            return undefined;
+        }
+        const name = this.printNode(declaration.name, 0);
+        const indent = this.getIden(identation);
+        const inner = this.getIden(identation + 1);
+        return [
+            `${indent}var ${name} ${GO_STRING_LIST_LOCAL_TYPE} = ${GO_STRING_LIST_LOCAL_TYPE}{}`,
+            `${indent}if objectEntry, ok := ${read.container}[${read.key}].(map[string]any); ok {`,
+            `${inner}${name} = make(${GO_STRING_LIST_LOCAL_TYPE}, 0, len(objectEntry))`,
+            `${inner}for objectKey := range objectEntry {`,
+            `${this.getIden(identation + 2)}${name} = append(${name}, objectKey)`,
             `${inner}}`,
             `${indent}}`,
         ].join('\n');
