@@ -16277,6 +16277,8 @@ export class RustTranspiler extends BaseTranspiler {
         enableDemoTrading: '()',
         // TS `Promise<Dict>` in every override (the base `Promise<{}>`): the endpoint's map, `None` for any other body
         setPositionMode: 'Option<crate::value::Dict>',
+        // TS `Promise<Dict>`: the fees keyed by currency (`None` when a body answered no dict)
+        fetchTransactionFees: 'Option<crate::value::Dict>',
     };
 
     // The typed signature of a unified method listed in `config.typedUnified`, when every parameter maps;
