@@ -984,6 +984,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMarketLocalInitializerIsMap(identifier: any, knownDeclaration?: any): boolean;
     goNonceReturnCache: WeakMap<object, string>;
     goNonceReturnType(node: any): string | undefined;
+    goIsBaseMethodNamed(fn: any, methodName: string): boolean;
     goIsBaseNonceMethod(fn: any): boolean;
     goNonceReturnIsInt64(expression: any): boolean;
     goInt64SumOperands(call: any): any[] | undefined;
