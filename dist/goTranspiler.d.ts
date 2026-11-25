@@ -87,10 +87,12 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.SafeNumber2': string;
     'this.SafeNumberN': string;
     'this.SafeNumberOmitZero': string;
+    'this.SafeIntegerOmitZero': string;
     'exchange.SafeNumber': string;
     'exchange.SafeNumber2': string;
     'exchange.SafeNumberN': string;
     'exchange.SafeNumberOmitZero': string;
+    'exchange.SafeIntegerOmitZero': string;
     'this.ParseNumber': string;
     'exchange.ParseNumber': string;
     'this.NumberToString': string;
@@ -708,7 +710,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     goDescendantsOf(scope: any): any[];
     goScopeIdents(scope: any, name: string): any[];
-    goCheckerMemoCache: WeakMap<object, Checker>;
+    goCheckerMemoized: WeakSet<object>;
     getChecker(): Checker;
     goValueDecl(node: any): any;
     goSfPropAccessCache: WeakMap<object, Map<string, any[]>>;
@@ -2386,6 +2388,7 @@ export interface GoTranspiler {
     h27a02JsonOriginBeforeRead(container: any, read: any): boolean;
     goTypedMapDictRead(args: any, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
     h27a08RowRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h52g58AssignRowRead(node: any, identation: number, printed: string): string | undefined;
     h27a08JsonList(list: any): boolean;
     h27a09JsonOriginList(baseExpr: any): boolean;
     h27a11FrameParam(param: any): boolean;

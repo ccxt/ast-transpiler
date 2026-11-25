@@ -501,6 +501,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printNumberIsIntegerCall(node: any, identation: any, parsedArg?: any): string;
     csharpNullComparisonTypeOf(node: any): string | undefined;
     csharpGuardedNullableNegation(node: any, csharpType: string): boolean;
+    csharpDeclaredIntNegation(node: any, declaration: any, csharpType: string | undefined): boolean;
     csharpFinalDeclaredLocalType(declaration: any): string | undefined;
     csharpNativeNegatedNullableLocal(node: any, leftSide: string): string | undefined;
     csharpGuardedStringConcatRead(node: any): boolean;

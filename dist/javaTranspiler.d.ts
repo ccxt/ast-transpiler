@@ -2,6 +2,7 @@ import { BaseTranspiler } from "./baseTranspiler.js";
 import { type Node } from "typescript/unstable/ast";
 import { type Checker } from "typescript/unstable/sync";
 declare const JAVA_MEMO_UNDEFINED: unique symbol;
+export declare function javaLengthMinusZeroOperand(node: any): any;
 export declare class JavaTranspiler extends BaseTranspiler {
     private methodOverrideCache;
     private overrideChainCache;
@@ -162,6 +163,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueNullableDictParameterType(node: any, name: any, symbol: any, method: any): string | undefined;
     javaOverriddenSyncStringListSlot(name: any, method: any, type: any, checker: any): boolean;
     javaUnifiedOptionalStringListParameter(node: any, method: any): boolean;
+    javaReassignedParameter(arg: any): boolean;
+    javaVenueOrderRequestNumberSlot(node: any, method: any): boolean;
     javaUnifiedIntParameterType(name: any, symbol: any, method: any, type: any, node?: any): string | undefined;
     javaBaseListParameterTypeOf(node: any, method: any, type: any, checker: any): string | undefined;
     javaPrintsListArgument(arg: any, producerDeclared?: (name: string) => boolean): boolean;
@@ -520,6 +523,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaTypedStringSliceCall(node: any, name: any, parsedArg: any, parsedArg2: any, identation: any): string | undefined;
     javaSliceNonNegativeBound(node: any, depth?: number): boolean;
+    javaIndexOfConstLocal(node: any): boolean;
     javaSliceIsOwnLength(node: any, receiver: any): boolean;
     javaTypedStringReplaceAllCall(node: any, name: any, parsedArg: any, parsedArg2: any): string | undefined;
     stringLiteralArgument(argument: any): string;
