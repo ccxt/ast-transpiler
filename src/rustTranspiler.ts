@@ -687,6 +687,7 @@ export class RustTranspiler extends BaseTranspiler {
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration.name === node || !isIdentifier(declaration.name)) return false;
         if (!isVariableDeclaration(declaration) && !isParameterDeclaration(declaration)) return false;
+        if (isVariableDeclaration(declaration) && this.rust57eSidePartLocal(declaration)) return true;
         // a loop-header binding is read again by the condition / incrementor of the next pass
         const header: any = declaration.parent?.parent;
         if (header !== undefined && (header.kind === SyntaxKind.ForStatement || header.kind === SyntaxKind.ForOfStatement || header.kind === SyntaxKind.ForInStatement)) return false;
@@ -2775,12 +2776,18 @@ export class RustTranspiler extends BaseTranspiler {
      *  `get_value` cloned, `Null` where it answered `Null`. */
     printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined {
         if (this.rust57eSideLevelLocal(declaration)) return `${indent}let ${varName}: crate::value::List = ${parsedValue}.into_list()`;
-        const init: any = this.rustSkipWrappers(declaration?.initializer);
-        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return undefined;
-        const owner: any = this.rustDeclarationOfIdentifier(init.expression);
-        if (owner === undefined || owner.name === init.expression || !this.rust57eSideLevelLocal(owner)) return undefined;
+        if (!this.rust57eSidePartLocal(declaration)) return undefined;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
         const key: any = this.rustSkipWrappers(init.argumentExpression);
         return `${indent}let ${varName}: &Value = ${super.printIdentifier(init.expression)}.get(${Number(key.text)}).unwrap_or(&Value::Null)`;
+    }
+
+    /** `const parts = lvl[K]` off a ral-57e side level: printed as a `&Value` borrow, which is `Copy` (no clone to hand it on). */
+    rust57eSidePartLocal(declaration: any): boolean {
+        const init: any = this.rustSkipWrappers(declaration?.initializer);
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return false;
+        const owner: any = this.rustDeclarationOfIdentifier(init.expression);
+        return owner !== undefined && owner.name !== init.expression && this.rust57eSideLevelLocal(owner);
     }
 
     /** A map row `xs[i]` (i64 counter) of a typed `List` local reads through the base `safe_dict_t`, the form `safeDict (xs, i)`
@@ -2895,7 +2902,7 @@ export class RustTranspiler extends BaseTranspiler {
             let top: any = up;
             while (top.parent !== undefined && isParenthesizedExpression(top.parent)) top = top.parent;
             const child: any = top.parent;
-            if (!isVariableDeclaration(child) || child.initializer !== top || !this.rust57eConstElementOf(child) || !this.rust57eLiteralReadOnly(child)) return false;
+            if (!isVariableDeclaration(child) || child.initializer !== top || !this.rust57eConstElementOf(child) || !this.rust57eLiteralReadOnly(child, true)) return false;
             uses++;
             return true;
         });
@@ -2912,7 +2919,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** Every use of the local is the receiver of an rvalue element read at a numeric literal key (no write-back bind). */
-    rust57eLiteralReadOnly(declaration: any): boolean {
+    rust57eLiteralReadOnly(declaration: any, safeStringArg = false): boolean {
         const written = (n: any): boolean => {
             const up: any = n.parent;
             if (isBinaryExpression(up) && up.left === n && up.operatorToken.kind >= SyntaxKind.FirstAssignment && up.operatorToken.kind <= SyntaxKind.LastAssignment) return true;
@@ -2921,6 +2928,11 @@ export class RustTranspiler extends BaseTranspiler {
         let uses = 0;
         const ok = this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n: any) => {
             const up: any = n.parent;
+            // a side level's parts may also be the receiver of `this.safeString (parts, K, ..)` (K numeric literal)
+            if (safeStringArg && this.rust57eSafeStringLiteralRead(n)) {
+                uses++;
+                return true;
+            }
             if (!isElementAccessExpression(up) || up.expression !== n || written(up)) return false;
             const key: any = this.rustSkipWrappers(up.argumentExpression);
             if (key === undefined || !isNumericLiteral(key)) return false;
@@ -2930,6 +2942,16 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return ok && uses > 0;
+    }
+
+    /** `n` is the first argument of `this.safeString (n, K)` / `this.safeString (n, K, d)` with K a non-negative integer literal. */
+    rust57eSafeStringLiteralRead(n: any): boolean {
+        const call: any = n.parent;
+        if (call === undefined || !isCallExpression(call) || call.arguments[0] !== n || call.arguments.length < 2 || call.arguments.length > 3) return false;
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword || callee.name.text !== 'safeString') return false;
+        const key: any = this.rustSkipWrappers(call.arguments[1]);
+        return key !== undefined && isNumericLiteral(key) && Number.isInteger(Number(key.text)) && Number(key.text) >= 0;
     }
 
     // ── nil-declared locals (`let x: T = undefined`) ─────────────────────────
