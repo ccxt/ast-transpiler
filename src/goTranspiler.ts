@@ -17296,12 +17296,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }).join("");
     }
 
-    /**
-     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
-     * whitespace, so an indented *blank* line (only the indentation of a blank source
-     * line) must stay empty instead of becoming whitespace-only text.
-     */
-
     printSpreadElement(node, identation) {
         const expression = this.printNode(node.expression, 0);
         return this.getIden(identation) + expression + this.SPREAD_TOKEN;
@@ -17438,12 +17432,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         ].join("\n");
     }
 
-    /**
-     * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
-     * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
-     * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
-     * (properties, `any` receivers, JS builtins) keep the plain name.
-     */
+    // appends `asyncMethodSuffix` when the checker resolves the callee to an async function body;
+    // unresolvable or non-function symbols (properties, `any` receivers, JS builtins) keep the plain name
     applyAsyncSuffixToCallee(nameNode, goName: string): string {
         if (!this.asyncMethodSuffix || !nameNode) {
             return goName;
@@ -27390,9 +27380,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || (this.goSafeDictMapLocal(decl) !== GO_SAFE_DICT_LOCAL_TYPE) || this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name)) {
             return undefined;
         }
-        const ptr = this.printNode(value, 0).trim();
-        const iden = this.getIden(identation);
-        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+        return this.goScalarPointerStoreText(containerStr, keyStr, value, identation);
     }
 
     // `m[k] = p` on a map local that is non-nil at the write (an object-literal local, or a never-rebound
@@ -27469,6 +27457,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (this.goHasEnclosingNilGuard(keyNode) || this.goHasExitingNilGuard(keyNode)) ? `*${keyStr}` : undefined;
     }
 
+    // `m[k] = *p` or `m[k] = nil`: the DerefScalar store of a scalar pointer local
+    goScalarPointerStoreText(containerStr: string, keyStr: string, value, identation: number): string {
+        const ptr = this.printNode(value, 0).trim();
+        const iden = this.getIden(identation);
+        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
     // `this.options[k] = p` with `p` a local declared *string/*int64/*float64/*bool: the plain-valued field stores
     // what DerefScalar(p) stores, *p or an untyped nil for a nil p
     goPlainFieldScalarPointerStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
@@ -27478,9 +27473,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || ![ '*string', '*int64', '*float64', '*bool' ].includes(this.goDeclaredTypeOfIdentifier(value) ?? '')) {
             return undefined;
         }
-        const ptr = this.printNode(value, 0).trim();
-        const iden = this.getIden(identation);
-        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+        return this.goScalarPointerStoreText(containerStr, keyStr, value, identation);
     }
 
     // `this.options[k] = this.safeString (..)` (Safe String/Integer/Number/Bool, typed pointer returns): the accessor is
@@ -28116,24 +28109,29 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goLocalIsRebound(this.goEnclosingFunction(keyNode), keyNode)) {
             return undefined;
         }
-        const bookEntry = negated ? undefined : this.goBookEntryText(dict);
-        const dictText = bookEntry ?? this.printNode(dict, 0);
+        const dictText = (negated ? undefined : this.goBookEntryText(dict)) ?? this.printNode(dict, 0);
+        return this.goInOpNestedIfText(node, identation, dict, dictText, keyNode, negated, true,
+            () => [ this.goUnwrapPrintedParens(this.printNode(guard, 0)).trim() ]);
+    }
+
+    // `if G {\n if _, ok := m[*k]; ok {..} }` shared by the guarded / chained in-op rewrites
+    goInOpNestedIfText(node, identation, dict, dictText: string, keyNode, negated: boolean, tickerMap: boolean, guardTexts: () => string[]): string | undefined {
         const dictMapType = (dict?.kind === SyntaxKind.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined)
             ?? this.goInOpDictMapType(dict, dictText);
         const keyText = this.printNode(keyNode, 0);
         if (dictText.includes('\n') || keyText.includes('\n')
-            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any') && (dictMapType !== 'map[string]Ticker'))) {
+            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any') && (!tickerMap || (dictMapType !== 'map[string]Ticker')))) {
             return undefined;
         }
         const name = this.goIfInOpBindingName(node);
-        const guardText = this.goUnwrapPrintedParens(this.printNode(guard, 0)).trim();
-        if ((name === undefined) || guardText.includes('\n')) {
+        const guards = guardTexts();
+        if ((name === undefined) || guards.some((t) => t.includes('\n'))) {
             return undefined;
         }
         const indent = this.getIden(identation);
         const inner = `${this.getIden(identation + 1)}if _, ${name} := ${dictText}[*${keyText}]; ${negated ? '!' : ''}${name}`;
         const body = this.printBlock(node.thenStatement, identation + 1, false);
-        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guardText} {\n${inner}${body}\n${indent}}`);
+        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guards.join(' && ')} {\n${inner}${body}\n${indent}}`);
     }
 
     // `a && ... && (k in m)` (k a `*string`) with no else: `if G && R {}` runs exactly as
@@ -28183,23 +28181,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!plainReceiver || (this.goWsCacheHasText(dict, read.left) !== undefined)) {
             return undefined; // book entries keep the helper their passes key on; a ws cache prints its own test
         }
-        const dictText = this.printNode(dict, 0);
-        const dictMapType = (dict?.kind === SyntaxKind.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined)
-            ?? this.goInOpDictMapType(dict, dictText);
-        const keyText = this.printNode(keyNode, 0);
-        if (dictText.includes('\n') || keyText.includes('\n')
-            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any'))) {
-            return undefined;
-        }
-        const name = this.goIfInOpBindingName(node);
-        const guardTexts = guards.map((g) => this.printNode(g, 0).trim()).concat(keyGuarded ? [] : [ `${guards.length > 0 ? '(' : ''}${this.printNode(keyNode, 0)} != nil${guards.length > 0 ? ')' : ''}` ]);
-        if ((name === undefined) || guardTexts.some((t) => t.includes('\n'))) {
-            return undefined;
-        }
-        const indent = this.getIden(identation);
-        const inner = `${this.getIden(identation + 1)}if _, ${name} := ${dictText}[*${keyText}]; ${negated ? '!' : ''}${name}`;
-        const body = this.printBlock(node.thenStatement, identation + 1, false);
-        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guardTexts.join(' && ')} {\n${inner}${body}\n${indent}}`);
+        return this.goInOpNestedIfText(node, identation, dict, this.printNode(dict, 0), keyNode, negated, false,
+            () => guards.map((g) => this.printNode(g, 0).trim()).concat(keyGuarded ? [] : [ `${guards.length > 0 ? '(' : ''}${this.printNode(keyNode, 0)} != nil${guards.length > 0 ? ')' : ''}` ]));
     }
 
     // the single `key in dict` read the condition can bind: a map-typed identifier
