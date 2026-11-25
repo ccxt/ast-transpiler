@@ -61952,3 +61952,26 @@ function h48g41WrittenThrough (go: any, target: any): boolean {
     };
 }
 // ===== end H49-G38
+// ===== H49-G41
+// `this.extend (.., R, ..)` copies R's top-level members into a fresh map and never writes R, so handing a decoded
+// JSON map to extend keeps it decoded JSON for every comma-ok read of it; only when R prints as a map (an
+// endpoint receive handed on as a value prints `r.Raw`, an any)
+function h49g41PrintsAsMap (go: any, node: any): boolean {
+    const decl: any = go.goAnyBoxLocalDeclaration(node);
+    return (go.goDeclaredTypeOfIdentifier(node) === GO_SAFE_DICT_LOCAL_TYPE)
+        || ((decl?.kind === SyntaxKind.VariableDeclaration) && goAwaitedMapWritesOnlyLocal(go, decl));
+}
+{
+    const useIsReadOnlyH49g41 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
+    GoTranspiler.prototype.goJsonOriginUseIsReadOnly = function (node, name: string): boolean {
+        if (useIsReadOnlyH49g41.call(this, node, name)) {
+            return true;
+        }
+        const call: any = node?.parent;
+        return (call?.kind === SyntaxKind.CallExpression) && call.arguments.includes(node)
+            && (call.expression?.kind === SyntaxKind.PropertyAccessExpression) && (call.expression.expression?.kind === SyntaxKind.ThisKeyword)
+            && (call.expression.name?.text === 'extend') && !this.goWritesOrRebindsName(node, name, [])
+            && h49g41PrintsAsMap(this, node);
+    };
+}
+// ===== H49-G41 (end) =====
