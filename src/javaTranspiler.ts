@@ -9577,6 +9577,11 @@ export class JavaTranspiler extends BaseTranspiler {
             return n.name?.text === 'length' && this.javaLengthIntRead(n);
         case SyntaxKind.BinaryExpression: {
             const op = n.operatorToken.kind;
+            // an indexOf result is never below -1, so adding a literal >= 1 never goes negative
+            if (op === SyntaxKind.PlusToken && this.javaIndexOfConstLocal(n.left) && isNumericLiteral(this.unwrapParenthesized(n.right))
+                && /^\d+$/.test(this.unwrapParenthesized(n.right).text) && Number(this.unwrapParenthesized(n.right).text) >= 1) {
+                return true;
+            }
             return (op === SyntaxKind.PlusToken || op === SyntaxKind.AsteriskToken)
                 && this.javaSliceNonNegativeBound(n.left, depth + 1) && this.javaSliceNonNegativeBound(n.right, depth + 1);
         }
@@ -9601,6 +9606,22 @@ export class JavaTranspiler extends BaseTranspiler {
         default:
             return false;
         }
+    }
+
+    // a `const x = s.indexOf (..)` local: its value is never below -1
+    javaIndexOfConstLocal(node): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || !isIdentifier(n)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(n);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration
+            || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const init = this.unwrapParenthesized(declaration.initializer);
+        return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression)
+            && init.expression.name.text === 'indexOf';
     }
 
     // `s.slice (a, s.length)`: the end bound is the receiver's own length, which is its clamped value
