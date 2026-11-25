@@ -41839,6 +41839,26 @@ function goTypedVenueListLiteralLocal (goTranspiler, node): boolean {
     };
     return isList (declaration.initializer);
 }
+// `this.options`, or a const local read from it (directly or through such locals) by a dict / value reader or an index
+function goTypedVenueDescendsFromOptions (goTranspiler, node, depth: number): boolean {
+    const e = goTypedVenueUnparen (node);
+    if ((e?.kind === SyntaxKind.PropertyAccessExpression) && (e.expression?.kind === SyntaxKind.ThisKeyword)) {
+        return e.name?.text === 'options';
+    }
+    if ((e?.kind === SyntaxKind.ElementAccessExpression) || (e?.kind === SyntaxKind.PropertyAccessExpression)) {
+        return goTypedVenueDescendsFromOptions (goTranspiler, e.expression, depth + 1);
+    }
+    if ((e?.kind === SyntaxKind.CallExpression) && (e.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (e.expression.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(Dict|Value|List)\w*$/.test (e.expression.name?.text ?? '')) {
+        return (e.arguments.length > 0) && goTypedVenueDescendsFromOptions (goTranspiler, e.arguments[0], depth + 1);
+    }
+    if ((e?.kind !== SyntaxKind.Identifier) || (depth > 8)) {
+        return false;
+    }
+    const declaration: any = goTranspiler.goDeclarationOfIdentifier (e);
+    return (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer !== undefined)
+        && goTypedVenueDescendsFromOptions (goTranspiler, declaration.initializer, depth + 1);
+}
 function goTypedVenueStringListProducer (goTranspiler, node): boolean {
     const annotation = node?.type?.getText ()?.replace (/\s+/g, '');
     if ((node?.kind !== SyntaxKind.MethodDeclaration) || (node.body === undefined) || ((annotation !== 'string[]') && (annotation !== 'Strings'))) {
@@ -41864,6 +41884,11 @@ GoTranspiler.prototype.printReturnStatement = function (node, identation) {
         const call: any = goTypedVenueUnparen (node.expression);
         const args = call.arguments.map ((a) => this.printNode (a, 0).trim ());
         const container: any = goTypedVenueUnparen (call.arguments[0]);
+        // user options may hold any slice kind ([]string): the typed reader converts it as SafeList does
+        if (goTypedVenueListLiteralLocal (this, call.arguments[2]) && (call.arguments[1]?.kind === SyntaxKind.StringLiteral)
+            && goTypedVenueDescendsFromOptions (this, container, 0)) {
+            return this.printNodeCommentsIfAny (node, identation, this.getIden (identation) + 'return this.SafeListNSliceDefault(' + args[0] + ', []any{' + args[1] + '}, ' + args[2] + ')');
+        }
         // a typed map member with a never-nil list local default: the comma-ok read answers what SafeList does
         if (goTypedVenueListLiteralLocal (this, call.arguments[2]) && (call.arguments[1]?.kind === SyntaxKind.StringLiteral)
             && (container?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier (container) === GO_SAFE_DICT_LOCAL_TYPE)) {

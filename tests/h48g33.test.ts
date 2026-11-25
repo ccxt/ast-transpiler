@@ -46,8 +46,8 @@ describe ('h48g33: venue string[] producer defaulted by a const list-literal loc
             + '        return this.safeList (options, \'settlementCurrencies\', defaultSettle);\n'
             + '    }\n' + caller + '}\n');
         expect (out).toContain (') Settlements(typeVar string) []any {');
-        expect (out).toContain ('if list, ok := options["settlementCurrencies"].([]any); ok {');
-        expect (out).toContain ('return defaultSettle');
+        expect (out).toContain ('return this.SafeListNSliceDefault(options, []any{"settlementCurrencies"}, defaultSettle)');
+        expect (out).not.toContain ('.([]any); ok {');
         expect (out).not.toContain ('SafeListSlice(options');
         expect (out).toContain ('var xs []any = this.Settlements("swap")');
         expect (out).toContain ('i < len(xs)');
@@ -90,4 +90,27 @@ describe ('h48g33: venue string[] producer defaulted by a const list-literal loc
             + '}\n');
         expect (out).not.toContain ('Settlements(typeVar string) []any {');
     });
+    test ('positive: a typed map local not read from this.options keeps the comma-ok read', () => {
+        const out = transpile (head
+            + '    settlements (type: Str): string[] {\n'
+            + '        const local: Dict = {};\n'
+            + '        const defaultSettle = [ \'btc\' ];\n'
+            + '        return this.safeList (local, \'settlementCurrencies\', defaultSettle);\n'
+            + '    }\n' + caller + '}\n');
+        expect (out).toContain ('if list, ok := local["settlementCurrencies"].([]any); ok {');
+        expect (out).not.toContain ('SafeListNSliceDefault(');
+    });
+    test ('negative: a member read off this.options through nested dict locals never prints the []any-only comma-ok', () => {
+        const out = transpile (head
+            + '    settlements (type: Str, method: Str): string[] {\n'
+            + '        const options = this.safeDict (this.options, type, {});\n'
+            + '        const nested = this.safeDict (options, method, {});\n'
+            + '        const defaultSettle = [ \'btc\' ];\n'
+            + '        return this.safeList (nested, \'settlementCurrencies\', defaultSettle);\n'
+            + '    }\n' + caller + '}\n');
+        expect (out).not.toContain ('nested["settlementCurrencies"].([]any)');
+        expect (out).toContain ('return this.SafeListNSliceDefault(nested, []any{"settlementCurrencies"}, defaultSettle)');
+        expect (out).toContain (') []any {');
+    });
 });
+
