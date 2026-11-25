@@ -26781,8 +26781,8 @@ describe('rust boxed byte producers', () => {
         const t = new Transpiler({ 'verbose': false, 'rust': { 'parser': { 'NUM_LINES_END_FILE': 0 } } });
         try { out = t.transpileRustByPath(path.join(root, 'ts/src/venue.ts')).content; } finally { fs.rmSync(root, { recursive: true, force: true }); }
     });
-    test('a packb / ethAbiEncode local unboxes once into the byte handle and lends it', () => {
-        expect(out).toContain('let mut dataBinary: crate::value::Bytes = crate::value::Bytes(self.packb(action, &[]).into_list());');
+    test('a packb local takes the byte handle; an ethAbiEncode local unboxes once and lends it', () => {
+        expect(out).toContain('let mut dataBinary: crate::value::Bytes = self.packb(action, &[]);');
         expect(out).toContain('self.binaryToBase16(&dataBinary');
         expect(out).toMatch(/let mut data: crate::value::Bytes = crate::value::Bytes\(self\.ethAbiEncode\([^;]*\)\.into_list\(\)\);\n[^\n]*self\.hash\(&data, /);
     });

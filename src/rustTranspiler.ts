@@ -6972,7 +6972,7 @@ export class RustTranspiler extends BaseTranspiler {
     // ints behind a typed handle) and the byte parameters of the hand-written consumers take `impl Into<Value>`.
     // A producer call boxes once (`Value::from`, a move of the shared list) unless it sits in a consumer's byte
     // slot; a local written only from producers holds the handle and lends it (`&x`, an `Arc` bump, no copy).
-    private static readonly RUST_BYTES_PRODUCERS = new Set([ 'encode', 'ethEncodeStructuredData', 'base16ToBinary', 'base64ToBinary', 'base58ToBinary', 'binaryConcat', 'numberToBE', 'stringToBinary' ]);
+    private static readonly RUST_BYTES_PRODUCERS = new Set([ 'encode', 'ethEncodeStructuredData', 'base16ToBinary', 'base64ToBinary', 'base58ToBinary', 'binaryConcat', 'numberToBE', 'stringToBinary', 'packb' ]);
     private static readonly RUST_BYTES_SLOTS: { [name: string]: number[] } = {
         hmac: [ 0, 1 ], hash: [ 0 ], isBinaryMessage: [ 0 ], decode: [ 0 ], binaryToBase16: [ 0 ], binaryToBase64: [ 0 ], binaryToBase58: [ 0 ], binaryToString: [ 0 ], binaryLength: [ 0 ], binaryConcat: [ 0 ], urlencodeBase64: [ 0 ],
     };
@@ -7045,13 +7045,13 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustBytesLocalOf(source) === undefined ? undefined : source;
     }
 
-    /** `this.packb (..)` / `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
-     *  (`packb` always a list, `ethAbiEncode` a list or `Null` on an unsupported type). Only a local initializer takes
+    /** `this.ethAbiEncode (..)` resolved to the base tier: the runtime answers the byte list boxed
+     *  (a list or `Null` on an unsupported type). Only a local initializer takes
      *  it, unboxed once into the `Bytes` handle (`Null` reads as no bytes, as every byte slot reads it). */
     rustBoxedBytesProducer(node: Node): boolean {
         if (node === undefined || !isCallExpression(node) || !isPropertyAccessExpression(node.expression) || node.expression.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const name = String(node.expression.name.text);
-        return (name === 'packb' || name === 'ethAbiEncode') && !this.rustTestTierSource(node) && this.rustCalleeIsRuntimeBase(node);
+        return name === 'ethAbiEncode' && !this.rustTestTierSource(node) && this.rustCalleeIsRuntimeBase(node);
     }
 
     rustBytesBareText(node, identation = 0): string {
