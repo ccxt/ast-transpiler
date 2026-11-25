@@ -44995,7 +44995,9 @@ export class RustTranspiler extends BaseTranspiler {
 (RustTranspiler.prototype as any).rustP28OrderRowsParamUncached = function (this: any, param: any): boolean {
     if (!isIdentifier(param.name) || param.initializer !== undefined || param.questionToken !== undefined) return false;
     const ts = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
-    if (ts !== 'OrderRequest[]' && ts !== 'PredictionOrderRequest[]') return false;
+    // a `CancellationRequest` lowers the same way (`IntoRaw` answers a map per element)
+    const rowsTs = ts === 'CancellationRequest[]' ? 'OrderRequest[]' : ts;
+    if (rowsTs !== 'OrderRequest[]' && ts !== 'PredictionOrderRequest[]') return false;
     const method: any = param.parent;
     if (method === undefined || !isMethodDeclaration(method) || method.body === undefined || this.rustTestTierSource(param)) return false;
     if (this.rustTypedSignature(method) === undefined) return false;

@@ -62,3 +62,26 @@ describe ('h40-R09: the row list of a base-tier override is a list of maps', () 
         expect (out).toMatch (/fn pickRows\(&self, rows: Value\)/);
     });
 });
+
+// a typed `orders: CancellationRequest[]` parameter lowers to a list of maps the same way
+const cancelBase = "export interface Dict { [key: string]: any }\nexport type Str = string | undefined;\nexport interface Order { id: string }\nexport interface CancellationRequest { id: string }\nexport default class Exchange {\n    safeDict (o: any, k: any, d: Dict = undefined): Dict | undefined { return o; }\n    safeString (o: any, k: any, d: Str = undefined): Str { return o; }\n    hold (x: any): any { return x; }\n    // METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        return [];\n    }\n}\n";
+const cancelVenue = (body: string) => "import Exchange from './base/Exchange.js';\nimport type { Dict, Order, CancellationRequest } from './base/Exchange.js';\nexport default class venue extends Exchange {\n    async cancelOrdersForSymbols (orders: CancellationRequest[], params: Dict = {}): Promise<Order[]> {\n        const out = [];\n        for (let i = 0; i < orders.length; i++) {\n            const order = this.safeDict (orders, i);\n            out.push (this.safeString (order, 'id'));\n        }\n" + body + "        return out as any;\n    }\n}\n";
+function runCancel (dir: string, body: string): string {
+    fs.mkdirSync (path.join (root, dir, 'ts/src/base'), { recursive: true });
+    fs.writeFileSync (path.join (root, dir, 'ts/src/base/Exchange.ts'), cancelBase);
+    fs.writeFileSync (path.join (root, dir, 'ts/src/venue.ts'), cancelVenue (body));
+    return new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': [ 'cancelOrdersForSymbols' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (root, dir, 'ts/src/venue.ts')).content;
+}
+
+describe ('the orders parameter of a typed cancelOrdersForSymbols is a list of request maps', () => {
+    test ('rows read by index bind the parameter once as Vec<Dict>', () => {
+        const out = runCancel ('cancel-rows', '');
+        expect (out).toContain ('let orders: Vec<crate::value::Dict> = crate::value::dict_rows(');
+        expect (out).toContain ('orders.get(i as usize).cloned().unwrap_or_default()');
+        expect (out).not.toContain ('safe_dict_t(&orders');
+    });
+    test ('negative: any other use keeps the boxed binding', () => {
+        const out = runCancel ('cancel-other', '        this.hold (orders);\n');
+        expect (out).not.toContain ('dict_rows');
+    });
+});
