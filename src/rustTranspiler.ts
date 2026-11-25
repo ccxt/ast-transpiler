@@ -22781,12 +22781,19 @@ export class RustTranspiler extends BaseTranspiler {
             && this.literalKindOfNode(cond.right) === 'null' && this.primitiveKindOfType(this.typeOfNodeIfAny(k)) === 'number';
     }
 
+    // A hand-written `-> String` runtime call (`intToBase16`, `ethGetAddressFromPrivateKey`): convert the String, box once.
+    printRustStrRuntimeCase(node, method: string): string | undefined {
+        const recv: any = isPropertyAccessExpression(node?.expression) ? this.unwrapParens(node.expression.expression) : undefined;
+        if (recv === undefined || (node.arguments?.length ?? 0) !== 0 || !this.rustStrRuntimeCall(recv)) return undefined;
+        return `Value::from(${this.rustStrRuntimeBareText(recv)}.${method}())`;
+    }
+
     printToUpperCaseCall(node, identation, name = undefined) {
-        return this.printNativeStringCase(node, name, 'to_uppercase') ?? this.printRustCase(node, name, 'to_uppercase') ?? this.looseStrCase(name, 'to_uppercase');
+        return this.printRustStrRuntimeCase(node, 'to_uppercase') ?? this.printNativeStringCase(node, name, 'to_uppercase') ?? this.printRustCase(node, name, 'to_uppercase') ?? this.looseStrCase(name, 'to_uppercase');
     }
 
     printToLowerCaseCall(node, identation, name = undefined) {
-        return this.printNativeStringCase(node, name, 'to_lowercase') ?? this.printRustCase(node, name, 'to_lowercase') ?? this.looseStrCase(name, 'to_lowercase');
+        return this.printRustStrRuntimeCase(node, 'to_lowercase') ?? this.printNativeStringCase(node, name, 'to_lowercase') ?? this.printRustCase(node, name, 'to_lowercase') ?? this.looseStrCase(name, 'to_lowercase');
     }
 
     printShiftCall(node, identation, name = undefined) {
