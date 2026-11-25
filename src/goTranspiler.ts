@@ -41201,15 +41201,36 @@ function goLocalTypeUpgrade(from: string, to: string, claims: (go: any, declarat
 }
 // fn runs first; `return GO_NEXT` delegates to the previous implementation with `arity` arguments (fn's own by default)
 const GO_NEXT: any = Symbol ('GO_NEXT');
+// consecutive goChainNext hooks on one method share one flat dispatcher (newest first); each install builds a
+// fresh wrapper over a copied list, so a previously captured implementation never changes. A hook passing on
+// forwards only its first `arity` arguments, so later hooks and the base see the running minimum.
 function goChainNext(method: string, fn: (this: any, ...args: any[]) => any, arity = fn.length) {
-    const prev: any = GoTranspiler.prototype[method];
-    const n = arity;
-    GoTranspiler.prototype[method] = function (this: any, a?: any, b?: any, c?: any, d?: any, e?: any, f?: any, g?: any) {
-        const res = fn.call (this, a, b, c, d, e, f, g);
-        if (res !== GO_NEXT) { return res; }
+    const cur: any = GoTranspiler.prototype[method];
+    const fns: any[] = [ fn, ...(cur?.__goNextFns ?? []) ];
+    const ns: number[] = [ ((arity >= 1) && (arity <= 6)) ? arity : 7, ...(cur?.__goNextNs ?? []) ];
+    const prev: any = cur?.__goNextBase ?? cur;
+    const count = fns.length;
+    const last = ns[count - 1]; // the base sees the oldest hook's argument count (values cut at the running minimum)
+    const wrapped: any = function (this: any, a?: any, b?: any, c?: any, d?: any, e?: any, f?: any, g?: any) {
+        let n = 7;
+        for (let i = 0; i < count; i++) {
+            const res = fns[i].call (this, a, b, c, d, e, f, g);
+            if (res !== GO_NEXT) { return res; }
+            const k = ns[i];
+            if (k < n) {
+                n = k;
+                if (n < 7) { g = undefined; } if (n < 6) { f = undefined; } if (n < 5) { e = undefined; }
+                if (n < 4) { d = undefined; } if (n < 3) { c = undefined; } if (n < 2) { b = undefined; }
+            }
+        }
+        n = last;
         return n === 1 ? prev.call (this, a) : n === 2 ? prev.call (this, a, b) : n === 3 ? prev.call (this, a, b, c) : n === 4 ? prev.call (this, a, b, c, d)
             : n === 5 ? prev.call (this, a, b, c, d, e) : n === 6 ? prev.call (this, a, b, c, d, e, f) : prev.call (this, a, b, c, d, e, f, g);
     };
+    wrapped.__goNextFns = fns;
+    wrapped.__goNextNs = ns;
+    wrapped.__goNextBase = prev;
+    GoTranspiler.prototype[method] = wrapped;
 }
 
 // printToStringCall's native forms per receiver Go type: [stdlib package, template]
