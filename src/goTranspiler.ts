@@ -33705,10 +33705,13 @@ ${tryBodyBlock}
                 return false;
             }
             const parts: any[] = ((typeof type.isUnionType === 'function') && type.isUnionType()) ? type.getTypes().slice() : [type];
-            return (parts.length > 0) && parts.every((p: any) => (p.flags & TypeFlags.Object) !== 0);
+            // the `object` keyword type (NonPrimitive) excludes every scalar too
+            return (parts.length > 0) && parts.every((p: any) => (p.flags & (TypeFlags.Object | TypeFlags.NonPrimitive)) !== 0);
         };
-        const listObjects = (type: any): boolean => {
+        const listObjects = (declared: any): boolean => {
             try {
+                // `object[] | undefined`: an absent list has no element to read
+                const type = (declared === undefined) ? undefined : checker.getNonNullableType(declared);
                 if ((type === undefined) || (typeof checker.isArrayType !== 'function') || !checker.isArrayType(type)) {
                     return false;
                 }
