@@ -29406,7 +29406,9 @@ export class RustTranspiler extends BaseTranspiler {
             || (RustTranspiler.RUST_BUILT_HELPER_RETURNS[String((init.expression as any).name.text)] === undefined && this.rustBuiltReturnSourceKind(init) === 'dict')
             // a same-class venue method declared to answer a never-null `Dict` (ral-yc) boxes into the params slot the same way
             || (this.rustVenueContainerReturnKind(init)?.kind === 'dict' && this.rustVenueContainerReturnKind(init)?.nullable === false);
-        return !this.rustLentResponseSlot(up, n) && !this.rustLentListSlot(up, n) && this.rustNilBoxSlotOk(up, at);
+        // a base `groupBy` / `indexBy` map handed to a lent rows slot (`impl Into<Value>`) boxes as the map it always is
+        const helperMap = !literalDict && /^(?:groupBy|indexBy)$/.test(String((init.expression as any).name?.text)) && this.rustCalleeIsRuntimeBase(init);
+        return !this.rustLentResponseSlot(up, n) && (!this.rustLentListSlot(up, n) || helperMap) && this.rustNilBoxSlotOk(up, at);
     }
 
     /** A base `this.omit (x, keys)` whose head always holds a map: a literal, a built map (`extend`, ..) or a local that
