@@ -62032,3 +62032,18 @@ function h49g44IntSlot (go: any, fn: any, index: number): boolean {
     };
 }
 // ===== H49-G44 (end) =====
+// ===== H49-G37 (begin) =====
+// a const literal-key cut of a proven frame with no `{}` default (`const data = this.safeDict (message, 'data')`)
+// that types map[string]any is decoded JSON too: a missing or non-map member is a nil map, which every read answers as before
+{
+    const jsonContainerH49g37 = GoTranspiler.prototype.h27a11JsonContainer;
+    GoTranspiler.prototype.h27a11JsonContainer = function (node, depth = 0): boolean {
+        if (jsonContainerH49g37.call (this, node, depth)) {
+            return true;
+        }
+        const decl: any = ((depth <= 4) && (node?.kind === SyntaxKind.Identifier)) ? this.goAnyBoxLocalDeclaration (node) : undefined;
+        const args: any = (decl?.kind === SyntaxKind.VariableDeclaration) ? this.goSafeAccessorLocalArgs (decl.initializer, 'safeDict') : undefined;
+        return (args !== undefined) && (decl.initializer.arguments.length === 2) && this.h29a12FrameCut (node, null);
+    };
+}
+// ===== H49-G37 (end) =====
