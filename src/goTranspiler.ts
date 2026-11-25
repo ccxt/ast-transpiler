@@ -55218,6 +55218,27 @@ export interface GoTranspiler {
     h29a18RawUse(n: any): boolean;
 }
 const h29a18Proven = new WeakMap<any, boolean>();
+// two declarations whose enclosing blocks do not nest: each name is a separate Go variable
+function h29a18DisjointBlocks (a: any, b: any): boolean {
+    const block = (d: any) => {
+        let p = d?.parent;
+        while ((p !== undefined) && (p.kind !== SyntaxKind.Block)) {
+            p = p.parent;
+        }
+        return p;
+    };
+    const inside = (n: any, outer: any) => {
+        for (let p = n; p !== undefined; p = p.parent) {
+            if (p === outer) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const ba: any = block(a);
+    const bb: any = block(b);
+    return (ba !== undefined) && (bb !== undefined) && !inside(ba, bb) && !inside(bb, ba);
+}
 const H29A18_READERS = new Set([ ...H27A02_SCALAR_READERS, 'safeDict', 'safeList' ]);
 const printVariableDeclarationListH29a18 = GoTranspiler.prototype.printVariableDeclarationList;
 GoTranspiler.prototype.h29a18RawUse = function (n: any): boolean {
@@ -55261,9 +55282,14 @@ GoTranspiler.prototype.h29a18Row = function (declaration: any): boolean {
     const vetoed = (scope === undefined) || this.hasNodeWhere(scope, (n: any) => {
         if ((n.kind === SyntaxKind.VariableDeclaration || n.kind === SyntaxKind.Parameter) && (n !== declaration)
             && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
-            return true;
+            return !h29a18DisjointBlocks(declaration, n);
         }
         if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
+            return false;
+        }
+        // a namesake declared in a sibling block is another variable
+        const own: any = this.goAnyBoxLocalDeclaration(n);
+        if ((own !== undefined) && (own !== declaration) && h29a18DisjointBlocks(declaration, own)) {
             return false;
         }
         if ((this.goEnclosingFunction(n) !== scope) || this.goWritesOrRebindsName(n, name, [])) {
