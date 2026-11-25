@@ -3185,44 +3185,51 @@ export class CSharpTranspiler extends BaseTranspiler {
                 }
             }
             this.csharpVenueOverriddenMethods = overridden;
-            for (const [ key, methods ] of declarations) {
-                const at = key.indexOf('@');
-                const name = (at < 0) ? key : key.substring(0, at);
-                // one body in the chain, nothing in the base tier: no override binds the signature
-                if ((at < 0) || (methods.length !== 1) || declarations.has(name) || (methods[0].body === undefined)
-                    || (this.getMethodOverride(methods[0]) !== undefined)) {
-                    continue;
+            // repeat until no new decision: a dict row argument may be a parameter decided later in the walk
+            for (let before = -1, pass = 0; (before !== decided.size) && (pass < 4); pass++) {
+                before = decided.size;
+                for (const [ key, methods ] of declarations) {
+                    const at = key.indexOf('@');
+                    const name = (at < 0) ? key : key.substring(0, at);
+                    // one body in the chain, nothing in the base tier: no override binds the signature
+                    if ((at < 0) || (methods.length !== 1) || declarations.has(name) || (methods[0].body === undefined)
+                        || (this.getMethodOverride(methods[0]) !== undefined)) {
+                        continue;
+                    }
+                    const method = methods[0];
+                    const lineage = key.substring(at);
+                    const calls: any[] = [];
+                    let blocked = false;
+                    for (const reference of references.get(name) ?? []) {
+                        const fromThis = reference.expression?.kind === SyntaxKind.ThisKeyword;
+                        if (fromThis && (this.csharpListParamLineage(reference) !== lineage)) {
+                            continue; // another venue chain binds its own method
+                        }
+                        const call: any = reference.parent;
+                        if (!fromThis || !isCallExpression(call) || (call.expression !== reference)) {
+                            blocked = true;
+                            break;
+                        }
+                        calls.push(call);
+                    }
+                    if (blocked || (calls.length === 0)) {
+                        continue;
+                    }
+                    Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
+                        if (decided.has(parameter)) {
+                            return;
+                        }
+                        const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
+                            ?? this.csharpVenueDictParamsKind(method, parameter, index, calls)
+                            ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
+                        if (kind === 'string') {
+                            this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
+                        }
+                        if (kind !== undefined) {
+                            decided.set(parameter, kind);
+                        }
+                    });
                 }
-                const method = methods[0];
-                const lineage = key.substring(at);
-                const calls: any[] = [];
-                let blocked = false;
-                for (const reference of references.get(name) ?? []) {
-                    const fromThis = reference.expression?.kind === SyntaxKind.ThisKeyword;
-                    if (fromThis && (this.csharpListParamLineage(reference) !== lineage)) {
-                        continue; // another venue chain binds its own method
-                    }
-                    const call: any = reference.parent;
-                    if (!fromThis || !isCallExpression(call) || (call.expression !== reference)) {
-                        blocked = true;
-                        break;
-                    }
-                    calls.push(call);
-                }
-                if (blocked || (calls.length === 0)) {
-                    continue;
-                }
-                Array.from(method.parameters as any).forEach((parameter: any, index: number) => {
-                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
-                        ?? this.csharpVenueDictParamsKind(method, parameter, index, calls)
-                        ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
-                    if (kind === 'string') {
-                        this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
-                    }
-                    if (kind !== undefined) {
-                        decided.set(parameter, kind);
-                    }
-                });
             }
         } });
         return decided;
@@ -3388,6 +3395,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const binding: any = this.csharpReceiverBinding(value);
         if ((binding !== undefined) && (binding.kind === SyntaxKind.Parameter) && this.csharpIsDictParamsBag(binding)) {
+            return true;
+        }
+        if ((binding !== undefined) && (binding.kind === SyntaxKind.Parameter) && dict(this.csharpVenueNumberParamCensus().get(binding))) {
             return true;
         }
         if ((binding !== undefined) && (binding.kind === SyntaxKind.BindingElement) && dict(this.csharpDestructuredDictSlotType(binding))) {

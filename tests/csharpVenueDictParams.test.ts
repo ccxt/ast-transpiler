@@ -245,3 +245,44 @@ describe ('csharp venue-private params bag followed by defaulted parameters', ()
         expect(a).toMatch(/midRequired\(string s, object parameters/);
     });
 });
+
+describe ('csharp venue-private dictionary row parameter fed by a typed row parameter', () => {
+    // a row argument that is another venue-private method's census-typed row parameter is a
+    // dictionary too, whichever of the two methods the census reaches first
+    const TMP = path.join(__dirname, 'files', 'tmp-csharp-venue-dict-row-chain');
+    const BASE = path.join(TMP, 'ts', 'src', 'base', 'Exchange.ts');
+    const A = path.join(TMP, 'ts', 'src', 'a.ts');
+    let a: string;
+
+    beforeAll(() => {
+        fs.mkdirSync(path.dirname(BASE), { recursive: true });
+        fs.writeFileSync(BASE, 'export class Exchange {\n    extend (a: any, b: any = undefined): any { return a; }\n    safeString (a: any, k: any): any { return a; }\n}\n');
+        fs.writeFileSync(A,
+            "import { Exchange } from './base/Exchange';\n" +
+            'export class A extends Exchange {\n' +
+            "    f (x: any) { return [ this.outer (this.extend (x, { 'a': 1 })), this.outerBoxed (x) ]; }\n" +
+            "    parseRow (row: Dict) { return this.safeString (row, 'k'); }\n" +
+            "    parseBoxedRow (row: Dict) { return this.safeString (row, 'k'); }\n" +
+            "    outer (message: Dict) { return this.parseRow (message); }\n" +
+            "    outerBoxed (message: Dict) { return this.parseBoxedRow (message); }\n" +
+            '}\n');
+        const transpiler = new Transpiler({ 'verbose': false, 'csharp': { 'parser': WRAPPED_PARSER } });
+        (transpiler as any).setSharedProgram([ A ]);
+        a = (transpiler as any).transpileCSharpByPath(A).content;
+        (transpiler as any).setSharedProgram([]);
+    });
+
+    afterAll(() => {
+        fs.rmSync(TMP, { recursive: true, force: true });
+    });
+
+    test('a caller passing its own typed row parameter types the row', () => {
+        expect(a).toContain('outer(IDictionary<string, object> message)');
+        expect(a).toContain('parseRow(IDictionary<string, object> row)');
+    });
+
+    test('a caller passing a boxed parameter keeps object on both', () => {
+        expect(a).toContain('outerBoxed(object message)');
+        expect(a).toContain('parseBoxedRow(object row)');
+    });
+});
