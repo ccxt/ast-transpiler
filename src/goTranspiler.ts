@@ -4888,7 +4888,7 @@ function ccxtGoEndpointListLocalIsTyped (goTranspiler, arg, init, inFlight) {
 }
 
 function ccxtGoParentPastParens (node) {
-    let parent = goOuterParent(node);
+    const parent = goOuterParent(node);
     return parent;
 }
 
@@ -11014,6 +11014,8 @@ function goInstallOnce (goTranspiler: any, flag: string, method?: string): boole
     goTranspiler[flag] = true;
     return true;
 }
+// the chain wrappers switch on arity and read `arguments`: no rest array is built per call
+/* eslint-disable prefer-rest-params */
 function goAttachOr (target: any, method: string, fn: (this: any, ...args: any[]) => boolean) {
     const cur: any = target[method];
     if (cur && cur.__goChainOr) { cur.__goChainOr.push (fn); return; }
@@ -11143,6 +11145,7 @@ function goInstAround (goTranspiler: any, method: string, fn: (this: any, prev: 
             : n === 0 ? fn.call (this, prev) : n === 4 ? fn.call (this, prev, a, b, c, d) : fn.call (this, prev, ...Array.from (arguments));
     };
 }
+/* eslint-enable prefer-rest-params */
 function goInstOr (goTranspiler: any, flag: string, method: string, fn: (this: any, ...args: any[]) => boolean) {
     if ((goTranspiler !== undefined) && (!flag || goInstallOnce (goTranspiler, flag, method))) { goAttachOr (goTranspiler, method, fn); }
 }
@@ -13456,8 +13459,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // a `*string` local every write of which is a SafeString-family call with a literal
     goDefaultedSafeStringLocal(node): boolean {
         if (node?.kind !== SyntaxKind.Identifier) { return false; }
-        let declaration;
-        declaration = this.goSymbolValueDecl(node);
+        const declaration = this.goSymbolValueDecl(node);
         if (((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) || (this.goDeclaredTypeOfIdentifier(node) !== '*string')) { return false; }
         if (!this.goDefaultedSafeStringCall(declaration.initializer)) { return false; }
         const scope = this.goEnclosingFunction(declaration);
@@ -20674,7 +20676,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `k in book` directly under a `!`: a negated book-entry lookup keeps the helper (the cache-entry proofs
     // downstream key on that guard), only the positive read is native
     goUnderNegation(inNode): boolean {
-        let current: any = goOuterParent(inNode);
+        const current: any = goOuterParent(inNode);
         return (current?.kind === SyntaxKind.PrefixUnaryExpression) && (current.operator === SyntaxKind.ExclamationToken);
     }
 
@@ -22071,7 +22073,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         seen.add(param);
         const table: any = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
         const pointer = goType.startsWith('*');
-        let safe = true;
+        const safe = true;
         const verdictOf = (callee: string, argIndex: number): string => {
             // the table is keyed by the printed Go callee (`this.market` prints `this.Market`); a
             // pointer is unwrapped by derefScalar, a nil map is not, so only pointers fold the case
@@ -28354,7 +28356,7 @@ ${tryBodyBlock}
         const name = element.name.text;
         const scope = this.goEnclosingFunction(declaration);
         const conditionLike = (n): boolean => {
-            let p = goOuterParent(n);
+            const p = goOuterParent(n);
             return ((p?.kind === SyntaxKind.PrefixUnaryExpression) && (p.operator === SyntaxKind.ExclamationToken))
                 || ((p?.kind === SyntaxKind.BinaryExpression) && ((p.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) || (p.operatorToken.kind === SyntaxKind.BarBarToken)))
                 || (p?.kind === SyntaxKind.IfStatement) || (p?.kind === SyntaxKind.WhileStatement) || (p?.kind === SyntaxKind.ConditionalExpression);
@@ -30732,7 +30734,7 @@ goChainNext('goLiteralDefaultStringLocal', function (declaration, goType: string
 // (3) `let x = false` whose other writes are bool literals or element 0 of `[ x, p ] = this.handleOptionBoolAndParams
 const GO_77G8_TUPLE_BOOL_PRODUCERS = { 'handleOptionBoolAndParams': 3, 'handleOptionBoolAndParams2': 4 };
 goChainOr('goLocalIsSafeToType', function (scope, declaration, varName: string, goType: string, stringWriteProven = false) {
-        const init: any = declaration?.initializer;
+    const init: any = declaration?.initializer;
     if ((goType !== 'bool') || (scope === undefined) || (declaration.kind !== SyntaxKind.VariableDeclaration)
         || ((init?.kind !== SyntaxKind.TrueKeyword) && (init?.kind !== SyntaxKind.FalseKeyword))) { return false; }
     const isBoolLiteral = (n: any) => (n?.kind === SyntaxKind.TrueKeyword) || (n?.kind === SyntaxKind.FalseKeyword);
@@ -31694,8 +31696,8 @@ goChainAround('goDeclaredTypeOfIdentifier', function (prev, node) {
 // ---- 84g7 R2: a defined int64 pointer arm next to a Go `int` arm --------------------------------
 interface GoTernaryJoinIntParts { goType: string, derefTrue: boolean, derefFalse: boolean, widenTrue?: boolean, widenFalse?: boolean }
 
-    // inside a parameter's GetArg scan the widened join is not offered: that scan decided the
-    // parameter's twin before this rule existed, and a provisional answer is not memoised (R1)
+// inside a parameter's GetArg scan the widened join is not offered: that scan decided the
+// parameter's twin before this rule existed, and a provisional answer is not memoised (R1)
 goTernaryJoinWave(function (ternary: any, declaration) {
     const whenTrue = this.goTernaryJoinArmType(ternary.whenTrue);
     const whenFalse = this.goTernaryJoinArmType(ternary.whenFalse);
@@ -33316,7 +33318,7 @@ function go90g8IsSumCounter(goTranspiler, declaration): boolean {
         // the first argument of the Sum write itself
         if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === n)
             && (goUnwrapParens(parent.parent)?.kind === SyntaxKind.BinaryExpression || parent.parent?.kind === SyntaxKind.BinaryExpression)) {
-            let up = goOuterParent(parent);
+            const up = goOuterParent(parent);
             return !((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken)
                 && go87g8IsOwnRef(goTranspiler, up.left, declaration) && go90g8SumOfSelf(goTranspiler, up.right, declaration));
         }
@@ -33333,7 +33335,7 @@ function go90g8IsSumCounter(goTranspiler, declaration): boolean {
 goChainOr('goLocalIsSafeToType', function (scope, declaration, varName: string, goType: string, stringWriteProven = false) { return (goType === 'int') && go90g8IsSumCounter(this, declaration); });
 // the Sum write of a counter prints as the native int addition
 goChainPre('printCallExpression', function (node, identation) {
-    let up = goOuterParent(node);
+    const up = goOuterParent(node);
     if ((up?.kind === SyntaxKind.BinaryExpression) && (up.operatorToken.kind === SyntaxKind.EqualsToken)
         && (goUnwrapParens(up.right) === node) && (up.left?.kind === SyntaxKind.Identifier)) {
         const declaration = this.goDeclarationOfIdentifier(up.left);
@@ -34464,7 +34466,7 @@ goChainPre('printCustomBinaryExpressionIfAny', function (node, identation) {
 
 // An async exchange-local `Str` parameter prints `*string` when every call site passes a `*string`
 goChainRewrite('goRequiredParameterNativeType', function (answer: any, fn, param, index: number) {
-        if ((answer !== undefined) || !this.isAsyncFunction(fn) || (param.type?.getText() !== 'Str')
+    if ((answer !== undefined) || !this.isAsyncFunction(fn) || (param.type?.getText() !== 'Str')
         || (param.name?.kind !== SyntaxKind.Identifier) || goHasDynamicCall(fn, fn.name.text)) { return answer; }
     const sites = this.goSameFileCallsOf(fn, fn.name.text);
     if (sites.length === 0) { return answer; }
@@ -34498,7 +34500,7 @@ goChainRewrite('goRequiredParameterNativeType', function (answer: any, fn, param
 // An async exchange-local `Int` / `Num` parameter prints `*int64` / `*float64` when every same-file call site
 // passes that pointer or `undefined` and no other file or quoted name reaches the method: nil tests go native.
 goChainRewrite('goRequiredParameterNativeType', function (answer: any, fn, param, index: number) {
-        const pointer = { 'Int': '*int64', 'Num': '*float64' }[param.type?.getText() ?? ''];
+    const pointer = { 'Int': '*int64', 'Num': '*float64' }[param.type?.getText() ?? ''];
     if ((answer !== undefined) || (pointer === undefined) || !this.isAsyncFunction(fn) || (param.name?.kind !== SyntaxKind.Identifier)
         || (param.initializer !== undefined) || goHasDynamicCall(fn, fn.name.text)) { return answer; }
     const sites = this.goSameFileCallsOf(fn, fn.name.text);
@@ -35987,7 +35989,7 @@ goChainAround('goLocalIsSafeToType', function (prev, scope, declaration, varName
     }
 });
 goChainRewrite('goTypeOfInitializer', function (known: any, initializer, printedValue: string) {
-        const proving = this.h20g04SelfOmitDeclaration;
+    const proving = this.h20g04SelfOmitDeclaration;
     if ((known !== undefined) || (proving === undefined)) { return known; }
     const call = ral84g6OmitCall (initializer);
     return ((call !== undefined) && (ccxtGoParamDeclarationOf (this, call.arguments[0]) === proving)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
@@ -38346,7 +38348,7 @@ goChainOr('h27a09JsonOriginList', function (baseExpr) { return this.h28a13FrameL
 // `const row = this.safeDict (xs, i, {})` in the same bounded loop: the comma-ok read plus the empty-map
 // fallback answers what SafeDictMap gave for a missing or non-map element
 goChainRewrite('printVariableDeclarationList', function (printed: any, node, identation) {
-        const declaration: any = node?.declarations?.[0];
+    const declaration: any = node?.declarations?.[0];
     const init: any = declaration?.initializer;
     const fallback: any = init?.arguments?.[2];
     if ((node?.declarations?.length !== 1) || (declaration?.name?.kind !== SyntaxKind.Identifier) || (node.parent?.kind !== SyntaxKind.FirstStatement)
@@ -39931,7 +39933,7 @@ goChainOr('goDefaultedSafeStringCallOrTypedDefault', function (call) { const las
 // `return { .., 'k': x }` / `return this.f ({ .., 'k': x })` (other arguments local reads) with x a `*string`
 function h30g02Literal (literal: any): boolean {
     if (literal?.kind !== SyntaxKind.ObjectLiteralExpression) { return false; }
-    let up: any = goOuterParent(literal);
+    const up: any = goOuterParent(literal);
     let statement: any = up;
     if (up?.kind === SyntaxKind.CallExpression) {
         if ((up.expression?.kind !== SyntaxKind.PropertyAccessExpression)
@@ -40270,7 +40272,7 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node, ide
 // `const xs = this.safeList (frame, K, [])` on a proven list frame: the h27-A08 guarded comma-ok read plus the `[]`
 // fallback SafeListSlice gave for a missing or non-list element.
 goChainRewrite('h27a08RowRead', function (done: any, declaration, declaredType: string, varName: string, identation: number, declaredValue: string) {
-        if ((done !== undefined) || (declaredType !== GO_SAFE_LIST_LOCAL_TYPE)) { return done; }
+    if ((done !== undefined) || (declaredType !== GO_SAFE_LIST_LOCAL_TYPE)) { return done; }
     let init: any = declaration?.initializer;
     init = goUnwrapTypeNonNull(init);
     if ((init?.expression?.name?.text !== 'safeList') || (init.arguments?.length !== 3)) { return undefined; }
@@ -41805,7 +41807,7 @@ goChainOr('goListElementsArePointerFree', function (list, depth = 0) { return ((
 goChainRewrite('goTernaryJoinArmType', function (known: any, node) {
     const arm: any = this.goUnwrapParenthesizedNode(node);
     if ((known !== undefined) || (arm?.kind !== SyntaxKind.Identifier)) { return known; }
-    let ternary: any = goOuterParent(node);
+    const ternary: any = goOuterParent(node);
     const owner: any = (ternary?.kind === SyntaxKind.ConditionalExpression) ? goTernaryJoinOwner(ternary) : undefined;
     if (owner?.type?.kind !== SyntaxKind.StringKeyword) { return undefined; }
     const decl: any = this.goSymbolValueDecl(arm);
