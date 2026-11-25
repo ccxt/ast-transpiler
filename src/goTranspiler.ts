@@ -48015,7 +48015,7 @@ GoTranspiler.prototype.h26g51PushStoreBackList = function (declaration) {
     }
     let pushes = 0;
     let stores = 0;
-    const safe = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, (n) => {
+    const use = (n: any): boolean => {
         const parent: any = n.parent;
         if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'push')
             && this.goIsNativeAppendShape(n, parent.parent)) {
@@ -48024,8 +48024,21 @@ GoTranspiler.prototype.h26g51PushStoreBackList = function (declaration) {
         }
         stores += this.h26g51StoreBackOf(n) ? 1 : 0;
         return this.h26g51StoreBackOf(n);
-    });
-    return (safe !== undefined) && (pushes > 0) && (stores > 0) && !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name);
+    };
+    const safe = this.goDeclaredLocalTypeIfSafe(declaration, GO_SAFE_LIST_LOCAL_TYPE, use);
+    if ((safe !== undefined) && (pushes > 0) && (stores > 0) && !this.goLocalIsRebound(this.goEnclosingFunction(declaration), declaration.name)) {
+        return true;
+    }
+    // uses matched by symbol (a same-named local of a sibling block is another Go variable), only with a native seed
+    pushes = 0;
+    stores = 0;
+    const scope: any = this.goEnclosingFunction(declaration);
+    if ((scope === undefined) || this.goTypeNameIsShadowed(scope, GO_SAFE_LIST_LOCAL_TYPE) || (this.h51g07ListSlotSeed(declaration) === undefined)) {
+        return false;
+    }
+    const bySymbol = this.goDescendantsOf(scope).every((n: any) => (n.kind !== SyntaxKind.Identifier) || (n === declaration.name)
+        || (n.text !== declaration.name.text) || (this.goDeclarationOfIdentifier(n) !== declaration) || use(n));
+    return bySymbol && (pushes > 0) && (stores > 0) && !this.h26g52SymbolIsRebound(scope, declaration);
 };
 // the local as the whole right side of a statement `c[k] = xs`
 GoTranspiler.prototype.h26g51StoreBackOf = function (node) {
@@ -62224,3 +62237,85 @@ function goSiblingBlockBinding(transpiler, declaration): { disjoint: (n: any) =>
     return { disjoint, foreign: (n: any) => !goNodeWithin(n, own) };
 }
 // ===== end H50-G51
+
+// ===== H51-G07 =====
+// `const xs = this.safeList (m, k, [])` (a push / store-back local) where m is a never-rebound `{}` local whose every
+// write is `m[k2] = []` or the store-back of such a local, and every other use only reads it: each member is a []any
+// or absent, so the comma-ok read plus the empty default answers what SafeListSlice did.
+export interface GoTranspiler {
+    h51g07ListSlotSeed(declaration): { map: string, key: string } | undefined;
+}
+GoTranspiler.prototype.h51g07ListSlotSeed = function (declaration) {
+    const call: any = declaration?.initializer;
+    const args: any = (call?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(call, 'safeList') : undefined;
+    const map: any = args?.container;
+    const key: any = args?.key;
+    const mapDecl: any = (map?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(map) : undefined;
+    const scope: any = this.goEnclosingFunction(declaration);
+    if ((mapDecl?.initializer?.kind !== SyntaxKind.ObjectLiteralExpression) || (mapDecl.initializer.properties.length !== 0)
+        || (this.goEnclosingFunction(mapDecl) !== scope) || (this.goDeclaredTypeOfIdentifier(map) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || this.goLocalIsRebound(scope, mapDecl.name) || (key?.kind !== SyntaxKind.Identifier)) {
+        return undefined;
+    }
+    let keyText = this.h27a05KeyText(key);
+    if ((keyText === undefined) && (this.goDeclaredTypeOfIdentifier(key) === '*string') && this.goHasExitingNilGuard(key)) {
+        keyText = '*' + this.printNode(key, 0).trim();
+    }
+    if (keyText === undefined) {
+        return undefined;
+    }
+    const isListSeedOfMap = (n: any): boolean => {
+        const d: any = (n?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(n) : undefined;
+        const a: any = (d?.initializer?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(d.initializer, 'safeList') : undefined;
+        return (a?.container?.kind === SyntaxKind.Identifier) && (this.goDeclarationOfIdentifier(a.container) === mapDecl);
+    };
+    const usesOk = this.goDescendantsOf(scope).every((n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n === mapDecl.name) || (n.text !== mapDecl.name.text) || (this.goDeclarationOfIdentifier(n) !== mapDecl)) {
+            return true;
+        }
+        if (this.goEnclosingFunction(n) !== scope) {
+            return false;
+        }
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.ElementAccessExpression) && (parent.expression === n)) {
+            const assign: any = parent.parent;
+            if ((assign?.kind === SyntaxKind.BinaryExpression) && (assign.left === parent)) {
+                const right: any = this.goUnwrapParenthesizedNode(assign.right);
+                return (assign.operatorToken?.kind === SyntaxKind.EqualsToken)
+                    && (((right?.kind === SyntaxKind.ArrayLiteralExpression) && (right.elements.length === 0)) || isListSeedOfMap(right));
+            }
+            // a read of the slot that nothing writes through or deletes
+            return !this.h27a04WrittenThrough(parent) && (assign?.kind !== SyntaxKind.DeleteExpression);
+        }
+        if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.InKeyword)) {
+            return true;
+        }
+        if ((parent?.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === n) && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression)) {
+            const callee: any = parent.expression;
+            return ((callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe(List|Value|String|Integer)$/.test(callee.name?.text ?? ''))
+                || ((callee.expression?.kind === SyntaxKind.Identifier) && (callee.expression.text === 'Object') && (callee.name?.text === 'keys'));
+        }
+        return parent?.kind === SyntaxKind.ReturnStatement;
+    });
+    return usesOk ? { 'map': this.printNode(map, 0).trim(), 'key': keyText } : undefined;
+};
+{
+    const h51g07Upstream = GoTranspiler.prototype.printVariableDeclarationList;
+    GoTranspiler.prototype.printVariableDeclarationList = function (node, identation) {
+        const printed = h51g07Upstream.call(this, node, identation);
+        const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        if ((typeof printed !== 'string') || (decl?.name?.kind !== SyntaxKind.Identifier) || !this.h26g51PushStoreBackList(decl)) {
+            return printed;
+        }
+        const seed = this.h51g07ListSlotSeed(decl);
+        const name = decl.name.text;
+        const lead = /^\n*/.exec(printed)[0];
+        const m = /^(\t*)(.*)$/.exec(printed.substring(lead.length));
+        if ((seed === undefined) || (m === null) || !m[2].startsWith(`var ${name} []any = this.SafeListSlice(${seed.map}, `) || !m[2].endsWith(', []any{})')) {
+            return printed;
+        }
+        const ind = m[1];
+        return `${lead}${ind}var ${name}, _ = ${seed.map}[${seed.key}].([]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = []any{}\n${ind}}`;
+    };
+}
+// ===== end H51-G07 =====
