@@ -20444,6 +20444,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (this.bearerEnumArg(parent) !== undefined) return !literalKeys && !this.rust40bProTier(id) && parent.arguments[0] === id;
             if (this.rustShadowSafeCallee(parent) === undefined) return false;
             const args: NodeArray<Expression> = parent.arguments;
+            // `this.safeDict (p, k, d)` with `k` one of `Object.keys (p)`: the reader takes the shadow map by reference
+            if (!literalKeys && args[0] === id && args.length === 3 && String((parent.expression as any).name.text) === 'safeDict' && isIdentifier(args[1]) && this.rustParamOwnKeysElementKey(id, args[1])) return true;
             if (args[0] !== id || args.length < 2 || args.length > 3) return false;
             return this.rustShadowKeyIsLiteral(args[1]) || (!literalKeys && this.rustShadowSafeCallee(parent) === 'safeString' && this.rustShadowSafeReadKeyParam(args[1]));
         }
@@ -30293,6 +30295,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (declaration.kind === SyntaxKind.Parameter && !this.rustTestTierSource(call) && this.rustParamReadsByReference(declaration)) return `&${text}`;
         // the `Dict`-bound params slot is lent: `&Dict` is the reader container `KeyRead` accepts
         if (declaration.kind === SyntaxKind.Parameter && this.rustParamsDictSlot(declaration)) return `&${text}`;
+        // a shadowed map parameter is the `&IndexMap` the reader container `KeyRead` accepts
+        if (declaration.kind === SyntaxKind.Parameter && !this.rustTestTierSource(call) && this.rustParamShadowOf(node)?.kind === RUST_PARAM_SHADOWS.MAP) return `&${text}`;
         if (this.rustBorrowedLocalKind(declaration) !== undefined || this.rustLentListLocal(declaration) || this.rustReaderTables.has(declaration)
             || this.rustSafeMarketLocalOf(node) !== undefined || this.rustMarketSlotParamOf(node) !== undefined || this.rustTypedMarketLocalOf(node) !== undefined
             || this.rustCurrencySlotParamOf(node) !== undefined || this.rustCurrencyLocalOf(node) !== undefined) return `&${text}`;
