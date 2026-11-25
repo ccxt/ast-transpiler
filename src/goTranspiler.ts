@@ -30484,7 +30484,7 @@ ${tryBodyBlock}
     // `const xs = this.safeList (m, k, [])` (a push / store-back local) where m is a never-rebound `{}` local whose every
     h51g07ListSlotSeed(declaration) {
         const call: any = declaration?.initializer;
-        const args: any = (call?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(call, 'safeList') : undefined;
+        const args: any = ((call?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(call, 'safeList') : undefined) ?? h52g40SlotAliasArgs(declaration);
         const map: any = args?.container;
         const key: any = args?.key;
         const mapDecl: any = (map?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(map) : undefined;
@@ -30497,7 +30497,7 @@ ${tryBodyBlock}
         if (keyText === undefined) { return undefined; }
         const isListSeedOfMap = (n: any): boolean => {
             const d: any = (n?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(n) : undefined;
-            const a: any = (d?.initializer?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(d.initializer, 'safeList') : undefined;
+            const a: any = ((d?.initializer?.arguments?.length === 3) ? this.goSafeAccessorLocalArgs(d.initializer, 'safeList') : undefined) ?? h52g40SlotAliasArgs(d);
             return (a?.container?.kind === SyntaxKind.Identifier) && (this.goDeclarationOfIdentifier(a.container) === mapDecl);
         };
         const usesOk = this.goDescendantsOf(scope).every((n: any) => {
@@ -42110,4 +42110,47 @@ goChainOr('goJsonOriginUseIsReadOnly', function (node, name: string) {
         || (node.pos >= read.pos) || (this.goEnclosingFunction(holder) !== this.goEnclosingFunction(read))) { return false; }
     const after = read.end;
     return this.goJsonOriginBindingIsReadOnly(holder, (n: any) => n.pos >= after);
+});
+
+// `const xs = m[k]; xs.push (v); m[k] = xs` on a local map whose slots only ever hold lists: the alias is the slot's []any
+function h52g40SlotAliasArgs(declaration): any {
+    const access: any = declaration?.initializer;
+    if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || ((declaration.parent?.flags & NodeFlags.Const) === 0) || (access?.kind !== SyntaxKind.ElementAccessExpression)
+        || (access.expression?.kind !== SyntaxKind.Identifier) || (access.argumentExpression?.kind !== SyntaxKind.Identifier) || (access.questionDotToken !== undefined)) { return undefined; }
+    return { container: access.expression, key: access.argumentExpression };
+}
+const h52g40AliasVerdicts = new WeakMap<any, boolean>();
+GoTranspiler.prototype.h52g40SlotAliasList = function (declaration): boolean {
+    if ((h52g40SlotAliasArgs(declaration) === undefined) || (declaration.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    if (h52g40AliasVerdicts.has(declaration)) { return h52g40AliasVerdicts.get(declaration); }
+    h52g40AliasVerdicts.set(declaration, false); // re-entry answers the box
+    const scope: any = this.goEnclosingFunction(declaration);
+    let pushes = 0;
+    let stores = 0;
+    const use = (n: any): boolean => {
+        const parent: any = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'push') && this.goIsNativeAppendShape(n, parent.parent)) { pushes++; return true; }
+        if (this.h26g51StoreBackOf(n)) { stores++; return true; }
+        return false;
+    };
+    const ok = (scope !== undefined) && !this.goTypeNameIsShadowed(scope, GO_SAFE_LIST_LOCAL_TYPE) && (this.h51g07ListSlotSeed(declaration) !== undefined)
+        && this.goDescendantsOf(scope).every((n: any) => (n.kind !== SyntaxKind.Identifier) || (n === declaration.name)
+            || (n.text !== declaration.name.text) || (this.goDeclarationOfIdentifier(n) !== declaration) || use(n))
+        && (pushes > 0) && (stores > 0) && !this.h26g52SymbolIsRebound(scope, declaration);
+    h52g40AliasVerdicts.set(declaration, ok);
+    return ok;
+};
+goChainRewrite('getGoLocalType', function (known: any, declaration, parsedValue: string) {
+    return ((known === 'any') && this.h52g40SlotAliasList(declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : known;
+});
+goChainRewrite('printVariableDeclarationList', function (printed: any, node, identation) {
+    const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    if ((typeof printed !== 'string') || (decl?.name?.kind !== SyntaxKind.Identifier) || !this.h52g40SlotAliasList(decl)) { return printed; }
+    const seed = this.h51g07ListSlotSeed(decl);
+    const name = decl.name.text;
+    const lead = /^\n*/.exec(printed)[0];
+    const m = /^(\t*)var (\w+) /.exec(printed.substring(lead.length));
+    if ((seed === undefined) || (m === null) || (m[2] !== name) || printed.substring(lead.length).includes('\n')) { return printed; }
+    const ind = m[1];
+    return `${lead}${ind}var ${name}, _ = ${seed.map}[${seed.key}].([]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = []any{}\n${ind}}`;
 });
