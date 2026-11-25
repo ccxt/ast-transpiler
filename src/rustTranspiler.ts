@@ -24449,6 +24449,7 @@ export class RustTranspiler extends BaseTranspiler {
         let rebuilds = 0;
         let elementUses = 0;
         let enumUses = 0;
+        const writeValues: any[] = [];
         const outerWidened = this.literalKeyHits;
         const outerSiblings = this.literalSiblingBindings;
         const outerSelfWrites = this.literalSelfWriteHits;
@@ -24501,7 +24502,7 @@ export class RustTranspiler extends BaseTranspiler {
                 return true;
             }
             // The value of a dict write (`m['k'] = x`) is boxed once.
-            if (this.rustDictWriteValue(n)) return true;
+            if (this.rustDictWriteValue(n)) return writeValues.push(n) > 0;
             // `Object.keys/values(x)` prints the map's own iterators.
             if (isCallExpression(parent) && this.bearerEnumArg(parent) === n) {
                 enumUses++;
@@ -24547,7 +24548,10 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-vf: except a single move at the last use (a list push / ws settle): each sibling `let` is its own Rust block,
         // and the move is the box the helper form made (D11: stored and boxed back is typed)
         const siblingMove = siblings > 0 && moveEscapes.length === 1 && escapes.length === 0 && rebuilds === 0 && enumUses === 0 && keyHits === 0;
-        if (siblings > 0 && elementUses === 0 && !siblingMove) return false;
+        // a literal with a same-named sibling, written once whole into a map at its last use, is the same single move
+        const siblingWrite = siblings > 0 && writeValues.length === 1 && moveEscapes.length === 0 && escapes.length === 0 && rebuilds === 0 && enumUses === 0 && keyHits === 0
+            && !produced && this.rustLocalLastUse(writeValues[0], declaration) && !this.loopBetween(writeValues[0]);
+        if (siblings > 0 && elementUses === 0 && !siblingMove && !siblingWrite) return false;
         // a list-element / settle hand-off moves the map: only its single last use, with no other escape, may take it
         if (moveEscapes.length > 0) {
             // a map widened by string-local keys, with no sibling move, keeps its `Value` box
