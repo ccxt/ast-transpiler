@@ -30787,6 +30787,8 @@ export interface GoTranspiler {
 // `a - b` / `a * b` / `a + b` with one int64 and one int operand (or an int `- * %N` in a `var` initializer):
 Object.assign (CCXT_GO_HELPER_RETURN_TYPES, Object.fromEntries ([ 'ParseWsBidAsk', 'ParseWsPosition', 'ParseWsMyTrade', 'ParseWsOrderTrade', 'ParseWsUtaTrade', 'ParseWsFundingRate' ]
     .flatMap ((name) => [ [ 'this.' + name, 'map[string]any' ], [ 'this.DerivedExchange.' + name, 'map[string]any' ] ])));
+// bitfinex ws list-row parser: ccxt build retypes it to map[string]any (it returns OrderToMap(SafeOrder(..)), never nil)
+CCXT_GO_HELPER_RETURN_TYPES['this.ParseWsOrderRow'] = 'map[string]any';
 // (2) `let x = 'lit'` later rewritten only with string literals or `x = this.safeString (o, k, 'lit' | x)`: the
 goChainNext('goLiteralDefaultStringLocal', function (declaration, goType: string, scope, name: string): boolean {
     const init: any = declaration?.initializer;
