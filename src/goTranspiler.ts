@@ -49113,7 +49113,7 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
     }
     const isFrameArg = (arg: any): boolean => {
         const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.goAnyBoxLocalDeclaration(arg) : undefined;
-        return (decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl);
+        return ((decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl)) || h50g45ListFrameHead(go, arg);
     };
     const calls = go.goSameFileCallsOf(fn, methodName);
     let callCount = 0;
@@ -62154,3 +62154,24 @@ function h49g44IntSlot (go: any, fn: any, index: number): boolean {
     };
 }
 // ===== end H50-G44
+// ===== H50-G45: a ws list frame's first element handed to a frame handler
+// `this.safeDict (frame, 0, {})` with `frame` the list parameter of an unwritten `override handleListMessage` that this
+// file never calls itself: the ws dispatch hands it the decoded JSON array, so element 0 is decoded JSON (or a fresh `{}`)
+function h50g45ListFrameHead (go: any, arg: any): boolean {
+    const call: any = go.goUnwrapParenthesizedNode(arg);
+    const args: any = go.goSafeAccessorLocalArgs(call, 'safeDict');
+    if ((args === undefined) || (args.key?.kind !== SyntaxKind.NumericLiteral) || (args.key.text !== '0') || (args.container?.kind !== SyntaxKind.Identifier)) {
+        return false;
+    }
+    const param: any = go.goAnyBoxLocalDeclaration(args.container);
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.name?.text !== 'handleListMessage') || (fn.parameters.indexOf(param) !== 1) || (fn.body === undefined)
+        || !((fn.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword))) {
+        return false;
+    }
+    const sourceFile = fn.getSourceFile();
+    const calledHere = go.hasNodeWhere(sourceFile, (n: any) => (n.kind === SyntaxKind.PropertyAccessExpression) && (n.name?.text === 'handleListMessage'));
+    return !calledHere && !h27a11WritesInto(go, fn.body, param.name.text, param);
+}
+// ===== end H50-G45
