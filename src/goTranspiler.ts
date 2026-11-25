@@ -980,11 +980,14 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.SafeNumber2': '*float64',
     'this.SafeNumberN': '*float64',
     'this.SafeNumberOmitZero': '*float64',
+    // exchange_safe.go: hand-written, nil when the integer is absent or zero
+    'this.SafeIntegerOmitZero': '*int64',
     // the transpiled test tree calls the base methods on a `*ccxt.Exchange`-typed local literally named `exchange`, so the same signatures apply there
     'exchange.SafeNumber': '*float64',
     'exchange.SafeNumber2': '*float64',
     'exchange.SafeNumberN': '*float64',
     'exchange.SafeNumberOmitZero': '*float64',
+    'exchange.SafeIntegerOmitZero': '*int64',
     // --- numeric / time helpers: the Go type every return path already produces ---
     // NumberToString / Parse8601 / Iso8601 answer a nil pointer for TS undefined; ParseToInt is never nil
     'this.ParseNumber': '*float64',
