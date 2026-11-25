@@ -18210,7 +18210,7 @@ function ccxtGoEndpointListLocalIsTyped(goTranspiler, arg, init, inFlight2) {
   }
 }
 function ccxtGoParentPastParens(node) {
-  let parent = goOuterParent(node);
+  const parent = goOuterParent(node);
   return parent;
 }
 function ccxtGoPromiseAllUseIsSafe(n) {
@@ -28392,8 +28392,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (node?.kind !== SyntaxKind5.Identifier) {
       return false;
     }
-    let declaration;
-    declaration = this.goSymbolValueDecl(node);
+    const declaration = this.goSymbolValueDecl(node);
     if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || this.goDeclaredTypeOfIdentifier(node) !== "*string") {
       return false;
     }
@@ -37166,7 +37165,7 @@ ${this.getIden(level)}}()`;
   // `k in book` directly under a `!`: a negated book-entry lookup keeps the helper (the cache-entry proofs
   // downstream key on that guard), only the positive read is native
   goUnderNegation(inNode) {
-    let current = goOuterParent(inNode);
+    const current = goOuterParent(inNode);
     return current?.kind === SyntaxKind5.PrefixUnaryExpression && current.operator === SyntaxKind5.ExclamationToken;
   }
   // `const m = this.safeDict(<plain map>, key, {})`: the decoded dictionary or the never-nil literal default, so
@@ -38841,7 +38840,7 @@ ${indent}}`);
     seen.add(param);
     const table = this.CCXT_GO_GETARG_SAFE_CONSUMERS ?? {};
     const pointer = goType.startsWith("*");
-    let safe = true;
+    const safe = true;
     const verdictOf = (callee, argIndex) => {
       const goName = callee.charAt(0).toUpperCase() + callee.slice(1);
       const entry = table[callee] ?? (pointer ? table[goName] ?? table[goName + "Async"] : void 0);
@@ -46408,7 +46407,7 @@ ${iden}}` + upstream.substring(upstream.trimEnd().length);
     const name = element.name.text;
     const scope = this.goEnclosingFunction(declaration);
     const conditionLike = (n) => {
-      let p = goOuterParent(n);
+      const p = goOuterParent(n);
       return p?.kind === SyntaxKind5.PrefixUnaryExpression && p.operator === SyntaxKind5.ExclamationToken || p?.kind === SyntaxKind5.BinaryExpression && (p.operatorToken.kind === SyntaxKind5.AmpersandAmpersandToken || p.operatorToken.kind === SyntaxKind5.BarBarToken) || p?.kind === SyntaxKind5.IfStatement || p?.kind === SyntaxKind5.WhileStatement || p?.kind === SyntaxKind5.ConditionalExpression;
     };
     if (scope === void 0 || !this.goScopeIdents(scope, name).some((n) => n !== element.name && !conditionLike(n))) {
@@ -52386,7 +52385,7 @@ function go90g8IsSumCounter(goTranspiler, declaration) {
       return true;
     }
     if (parent?.kind === SyntaxKind5.CallExpression && parent.arguments[0] === n && (goUnwrapParens(parent.parent)?.kind === SyntaxKind5.BinaryExpression || parent.parent?.kind === SyntaxKind5.BinaryExpression)) {
-      let up = goOuterParent(parent);
+      const up = goOuterParent(parent);
       return !(up?.kind === SyntaxKind5.BinaryExpression && up.operatorToken.kind === SyntaxKind5.EqualsToken && go87g8IsOwnRef(goTranspiler, up.left, declaration) && go90g8SumOfSelf(goTranspiler, up.right, declaration));
     }
     if (parent?.kind === SyntaxKind5.PropertyAssignment && parent.initializer === n && parent.parent?.kind === SyntaxKind5.ObjectLiteralExpression) {
@@ -52405,7 +52404,7 @@ goChainOr("goLocalIsSafeToType", function(scope, declaration, varName, goType, s
   return goType === "int" && go90g8IsSumCounter(this, declaration);
 });
 goChainPre("printCallExpression", function(node, identation) {
-  let up = goOuterParent(node);
+  const up = goOuterParent(node);
   if (up?.kind === SyntaxKind5.BinaryExpression && up.operatorToken.kind === SyntaxKind5.EqualsToken && goUnwrapParens(up.right) === node && up.left?.kind === SyntaxKind5.Identifier) {
     const declaration = this.goDeclarationOfIdentifier(up.left);
     if (declaration !== void 0 && go90g8IsSumCounter(this, declaration) && go90g8SumOfSelf(this, node, declaration) && this.goDeclaredTypeOfIdentifier(up.left) === "int") {
@@ -60192,7 +60191,7 @@ function h30g02Literal(literal2) {
   if (literal2?.kind !== SyntaxKind5.ObjectLiteralExpression) {
     return false;
   }
-  let up = goOuterParent(literal2);
+  const up = goOuterParent(literal2);
   let statement = up;
   if (up?.kind === SyntaxKind5.CallExpression) {
     if (up.expression?.kind !== SyntaxKind5.PropertyAccessExpression || up.expression.expression?.kind !== SyntaxKind5.ThisKeyword && up.expression.expression?.kind !== SyntaxKind5.Identifier) {
@@ -62500,7 +62499,7 @@ goChainRewrite("goTernaryJoinArmType", function(known, node) {
   if (known !== void 0 || arm?.kind !== SyntaxKind5.Identifier) {
     return known;
   }
-  let ternary = goOuterParent(node);
+  const ternary = goOuterParent(node);
   const owner = ternary?.kind === SyntaxKind5.ConditionalExpression ? goTernaryJoinOwner(ternary) : void 0;
   if (owner?.type?.kind !== SyntaxKind5.StringKeyword) {
     return void 0;

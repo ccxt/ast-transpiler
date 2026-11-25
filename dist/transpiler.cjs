@@ -18209,7 +18209,7 @@ function ccxtGoEndpointListLocalIsTyped(goTranspiler, arg, init, inFlight2) {
   }
 }
 function ccxtGoParentPastParens(node) {
-  let parent = goOuterParent(node);
+  const parent = goOuterParent(node);
   return parent;
 }
 function ccxtGoPromiseAllUseIsSafe(n) {
@@ -28391,8 +28391,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
     if (_optionalChain([node, 'optionalAccess', _4916 => _4916.kind]) !== _ast.SyntaxKind.Identifier) {
       return false;
     }
-    let declaration;
-    declaration = this.goSymbolValueDecl(node);
+    const declaration = this.goSymbolValueDecl(node);
     if (_optionalChain([declaration, 'optionalAccess', _4917 => _4917.kind]) !== _ast.SyntaxKind.VariableDeclaration || _optionalChain([declaration, 'access', _4918 => _4918.name, 'optionalAccess', _4919 => _4919.kind]) !== _ast.SyntaxKind.Identifier || this.goDeclaredTypeOfIdentifier(node) !== "*string") {
       return false;
     }
@@ -37165,7 +37164,7 @@ ${this.getIden(level)}}()`;
   // `k in book` directly under a `!`: a negated book-entry lookup keeps the helper (the cache-entry proofs
   // downstream key on that guard), only the positive read is native
   goUnderNegation(inNode) {
-    let current = goOuterParent(inNode);
+    const current = goOuterParent(inNode);
     return _optionalChain([current, 'optionalAccess', _6976 => _6976.kind]) === _ast.SyntaxKind.PrefixUnaryExpression && current.operator === _ast.SyntaxKind.ExclamationToken;
   }
   // `const m = this.safeDict(<plain map>, key, {})`: the decoded dictionary or the never-nil literal default, so
@@ -38840,7 +38839,7 @@ ${indent}}`);
     seen.add(param);
     const table = _nullishCoalesce(this.CCXT_GO_GETARG_SAFE_CONSUMERS, () => ( {}));
     const pointer = goType.startsWith("*");
-    let safe = true;
+    const safe = true;
     const verdictOf = (callee, argIndex) => {
       const goName = callee.charAt(0).toUpperCase() + callee.slice(1);
       const entry = _nullishCoalesce(table[callee], () => ( (pointer ? _nullishCoalesce(table[goName], () => ( table[goName + "Async"])) : void 0)));
@@ -46407,7 +46406,7 @@ ${iden}}` + upstream.substring(upstream.trimEnd().length);
     const name = element.name.text;
     const scope = this.goEnclosingFunction(declaration);
     const conditionLike = (n) => {
-      let p = goOuterParent(n);
+      const p = goOuterParent(n);
       return _optionalChain([p, 'optionalAccess', _10081 => _10081.kind]) === _ast.SyntaxKind.PrefixUnaryExpression && p.operator === _ast.SyntaxKind.ExclamationToken || _optionalChain([p, 'optionalAccess', _10082 => _10082.kind]) === _ast.SyntaxKind.BinaryExpression && (p.operatorToken.kind === _ast.SyntaxKind.AmpersandAmpersandToken || p.operatorToken.kind === _ast.SyntaxKind.BarBarToken) || _optionalChain([p, 'optionalAccess', _10083 => _10083.kind]) === _ast.SyntaxKind.IfStatement || _optionalChain([p, 'optionalAccess', _10084 => _10084.kind]) === _ast.SyntaxKind.WhileStatement || _optionalChain([p, 'optionalAccess', _10085 => _10085.kind]) === _ast.SyntaxKind.ConditionalExpression;
     };
     if (scope === void 0 || !this.goScopeIdents(scope, name).some((n) => n !== element.name && !conditionLike(n))) {
@@ -52385,7 +52384,7 @@ function go90g8IsSumCounter(goTranspiler, declaration) {
       return true;
     }
     if (_optionalChain([parent, 'optionalAccess', _12586 => _12586.kind]) === _ast.SyntaxKind.CallExpression && parent.arguments[0] === n && (_optionalChain([goUnwrapParens, 'call', _12587 => _12587(parent.parent), 'optionalAccess', _12588 => _12588.kind]) === _ast.SyntaxKind.BinaryExpression || _optionalChain([parent, 'access', _12589 => _12589.parent, 'optionalAccess', _12590 => _12590.kind]) === _ast.SyntaxKind.BinaryExpression)) {
-      let up = goOuterParent(parent);
+      const up = goOuterParent(parent);
       return !(_optionalChain([up, 'optionalAccess', _12591 => _12591.kind]) === _ast.SyntaxKind.BinaryExpression && up.operatorToken.kind === _ast.SyntaxKind.EqualsToken && go87g8IsOwnRef(goTranspiler, up.left, declaration) && go90g8SumOfSelf(goTranspiler, up.right, declaration));
     }
     if (_optionalChain([parent, 'optionalAccess', _12592 => _12592.kind]) === _ast.SyntaxKind.PropertyAssignment && parent.initializer === n && _optionalChain([parent, 'access', _12593 => _12593.parent, 'optionalAccess', _12594 => _12594.kind]) === _ast.SyntaxKind.ObjectLiteralExpression) {
@@ -52404,7 +52403,7 @@ goChainOr("goLocalIsSafeToType", function(scope, declaration, varName, goType, s
   return goType === "int" && go90g8IsSumCounter(this, declaration);
 });
 goChainPre("printCallExpression", function(node, identation) {
-  let up = goOuterParent(node);
+  const up = goOuterParent(node);
   if (_optionalChain([up, 'optionalAccess', _12599 => _12599.kind]) === _ast.SyntaxKind.BinaryExpression && up.operatorToken.kind === _ast.SyntaxKind.EqualsToken && goUnwrapParens(up.right) === node && _optionalChain([up, 'access', _12600 => _12600.left, 'optionalAccess', _12601 => _12601.kind]) === _ast.SyntaxKind.Identifier) {
     const declaration = this.goDeclarationOfIdentifier(up.left);
     if (declaration !== void 0 && go90g8IsSumCounter(this, declaration) && go90g8SumOfSelf(this, node, declaration) && this.goDeclaredTypeOfIdentifier(up.left) === "int") {
@@ -60191,7 +60190,7 @@ function h30g02Literal(literal2) {
   if (_optionalChain([literal2, 'optionalAccess', _15914 => _15914.kind]) !== _ast.SyntaxKind.ObjectLiteralExpression) {
     return false;
   }
-  let up = goOuterParent(literal2);
+  const up = goOuterParent(literal2);
   let statement = up;
   if (_optionalChain([up, 'optionalAccess', _15915 => _15915.kind]) === _ast.SyntaxKind.CallExpression) {
     if (_optionalChain([up, 'access', _15916 => _15916.expression, 'optionalAccess', _15917 => _15917.kind]) !== _ast.SyntaxKind.PropertyAccessExpression || _optionalChain([up, 'access', _15918 => _15918.expression, 'access', _15919 => _15919.expression, 'optionalAccess', _15920 => _15920.kind]) !== _ast.SyntaxKind.ThisKeyword && _optionalChain([up, 'access', _15921 => _15921.expression, 'access', _15922 => _15922.expression, 'optionalAccess', _15923 => _15923.kind]) !== _ast.SyntaxKind.Identifier) {
@@ -62499,7 +62498,7 @@ goChainRewrite("goTernaryJoinArmType", function(known, node) {
   if (known !== void 0 || _optionalChain([arm, 'optionalAccess', _16903 => _16903.kind]) !== _ast.SyntaxKind.Identifier) {
     return known;
   }
-  let ternary = goOuterParent(node);
+  const ternary = goOuterParent(node);
   const owner = _optionalChain([ternary, 'optionalAccess', _16904 => _16904.kind]) === _ast.SyntaxKind.ConditionalExpression ? goTernaryJoinOwner(ternary) : void 0;
   if (_optionalChain([owner, 'optionalAccess', _16905 => _16905.type, 'optionalAccess', _16906 => _16906.kind]) !== _ast.SyntaxKind.StringKeyword) {
     return void 0;
