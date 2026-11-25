@@ -29012,6 +29012,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.literalKindOfNode(rhs) === 'null') return `${name} = None`;
         // ral-76b R2: a plain map literal builds the map straight into `Some` (no box and convert)
         if (local.kind === 'dict' && isObjectLiteralExpression(rhs) && rhs.properties.length > 0 && this.rustSameKindRewrite(rhs, 'dict')) return `${name} = Some(crate::value::Dict::new(${this.rustObjectLiteralBlock(rhs, identation)}))`;
+        // an empty map literal is the empty typed map in `Some` (what `Value::Map({}).into_opt_dict()` answered)
+        if (local.kind === 'dict' && isObjectLiteralExpression(rhs) && rhs.properties.length === 0) return `${name} = Some(crate::value::Dict::default())`;
         // ral-43f: an optional source of the same kind is handed over as is (moved at its last use, else an Arc bump)
         const src = this.rustOptContainerOf(rhs);
         if (src !== undefined && src.kind === local.kind && this.rustPrintedOptional.has(src.declaration)) {
