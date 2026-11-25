@@ -8763,7 +8763,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 if (e === '') {
                     return;
                 }
-                const slotDeclaration = ((index === 0) && this.csharpBoolSlotBinding(arrayBindingPatternElements[0])) ? 'bool ' : 'var ';
+                // a `List<string>` holder (a runtime list of strings) reads each slot as a string
+                const slotDeclaration = (tempType === 'List<string>') ? 'string ' : (((index === 0) && this.csharpBoolSlotBinding(arrayBindingPatternElements[0])) ? 'bool ' : 'var ');
                 const slotCast = (slotDeclaration === 'bool ') ? '(bool)' : '';
                 const statement = this.getIden(identation) + `${slotDeclaration}${e} = ${slotCast}` + (tempType ? `${syntheticName}[${index}]` : `((IList<object>) ${syntheticName})[${index}]`);
                 // printStatement adds the last ;
