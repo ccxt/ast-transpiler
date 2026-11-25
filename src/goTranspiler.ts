@@ -19803,8 +19803,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the field table of the row's checker type, after the ts declaration proves the first key is its member
     goTypedRowTable(base, firstKey: string): any {
         const checker: any = this.checkerOrUndefined();
-        const located: any = checker?.getTypeAtLocation(base);
-        const type: any = (located !== undefined) ? checker.getNonNullableType(located) : undefined;
+        const type: any = goCheckerNodeMemo('typedRowType', checker, base, () => {
+            const located: any = checker?.getTypeAtLocation(base);
+            return (located !== undefined) ? checker.getNonNullableType(located) : undefined;
+        });
         const name = type?.getAliasSymbol()?.name ?? type?.getSymbol()?.name;
         const table = GO_TYPED_ROW_FIELDS[name];
         return ((table !== undefined) && (checker.getPropertyOfType(type, firstKey) !== undefined)) ? table : undefined;
@@ -19988,6 +19990,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goMethodDeclarationOfCallee(callee): any {
         const checker: any = this.checkerOrUndefined();
+        return goCheckerNodeMemo('methodOfCallee', checker, callee, () => this.goMethodDeclarationOfCalleeUncached(checker, callee));
+    }
+
+    goMethodDeclarationOfCalleeUncached(checker: any, callee): any {
         if (checker === undefined) {
             // an in-memory program has no checker: resolve the callee by name in its own class
             return this.goMethodDeclarationByName(callee);
@@ -23527,8 +23533,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (checker === undefined) {
             return undefined;
         }
-        const symbol = checker.getSymbolAtLocation(node);
-        return symbol?.valueDeclaration?.resolve();
+        return goCheckerNodeMemo('anyBoxLocal', checker, node, () => checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve());
     }
 
     // true when this identifier is a parameter bound by `x := GetArg(optionalArgs, i, default)`:
@@ -25014,6 +25019,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // true when the method overrides (or shadows) a member of the class it extends, or carries an
     goMethodKeepsBaseSignature(fn): boolean {
+        return goCheckerNodeMemo('keepsBaseSignature', this.checkerOrUndefined(), fn, () => this.goMethodKeepsBaseSignatureUncached(fn));
+    }
+
+    goMethodKeepsBaseSignatureUncached(fn): boolean {
         if ((fn.modifiers ?? []).some(m => m.kind === SyntaxKind.OverrideKeyword)) {
             return true;
         }
@@ -25560,7 +25569,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goTsSrcTreeBuild(root: string) {
-        const shared = goSharedTsSrcRoot(root);
+        const shared: any = goSharedTsSrcRoot(root);
+        // the indexes depend only on the shared file texts: build them once per shared root, and hand each
+        // instance its own object so the caches later attached to the tree stay per instance
+        shared.treeIndex ??= this.goTsSrcTreeIndex(shared);
+        return { ...shared.treeIndex };
+    }
+
+    goTsSrcTreeIndex(shared: any) {
         const callIndex = new Map<string, Array<any>>();
         const fileText = new Map<string, string>();
         const fileClasses = new Map<string, string[]>();
@@ -41231,6 +41247,26 @@ function goChainNext(method: string, fn: (this: any, ...args: any[]) => any, ari
     wrapped.__goNextNs = ns;
     wrapped.__goNextBase = prev;
     GoTranspiler.prototype[method] = wrapped;
+}
+
+// a per-checker memo of `compute(node)`: answers are keyed by the checker object, so another program never reads them
+function goCheckerNodeMemo<T>(slot: string, checker: any, node: any, compute: () => T): T {
+    const slots: any = (goCheckerNodeMemo as any).slots ??= {};
+    const byChecker: WeakMap<object, WeakMap<object, any>> = slots[slot] ??= new WeakMap();
+    if ((checker === undefined) || (node === null) || (typeof node !== 'object')) {
+        return compute();
+    }
+    let memo = byChecker.get(checker);
+    if (memo === undefined) {
+        memo = new WeakMap();
+        byChecker.set(checker, memo);
+    }
+    if (memo.has(node)) {
+        return memo.get(node);
+    }
+    const value = compute();
+    memo.set(node, value);
+    return value;
 }
 
 // printToStringCall's native forms per receiver Go type: [stdlib package, template]
