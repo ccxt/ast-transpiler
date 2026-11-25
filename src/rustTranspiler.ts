@@ -26236,6 +26236,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (nilDeclared && from === 'dict' && this.rustOptExtendOperandUse(n)) return ++lentNullable > 0 && ++reads > 0;
             // a per-venue lent slot takes any typed container local by reference (the optional form arrives as Null for None)
             if ((from === 'dict' || from === 'list') && this.rustLentVenueSlot(up, n) !== undefined) return ++reads > 0;
+            // a declared `Promise<Dict>` endpoint answer lent whole to a borrowed venue `Dict` slot (`&x`, no copy)
+            if (endpoint && from === 'dict' && !nilDeclared && isCallExpression(up) && this.rustVenueDictSlotOf(up, n)) return ++reads > 0;
             if (this.rustLentResponseSlot(up, n) && (extendReuse || this.rustLentResponseSource(init))) return ++lentResponses > 0 && ++reads > 0;
             if ((endpoint || this.rustLentContainerSource(init)) && this.rustLentEndpointSlot(up, n, from)) return ++lentResponses > 0 && ++reads > 0;
             // `json` tells Null from an empty container: only a never-null source lends there as the plain container
@@ -42227,6 +42229,8 @@ export class RustTranspiler extends BaseTranspiler {
         // a table-proven local lends only beside callers that need no map view of a boxed slot
         const boxedLend = (a: any) => { const d: any = this.rustDeclarationOfIdentifier(a); return d?.kind === SyntaxKind.Parameter && !this.rustVenueDictParam(d); };
         if (calls.some((call: any) => this.rustTableDictLocalArg(call.arguments[at])) && calls.some((call: any) => boxedLend(call.arguments[at]))) return false;
+        // an awaited Dict endpoint local lends only where no caller hands on its own parameter
+        if (calls.some((call: any) => this.rustEndpointDictLocal(call.arguments[at])) && calls.some((call: any) => this.rustDeclarationOfIdentifier(call.arguments[at])?.kind === SyntaxKind.Parameter)) return false;
         return calls.every((call: any) => call.arguments.length >= at + 1 && this.rustVenueDictArgLends(call.arguments[at]));
     }
 
@@ -42630,7 +42634,14 @@ export class RustTranspiler extends BaseTranspiler {
     /** A never-reassigned reader-produced local the declared-Dict locals table proves a map: it prints the shared handle. */
     rustTableDictLocalArg(arg: any): boolean {
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
-        if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name === arg || !isCallExpression(this.rustSkipWrappers(declaration.initializer))) return false;
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name === arg) return false;
+        // an awaited endpoint whose abstract declaration answers `Promise<Dict>` prints the shared map handle
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (this.rustEndpointDictLocal(arg)) {
+            if (this.rustLocalIsReassigned(declaration, String(arg.text))) return false;
+            return this.rustBorrowedPending.has(declaration) || this.rustBorrowedLocalKind(declaration) === 'dict';
+        }
+        if (!isCallExpression(init)) return false;
         if (this.rustNeverNullDictLocalArg(arg) || this.rustLocalIsReassigned(declaration, String(arg.text)) || this.rustDeclaredLocalTypeResolver(arg) !== 'dict') return false;
         // the local must print as the shared map: a local the printer keeps boxed (`let x: Value`) cannot be lent
         return this.rustBorrowedPending.has(declaration) || this.rustBorrowedLocalKind(declaration) === 'dict';
@@ -42883,6 +42894,22 @@ export class RustTranspiler extends BaseTranspiler {
         const row = `${list}.get(${String(read[1].text)} as usize)`;
         if (this.rustVenueDictValueParam(param)) return `&(if let Some(Value::Dict(__m)) = ${row} { std::sync::Arc::clone(__m) } else { Default::default() })`;
         return `${row}.and_then(crate::Value::as_map).unwrap_or(&Default::default())`;
+    }
+
+    /** A local initialised by an awaited endpoint whose abstract declaration answers `Promise<Dict>`. */
+    rustEndpointDictLocal(arg: any): boolean {
+        const declaration: any = isIdentifier(arg) ? this.rustDeclarationOfIdentifier(arg) : undefined;
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name === arg) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        const call: any = init?.kind === SyntaxKind.AwaitExpression ? this.rustSkipWrappers(init.expression) : undefined;
+        return call !== undefined && isCallExpression(call) && this.rustDeclaredEndpointKind(call) === 'dict';
+    }
+
+    /** The argument lands in a rustVenueDictParam slot of its `this.` call. */
+    rustVenueDictSlotOf(call: any, arg: any): boolean {
+        const at = Array.from(call.arguments).indexOf(arg);
+        const param: any = at < 0 || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword ? undefined : this.rustScalarCallee(call)?.parameters?.[at];
+        return param !== undefined && this.rustVenueDictParam(param);
     }
 
     /** `&x` (or the borrowed slot as is) for an argument landing in a rustVenueDictParam slot. */
