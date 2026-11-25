@@ -41,7 +41,7 @@ describe ('go producer declarations: Dict request builders', () => {
 
     test ('a Dict-annotated request builder types its local and the store is native', () => {
         const out = print ('Dict');
-        expect (out).toContain ('var request map[string]any = MapTyped(this.FetchOrdersRequest(');
+        expect (out).toContain ('var request map[string]any = this.FetchOrdersRequest(');
         expect (out).toContain ('request["action"] = "x"');
         expect (print ('Dict', false)).toContain ('AddElementToObject(request');
     });

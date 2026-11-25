@@ -7044,7 +7044,8 @@ function ccxtGoProducerDeclarationType (goTranspiler, declaration, family) {
     // the table is keyed by the printed Go name; the ts callee is camelCase
     const goName = callee.name.text.charAt (0).toUpperCase () + callee.name.text.slice (1);
     // a map producer whose resolved override declares a list or tuple is read as that list
-    const tableFamily = CCXT_GO_PRODUCER_DECLARATIONS['this.' + goName];
+    const ownMap = (family === 'map') && (CCXT_GO_PRODUCER_DECLARATIONS['this.' + goName] === undefined) && ccxtGoProducerOwnMapMethod (goTranspiler, initializer);
+    const tableFamily = CCXT_GO_PRODUCER_DECLARATIONS['this.' + goName] ?? (ownMap ? 'map' : undefined);
     const declaredText = ccxtGoProducerDeclaredText (goTranspiler, callee);
     if ((tableFamily !== family) && !((tableFamily === 'map') && (family === 'list') && ccxtGoProducerTextIsList (declaredText))) { return undefined; }
     // the override the checker resolves may declare another shape (a tuple): keep the box
@@ -7055,7 +7056,10 @@ function ccxtGoProducerDeclarationType (goTranspiler, declaration, family) {
         || ((goName === 'Omit') && ccxtGoProducerArgIsMap (goTranspiler, initializer.arguments[0]))
         || ((CCXT_GO_PRODUCER_NEVER_ABSENT_IF_DICT.indexOf (goName) >= 0) && (declaredText === 'Dict')
             && ((goName === 'CreateOrderRequest') || ccxtGoProducerReturnsFreshDict (goTranspiler, callee))));
-    const readsTheValue = neverAbsent
+    // an own map[string]any method: the typed local boxes into `any` exactly as the call did; only rebinds and nil tests differ
+    const readsTheValue = ownMap
+        ? (n) => !ccxtGoProducerUseRebinds (n) && !ccxtGoProducerUseNilTest (n)
+        : neverAbsent
         ? (n) => !ccxtGoProducerUseRebinds (n)
         : (dictLike
             ? (n) => goTranspiler.goSafeDictUseReadsTheMap (n)
@@ -7190,7 +7194,29 @@ function ccxtGoProducerUnboxValue (goTranspiler, declaration, identation, family
     if ((family === 'map') && (CCXT_GO_HELPER_RETURN_TYPES['this.' + callee.name.text.charAt (0).toUpperCase () + callee.name.text.slice (1)] === 'map[string]any')) { return printed; }
     // a callee whose Go signature already returns []any (base + every override, or this class's one method): ArrayTyped is the identity
     if ((family === 'list') && ccxtGoProducerReturnsGoList (goTranspiler, declaration.initializer, printed)) { return printed; }
+    if ((family === 'map') && ccxtGoProducerOwnMapMethod (goTranspiler, declaration.initializer)
+        && printed.startsWith ('this.') && printed.endsWith (')') && goTranspiler.isWholePrintedCall (printed, printed.indexOf ('('))) { return printed; }
     return ((family === 'map') ? 'MapTyped(' : 'ArrayTyped(') + printed + ')';
+}
+
+// this class's one sync method of that name prints a `map[string]any` Go signature
+function ccxtGoProducerOwnMapMethod (goTranspiler, call) {
+    const own = ccxtGoAsyncListClassMember (enclosingClassDeclaration (call), String (call.expression.name.text));
+    return (own !== undefined) && !goTranspiler.isAsyncFunction (own)
+        && /\) map\[string\]any\s*$/.test (goTranspiler.printMethodDefinition (own, 0).split ('\n').pop ());
+}
+
+// `x === undefined` / `x !== undefined` (or null): a nil map tests nil, its boxed copy did not
+function ccxtGoProducerUseNilTest (n) {
+    let e = n;
+    while (e.parent?.kind === SyntaxKind.ParenthesizedExpression) { e = e.parent; }
+    const p = e.parent;
+    if (p?.kind === SyntaxKind.PrefixUnaryExpression) { return true; }
+    if ((p?.kind === SyntaxKind.IfStatement) || (p?.kind === SyntaxKind.ConditionalExpression && p.condition === e)) { return true; }
+    if (p?.kind !== SyntaxKind.BinaryExpression) { return false; }
+    const op = p.operatorToken.kind;
+    return [ SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,
+        SyntaxKind.AmpersandAmpersandToken, SyntaxKind.BarBarToken, SyntaxKind.QuestionQuestionToken ].includes (op);
 }
 
 function ccxtGoProducerReturnsGoList (goTranspiler, call, printed) {
