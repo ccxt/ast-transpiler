@@ -48,8 +48,10 @@ describe ('rust pro ws handler dict-handle message: shadow view and info entry',
         expect (fn).toMatch (/"info"[^\n]*Value::from\(message\)\)/);
     });
 
-    test ('an info entry at the last use keeps the boxed slot', () => {
-        expect (output).toMatch (/fn handleLast\([^)]*message: Value\)/);
+    test ('an info entry at the last use shares the dict handle', () => {
+        const fn = output.slice (output.indexOf ('fn handleLast('), output.indexOf ('fn handleMessage('));
+        expect (fn).toMatch (/fn handleLast\([^)]*message: &crate::value::Dict\)/);
+        expect (fn).toMatch (/"info"[^\n]*Value::from\(message\)\)/);
     });
 
     test ('negatives keep the Value slot', () => {

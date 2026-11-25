@@ -20302,7 +20302,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (!ok) return;
             if (isIdentifier(node) && node.text === name && node !== param.name) {
                 const strRead = strList && this.rustStrListSafeStringUse(node);
-                if (this.rustSymbolOf(node) !== paramSymbol || !(strRead || this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
+                if (this.rustSymbolOf(node) !== paramSymbol || !(strRead || this.rustParamUseIsRead(node, kind, literalKeys) || (strList && (this.rustStrListSliceUse(node) || this.rustStrListNumberKeyUse(node) || this.rustBookDeltasSafeReadUse(node))) || (infoValue && (this.rustVenueDictValueUse(node) || this.rustVenueDictReaderUse(node) || this.rustVenueDictLentValueUse(node) || this.rustVoidHandlerJsonOperand(node) || this.rustVenueDictLentSlotUse(node) || this.rustVenueDictLentHandleUse(node) || this.rustVenueDictLastEntryUse(node))) || (wholeUse && (this.rustVenueDictWholeArgUse(node) || this.rustVenueDictWholeUse(node))))) {
                     ok = false;
                     return;
                 }
@@ -42581,6 +42581,12 @@ export class RustTranspiler extends BaseTranspiler {
         return later;
     }
 
+    /** An object-literal entry value (`'info': x`) at the last use: the dict handle is shared into the box (`Value::from(x)`). */
+    rustVenueDictLastEntryUse(id: any): boolean {
+        const up: any = id?.parent;
+        return up !== undefined && isPropertyAssignment(up) && up.initializer === id && isObjectLiteralExpression(up.parent) && !this.rustVenueDictValueUse(id);
+    }
+
     /** A whole argument of a `this.` call whose slot prints `impl Into<crate::Value>` (`this.parseWsOrder (message)`):
      *  the dict handle is shared into the box, no copy. */
     rustVenueDictLentValueUse(id: any): boolean {
@@ -42757,7 +42763,7 @@ export class RustTranspiler extends BaseTranspiler {
         let found = false;
         const visit = (n: any) => {
             if (found) return;
-            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLentValueUse(n) || this.rustVoidHandlerJsonOperand(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
+            if (isIdentifier(n) && n.text === name && (this.rustVenueDictValueUse(n) || this.rustVenueDictLastEntryUse(n) || this.rustVenueDictLentValueUse(n) || this.rustVoidHandlerJsonOperand(n) || (handler && (this.rustVenueDictWholeArgUse(n) || this.rustVenueDictWholeUse(n) || this.rustVenueDictLentHandleUse(n)))) && this.rustDeclarationOfIdentifier(n) === param) found = true;
             n.forEachChild(visit);
         };
         this.rustVenueDictValuePending.add(param);
