@@ -438,6 +438,8 @@ const JAVA_UNIFIED_TRAILING_PERCENT_METHODS = new Set<string>(['createTrailingPe
 const JAVA_VENUE_NUMBER_PARAMETER_METHODS = new Set<string>(['transferIn', 'transferOut']);
 // unified trailing-percent order methods whose defaulted `trailingTriggerPrice: Num` prints `Double`
 const JAVA_UNIFIED_TRAILING_TRIGGER_PRICE_METHODS = new Set<string>(['createTrailingPercentOrder']);
+// venue order-request builders whose `amount` / `price` (`Num` or `number`, sync or async) print `Double`
+const JAVA_VENUE_ORDER_REQUEST_NUMBER_METHODS = new Set<string>(['createOrderRequest', 'createTestOrder', 'signAndCreateOrder']);
 
 // Parameter positions whose Java signature cannot move to the annotated type even though
 // the base declaration carries it. Java overrides are invariant, so one excluded position
@@ -1401,6 +1403,12 @@ export class JavaTranspiler extends BaseTranspiler {
         if (type === 'Long' && this.javaLocalDeclaredAs(isAsExpression(arg) ? arg.expression : arg, printed, type)) {
             return printed;
         }
+        // a local or parameter already declared Double passes a Double slot as it is
+        // (a reassigned parameter reads a copy whose declared type is not proven)
+        if (type === 'Double' && isIdentifier(arg) && this.javaLocalDeclaredAs(arg, printed, type)
+            && !this.javaReassignedParameter(arg)) {
+            return printed;
+        }
         // a local the build layer already declares String passes a String slot as it is
         if (type === 'String' && isIdentifier(arg) && this.javaLocalDeclaredAs(arg, printed, type)) {
             return printed;
@@ -2226,6 +2234,9 @@ export class JavaTranspiler extends BaseTranspiler {
             && JAVA_UNIFIED_TRAILING_TRIGGER_PRICE_METHODS.has(String((method.name as any)?.text))) {
             return 'Double';
         }
+        if (name === 'Num' && this.javaVenueOrderRequestNumberSlot(node, method)) {
+            return 'Double';
+        }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
             return undefined;
         }
@@ -2451,6 +2462,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (venueList !== undefined) {
             return venueList;
         }
+        if (!testTier && (name === 'Num' || (name === undefined && (type.flags & TypeFlags.Number) !== 0))
+            && this.javaVenueOrderRequestNumberSlot(node, method)) {
+            return 'Double';
+        }
         const unifiedInt = testTier ? undefined : this.javaUnifiedIntParameterType(name, symbol, method, type, node);
         if (unifiedInt !== undefined) {
             return unifiedInt;
@@ -2581,6 +2596,20 @@ export class JavaTranspiler extends BaseTranspiler {
             root = m;
         }
         return JAVA_NATIVE_PARAMETER_BASE_FILES.test(root.getSourceFile().fileName);
+    }
+
+    // an identifier that resolves to a parameter the printer records as reassigned
+    javaReassignedParameter(arg): boolean {
+        const declaration = this.javaDeclarationOfIdentifier(arg);
+        return declaration !== undefined && isParameterDeclaration(declaration)
+            && Boolean(this.ReassignedVars[this.getVarKey(declaration)]);
+    }
+
+    // the `amount` / `price` slot of a venue order-request builder no base tier declares
+    javaVenueOrderRequestNumberSlot(node, method): boolean {
+        return ['amount', 'price'].includes((node.name as any)?.text) && isIdentifier(method.name)
+            && JAVA_VENUE_ORDER_REQUEST_NUMBER_METHODS.has(method.name.text)
+            && JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'));
     }
 
     // a fixed `int` / `Int` (base/types.ts) parameter of a method first declared in the Exchange tier prints `Long`,
