@@ -27,6 +27,12 @@ function goUnwrapParens (n: any): any {
     while (n?.kind === SyntaxKind.ParenthesizedExpression) { n = n.expression; }
     return n;
 }
+// `x.length - 0` (an idiom that keeps PHP on strlen): an integer length minus zero is the length itself
+function goLengthMinusZeroOperand (n: any): any {
+    if ((n?.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.MinusToken) || (n.right?.kind !== SyntaxKind.NumericLiteral) || (n.right.text !== '0')) { return undefined; }
+    const left = goUnwrapParens(n.left);
+    return ((left?.kind === SyntaxKind.PropertyAccessExpression) && (left.name?.text === 'length') && (left.expression?.kind !== SyntaxKind.ThisKeyword)) ? left : undefined;
+}
 function goUnwrapTypeExpr (n: any): any {
     while ((n?.kind === SyntaxKind.ParenthesizedExpression) || (n?.kind === SyntaxKind.AsExpression)) { n = n.expression; }
     return n;
@@ -13355,6 +13361,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
                 || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
                 || (ORDERED_COMPARISON_OPERATORS[op] !== undefined)) { return 'bool'; }
+            const lengthMinusZero = goLengthMinusZeroOperand(initializer); if (lengthMinusZero !== undefined) { return this.goTypeOfInitializer(lengthMinusZero, printedValue); }
             // a `+` chain goNativeStringConcat prints as the Go operator is a Go string
             if ((op === SyntaxKind.PlusToken) && (this.goNativeArithmetic(initializer)?.goType === 'string')) { return 'string'; }
             break;
@@ -13599,7 +13606,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         case SyntaxKind.AsExpression:
             // an assertion prints nothing: the asserted expression's Go type governs the operand
             return this.goOperandStaticType(this.goUnwrapPrintedAssertions(node.expression), printedText);
-        case SyntaxKind.BinaryExpression: return this.goConstantProductKind(node) ?? this.goNativeArithmeticType(node);
+        case SyntaxKind.BinaryExpression: if (goLengthMinusZeroOperand(node) !== undefined) { return this.goOperandStaticType(goLengthMinusZeroOperand(node), printedText); } return this.goConstantProductKind(node) ?? this.goNativeArithmeticType(node);
         case SyntaxKind.Identifier: return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
         case SyntaxKind.PropertyAccessExpression:
             // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
@@ -20537,6 +20544,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goLengthFeedsArithmeticClassifier(lengthNode): boolean {
         let current = lengthNode?.parent;
         for (let i = 0; (i < 16) && (current !== undefined); i++) {
+            if ((current.kind === SyntaxKind.BinaryExpression) && (goLengthMinusZeroOperand(current) !== undefined)) { current = current.parent; continue; } // prints as the bare length
             if (current.kind === SyntaxKind.BinaryExpression) {
                 const op = current.operatorToken?.kind;
                 if ((op === SyntaxKind.MinusToken) || (op === SyntaxKind.AsteriskToken) || (op === SyntaxKind.SlashToken) || (op === SyntaxKind.PercentToken)) { return true; }
@@ -23776,6 +23784,8 @@ ${this.getIden(identation)}${returnStatement}`;
     printBinaryExpression(node, identation) {
 
         const {left, right, operatorToken} = node;
+
+        const lengthMinusZero = goLengthMinusZeroOperand(node); if (lengthMinusZero !== undefined) return this.printNode(lengthMinusZero, identation);
 
         const h28m01 = this.h28m01RowFieldBinary(node, identation); if (h28m01 !== undefined) return h28m01;
         const h30g27 = this.h30g27IndexOfCompare(node, identation); if (h30g27 !== undefined) return h30g27;

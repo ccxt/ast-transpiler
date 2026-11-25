@@ -682,6 +682,16 @@ const JAVA_IMPLICIT_API_FILE = /(^|[\\/])ts[\\/]src[\\/]abstract[\\/][a-z0-9_]+\
 const JAVA_CRC32_BASE_FILE = /(^|[\\/])ts[\\/]src[\\/]base[\\/]functions[\\/]crypto\.ts$/;
 
 // unwrap `( ... )` around an expression
+export function javaLengthMinusZeroOperand(node: any): any {
+    if (node?.kind !== SyntaxKind.BinaryExpression || node.operatorToken?.kind !== SyntaxKind.MinusToken
+        || node.right?.kind !== SyntaxKind.NumericLiteral || node.right.text !== '0') {
+        return undefined;
+    }
+    const left = unwrapParens(node.left);
+    return left?.kind === SyntaxKind.PropertyAccessExpression && left.name?.text === 'length'
+        && left.expression?.kind !== SyntaxKind.ThisKeyword ? left : undefined;
+}
+
 function unwrapParens(node: any): any {
     while (node?.kind === SyntaxKind.ParenthesizedExpression) {
         node = node.expression;
@@ -6977,6 +6987,12 @@ export class JavaTranspiler extends BaseTranspiler {
             this.ReassignedVars[this.getVarKey(left)] = true;
         }
 
+        // `x.length - 0` (an idiom that keeps PHP on strlen) is the length itself
+        const lengthMinusZero = javaLengthMinusZeroOperand(node);
+        if (lengthMinusZero !== undefined) {
+            return this.printNode(lengthMinusZero, identation);
+        }
+
         if (left.kind === SyntaxKind.TypeOfExpression) {
             const typeOfExpression = this.handleTypeOfInsideBinaryExpression(
                 node,
@@ -8298,6 +8314,9 @@ export class JavaTranspiler extends BaseTranspiler {
         const value = this.unwrapParenthesized(node);
         if (value?.kind !== SyntaxKind.BinaryExpression) {
             return undefined;
+        }
+        if (javaLengthMinusZeroOperand(value) !== undefined) {
+            return undefined; // prints as the bare int length, typed by the length-local rule
         }
         const op = value.operatorToken.kind;
         if (op === SyntaxKind.PlusToken && this.javaNativeConcat(value)) {
