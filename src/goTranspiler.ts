@@ -47437,6 +47437,7 @@ export interface GoTranspiler {
     h26g32LiteralDefaultStringSlot(decl): string | undefined;
     h26g32SlotIsString(list): boolean;
     h26g32StringSlotOperand(node): boolean;
+    h51g52RequiredStringParam(arg): boolean;
 }
 const H26G32_LITERAL_DEFAULT_AT: { [name: string]: number } = { 'handleParamString': 2, 'handleParamString2': 3 };
 // slot 0 of `const [ x, p ] = this.handleParamString[2] (.., '<literal>')`: the Go twin hands SafeString[2] a non-nil
@@ -47450,7 +47451,8 @@ GoTranspiler.prototype.h26g32LiteralDefaultStringSlot = function (decl) {
         || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.initializer !== undefined) || (decl.dotDotDotToken !== undefined)
         || (holder?.kind !== SyntaxKind.VariableDeclaration) || (((holder.parent?.flags ?? 0) & NodeFlags.Const) === 0)
         || (call.expression?.expression?.kind !== SyntaxKind.ThisKeyword) || (call.arguments?.length !== at + 1)
-        || (call.arguments[at].kind !== SyntaxKind.StringLiteral) || !this.goCheckerTypeHasFlags(decl.name, TypeFlags.StringLike)) {
+        || !((call.arguments[at].kind === SyntaxKind.StringLiteral) || this.h51g52RequiredStringParam(call.arguments[at]))
+        || !this.goCheckerTypeHasFlags(decl.name, TypeFlags.StringLike)) {
         return undefined;
     }
     // a binding the pointer-slot rule already types keeps its `*string` reads
@@ -47473,6 +47475,12 @@ GoTranspiler.prototype.h26g32SlotIsString = function (list) {
 GoTranspiler.prototype.h26g32StringSlotOperand = function (node) {
     const decl: any = (node?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.() : undefined;
     return (decl?.kind === SyntaxKind.BindingElement) && (this.h26g32LiteralDefaultStringSlot(decl) === 'string');
+};
+// a required `string` parameter of the enclosing method: Go prints it as a `string`, never nil
+GoTranspiler.prototype.h51g52RequiredStringParam = function (arg) {
+    const decl: any = (arg?.kind === SyntaxKind.Identifier) ? this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.() : undefined;
+    return (decl?.kind === SyntaxKind.Parameter) && (decl.type?.kind === SyntaxKind.StringKeyword)
+        && (decl.initializer === undefined) && (decl.questionToken === undefined) && (decl.dotDotDotToken === undefined);
 };
 // ===== h26-G32 (end) =====
 

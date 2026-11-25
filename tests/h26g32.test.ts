@@ -65,4 +65,17 @@ describe ('h26g32: handleParamString[2] slot 0 with a literal default is a Go st
         expect (out).toContain ('m := *mPtr');
         expect (out).toContain ('if m == "v3" {');
     });
+    test ('a required string parameter as the default binds slot 0 as a string', () => {
+        const out = print ('    w (name: string, params: Dict = {}) {\n        const [ k, p ] = this.handleParamString (params, \'channel\', name);\n'
+            + '        return this.id + \' \' + k + this.note (p);\n    }\n');
+        expect (out).toContain ('k := *kPtr');
+        expect (out).not.toContain ('func() any');
+    });
+    test ('an optional or nullable parameter as the default keeps the box', () => {
+        for (const sig of [ 'name: Str', 'name?: string', 'name: string = undefined' ]) {
+            const out = print ('    w (' + sig + ', params: Dict = {}) {\n        const [ k, p ] = this.handleParamString (params, \'channel\', name);\n'
+                + '        return this.id + \' \' + k + this.note (p);\n    }\n');
+            expect (out).not.toContain ('k := *kPtr');
+        }
+    });
 });
