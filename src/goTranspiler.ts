@@ -19738,8 +19738,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // the field table of the row's checker type, after the ts declaration proves the first key is its member
     goTypedRowTable(base, firstKey: string): any {
         const checker: any = this.checkerOrUndefined();
-        const located: any = checker?.getTypeAtLocation(base);
-        const type: any = (located !== undefined) ? checker.getNonNullableType(located) : undefined;
+        const type: any = goCheckerNodeMemo('typedRowType', checker, base, () => {
+            const located: any = checker?.getTypeAtLocation(base);
+            return (located !== undefined) ? checker.getNonNullableType(located) : undefined;
+        });
         const name = type?.getAliasSymbol()?.name ?? type?.getSymbol()?.name;
         const table = GO_TYPED_ROW_FIELDS[name];
         return ((table !== undefined) && (checker.getPropertyOfType(type, firstKey) !== undefined)) ? table : undefined;
@@ -19923,6 +19925,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goMethodDeclarationOfCallee(callee): any {
         const checker: any = this.checkerOrUndefined();
+        return goCheckerNodeMemo('methodOfCallee', checker, callee, () => this.goMethodDeclarationOfCalleeUncached(checker, callee));
+    }
+
+    goMethodDeclarationOfCalleeUncached(checker: any, callee): any {
         if (checker === undefined) {
             // an in-memory program has no checker: resolve the callee by name in its own class
             return this.goMethodDeclarationByName(callee);
@@ -23462,8 +23468,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (checker === undefined) {
             return undefined;
         }
-        const symbol = checker.getSymbolAtLocation(node);
-        return symbol?.valueDeclaration?.resolve();
+        return goCheckerNodeMemo('anyBoxLocal', checker, node, () => checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve());
     }
 
     // true when this identifier is a parameter bound by `x := GetArg(optionalArgs, i, default)`:
@@ -24949,6 +24954,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // true when the method overrides (or shadows) a member of the class it extends, or carries an
     goMethodKeepsBaseSignature(fn): boolean {
+        return goCheckerNodeMemo('keepsBaseSignature', this.checkerOrUndefined(), fn, () => this.goMethodKeepsBaseSignatureUncached(fn));
+    }
+
+    goMethodKeepsBaseSignatureUncached(fn): boolean {
         if ((fn.modifiers ?? []).some(m => m.kind === SyntaxKind.OverrideKeyword)) {
             return true;
         }
@@ -25495,7 +25504,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goTsSrcTreeBuild(root: string) {
-        const shared = goSharedTsSrcRoot(root);
+        const shared: any = goSharedTsSrcRoot(root);
+        // the indexes depend only on the shared file texts: build them once per shared root, and hand each
+        // instance its own object so the caches later attached to the tree stay per instance
+        shared.treeIndex ??= this.goTsSrcTreeIndex(shared);
+        return { ...shared.treeIndex };
+    }
+
+    goTsSrcTreeIndex(shared: any) {
         const callIndex = new Map<string, Array<any>>();
         const fileText = new Map<string, string>();
         const fileClasses = new Map<string, string[]>();
@@ -39183,7 +39199,20 @@ ${tryBodyBlock}
         }
         return { name: decl.name, container: call.arguments[0], key: call.arguments[1] };
     }
+    // a pure AST question (parent shape and callee name): answered once per identifier node
+    h29a18RawUseMemo = new WeakMap<object, boolean>();
     h29a18RawUse(n: any): boolean {
+        if ((n === null) || (typeof n !== 'object')) {
+            return this.h29a18RawUseOf(n);
+        }
+        let hit = this.h29a18RawUseMemo.get(n);
+        if (hit === undefined) {
+            hit = this.h29a18RawUseOf(n);
+            this.h29a18RawUseMemo.set(n, hit);
+        }
+        return hit;
+    }
+    h29a18RawUseOf(n: any): boolean {
         const parent: any = n?.parent;
         const pKind = parent?.kind;
         if (pKind === SyntaxKind.PropertyAssignment) {
@@ -41136,15 +41165,56 @@ function goLocalTypeUpgrade(from: string, to: string, claims: (go: any, declarat
 }
 // fn runs first; `return GO_NEXT` delegates to the previous implementation with `arity` arguments (fn's own by default)
 const GO_NEXT: any = Symbol ('GO_NEXT');
+// consecutive goChainNext hooks on one method share one flat dispatcher (newest first); each install builds a
+// fresh wrapper over a copied list, so a previously captured implementation never changes. A hook passing on
+// forwards only its first `arity` arguments, so later hooks and the base see the running minimum.
 function goChainNext(method: string, fn: (this: any, ...args: any[]) => any, arity = fn.length) {
-    const prev: any = GoTranspiler.prototype[method];
-    const n = arity;
-    GoTranspiler.prototype[method] = function (this: any, a?: any, b?: any, c?: any, d?: any, e?: any, f?: any, g?: any) {
-        const res = fn.call (this, a, b, c, d, e, f, g);
-        if (res !== GO_NEXT) { return res; }
+    const cur: any = GoTranspiler.prototype[method];
+    const fns: any[] = [ fn, ...(cur?.__goNextFns ?? []) ];
+    const ns: number[] = [ ((arity >= 1) && (arity <= 6)) ? arity : 7, ...(cur?.__goNextNs ?? []) ];
+    const prev: any = cur?.__goNextBase ?? cur;
+    const count = fns.length;
+    const last = ns[count - 1]; // the base sees the oldest hook's argument count (values cut at the running minimum)
+    const wrapped: any = function (this: any, a?: any, b?: any, c?: any, d?: any, e?: any, f?: any, g?: any) {
+        let n = 7;
+        for (let i = 0; i < count; i++) {
+            const res = fns[i].call (this, a, b, c, d, e, f, g);
+            if (res !== GO_NEXT) { return res; }
+            const k = ns[i];
+            if (k < n) {
+                n = k;
+                if (n < 7) { g = undefined; } if (n < 6) { f = undefined; } if (n < 5) { e = undefined; }
+                if (n < 4) { d = undefined; } if (n < 3) { c = undefined; } if (n < 2) { b = undefined; }
+            }
+        }
+        n = last;
         return n === 1 ? prev.call (this, a) : n === 2 ? prev.call (this, a, b) : n === 3 ? prev.call (this, a, b, c) : n === 4 ? prev.call (this, a, b, c, d)
             : n === 5 ? prev.call (this, a, b, c, d, e) : n === 6 ? prev.call (this, a, b, c, d, e, f) : prev.call (this, a, b, c, d, e, f, g);
     };
+    wrapped.__goNextFns = fns;
+    wrapped.__goNextNs = ns;
+    wrapped.__goNextBase = prev;
+    GoTranspiler.prototype[method] = wrapped;
+}
+
+// a per-checker memo of `compute(node)`: answers are keyed by the checker object, so another program never reads them
+function goCheckerNodeMemo<T>(slot: string, checker: any, node: any, compute: () => T): T {
+    const slots: any = (goCheckerNodeMemo as any).slots ??= {};
+    const byChecker: WeakMap<object, WeakMap<object, any>> = slots[slot] ??= new WeakMap();
+    if ((checker === undefined) || (node === null) || (typeof node !== 'object')) {
+        return compute();
+    }
+    let memo = byChecker.get(checker);
+    if (memo === undefined) {
+        memo = new WeakMap();
+        byChecker.set(checker, memo);
+    }
+    if (memo.has(node)) {
+        return memo.get(node);
+    }
+    const value = compute();
+    memo.set(node, value);
+    return value;
 }
 
 // printToStringCall's native forms per receiver Go type: [stdlib package, template]
