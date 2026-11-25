@@ -1090,7 +1090,8 @@ export const CCXT_GO_BOOL_METHOD_NAMES = [
 export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimeframe', 'AmountToPrecision', 'PriceToPrecision',
     'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
     'CommonCurrencyCode', 'MarketId', 'GetBaseDomainFromUrl', 'CostToPrecision', 'FeeToPrecision',
-    'ParsePrecision', 'IntegerPrecisionToAmount', 'ConvertExpireDate', 'ConvertExpireDateToMarketIdDate', 'CreateCcxtTradeId', 'OmitZero', 'FormatVaultAddress' ];
+    'ParsePrecision', 'IntegerPrecisionToAmount', 'ConvertExpireDate', 'ConvertExpireDateToMarketIdDate', 'CreateCcxtTradeId', 'OmitZero', 'FormatVaultAddress',
+    'OutcomeSearchQuery' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)`
