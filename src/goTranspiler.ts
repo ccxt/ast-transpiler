@@ -37739,6 +37739,9 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
     if ((methodName === 'handleMessage') || goHasDynamicCall(fn, methodName) || h27a11NamedElsewhere(go, fn, methodName)) { return false; }
     const isFrameArg = (arg: any): boolean => {
         const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.goAnyBoxLocalDeclaration(arg) : undefined;
+        if (goFrameListRowArg(go, decl)) {
+            return true;
+        }
         return ((decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl)) || h50g45ListFrameHead(go, arg);
     };
     const calls = go.goSameFileCallsOf(fn, methodName);
@@ -42202,3 +42205,21 @@ GoTranspiler.prototype.h52g58AssignRowRead = function (node, identation: number,
     return `${lead}${iden}${name} = nil\n${iden}if ${k} < len(${xs}) {\n${in1}${name}, _ = ${xs}[${k}].(map[string]any)\n${iden}}\n${iden}if ${name} == nil {\n${in1}${name} = map[string]any{}\n${iden}}`;
 };
 goChainReadHook('printExpressionStatement', 'h52g58AssignRowRead', [0, 1, -1]);
+
+// `const row = this.safeDict (xs, i, {})` where xs is a read-only list cut from a proven frame (h28a13FrameList)
+// and row is never written: the row is a decoded JSON map (or the fresh empty default), so it proves as a frame
+function goFrameListRowArg (go: any, decl: any): boolean {
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0)) {
+        return false;
+    }
+    const init: any = go.goUnwrapParenthesizedNode(decl.initializer);
+    const args: any = go.goSafeAccessorLocalArgs(init, 'safeDict');
+    const fallback: any = init?.arguments?.[2];
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.Identifier)
+        || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)) {
+        return false;
+    }
+    // a block-scoped const is visible only in its own block: same-name rows of sibling blocks are other bindings
+    return go.h28a13FrameList(args.container) && !h27a11WritesInto(go, decl.parent.parent.parent, decl.name.text, decl);
+}
