@@ -13589,7 +13589,7 @@ describe('ud: a reader string boxed at a lending slot before its last use', () =
         const out = write ('ud-lend-neg', "    m (u: any, f: boolean) {\n        if (f) {\n            const code = this.safeString (u, 'code');\n            const n = JSON.stringify (code);\n            return this.hold (code, n);\n        } else {\n            const code = this.safeString (u, 'other');\n            return this.hold (code);\n        }\n    }\n");
         // ral-70f: typed (the box at the free-function slot converts once: `code.clone().map(Value::from)..`, the copy the
         // `Value` clone made; ccxt's narrowStrNullLocals pass printed this)
-        expect(out).toContain('let mut code: Option<String> = self.safe_string_k_opt(u.clone(), "code"');
+        expect(out).toContain('let mut code: Option<String> = self.safe_string_k_opt(u, "code"');
         expect(out).toContain('json_stringify(&Value::from(code.as_deref()))');
     });
     test('a reader string that is a split receiver lends at its earlier self-call box instead of staying a Value', () => {
@@ -18455,7 +18455,7 @@ describe('ral-52i: a list local reassigned whole from an endpoint answer or a `[
         const out = run();
         const t = out.slice(out.indexOf('fn tag'), out.indexOf('fn info'));
         expect(t).toContain('let mut rows: crate::value::List = ');
-        expect(t).toContain('rows = std::sync::Arc::new(vec![response.clone()])');
+        expect(t).toContain('rows = std::sync::Arc::new(vec![response])');
     });
     test('a guarded answer read again later is shared, not moved', () => {
         const out = run();
@@ -25082,7 +25082,7 @@ describe("ral-87rb R2: a numberToString string lent into a Precise write is an O
     test("binance createOrderRequest amountString / priceString: Option<String>, lent to Precise.stringMul", () => {
         expect(out).toContain('let mut amountString: Option<String> = ');
         expect(out).toContain('let mut priceString: Option<String> = ');
-        expect(out).toContain('let mut amountString: Option<String> = self.numberToString(amount.clone());');
+        expect(out).toContain('let mut amountString: Option<String> = self.numberToString(amount);');
     });
 });
 

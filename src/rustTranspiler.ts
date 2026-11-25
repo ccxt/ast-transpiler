@@ -691,7 +691,8 @@ export class RustTranspiler extends BaseTranspiler {
         const header: any = declaration.parent?.parent;
         if (header !== undefined && (header.kind === SyntaxKind.ForStatement || header.kind === SyntaxKind.ForOfStatement || header.kind === SyntaxKind.ForInStatement)) return false;
         if (!this.rustOwnedLastUse(node, declaration) && !this.rustReturnedLiteralValueMoves(node, declaration)
-            && !this.rustOwnedDeadBeforeWrite(node, declaration)) return false;
+            && !this.rustOwnedDeadBeforeWrite(node, declaration)
+            && !this.rustOwnedOtherArmLastUse(node, declaration)) return false;
         // a closure below the declaration that names the local may still hold it
         const scope: any = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(node);
@@ -9828,6 +9829,41 @@ export class RustTranspiler extends BaseTranspiler {
             if (n.pos > node.pos && !returned && !otherArm(n)) return false;
         }
         return true;
+    }
+
+    /** Every later read of the local sits in the other arm of an enclosing `if` (no read in this statement, no loop,
+     *  `try` or closure between the use and the declaration): no read runs after this use, so it moves. */
+    rustOwnedOtherArmLastUse(node, declaration): boolean {
+        const statement: any = findAncestor(node, (a: any) => isStatement(a));
+        const scope: any = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(node);
+        if (statement === undefined || own === undefined || scope === undefined || this.rustEnclosingFunction(node) !== scope) return false;
+        for (let up: any = statement.parent; up !== undefined && up !== scope; up = up.parent) {
+            if (isFunctionLike(up) || up.kind === SyntaxKind.TryStatement) return false;
+            if (!(up.pos <= declaration.pos && declaration.end <= up.end) && (up.kind === SyntaxKind.ForStatement || up.kind === SyntaxKind.ForOfStatement
+                || up.kind === SyntaxKind.ForInStatement || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement)) return false;
+        }
+        const otherArm = (n: any): boolean => {
+            for (let up: any = node.parent; up !== undefined && up !== scope; up = up.parent) {
+                if (!isIfStatement(up) || up.elseStatement === undefined) continue;
+                const inThen = (x: any) => x.pos >= up.thenStatement.pos && x.end <= up.thenStatement.end;
+                const inElse = (x: any) => x.pos >= up.elseStatement.pos && x.end <= up.elseStatement.end;
+                if ((inThen(node) && inElse(n)) || (inElse(node) && inThen(n))) return true;
+            }
+            return false;
+        };
+        let later = false;
+        for (const n of this.rustScopeNameNodes(scope, String(declaration.name.text))) {
+            if (n === node || n === declaration.name || !isIdentifier(n) || this.rustIdentifierIsPropertyName(n)) continue;
+            const symbol = this.rustSymbolOf(n);
+            if (symbol !== undefined && symbol !== own) continue;
+            if (this.rustEnclosingFunction(n) !== scope || (n.pos >= statement.pos && n.end <= statement.end)) return false;
+            if (n.pos > node.pos) {
+                if (!otherArm(n)) return false;
+                later = true;
+            }
+        }
+        return later;
     }
 
     /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
