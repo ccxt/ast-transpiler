@@ -7165,7 +7165,9 @@ export class JavaTranspiler extends BaseTranspiler {
     printJavaStringComparison(left, right, op): string | undefined {
         // identifiers and literals only: each operand prints more than once
         const printsString = (n) => isStringLiteral(n) || (isIdentifier(n) && this.javaDeclaredStringResolver !== undefined
-            && this.javaTry(() => this.javaDeclaredStringResolver(n) === 'String', false));
+            && this.javaTry(() => this.javaDeclaredStringResolver(n) === 'String', false))
+            // a parameter the method signature prints `String`, read under its own name
+            || (isIdentifier(n) && this.javaTry(() => this.javaStringParameterRead(n, this.printNode(n, 0).trim()), false));
         if (!printsString(left) || !printsString(right)) {
             return undefined;
         }
