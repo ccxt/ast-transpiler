@@ -693,7 +693,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (header !== undefined && (header.kind === SyntaxKind.ForStatement || header.kind === SyntaxKind.ForOfStatement || header.kind === SyntaxKind.ForInStatement)) return false;
         if (!this.rustOwnedLastUse(node, declaration) && !this.rustReturnedLiteralValueMoves(node, declaration)
             && !this.rustOwnedDeadBeforeWrite(node, declaration)
-            && !this.rustOwnedOtherArmLastUse(node, declaration)) return false;
+            && !this.rustOwnedOtherArmLastUse(node, declaration)
+            && !this.rustOwnedThrownErrorArg(node, declaration)) return false;
         // a closure below the declaration that names the local may still hold it
         const scope: any = this.rustEnclosingFunction(declaration);
         const own = this.rustSymbolOf(node);
@@ -9889,6 +9890,21 @@ export class RustTranspiler extends BaseTranspiler {
         return later;
     }
 
+    /** `throw new XError (x)` with a local `x`: the throw leaves the function (no `try` around it), so the use is the
+     *  local's last one unless the same statement reads it again. */
+    rustOwnedThrownErrorArg(node, declaration): boolean {
+        const ctor: any = node.parent;
+        if (ctor?.kind !== SyntaxKind.NewExpression || !Array.from(ctor.arguments ?? []).includes(node) || ctor.parent?.kind !== SyntaxKind.ThrowStatement) return false;
+        if (!isVariableDeclaration(declaration)) return false;
+        const scope: any = this.rustEnclosingFunction(declaration);
+        const own = this.rustSymbolOf(node);
+        if (scope === undefined || own === undefined || this.rustEnclosingFunction(node) !== scope) return false;
+        for (let up: any = ctor.parent; up !== undefined && up !== scope; up = up.parent) if (up.kind === SyntaxKind.TryStatement || isFunctionLike(up)) return false;
+        const statement: any = ctor.parent;
+        return !this.rustScopeNameNodes(scope, String(declaration.name.text)).some((n: any) => n !== node && n.pos >= statement.pos && n.end <= statement.end
+            && isIdentifier(n) && !this.rustIdentifierIsPropertyName(n) && [ undefined, own ].includes(this.rustSymbolOf(n)));
+    }
+
     /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
      *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
     rustOwnedDeadBeforeWrite(node, declaration): boolean {
@@ -10588,7 +10604,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** rd: a `String` error message at its provable last use moves into the constructor (`ToErrorMessage for String`). */
     rustErrMsgMoves(n: any, declaration: any): boolean {
-        return this.rustScalarLocalOf(n)?.kind === 'str' && this.rustRdOwnInit(declaration) && this.rustLocalLastUse(n, declaration);
+        return this.rustScalarLocalOf(n)?.kind === 'str' && this.rustRdOwnInit(declaration)
+            && (this.rustLocalLastUse(n, declaration) || this.rustOwnedThrownErrorArg(n, declaration));
     }
 
     /** rd: a box at a slot where the `Value` form cloned the local (a `this.`/`super.` argument, an object-literal value,
@@ -18989,8 +19006,9 @@ export class RustTranspiler extends BaseTranspiler {
     // allocation); a checker-proven string drops the redundant `Value::Str` box.
     printErrorConstructorArg(name: string, index: number, node, identation: number): string {
         const kind = (RustTranspiler as any).RUST_ERROR_CONSTRUCTOR_ARGS[name]?.[index];
+        const owned = (text: string) => isIdentifier(node) && RustTranspiler.isBareLocal(text) && this.rustOwnedUseIsFree(node) ? `\u0004${text}` : text;
         if (kind === undefined) {
-            return this.printNode(node, identation);
+            return owned(this.printNode(node, identation));
         }
         if (isStringLiteral(node) && !(node.text in this.StringLiteralReplacements)) {
             return this.quotedStringLiteral(node.text);
@@ -18998,14 +19016,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'msg' && this.rustStrRuntimeCall(this.unwrapParens(node))) return this.rustStrRuntimeBareText(this.unwrapParens(node), identation);
         const printed = this.printNode(node, identation).trim();
         if (kind !== 'msg' || !this.rustTypeIsString(node)) {
-            return printed;
+            return owned(printed);
         }
         const payload = this.peelValueStrBox(printed)
             ?? this.peelValueStrBox(this.stripOuterParens(printed))
             ?? printed;
         // The `Value::Str(..)` box carries the `Cow` conversion; the error
         // ctors take an `impl ToErrorMessage` (String / &str / Value).
-        return payload.replace(/\.into\(\)$/, '');
+        return owned(payload.replace(/\.into\(\)$/, ''));
     }
 
     // `BadRequest` → `bad_request`: the class-to-runtime-fn name the ccxt
