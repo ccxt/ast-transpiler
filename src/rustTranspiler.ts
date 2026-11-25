@@ -42417,6 +42417,8 @@ export class RustTranspiler extends BaseTranspiler {
                     const decl: any = this.rustDeclarationOfIdentifier(root);
                     // a write into a trailing slot of the handler itself (its own `subscription`) is not a row of the message
                     if (decl !== undefined && params.indexOf(decl) >= 2 && root === n.left.expression) { n.forEachChild(visit); return; }
+                    // a write into the client handle's own `subscriptions` is not a row of the message
+                    if (decl === params[0] && isPropertyAccessExpression(n.left.expression) && n.left.expression.expression === root && String(n.left.expression.name.text) === 'subscriptions') { n.forEachChild(visit); return; }
                     const init: any = decl !== undefined && isVariableDeclaration(decl) ? decl.initializer : undefined;
                     const fresh = init !== undefined && (isObjectLiteralExpression(init) || isArrayLiteralExpression(init) || this.rustCallReturnsFreshLiteral(init) || this.rustCallReturnsFreshRecord(init)
                         || this.rustCallReturnsObjectLiteral(init)
@@ -42869,6 +42871,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (up === undefined) return false;
         // a routed frame handed to the by-name dispatch `method.call (this, client, message)`: the slice takes a box
         if (this.rustWsDispatchCallArg(id) && this.rustRoutedFrameUse(id)) return true;
+        // a routed frame handed to `this.spawn (this.m, ..)`: the spawn slice takes a box
+        if (isCallExpression(up) && this.rustWsSpawnHandoff(up, id) && this.rustRoutedFrameUse(id)) return true;
         if (isReturnStatement(up) && up.expression === id) {
             let fn: any = up.parent;
             while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
