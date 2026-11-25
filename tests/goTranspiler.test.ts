@@ -19929,10 +19929,7 @@ describe ('go dict param: parseOption / parseAccount / parseMarginMode rows', ()
             fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
         }
     };
-    test('parseGreeks has no row: a {}-defaulted safeDict row keeps the box', () => {
-        expect(print('tmp-g06-parseGreeks-sd', 'parseGreeks', 'this.safeDict (xs, 0, {})')).toContain('ParseGreeks(row any');
-    });
-    for (const [ method, goName ] of [ [ 'parseOption', 'ParseOption' ], [ 'parseAccount', 'ParseAccount' ], [ 'parseMarginMode', 'ParseMarginMode' ] ]) {
+    for (const [ method, goName ] of [ [ 'parseOption', 'ParseOption' ], [ 'parseAccount', 'ParseAccount' ], [ 'parseMarginMode', 'ParseMarginMode' ], [ 'parseGreeks', 'ParseGreeks' ] ]) {
         test(method + ': a {}-defaulted safeDict row types the parameter', () => {
             expect(print('tmp-g06-' + method + '-sd', method, 'this.safeDict (xs, 0, {})')).toContain(goName + '(row map[string]any');
         });
