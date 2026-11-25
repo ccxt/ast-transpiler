@@ -3203,7 +3203,14 @@ export class CSharpTranspiler extends BaseTranspiler {
                     for (const reference of references.get(name) ?? []) {
                         const fromThis = reference.expression?.kind === SyntaxKind.ThisKeyword;
                         if (fromThis && (this.csharpListParamLineage(reference) !== lineage)) {
-                            continue; // another venue chain binds its own method
+                            // a subclass call the checker resolves to this very declaration binds it too
+                            if ((this.getChecker().getSymbolAtLocation(reference.name)?.valueDeclaration as any)?.resolve?.() !== methods[0]) {
+                                continue; // another venue chain binds its own method
+                            }
+                            if (this.csharpVenueOverriddenMethods.has(methods[0])) {
+                                blocked = true;
+                                break;
+                            }
                         }
                         const call: any = reference.parent;
                         if (!fromThis || !isCallExpression(call) || (call.expression !== reference)) {
