@@ -19456,8 +19456,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((op >= SyntaxKind.FirstAssignment) && (op <= SyntaxKind.LastAssignment) && (parent.left === node)) {
                 return rebinds.has(parent); // a rebinding, unless it is again a never-nil safeDict read
             }
-            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 const other = (parent.left === node) ? parent.right : parent.left;
                 if (!isNil(other)) {
                     return false;
@@ -20655,8 +20654,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if (op === SyntaxKind.EqualsToken) {
                 return nilTestSafe && (parent.right === node) && this.goListLocalCopyTargetIsList(parent.left);
             }
-            if ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
-                || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 return nilTestSafe && this.goIsNilLiteral((parent.left === node) ? parent.right : parent.left);
             }
             return false;
@@ -21732,8 +21730,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if (operator === SyntaxKind.InKeyword) {
                 return parent.left === current;
             }
-            if ((operator === SyntaxKind.EqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsToken)
-                || (operator === SyntaxKind.EqualsEqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(operator)) {
                 const other: any = (parent.left === current) ? parent.right : parent.left;
                 return (other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
             }
@@ -22698,8 +22695,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const op = parent.operatorToken?.kind;
             const other = (parent.left === child) ? parent.right : parent.left;
             if (((op === SyntaxKind.EqualsToken) && (parent.left === child)) || ((op === SyntaxKind.InKeyword) && (parent.right === child))
-                || (((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
-                    || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) && this.goIsNilLiteral(other))) {
+                || (this.goIsEqualityToken(op) && this.goIsNilLiteral(other))) {
                 return undefined;
             }
         }
@@ -23100,21 +23096,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
-        const nonceSum = this.goNonceSumText(node);
+        const nonceSum = this.goNonceSumText(node)
+            ?? this.goWsAppendCall(node, identation)
+            ?? this.goWsCacheReadText(node)
+            ?? this.goWsTickersFilterText(node);
         if (nonceSum !== undefined) {
             return nonceSum;
-        }
-        const wsAppend = this.goWsAppendCall(node, identation);
-        if (wsAppend !== undefined) {
-            return wsAppend;
-        }
-        const wsCacheRead = this.goWsCacheReadText(node);
-        if (wsCacheRead !== undefined) {
-            return wsCacheRead;
-        }
-        const tickersFilter = this.goWsTickersFilterText(node);
-        if (tickersFilter !== undefined) {
-            return tickersFilter;
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
@@ -24305,15 +24292,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return '*int64';
         }
-        const clientType = this.goWsClientParameterType(fn, param);
+        const clientType = this.goWsClientParameterType(fn, param)
+            // the ws frame. `override handleMessage (client, message: Dict)` is the one
+            // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
+            ?? this.goWsFrameParameterType(fn, param);
         if (clientType !== undefined) {
             return clientType;
-        }
-        // the ws frame. `override handleMessage (client, message: Dict)` is the one
-        // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
-        const frameType = this.goWsFrameParameterType(fn, param);
-        if (frameType !== undefined) {
-            return frameType;
         }
         if (this.goIsUnifiedSliceParameter(fn.name.text, fn.parameters.indexOf(param))) {
             // the slice table types the base and every override together, exactly like
@@ -27939,8 +27923,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 reads.push({ 'node': inner, 'negated': false });
                 return true;
             }
-            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 return this.goPureLeaf(inner.left) && this.goPureLeaf(inner.right);
             }
             return false;
@@ -28754,22 +28737,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printIfStatement(node, identation) {
-        const tickersIn = this.goWsTickersPointerInIf(node, identation);
+        const tickersIn = this.goWsTickersPointerInIf(node, identation)
+            // a nil-guarded pointer key needs the read inside the guard
+            ?? this.goInOpGuardedNestedIf(node, identation)
+            ?? this.goInOpChainNestedIf(node, identation)
+            ?? this.goOrHoistIf(node, identation);
         if (tickersIn !== undefined) {
             return tickersIn;
-        }
-        // a nil-guarded pointer key needs the read inside the guard
-        const nested = this.goInOpGuardedNestedIf(node, identation);
-        if (nested !== undefined) {
-            return nested;
-        }
-        const chained = this.goInOpChainNestedIf(node, identation);
-        if (chained !== undefined) {
-            return chained;
-        }
-        const hoisted = this.goOrHoistIf(node, identation);
-        if (hoisted !== undefined) {
-            return hoisted;
         }
         return super.printIfStatement(node, identation);
     }
