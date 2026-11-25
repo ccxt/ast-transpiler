@@ -438,6 +438,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaArithmeticResultIsBoxSensitive(node: any): boolean;
     javaIntegralOperandKind(node: any, text: string): 'long' | 'int' | undefined;
     printIntegralCallArithmetic(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    printFloorLongProduct(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
+    javaConstIntegralProductKind(node: any, text: string): string | undefined;
     printDeclaredBoxArithmetic(node: any, left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     javaNativeMathMinMaxOperandKind(node: any): any;

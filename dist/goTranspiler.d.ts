@@ -2118,6 +2118,7 @@ export interface GoTranspiler {
     h26g32LiteralDefaultStringSlot(decl: any): string | undefined;
     h26g32SlotIsString(list: any): boolean;
     h26g32StringSlotOperand(node: any): boolean;
+    h51g52RequiredStringParam(arg: any): boolean;
 }
 export interface GoTranspiler {
     h26g33NonNilMarketTypeSlotArg(arg: any): boolean;
@@ -2810,3 +2811,9 @@ export interface GoTranspiler {
     h45g36LiteralTableRead(node: any, printed: string): string | undefined;
 }
 export declare function installH46g30UrlsApiLocal(goTranspiler: any): void;
+export interface GoTranspiler {
+    h51g07ListSlotSeed(declaration: any): {
+        map: string;
+        key: string;
+    } | undefined;
+}

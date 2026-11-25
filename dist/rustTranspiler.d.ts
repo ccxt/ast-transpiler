@@ -394,6 +394,8 @@ export declare class RustTranspiler extends BaseTranspiler {
      *  list for `Null`), and `parts` borrows its element (`lvl.get(K).unwrap_or(&Value::Null)`): the same element
      *  `get_value` cloned, `Null` where it answered `Null`. */
     printRust57eSideLevel(declaration: any, parsedValue: string, indent: string, varName: string): string | undefined;
+    /** `const parts = lvl[K]` off a ral-57e side level: printed as a `&Value` borrow, which is `Copy` (no clone to hand it on). */
+    rust57eSidePartLocal(declaration: any): boolean;
     /** A map row `xs[i]` (i64 counter) of a typed `List` local reads through the base `safe_dict_t`, the form `safeDict (xs, i)`
      *  prints: the element's map, or the empty map for a missing / non-map element, as `.into_dict()` of the slice read answered. */
     rustDictRowReaderText(declaration: any, read: string): string | undefined;
@@ -412,7 +414,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `const e = x[k]` (one const declarator, identifier receiver, same function). */
     rust57eConstElementOf(declaration: any): boolean;
     /** Every use of the local is the receiver of an rvalue element read at a numeric literal key (no write-back bind). */
-    rust57eLiteralReadOnly(declaration: any): boolean;
+    rust57eLiteralReadOnly(declaration: any, safeStringArg?: boolean): boolean;
+    /** `n` is the first argument of `this.safeString (n, K)` / `this.safeString (n, K, d)` with K a non-negative integer literal. */
+    rust57eSafeStringLiteralRead(n: any): boolean;
     private static readonly RUST_NIL_INT_HELPERS;
     private static readonly RUST_NIL_BOOL_HELPERS;
     private static readonly RUST_NIL_PRECISE_STR;
@@ -1470,6 +1474,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Every later read of the local sits in the other arm of an enclosing `if` (no read in this statement, no loop,
      *  `try` or closure between the use and the declaration): no read runs after this use, so it moves. */
     rustOwnedOtherArmLastUse(node: any, declaration: any): boolean;
+    /** `throw new XError (x)` with a local `x`: the throw leaves the function (no `try` around it), so the use is the
+     *  local's last one unless the same statement reads it again. */
+    rustOwnedThrownErrorArg(node: any, declaration: any): boolean;
     /** The next read of the local is a plain `x = <expr without x>` statement later in the same block, with no other
      *  read, jump or `try` in between: the old value is dead after this use, so the use moves it. */
     rustOwnedDeadBeforeWrite(node: any, declaration: any): boolean;
@@ -3327,6 +3334,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printRustPreciseDecimalsWrite(left: any, right: any): string | undefined;
     /** `k` is declared `Int`-typed and the write sits directly in `if (k !== undefined) { .. }`. */
     rustPreciseGuardedInt(k: any, write: any): boolean;
+    printRustStrRuntimeCase(node: any, method: string): string | undefined;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
     printToLowerCaseCall(node: any, identation: any, name?: any): string;
     printShiftCall(node: any, identation: any, name?: any): string;
@@ -4267,6 +4275,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOmitLiteralKeys(call: any): boolean;
     private static readonly RUST_BUILT_BOX_RECEIVER_METHODS;
     private static readonly RUST_BUILT_HELPER_RETURNS;
+    private static readonly RUST_BUILT_RECORD_BUILDERS;
     private static readonly RUST_BASE_FILTER_LISTS;
     /** The container a base list filter answers, `undefined` when it is unproven, `null` when `method` is none of them. */
     rustBaseFilterReturnKind(call: any, method: string): 'dict' | 'list' | undefined | null;
@@ -5423,6 +5432,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustPromiseAllListProducer(element: any): any;
     private rustPromiseAllListKinds;
     rustPromiseAllListSlotKind(element: any): 'list' | undefined;
+    /** `const [ a, b ] = await Promise.all ([ x, y ])` where every operand is a once-read local printed as a map: `promise_all`
+     *  hands each operand back as it came, so each slot takes its operand's map (a `Value` slot boxes it). */
+    printPromiseAllDictLocals(declaration: any, names: string[], indent: string): string | undefined;
     /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */
     printPromiseAllListSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
