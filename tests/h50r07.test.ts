@@ -13,6 +13,8 @@ const venue = "import Exchange from './base/Exchange.js';\nimport type { Dict, S
     "    async fetchLoan (code: string, params = {}) {\n        const response: Dict = await this.hold (params);\n        const data = this.safeDict (response, 'data', {});\n        return this.parseLoan (data, code);\n    }\n" +
     "    parseLoan (info: Dict, code: Str = undefined): Dict {\n        const id = this.safeString (info, 'id');\n        return {\n            'id': id,\n            'amount': this.safeNumber (info, 'amt'),\n            'info': info,\n        };\n    }\n" +
     "    async fetchLoan2 (code: string, params = {}) {\n        const response: Dict = await this.hold (params);\n        const data = this.safeDict (response, 'data', {});\n        return this.parseNullLoan (data, code);\n    }\n" +
+    "    async fetchLoan4 (code: string, params = {}) {\n        const response: Dict = await this.hold (params);\n        const data = this.safeDict (response, 'data', {});\n        const transaction: Dict = this.parseBareLoan (data, code);\n        return transaction;\n    }\n" +
+    "    parseBareLoan (info: Dict, code: Str = undefined): Dict {\n        return {\n            'id': undefined,\n            'info': info,\n        };\n    }\n" +
     "    parseNullLoan (info: NullableDict, code: Str = undefined): Dict {\n        return {\n            'id': this.safeString (info, 'id'),\n            'info': info,\n        };\n    }\n" +
     "    async fetchLoan3 (code: string, params = {}) {\n        const response: Dict = await this.hold (params);\n        const data = this.safeDict (response, 'data', {});\n        return this.parseHeldLoan (data, code);\n    }\n" +
     "    parseHeldLoan (info: Dict, code: Str = undefined): Dict {\n        this.hold (info);\n        return {\n            'id': this.safeString (info, 'id'),\n            'info': info,\n        };\n    }\n}\n";
@@ -35,6 +37,11 @@ describe ('rust venue parser info: Dict at its last-use info entry', () => {
         expect (fn).toMatch (/info: &crate::value::Dict[,)]/);
         expect (fn).not.toMatch (/info\.into\(\)/);
         expect (fn).toMatch (/"info"[^\n]*Value::from\(info\)\)/);
+    });
+
+    test ('an info entry that is the only use takes the dict handle too', () => {
+        expect (output).toMatch (/fn parseBareLoan\(&self, info: &crate::value::Dict[,)]/);
+        expect (output).toMatch (/self\.parseBareLoan\(&data/);
     });
 
     test ('negatives keep the Value slot', () => {
