@@ -34308,7 +34308,8 @@ ${tryBodyBlock}
         }
         const parts: any[] = ((typeof element.isUnionType === 'function') && element.isUnionType()) ? element.getTypes().slice() : [element];
         const real = parts.filter((p) => !(p.flags & (TypeFlags.Undefined | TypeFlags.Null)));
-        return (real.length > 0) && real.every((p) => ((p.flags & TypeFlags.Object) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
+        // `object[]` elements carry the NonPrimitive flag, not Object
+        return (real.length > 0) && real.every((p) => ((p.flags & (TypeFlags.Object | TypeFlags.NonPrimitive)) !== 0) && ((p.flags & (TypeFlags.Any | TypeFlags.Unknown)) === 0));
     }
 
     // JSON-origin list reads: `this.safeList(R, k)` of a decoded JSON document R (an awaited endpoint, or
