@@ -19939,7 +19939,8 @@ describe ('go dict param: parseOption / parseAccount / parseMarginMode rows', ()
             fs.rmSync(path.join(__dirname, 'files', name), { recursive: true, force: true });
         }
     };
-    for (const [ method, goName ] of [ [ 'parseOption', 'ParseOption' ], [ 'parseAccount', 'ParseAccount' ], [ 'parseMarginMode', 'ParseMarginMode' ], [ 'parseGreeks', 'ParseGreeks' ] ]) {
+    for (const [ method, goName ] of [ [ 'parseOption', 'ParseOption' ], [ 'parseAccount', 'ParseAccount' ], [ 'parseMarginMode', 'ParseMarginMode' ], [ 'parseGreeks', 'ParseGreeks' ],
+        [ 'parseMarginModification', 'ParseMarginModification' ] ]) {
         test(method + ': a {}-defaulted safeDict row types the parameter', () => {
             expect(print('tmp-g06-' + method + '-sd', method, 'this.safeDict (xs, 0, {})')).toContain(goName + '(row map[string]any');
         });

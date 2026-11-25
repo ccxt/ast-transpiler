@@ -14263,6 +14263,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parsePredictionOrder': [ 0 ],
     // every tree caller passes a `{}`-defaulted safeDict row or a typed map row; every override reads it as a map
     'parseGreeks': [ 0 ],
+    // every tree caller passes a map response, a `{}`-defaulted safeDict row or an extend copy
+    'parseMarginModification': [ 0 ],
 };
 // the async rows above (each one's typed wrapper converts its struct argument)
 const GO_BASE_DICT_ASYNC_PARAMS: string[] = [
