@@ -14064,7 +14064,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const decl: any = this.goSymbolValueDecl(base);
             return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === GO_STRING_LIST_LOCAL_TYPE);
         }
-        case SyntaxKind.CallExpression: return this.goStringMethodCallIsProven(node);
+        // `this.m (..)` declared `string` whose printed Go signature returns `string`
+        case SyntaxKind.CallExpression: return this.goStringMethodCallIsProven(node) || this.goStringReturningThisCall(node);
         }
         return false;
     }
