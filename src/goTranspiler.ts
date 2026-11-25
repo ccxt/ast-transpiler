@@ -62089,3 +62089,68 @@ function h49g44IntSlot (go: any, fn: any, index: number): boolean {
     };
 }
 // ===== H49-G37 (end) =====
+// ===== H50-G44
+// `let x = undefined;` whose every write placed before the read is a whole statement `x = await <endpoint> (..)` holds decoded
+// JSON (or nil) at the read, as a `const x = await ..` does; uses after the read cannot run first (no loop encloses it)
+{
+    const h50g44BeforeRead = GoTranspiler.prototype.h27a02JsonOriginBeforeRead;
+    GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read) {
+        if (h50g44BeforeRead.call(this, container, read)) {
+            return true;
+        }
+        const declaration: any = this.goAnyBoxLocalDeclaration(container);
+        const scope: any = this.goEnclosingFunction(read);
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !isNilDeclaredInitializer(declaration.initializer)
+            || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope) || (read.initializer?.arguments?.[0] === undefined)) {
+            return false;
+        }
+        for (let up: any = read.parent; (up !== undefined) && (up !== scope); up = up.parent) {
+            if ((up.kind === SyntaxKind.ForStatement) || (up.kind === SyntaxKind.ForOfStatement) || (up.kind === SyntaxKind.ForInStatement)
+                || (up.kind === SyntaxKind.WhileStatement) || (up.kind === SyntaxKind.DoStatement)
+                || (up.kind === SyntaxKind.ArrowFunction) || (up.kind === SyntaxKind.FunctionExpression)) {
+                return false;
+            }
+        }
+        const after = read.end;
+        let writes = 0;
+        const readOnly = this.goJsonOriginBindingIsReadOnly(declaration, (n, name) => {
+            if ((n.pos >= after) || (read.initializer.arguments[0] === n)) {
+                return true;
+            }
+            const assign: any = n.parent;
+            const right: any = this.goUnwrapParenthesizedNode(assign?.right);
+            if ((assign?.kind === SyntaxKind.BinaryExpression) && (assign.left === n) && (assign.operatorToken?.kind === SyntaxKind.EqualsToken)
+                && (assign.parent?.kind === SyntaxKind.ExpressionStatement) && (right?.kind === SyntaxKind.AwaitExpression)
+                && (this.goAwaitedCallIsImplicitEndpoint(right.expression) || this.goAwaitedCallIsRequestStub(right.expression))) {
+                writes += 1;
+                return true;
+            }
+            return !this.goWritesOrRebindsName(n, name, []) && (this.goJsonOriginUseIsReadOnly(n, name) || this.h27a02ScalarReaderUse(n));
+        });
+        return readOnly && (writes > 0);
+    };
+    // the list read on such a local: its declared type is the nil-join's map, which the memoised local type may not hold yet
+    const h50g44ListRead = GoTranspiler.prototype.h27a02JsonListRead;
+    GoTranspiler.prototype.h27a02JsonListRead = function (node, identation: number, printed: string) {
+        const shipped = h50g44ListRead.call(this, node, identation, printed);
+        const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+        const args: any = this.goSafeAccessorLocalArgs(declaration?.initializer, 'safeList');
+        if ((shipped !== undefined) || (typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (args === undefined)
+            || (args.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier) || !/^[A-Za-z0-9_]+$/.test(args.key.text)
+            || !isNilDeclaredInitializer(this.goAnyBoxLocalDeclaration(args.container)?.initializer)
+            || (ccxtGoNilDeclaredContainerJoinType(this, this.goAnyBoxLocalDeclaration(args.container)) !== GO_SAFE_DICT_LOCAL_TYPE)
+            || !this.h27a02JsonOriginBeforeRead(args.container, declaration)) {
+            return shipped;
+        }
+        const name = this.printNode(declaration.name, 0).trim();
+        const container = this.printNode(args.container, 0).trim();
+        const iden = this.getIden(identation);
+        const lead = /^\n*/.exec(printed)[0];
+        if (printed.substring(lead.length) !== `${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE} = SafeListTyped(${container}, "${args.key.text}")`) {
+            return shipped;
+        }
+        return `${lead}${iden}var ${name} ${GO_SAFE_LIST_LOCAL_TYPE}\n${iden}${name}, _ = ${container}["${args.key.text}"].(${GO_SAFE_LIST_LOCAL_TYPE})`;
+    };
+}
+// ===== end H50-G44
