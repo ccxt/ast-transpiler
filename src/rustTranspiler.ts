@@ -12565,6 +12565,8 @@ export class RustTranspiler extends BaseTranspiler {
         const method = this.rustScalarStrMethod(call);
         // a typed string needle of `indexOf` reads in place even when the typed receiver is a ws key (`find` prints both sides native)
         const wsRecvOk = name === 'indexOf' && (kind === 'str' || kind === 'ostr');
+        // a defaulted `String` needle of `indexOf` prints `find` natively even when the local is also a ws cache key
+        if (name === 'indexOf' && kind === 'str' && method !== undefined && method.recvKind !== 'int' && this.rustScalarLocalOf(method.recv) !== undefined) return true;
         return method !== undefined && method.recvKind !== 'int' && this.rustScalarLocalOf(method.recv) !== undefined && !this.rust41bWsKeyLocal(n, name === 'indexOf') && (wsRecvOk || !this.rust41bWsKeyLocal(method.recv));
     }
 
