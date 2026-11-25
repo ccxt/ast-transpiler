@@ -30742,6 +30742,7 @@ export interface GoTranspiler {
     h27a02JsonOriginBeforeRead(container, read): boolean;
     goTypedMapDictRead(args, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
     h27a08RowRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h52g58AssignRowRead(node, identation: number, printed: string): string | undefined;
     h27a08JsonList(list): boolean;
     h27a09JsonOriginList(baseExpr): boolean;
     h27a11FrameParam(param): boolean;
@@ -42179,3 +42180,25 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node, ide
     const ind = m[1];
     return `${lead}${ind}var ${name}, _ = ${seed.map}[${seed.key}].([]any)\n${ind}if ${name} == nil {\n${ind}\t${name} = []any{}\n${ind}}`;
 });
+// `m = this.safeDict (xs, N, {})` on a map local and a declared list: the bounds-tested comma-ok row read the declaration
+// form (h27a08RowRead) prints; a missing or non-map element still answers a fresh empty map
+GoTranspiler.prototype.h52g58AssignRowRead = function (node, identation: number, printed: string) {
+    const e: any = node?.expression;
+    if ((typeof printed !== 'string') || (e?.kind !== SyntaxKind.BinaryExpression) || (e.operatorToken.kind !== SyntaxKind.EqualsToken) || (e.left?.kind !== SyntaxKind.Identifier)) { return undefined; }
+    const args: any = this.goSafeAccessorLocalArgs(goUnwrapTypeNonNull(e.right), 'safeDict');
+    const list: any = args?.container;
+    const key: any = args?.key;
+    if ((list?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.NumericLiteral) || !/^\d+$/.test(`${key.text}`) || (list.text === e.left.text)
+        || !(this.goDeclaredListIdentifier(list) || (ccxtGoNilJoinDeclarationType(this, list) === GO_SAFE_LIST_LOCAL_TYPE))) { return undefined; }
+    if ((this.goResolvedLocalGoType(e.left) !== GO_SAFE_DICT_LOCAL_TYPE) && (ccxtGoNilJoinDeclarationType(this, e.left) !== GO_SAFE_DICT_LOCAL_TYPE)) { return undefined; }
+    const name = this.printNode(e.left, 0).trim();
+    const xs = this.printNode(list, 0).trim();
+    const k = `${key.text}`;
+    const iden = this.getIden(identation);
+    const lead = /^(?:\n|[ \t]*\/\/[^\n]*\n)*/.exec(printed)[0];
+    const body = printed.substring(lead.length).replace(/;?\s*$/, '');
+    if (![ `this.SafeDictMap(${xs}, ${k}, map[string]any{})`, `MapTyped(this.SafeDict(${xs}, ${k}, map[string]any{}))` ].some((f) => body === `${iden}${name} = ${f}`)) { return undefined; }
+    const in1 = this.getIden(identation + 1);
+    return `${lead}${iden}${name} = nil\n${iden}if ${k} < len(${xs}) {\n${in1}${name}, _ = ${xs}[${k}].(map[string]any)\n${iden}}\n${iden}if ${name} == nil {\n${in1}${name} = map[string]any{}\n${iden}}`;
+};
+goChainReadHook('printExpressionStatement', 'h52g58AssignRowRead', [0, 1, -1]);
