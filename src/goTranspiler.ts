@@ -16774,7 +16774,7 @@ export class GoTranspiler extends BaseTranspiler {
     }
 
     goValueDecl(node: any): any {
-        return this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        return this.goSymbolValueDecl(node);
     }
 
     // Per-SourceFile PropertyAccessExpression index keyed by property name (avoids whole-file AST scans).
@@ -16831,20 +16831,24 @@ export class GoTranspiler extends BaseTranspiler {
     // Shared check for `this.m(..., node, ...)` where m's corresponding parameter satisfies `checkParam`.
     goReadOnlyCalleeArg(node: any, checkParam: (fn: any, param: any) => boolean, requireArity: boolean, nameRe?: RegExp): boolean {
         const call: any = node?.parent;
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        if ((this.goThisCallName(call) === undefined)
             || ((nameRe !== undefined) && !nameRe.test(String(call.expression.name?.text)))) {
             return false;
         }
         const index: number = call.arguments.indexOf(node);
-        let fn: any;
-        try {
-            fn = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
-        } catch (e) {
-            fn = undefined;
-        }
+        const fn: any = this.goResolvedCallDecl(call);
         const param: any = (index >= 0) ? fn?.parameters?.[index] : undefined;
         return (param !== undefined) && (!requireArity || (fn.parameters.length >= call.arguments.length)) && checkParam(fn, param);
+    }
+
+    // plain per-key memo (no re-entrancy guard): compute once, cache the answer, undefined included
+    goMemo<K extends object, V>(cache: WeakMap<K, V> | Map<K, V>, key: K, compute: () => V): V {
+        if (cache.has(key)) {
+            return cache.get(key) as V;
+        }
+        const value = compute();
+        cache.set(key, value);
+        return value;
     }
 
     hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean {
@@ -17143,12 +17147,6 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }).join("");
     }
 
-    /**
-     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
-     * whitespace, so an indented *blank* line (only the indentation of a blank source
-     * line) must stay empty instead of becoming whitespace-only text.
-     */
-
     printSpreadElement(node, identation) {
         const expression = this.printNode(node.expression, 0);
         return this.getIden(identation) + expression + this.SPREAD_TOKEN;
@@ -17285,12 +17283,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         ].join("\n");
     }
 
-    /**
-     * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
-     * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
-     * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
-     * (properties, `any` receivers, JS builtins) keep the plain name.
-     */
+    // appends `asyncMethodSuffix` when the checker resolves the callee to an async function body;
+    // unresolvable or non-function symbols (properties, `any` receivers, JS builtins) keep the plain name
     applyAsyncSuffixToCallee(nameNode, goName: string): string {
         if (!this.asyncMethodSuffix || !nameNode) {
             return goName;
@@ -17546,7 +17540,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the concrete Go type of a `var x T = <init>` local, undefined for `any`
     goLocalStaticType(node): string | undefined {
-        const declaration: any = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        const declaration: any = this.goSymbolValueDecl(node);
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -17580,7 +17574,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (checker === undefined) {
             return undefined;
         }
-        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        const declaration = this.goSymbolValueDecl(node);
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) {
             return undefined;
         }
@@ -17613,7 +17607,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (checker === undefined) {
             return undefined;
         }
-        const declaration = checker.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        const declaration = this.goSymbolValueDecl(node);
         if (declaration?.kind !== SyntaxKind.Parameter) {
             return undefined;
         }
@@ -17648,11 +17642,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         let declaration;
-        try {
-            declaration = this.getChecker().getSymbolAtLocation(node)?.valueDeclaration?.resolve();
-        } catch (e) {
-            return false;
-        }
+        declaration = this.goSymbolValueDecl(node);
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)) {
             return false;
         }
@@ -17666,29 +17656,17 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (scope === undefined) {
             return false;
         }
-        const name = declaration.name.text;
-        let everyWriteDefaulted = true;
-        const visit = (n) => {
-            if (!everyWriteDefaulted) {
-                return;
+        return this.goScopeIdents(scope, declaration.name.text).every((n) => {
+            const parent: any = n.parent;
+            if (n === declaration.name) {
+                return true;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
-                const parent: any = n.parent;
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)
-                    && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
-                    everyWriteDefaulted = (parent.operatorToken.kind === SyntaxKind.EqualsToken)
-                        && this.goDefaultedSafeStringCall(parent.right);
-                    return;
-                }
-                if ((parent?.kind === SyntaxKind.PrefixUnaryExpression) || (parent?.kind === SyntaxKind.PostfixUnaryExpression)) {
-                    everyWriteDefaulted = false;
-                    return;
-                }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)
+                && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
+                return (parent.operatorToken.kind === SyntaxKind.EqualsToken) && this.goDefaultedSafeStringCall(parent.right);
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
-        return everyWriteDefaulted;
+            return (parent?.kind !== SyntaxKind.PrefixUnaryExpression) && (parent?.kind !== SyntaxKind.PostfixUnaryExpression);
+        });
     }
 
     // a call to one of the hand-written SafeString-family methods that passes enough
@@ -17753,7 +17731,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== 'numberToString')) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(callee.name);
         if ((decl?.parent?.kind !== SyntaxKind.ClassDeclaration) || !GO_NUMBER_TO_STRING_BASE_CLASSES.includes(decl.parent.name?.text)) {
             return false;
         }
@@ -17804,7 +17782,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || (callee.expression?.kind !== SyntaxKind.ThisKeyword) || (callee.name?.text !== name)) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(callee.name)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(callee.name);
         return (decl?.parent?.kind === SyntaxKind.ClassDeclaration) && GO_NUMBER_TO_STRING_BASE_CLASSES.includes(decl.parent.name?.text);
     }
 
@@ -17813,7 +17791,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (node?.kind !== SyntaxKind.Identifier) {
             return node;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(node);
         const isConst = (decl?.kind === SyntaxKind.VariableDeclaration) && (decl.parent?.kind === SyntaxKind.VariableDeclarationList)
             && ((decl.parent.flags & ts.NodeFlags.Const) !== 0);
         return isConst ? decl.initializer : undefined;
@@ -18168,8 +18146,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // this.safeInteger{,2,N} with an integer literal default: the Go method returns &default on every nil path
     goDefaultedSafeIntegerCall(node): boolean {
-        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        if (this.goThisCallName(node) === undefined) {
             return false;
         }
         const arity = { 'safeInteger': 3, 'safeInteger2': 4, 'safeIntegerN': 3 }[node.expression.name?.text];
@@ -18209,8 +18186,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // `this.safeInteger (o, k, this.milliseconds ())`: the int64 clock default makes the reader's pointer non-nil
     goClockDefaultedSafeIntegerCall(node): boolean {
-        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (node.expression.name?.text !== 'safeInteger')
+        if ((this.goThisCallName(node) !== 'safeInteger')
             || (node.arguments?.length !== 3)) {
             return false;
         }
@@ -18398,7 +18374,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         // syntactic pre-filter: a type query on any other pushed local would poison its own typing
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || this.goDeclaredTypeInProgress.has(decl)
             || ((init?.kind !== SyntaxKind.Identifier) && !((init?.kind === SyntaxKind.CallExpression) && /^safeString[2N]?$/.test(`${init.expression?.name?.text ?? ''}`)))) {
@@ -18465,7 +18441,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                 return true;
             }
             // a defaulted parameter bound `var xs []string = GetArgStringSlice(..)`: its element is a Go string
-            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(base)?.valueDeclaration?.resolve?.();
+            const decl: any = this.goSymbolValueDecl(base);
             return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === GO_STRING_LIST_LOCAL_TYPE);
         }
         case SyntaxKind.CallExpression:
@@ -18519,7 +18495,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // the local's declaration scope holds a `x.push (a + b)` string concat
     goStringListHasConcatPush(n): boolean {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(n);
         const scope = decl?.parent?.parent?.parent;
         return (scope !== undefined) && this.hasNodeWhere(scope, (m: any) => (m.kind === SyntaxKind.CallExpression)
             && (m.expression?.kind === SyntaxKind.PropertyAccessExpression) && (m.expression.name?.text === 'push')
@@ -18536,7 +18512,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (arg?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer?.kind !== SyntaxKind.ArrayLiteralExpression)
             || ((decl.initializer.elements ?? []).length !== 0)) {
             return false;
@@ -18644,8 +18620,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // literal default on every absent path, so the write is a never-nil bool (printed dereferenced)
     goLiteralDefaultSafeBoolWrite(node, goType: string): boolean {
         node = goUnwrapParens(node);
-        if ((goType !== 'bool') || (node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        if ((goType !== 'bool') || (this.goThisCallName(node) === undefined)) {
             return false;
         }
         const arity = { 'safeBool': 3, 'safeBool2': 4, 'safeBoolN': 3 }[node.expression.name?.text];
@@ -19034,12 +19009,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || !Object.prototype.hasOwnProperty.call(this.GO_MARKET_TABLES, node.name?.text)) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node.name);
-        } catch (e) {
-            declaration = undefined;
-        }
+        const declaration: any = this.goValueDecl(node.name);
         const owner: any = declaration?.parent;
         if ((declaration?.kind !== SyntaxKind.PropertyDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration) || (owner.name?.text !== 'BaseExchange')) {
             return undefined;
@@ -19057,12 +19027,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (node?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            declaration = undefined;
-        }
+        const declaration: any = this.goValueDecl(node);
         const init: any = (declaration?.kind === SyntaxKind.VariableDeclaration) ? this.goUnwrapParenthesizedNode(declaration.initializer) : undefined;
         const constant = ((declaration?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
         const table = (constant && (init?.expression?.kind === SyntaxKind.ThisKeyword)) ? this.goMarketTable(init) : undefined;
@@ -19078,8 +19043,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const local = mapLocal(node.left);
         const mapArg = (arg) => local ? (mapLocal(arg) || ral84g6OmitArgIsMap(this, arg)) : (this.goFieldContainerTypeNative(arg) === 'map[string]any');
         if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || !(local || (this.goFieldContainerTypeNative(node.left) === 'map[string]any'))
-            || (right?.kind !== SyntaxKind.CallExpression) || (right.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (right.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (right.expression.name?.text !== 'omit')
+            || (this.goThisCallName(right) !== 'omit')
             || ((right.arguments?.length ?? 0) < 2) || !mapArg(this.goUnwrapParenthesizedNode(right.arguments[0]))) {
             return undefined;
         }
@@ -19167,8 +19131,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goSafeDictCallArgs(initializer): { call: any, family: 'SafeDict' | 'SafeDict2', keys: number, fallback: any } | undefined {
         let node: any = initializer;
         node = goUnwrapTypeNonNull(node);
-        if ((node?.kind !== SyntaxKind.CallExpression) || (node.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (node.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        if (this.goThisCallName(node) === undefined) {
             return undefined;
         }
         const name = node.expression.name?.text;
@@ -19251,8 +19214,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // (e.g. handlePublicAddress: [Str, Dict]): the slot holds a decoded map, never a ws struct
     goTupleDictSlotContainer(container): boolean {
         const read: any = container?.parent;
-        if ((container?.kind !== SyntaxKind.CallExpression) || (container.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (container.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (read?.kind !== SyntaxKind.CallExpression)
+        if ((this.goThisCallName(container) === undefined) || (read?.kind !== SyntaxKind.CallExpression)
             || (read.arguments[0] !== container) || (read.arguments[1]?.kind !== SyntaxKind.NumericLiteral)) {
             return false;
         }
@@ -19335,8 +19297,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if ((op >= SyntaxKind.FirstAssignment) && (op <= SyntaxKind.LastAssignment) && (parent.left === node)) {
                 return rebinds.has(parent); // a rebinding, unless it is again a never-nil safeDict read
             }
-            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 const other = (parent.left === node) ? parent.right : parent.left;
                 if (!isNil(other)) {
                     return false;
@@ -19653,12 +19614,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (key?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(key);
-        } catch (e) {
-            return false;
-        }
+        const decl: any = this.goValueDecl(key);
         return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'string');
     }
 
@@ -19724,12 +19680,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || !this.goMapLocalKeyIsString(keyNode, keyStr)) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(baseExpr);
-        } catch (e) {
-            return false;
-        }
+        const decl: any = this.goValueDecl(baseExpr);
         const isMap = (decl?.kind === SyntaxKind.Parameter) ? (this.goGetArgParameterType(decl) === 'map[string]any')
             : ((decl?.kind === SyntaxKind.VariableDeclaration) && ((this.goResolvedLocalGoType(baseExpr) === 'map[string]any')
                 || this.goAwaitedMapLocal(decl)));
@@ -19963,23 +19914,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     // every `return` the body itself reaches: the returns of a nested function literal are that
     // literal's, and say nothing about this signature
     goFunctionLevelReturns(body): any[] {
-        const returns: any[] = [];
-        const walk = (n: any) => {
-            if (n === undefined) {
-                return;
-            }
-            if (n.kind === SyntaxKind.ReturnStatement) {
-                returns.push(n);
-                return;
-            }
-            if ((n.kind === SyntaxKind.FunctionExpression) || (n.kind === SyntaxKind.ArrowFunction)
-                || (n.kind === SyntaxKind.FunctionDeclaration) || (n.kind === SyntaxKind.MethodDeclaration)) {
-                return;
-            }
-            n.forEachChild(walk);
-        };
-        body?.forEachChild(walk);
-        return returns;
+        const fnKinds = [SyntaxKind.FunctionExpression, SyntaxKind.ArrowFunction, SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration];
+        return (body === undefined) ? [] : this.goDescendantsOf(body).filter((n) => (n.kind === SyntaxKind.ReturnStatement)
+            && !this.goInFunctionBelow(n, body, (p) => fnKinds.includes(p.kind)));
     }
 
     // true when every path of the method body answers a dictionary. Memoised; a recursive method
@@ -20188,8 +20125,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // `this.sum(a, b)` (BaseExchange.sum) whose operands both print as int64: [a, b], else undefined
     goInt64SumOperands(call): any[] | undefined {
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (call.expression.name?.text !== 'sum')
+        if ((this.goThisCallName(call) !== 'sum')
             || (call.arguments?.length !== 2)) {
             return undefined;
         }
@@ -20559,8 +20495,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if (op === SyntaxKind.EqualsToken) {
                 return nilTestSafe && (parent.right === node) && this.goListLocalCopyTargetIsList(parent.left);
             }
-            if ((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
-                || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 return nilTestSafe && this.goIsNilLiteral((parent.left === node) ? parent.right : parent.left);
             }
             return false;
@@ -20781,17 +20716,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const call: any = node.parent;
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        if (this.goThisCallName(call) === undefined) {
             return false;
         }
         const index = call.arguments.indexOf(node);
-        let declaration: any;
-        try {
-            declaration = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goResolvedCallDecl(call);
         const param: any = declaration?.parameters?.[index];
         if ((index < 0) || (param === undefined) || (param.questionToken !== undefined) || (param.initializer !== undefined)
             || (param.dotDotDotToken !== undefined)) {
@@ -20908,42 +20837,40 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const writes: any[] = [];
         let otherUse = false;
         let elementStored = false;
-        const visit = (n) => {
+        for (const n of this.goScopeIdents(scope, name)) {
             if (otherUse) {
-                return;
+                break;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
-                const parent = n.parent;
-                if (parent?.kind === SyntaxKind.VariableDeclaration && parent.name === n) {
-                    return; // a sibling block re-declaring the name gets its own type
-                }
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
-                    && (parent.left?.kind === SyntaxKind.ElementAccessExpression)) {
-                    elementStored = true;
-                }
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
-                    if (parent.left === n) {
-                        writes.push(parent.right);
-                        return;
-                    }
-                    if (this.goAssignmentWritesName(parent.left, name)) {
-                        otherUse = true; // `[ x, y ] = …` writes through GetValue
-                        return;
-                    }
-                }
-                if (((parent?.kind === SyntaxKind.PrefixUnaryExpression) || (parent?.kind === SyntaxKind.PostfixUnaryExpression))
-                    && ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken))) {
-                    otherUse = true;
-                    return;
-                }
-                if (!goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n)) {
-                    otherUse = true;
-                }
-                return;
+            if (n === declaration.name) {
+                continue;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+            const parent = n.parent;
+            if (parent?.kind === SyntaxKind.VariableDeclaration && parent.name === n) {
+                continue; // a sibling block re-declaring the name gets its own type
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.right === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)
+                && (parent.left?.kind === SyntaxKind.ElementAccessExpression)) {
+                elementStored = true;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                if (parent.left === n) {
+                    writes.push(parent.right);
+                    continue;
+                }
+                if (this.goAssignmentWritesName(parent.left, name)) {
+                    otherUse = true; // `[ x, y ] = …` writes through GetValue
+                    break;
+                }
+            }
+            if (((parent?.kind === SyntaxKind.PrefixUnaryExpression) || (parent?.kind === SyntaxKind.PostfixUnaryExpression))
+                && ((parent.operator === SyntaxKind.PlusPlusToken) || (parent.operator === SyntaxKind.MinusMinusToken))) {
+                otherUse = true;
+                break;
+            }
+            if (!goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, this, n)) {
+                otherUse = true;
+            }
+        }
         if (otherUse || (writes.length === 0)) {
             return undefined;
         }
@@ -21166,32 +21093,30 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         let rejected = false;
         const isNilLike = (n: any) => (n?.kind === SyntaxKind.NullKeyword) || (n?.kind === SyntaxKind.UndefinedKeyword)
             || ((n?.kind === SyntaxKind.Identifier) && (n.text === 'undefined'));
-        const visit = (n) => {
+        for (const n of this.goScopeIdents(scope, name)) {
             if (rejected) {
-                return;
+                break;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
-                const parent: any = n.parent;
-                if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
-                    return;
-                }
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === n)) {
-                    writes.push(parent.right);
-                    return;
-                }
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && this.goAssignmentWritesName(parent.left, name)) {
-                    rejected = true;
-                    return;
-                }
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && ((isNilLike(parent.left) && (parent.right === n)) || (isNilLike(parent.right) && (parent.left === n)))) {
-                    rejected = true; // `x === undefined` observes the box
-                    return;
-                }
-                return;
+            if (n === declaration.name) {
+                continue;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+            const parent: any = n.parent;
+            if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
+                continue;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.left === n)) {
+                writes.push(parent.right);
+                continue;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && this.goAssignmentWritesName(parent.left, name)) {
+                rejected = true;
+                break;
+            }
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && ((isNilLike(parent.left) && (parent.right === n)) || (isNilLike(parent.right) && (parent.left === n)))) {
+                rejected = true; // `x === undefined` observes the box
+                break;
+            }
+        }
         if (rejected || (writes.length === 0)) {
             return undefined;
         }
@@ -21325,12 +21250,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        if (this.goFieldStringLocalTypeCache.has(declaration)) {
-            return this.goFieldStringLocalTypeCache.get(declaration);
-        }
-        const result = this.goFieldStringLocalTypeScan(declaration);
-        this.goFieldStringLocalTypeCache.set(declaration, result);
-        return result;
+        return this.goMemo(this.goFieldStringLocalTypeCache, declaration, () => this.goFieldStringLocalTypeScan(declaration));
     }
     goFieldStringLocalTypeCache = new WeakMap<object, string | undefined>();
 
@@ -21348,34 +21268,18 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (scope === undefined) {
             return undefined;
         }
-        let bail = false;
-        const visit = (n) => {
-            if (bail) {
-                return;
-            }
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
-                n.forEachChild(visit);
-                return;
-            }
+        const bail = !this.goScopeIdents(scope, name).every((n) => {
             const parent = n.parent;
-            if ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n)) {
-                return; // a sibling block re-declaring the name gets its own type
+            if ((n === declaration.name) || ((parent?.kind === SyntaxKind.VariableDeclaration) && (parent.name === n))) {
+                return true; // a sibling block re-declaring the name gets its own type
             }
             if (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n)
                 && (parent.operatorToken?.kind === SyntaxKind.EqualsToken))) {
                 // a later write must keep the field's string (an `any` producer would not compile)
-                const right = this.goUnwrapParenthesizedNode(parent.right);
-                if (GO_STRING_FIELD_NAMES.indexOf(this.goAstFieldGoName(right)) >= 0) {
-                    return;
-                }
-                bail = true;
-                return;
+                return GO_STRING_FIELD_NAMES.indexOf(this.goAstFieldGoName(this.goUnwrapParenthesizedNode(parent.right))) >= 0;
             }
-            if (!goReadRuleAccepts(GO_FIELD_STRING_LOCAL_READ_RULE, this, n)) {
-                bail = true;
-            }
-        };
-        scope.forEachChild(visit);
+            return goReadRuleAccepts(GO_FIELD_STRING_LOCAL_READ_RULE, this, n);
+        });
         // the scan already refused every write and read a `string` cannot answer, so the
         // box-wide veto (which prints) is not consulted here
         if (bail || this.goTypeNameIsShadowed(scope, 'string')) {
@@ -21571,8 +21475,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const pattern: any = element?.parent;
         const call: any = pattern?.parent?.initializer;
         if ((element?.kind !== SyntaxKind.BindingElement) || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (pattern.elements.indexOf(element) !== 0)
-            || (pattern.parent?.kind !== SyntaxKind.VariableDeclaration) || (call?.kind !== SyntaxKind.CallExpression)
-            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            || (pattern.parent?.kind !== SyntaxKind.VariableDeclaration) || (this.goThisCallName(call) === undefined)) {
             return false;
         }
         const slot = { 'handleOptionStringAndParams': 3, 'handleOptionStringAndParams2': 4 }[call.expression.name?.text];
@@ -21593,14 +21496,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((goType !== '*string') || (scope === undefined) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) {
             return false;
         }
-        if (this.goLiteralDefaultStringLocalCache.has(declaration)) {
-            return this.goLiteralDefaultStringLocalCache.get(declaration);
-        }
-        const verdict = !this.goTypeNameIsShadowed(scope, 'string')
+        return this.goMemo(this.goLiteralDefaultStringLocalCache, declaration, () => !this.goTypeNameIsShadowed(scope, 'string')
             && this.goLiteralDefaultStringCall(declaration.initializer, undefined)
-            && this.goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name);
-        this.goLiteralDefaultStringLocalCache.set(declaration, verdict);
-        return verdict;
+            && this.goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name));
     }
     goLiteralDefaultStringLocalCache = new WeakMap<object, boolean>();
 
@@ -21609,9 +21507,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goLiteralDefaultStringCall(node, name: string | undefined): boolean {
         let call: any = node;
         call = goUnwrapTypeNonNull(call);
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 3)
-            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        if ((this.goThisCallName(call) === undefined) || (call.arguments?.length !== 3)
             || ['safeString', 'safeStringLower', 'safeStringUpper'].indexOf(call.expression.name?.text) < 0) {
             return false;
         }
@@ -21621,36 +21517,25 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     goLiteralDefaultStringLocalUsesAreSafe(scope, declaration, name: string): boolean {
-        let safe = true;
-        const visit = (n: any) => {
-            if (!safe) {
-                return;
-            }
-            if ((n.kind !== SyntaxKind.Identifier) || (n.text !== name) || (n === declaration.name)) {
-                n.forEachChild(visit);
-                return;
-            }
+        const safe = this.goScopeIdents(scope, name).every((n: any) => {
             const parent: any = n.parent;
-            if (((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
+            if ((n === declaration.name) || ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.name === n))
                 || ((parent?.kind === SyntaxKind.PropertyAssignment) && (parent.name === n))) {
-                return; // a member name, not the local
+                return true; // a member name, not the local
             }
             // a second binding of the name makes the scan ambiguous
             if (((parent?.kind === SyntaxKind.VariableDeclaration) || (parent?.kind === SyntaxKind.Parameter)
                 || (parent?.kind === SyntaxKind.BindingElement)) && (parent.name === n)) {
-                safe = false;
-                return;
+                return false;
             }
             if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (GO_WRITE_OPERATOR_KINDS.indexOf(parent.operatorToken?.kind) >= 0)) {
                 const right: any = parent.right;
-                safe = (parent.operatorToken.kind === SyntaxKind.EqualsToken)
+                return (parent.operatorToken.kind === SyntaxKind.EqualsToken)
                     && ((right?.kind === SyntaxKind.StringLiteral) || this.goLiteralDefaultStringCall(right, name)
                         || this.goLiteralDefaultStringConcatWrite(right, name));
-                return;
             }
-            safe = this.goLiteralDefaultStringLocalReadIsSafe(n);
-        };
-        scope.forEachChild(visit);
+            return this.goLiteralDefaultStringLocalReadIsSafe(n);
+        });
         return safe;
     }
 
@@ -21686,8 +21571,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             if (operator === SyntaxKind.InKeyword) {
                 return parent.left === current;
             }
-            if ((operator === SyntaxKind.EqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsToken)
-                || (operator === SyntaxKind.EqualsEqualsEqualsToken) || (operator === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(operator)) {
                 const other: any = (parent.left === current) ? parent.right : parent.left;
                 return (other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NoSubstitutionTemplateLiteral);
             }
@@ -21717,7 +21601,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         // read from the declaration only: printing the callee's parameters from inside this scan would
         // resolve this very local while its type is still open
         try {
-            const declaration: any = this.getChecker().getResolvedSignature(call)?.declaration?.resolve();
+            const declaration: any = this.goResolvedCallDecl(call);
             const parameter: any = declaration?.parameters?.[index];
             return (parameter?.kind === SyntaxKind.Parameter) && (parameter.type?.kind === SyntaxKind.StringKeyword)
                 && (parameter.initializer === undefined) && (parameter.questionToken === undefined) && (parameter.dotDotDotToken === undefined);
@@ -21761,8 +21645,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goDefaultedSafeStringCall(call)) {
             return true;
         }
-        if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
-            || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+        if (this.goThisCallName(call) === undefined) {
             return false;
         }
         const arity = GO_DEFAULTED_SAFE_STRING_ARITY[call.expression.name?.text];
@@ -22653,8 +22536,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const op = parent.operatorToken?.kind;
             const other = (parent.left === child) ? parent.right : parent.left;
             if (((op === SyntaxKind.EqualsToken) && (parent.left === child)) || ((op === SyntaxKind.InKeyword) && (parent.right === child))
-                || (((op === SyntaxKind.EqualsEqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)
-                    || (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.ExclamationEqualsToken)) && this.goIsNilLiteral(other))) {
+                || (this.goIsEqualityToken(op) && this.goIsNilLiteral(other))) {
                 return undefined;
             }
         }
@@ -22686,8 +22568,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goBalanceSafeBalanceWrite(node, identation: number): string | undefined {
         const left: any = node.left;
         const right: any = this.goUnwrapParenthesizedNode(node.right);
-        if ((this.goBaseCacheField(left) !== 'Balance') || (right?.kind !== SyntaxKind.CallExpression)
-            || (right.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (right.expression.expression?.kind !== SyntaxKind.ThisKeyword)
+        if ((this.goBaseCacheField(left) !== 'Balance') || (this.goThisCallName(right) === undefined)
             || (right.expression.name?.text !== 'safeBalance')) {
             return undefined;
         }
@@ -22932,23 +22813,19 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const writes: any[] = [];
         let bail = false;
-        const visit = (n) => {
-            if (bail) {
-                return;
+        for (const n of this.goScopeIdents(scope, name)) {
+            if (n === declaration.name) {
+                continue;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
-                const parent = n.parent;
-                if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
-                    writes.push(parent.right);
-                } else if (this.goAssignmentWritesName(parent, name) || (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n
-                    && !((goType === this.goOrderBook?.type) && this.goIsEqualityToken(parent.operatorToken?.kind)))) {
-                    bail = true;  // a book local may be compared to undefined: that reads it
-                }
-                return;
+            const parent = n.parent;
+            if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                writes.push(parent.right);
+            } else if (this.goAssignmentWritesName(parent, name) || (parent?.kind === SyntaxKind.BinaryExpression && parent.left === n
+                && !((goType === this.goOrderBook?.type) && this.goIsEqualityToken(parent.operatorToken?.kind)))) {
+                bail = true;  // a book local may be compared to undefined: that reads it
+                break;
             }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
+        }
         if (bail || (writes.length === 0)) {
             return undefined;
         }
@@ -23038,22 +22915,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!this.goWsCacheClassType(type)) {
             return undefined;
         }
-        let ok = true;
-        let returns = 0;
-        const visit = (n) => {
-            if (!ok || isFunctionLike(n)) {
-                return;
-            }
-            if (n.kind === SyntaxKind.ReturnStatement) {
-                returns++;
-                ok = (n.expression !== undefined) && (this.goWsCacheTypeOfNode(n.expression) !== undefined
-                    || this.goWsCacheOperand(n.expression));
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        node.body.forEachChild(visit);
-        return (ok && (returns > 0)) ? GO_WS_CACHE_TYPE : undefined;
+        const returns = this.goDescendantsOf(node.body).filter((n) => (n.kind === SyntaxKind.ReturnStatement) && !this.goInFunctionBelow(n, node.body));
+        const ok = returns.every((n) => (n.expression !== undefined) && (this.goWsCacheTypeOfNode(n.expression) !== undefined
+            || this.goWsCacheOperand(n.expression)));
+        return (ok && (returns.length > 0)) ? GO_WS_CACHE_TYPE : undefined;
     }
 
     // a required parameter declared as one of the ws cache classes, handed a ws cache by every caller
@@ -23072,21 +22937,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printOutOfOrderCallExpressionIfAny(node, identation) {
-        const nonceSum = this.goNonceSumText(node);
+        const nonceSum = this.goNonceSumText(node)
+            ?? this.goWsAppendCall(node, identation)
+            ?? this.goWsCacheReadText(node)
+            ?? this.goWsTickersFilterText(node);
         if (nonceSum !== undefined) {
             return nonceSum;
-        }
-        const wsAppend = this.goWsAppendCall(node, identation);
-        if (wsAppend !== undefined) {
-            return wsAppend;
-        }
-        const wsCacheRead = this.goWsCacheReadText(node);
-        if (wsCacheRead !== undefined) {
-            return wsCacheRead;
-        }
-        const tickersFilter = this.goWsTickersFilterText(node);
-        if (tickersFilter !== undefined) {
-            return tickersFilter;
         }
         if (node.expression.kind === SyntaxKind.PropertyAccessExpression) {
             const args = node.arguments;
@@ -23535,19 +23391,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         let holds = isPointerInit(decl.initializer);
         if (!holds) {
             const name = decl.name.text;
-            const scope = this.goEnclosingFunction(decl);
-            const visit = (n) => {
-                if (holds) { return; }
-                if (n.kind === SyntaxKind.BinaryExpression && n.operatorToken.kind === SyntaxKind.EqualsToken
-                    && n.left?.kind === SyntaxKind.Identifier && n.left.text === name && isPointerInit(n.right)) {
-                    holds = true;
-                    return;
-                }
-                n.forEachChild(visit);
-            };
-            if (scope !== undefined) {
-                scope.forEachChild(visit);
-            }
+            holds = this.hasNodeWhere(this.goEnclosingFunction(decl), (n) => n.kind === SyntaxKind.BinaryExpression && n.operatorToken.kind === SyntaxKind.EqualsToken
+                && n.left?.kind === SyntaxKind.Identifier && n.left.text === name && isPointerInit(n.right));
         }
         if (settled) {
             this.goAnyLocalHoldsPointerCache.set(decl, holds);
@@ -23649,33 +23494,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (decl?.kind !== SyntaxKind.VariableDeclaration || decl.name?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        if (this.goAnyLocalHoldsNonPointerCache.has(decl)) {
-            return this.goAnyLocalHoldsNonPointerCache.get(decl);
-        }
-        let holds = !this.goAnyLocalHoldsPointer(decl) && this.goIsNonPointerValueSource(decl.initializer);
-        if (holds) {
+        return this.goMemo(this.goAnyLocalHoldsNonPointerCache, decl, () => {
+            if (!(!this.goAnyLocalHoldsPointer(decl) && this.goIsNonPointerValueSource(decl.initializer))) {
+                return false;
+            }
             const name = decl.name.text;
             const scope = this.goEnclosingFunction(decl);
-            if (scope === undefined) {
-                holds = false;
-            } else {
-                const visit = (n) => {
-                    if (!holds) { return; }
-                    // `[ a, b ] = …` writes a and b through GetValue(<tuple>, i), so its
-                    // source is the right-hand side as well
-                    if (n.kind === SyntaxKind.BinaryExpression && n.operatorToken?.kind === SyntaxKind.EqualsToken
-                        && this.goAssignmentWritesName(n.left, name)
-                        && !this.goIsNonPointerValueSource(n.right)) {
-                        holds = false;
-                        return;
-                    }
-                    n.forEachChild(visit);
-                };
-                scope.forEachChild(visit);
-            }
-        }
-        this.goAnyLocalHoldsNonPointerCache.set(decl, holds);
-        return holds;
+            // `[ a, b ] = …` writes a and b through GetValue(<tuple>, i), so its source is the right-hand side as well
+            return (scope !== undefined) && !this.hasNodeWhere(scope, (n) => n.kind === SyntaxKind.BinaryExpression && n.operatorToken?.kind === SyntaxKind.EqualsToken
+                && this.goAssignmentWritesName(n.left, name) && !this.goIsNonPointerValueSource(n.right));
+        });
     }
 
     // true when this assignment target binds the named local: a plain identifier, or a
@@ -23732,20 +23560,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (scope === undefined) {
             return true;
         }
-        let pointerWrite = false;
-        const visit = (n) => {
-            if (pointerWrite) {
-                return;
-            }
-            if (n.kind === SyntaxKind.BinaryExpression && n.operatorToken?.kind === SyntaxKind.EqualsToken
-                && this.goAssignmentWritesName(n.left, name) && this.goWritePrintsPointerBox(n.right)) {
-                pointerWrite = true;
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
-        return pointerWrite;
+        return this.hasNodeWhere(scope, (n) => n.kind === SyntaxKind.BinaryExpression && n.operatorToken?.kind === SyntaxKind.EqualsToken
+            && this.goAssignmentWritesName(n.left, name) && this.goWritePrintsPointerBox(n.right));
     }
 
     // true when the printed value of an assignment's right-hand side is a typed pointer: a
@@ -24044,7 +23860,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         try {
-            const target: any = this.getChecker().getResolvedSignature(parent)?.declaration?.resolve();
+            const target: any = this.goResolvedCallDecl(parent);
             const param: any = target?.parameters?.[parent.arguments.indexOf(id)];
             return (param?.name !== undefined) && this.goIsProHandlerMethod(target)
                 && (this.goNodeIsOrderBook(param.name) || ((this.getChecker().getTypeAtLocation(param.name).flags & TypeFlags.Any) !== 0));
@@ -24232,7 +24048,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     return false;
                 }
                 try {
-                    const callee: any = checker.getResolvedSignature(n)?.declaration?.resolve();
+                    const callee: any = this.goResolvedCallDecl(n);
                     const target: any = callee?.parameters?.[at];
                     return (callee !== fn) && (target !== undefined) && (this.goNativeParameterType(target) === this.goOrderBook?.type);
                 } catch (e) {
@@ -24243,7 +24059,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goNativeParameterTypeCache = new Map<any, string | undefined>();
-    goSameFileCallCache = new Map<any, Map<string, Array<any>>>();
     goTsSrcTreeCache = new Map<string, any>();
 
     goNativeParameterType(param): string | undefined {
@@ -24318,15 +24133,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return '*int64';
         }
-        const clientType = this.goWsClientParameterType(fn, param);
+        const clientType = this.goWsClientParameterType(fn, param)
+            // the ws frame. `override handleMessage (client, message: Dict)` is the one
+            // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
+            ?? this.goWsFrameParameterType(fn, param);
         if (clientType !== undefined) {
             return clientType;
-        }
-        // the ws frame. `override handleMessage (client, message: Dict)` is the one
-        // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
-        const frameType = this.goWsFrameParameterType(fn, param);
-        if (frameType !== undefined) {
-            return frameType;
         }
         if (this.goIsUnifiedSliceParameter(fn.name.text, fn.parameters.indexOf(param))) {
             // the slice table types the base and every override together, exactly like
@@ -24458,19 +24270,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (body === undefined) {
             return false;
         }
-        let found = false;
-        const visit = (n): void => {
-            if (found) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
-                && (n.expression.text === name)) {
-                found = true;
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
+        const found = this.hasNodeWhere(body, (n) => (n.kind === SyntaxKind.ElementAccessExpression)
+            && (n.expression?.kind === SyntaxKind.Identifier) && (n.expression.text === name));
         return found;
     }
 
@@ -25020,35 +24821,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return true;
         }
         const name = param.name.text;
-        let keeps = true;
-        const visit = (n) => {
-            if (!keeps) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name)) {
-                let symbol;
-                try {
-                    symbol = this.getChecker().getSymbolAtLocation(n);
-                } catch (e) {
-                    symbol = undefined;
-                }
-                const binary: any = n.parent;
-                if ((symbol?.valueDeclaration?.resolve() === param) && (binary?.kind === SyntaxKind.BinaryExpression)
-                    && ((binary.left === n) || (binary.right === n))) {
-                    const op = binary.operatorToken?.kind;
-                    if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
-                        || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
-                        const other: any = (binary.left === n) ? binary.right : binary.left;
-                        if (goIsNilNode(other)) {
-                            keeps = false;
-                            return;
-                        }
-                    }
-                }
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
+        const keeps = !this.goScopeIdents(body, name).some((n) => {
+            const binary: any = n.parent;
+            return (binary?.kind === SyntaxKind.BinaryExpression) && ((binary.left === n) || (binary.right === n))
+                && this.goIsEqualityToken(binary.operatorToken?.kind) && (this.goSymbolValueDecl(n) === param)
+                && goIsNilNode((binary.left === n) ? binary.right : binary.left);
+        });
         return keeps;
     }
 
@@ -25120,24 +24898,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // true when every `key in <frame>` of the body prints native. Only an `if` condition holding
     goWsFrameReadsStayNative(body, param): boolean {
-        let native = true;
-        const visit = (n) => {
-            if (!native) {
-                return;
+        return !this.hasNodeWhere(body, (n) => {
+            if ((n.kind !== SyntaxKind.BinaryExpression) || (n.operatorToken?.kind !== SyntaxKind.InKeyword)) {
+                return false;
             }
-            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)) {
-                const dict = this.goUnwrapParenthesizedNode(n.right);
-                if ((dict?.kind === SyntaxKind.Identifier) && (dict.text === param.name.text)
-                    && (this.goAnyBoxLocalDeclaration(dict) === param)
-                    && !this.goWsFrameInOpHasInitClause(n, param)) {
-                    native = false;
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        body.forEachChild(visit);
-        return native;
+            const dict = this.goUnwrapParenthesizedNode(n.right);
+            return (dict?.kind === SyntaxKind.Identifier) && (dict.text === param.name.text)
+                && (this.goAnyBoxLocalDeclaration(dict) === param) && !this.goWsFrameInOpHasInitClause(n, param);
+        });
     }
 
     // the `in` node sits in an `if` condition that holds exactly one identifier map read, so
@@ -25150,16 +24918,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if ((parent.expression !== child) || (parent.expression === undefined)) {
                     return false;
                 }
-                let reads = 0;
-                const count = (n) => {
-                    if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)
-                        && (this.goUnwrapParenthesizedNode(n.right)?.kind === SyntaxKind.Identifier)) {
-                        reads += 1;
-                    }
-                    n.forEachChild(count);
-                };
-                count (parent.expression);
-                return reads === 1;
+                return [parent.expression, ...this.goDescendantsOf(parent.expression)].filter((n) => (n.kind === SyntaxKind.BinaryExpression)
+                    && (n.operatorToken?.kind === SyntaxKind.InKeyword) && (this.goUnwrapParenthesizedNode(n.right)?.kind === SyntaxKind.Identifier)).length === 1;
             }
             if ((parent.kind === SyntaxKind.ParenthesizedExpression)
                 || (parent.kind === SyntaxKind.PrefixUnaryExpression)
@@ -25299,7 +25059,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const printed = this.goPrintedArgType(arg);
         if ((printed === undefined) && (arg?.kind === SyntaxKind.Identifier)) {
             // a defaulted `xs: string[]` parameter bound by GetArgStringSlice hands its []string on
-            const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+            const decl: any = this.goSymbolValueDecl(arg);
             if ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === '[]string')) {
                 return '[]string';
             }
@@ -25411,22 +25171,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.h26g53ConstComparisonLocal(arg, checker)) {
             return true;
         }
-        const decl: any = checker?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve();
+        const decl: any = this.goSymbolValueDecl(arg);
         if ((decl?.kind !== SyntaxKind.Parameter) || (decl.type?.kind !== SyntaxKind.BooleanKeyword)
             || ((decl.initializer?.kind !== SyntaxKind.TrueKeyword) && (decl.initializer?.kind !== SyntaxKind.FalseKeyword))) {
             return false;
         }
-        let written = false;
-        const visit = (n: any) => {
+        return !this.goScopeIdents(decl.parent.body, decl.name.text).some((n) => {
             const p: any = n.parent;
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === decl.name.text) && (p?.kind === SyntaxKind.BinaryExpression) && (p.left === n)
-                && (p.operatorToken.kind >= SyntaxKind.FirstAssignment) && (p.operatorToken.kind <= SyntaxKind.LastAssignment)) {
-                written = true;
-            }
-            n.forEachChild(visit);
-        };
-        decl.parent.body?.forEachChild(visit);
-        return !written;
+            return (p?.kind === SyntaxKind.BinaryExpression) && (p.left === n)
+                && (p.operatorToken.kind >= SyntaxKind.FirstAssignment) && (p.operatorToken.kind <= SyntaxKind.LastAssignment);
+        });
     }
 
     goEnclosingClass(fn) {
@@ -25465,7 +25219,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // a Dict local the SafeDictMap rule declares `map[string]any` hands that map to its callee
     goSafeDictMapArgType(arg): string | undefined {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         return ((decl?.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictMapLocal(decl) === GO_SAFE_DICT_LOCAL_TYPE)) ? GO_SAFE_DICT_LOCAL_TYPE : undefined;
     }
 
@@ -25496,13 +25250,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(node);
         return (decl?.kind === SyntaxKind.Parameter) && (decl.type?.getText() === 'Client');
     }
 
     // the Go type an identifier is bound to when its declaration is not a typed local: a defaulted
     goBoundIdentifierType(arg): string | undefined {
-        const decl: any = this.checkerOrUndefined()?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve?.();
+        const decl: any = this.goSymbolValueDecl(arg);
         if (decl?.kind === SyntaxKind.Parameter) {
             return (this.goGetArgParameterType(decl) === 'string') ? 'string' : undefined;
         }
@@ -25750,33 +25504,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
         }
         const file = fn.getSourceFile();
-        let index = this.goSameFileCallCache.get(file);
-        if (index === undefined) {
-            index = new Map<string, Array<any>>();
-            const visit = (node) => {
-                if (node.kind === SyntaxKind.CallExpression) {
-                    const callee: any = node.expression;
-                    const calleeName = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
-                    if (typeof calleeName === 'string') {
-                        const list = index.get(calleeName) ?? [];
-                        list.push(node);
-                        index.set(calleeName, list);
-                    }
-                }
-                node.forEachChild(visit);
-            };
-            visit(file);
-            this.goSameFileCallCache.set(file, index);
-        }
+        // `<x>.<name>(...)` calls of the file, from the per-file property-access index
+        const callsNamed = (callee: string) => this.goSourceFilePropAccesses(file, callee)
+            .filter((pa: any) => (pa.parent?.kind === SyntaxKind.CallExpression) && (pa.parent.expression === pa)).map((pa: any) => pa.parent);
         const checker = this.getChecker();
         const result = [];
-        for (const call of (index.get(name) ?? [])) {
-            let declaration;
-            try {
-                declaration = checker.getResolvedSignature(call)?.declaration?.resolve();
-            } catch (e) {
-                declaration = undefined;
-            }
+        for (const call of callsNamed(name)) {
+            const declaration: any = this.goResolvedCallDecl(call);
             if (declaration === fn) {
                 result.push(call);
             }
@@ -25784,7 +25518,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         // `this.spawn (this.m, a, b)` / `this.delay (t, this.m, a, b)` call `m (a, b)` through CallDynamically:
         // the arguments after the method reference are the call's arguments, each passed as its own Go value
         for (const [ runner, at ] of [ [ 'spawn', 0 ], [ 'delay', 1 ] ] as Array<[string, number]>) {
-            for (const call of (index.get(runner) ?? [])) {
+            for (const call of callsNamed(runner)) {
                 const ref: any = call.arguments?.[at];
                 if ((call.expression?.expression?.kind !== SyntaxKind.ThisKeyword) || (ref?.kind !== SyntaxKind.PropertyAccessExpression)
                     || (ref.expression?.kind !== SyntaxKind.ThisKeyword) || (ref.name?.text !== name)) {
@@ -26118,12 +25852,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!this.predictionMapFields.has(this.transformPropertyAccessExpressionName(node.name.text, node.name))) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goValueDecl(node);
         return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.kind === SyntaxKind.ClassDeclaration)
             && ((declaration.parent.name?.escapedText ?? declaration.parent.name?.text) === 'PredictionExchange');
     }
@@ -26165,18 +25894,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return undefined;
         }
         const scope = this.goEnclosingFunction(declaration);
-        let taken = (scope === undefined);
-        const visit = (n: any): void => {
-            if (!taken && (n.kind === SyntaxKind.Identifier) && (n.text === 'objectKey')) {
-                taken = true;
-            }
-            if (!taken) {
-                n.forEachChild(visit);
-            }
-        };
-        if (scope !== undefined) {
-            scope.forEachChild(visit);
-        }
+        const taken = (scope === undefined) || (this.goScopeIdents(scope, 'objectKey').length > 0);
         const field = this.printNode(init.arguments[0], 0);
         if (taken || field.includes('\n')) {
             return undefined;
@@ -26283,22 +26001,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const then: any = st.thenStatement;
             return (then?.kind === SyntaxKind.Block) ? then.statements.some((s: any) => isLiteralStore(s)) : isLiteralStore(then);
         };
-        const storesOther = (st: any): boolean => {
-            let found = false;
-            const visit = (n: any): void => {
-                if (found) {
-                    return;
-                }
-                if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind >= SyntaxKind.FirstAssignment)
-                    && (n.operatorToken.kind <= SyntaxKind.LastAssignment) && isField(n.left) && (n.right?.kind !== SyntaxKind.ObjectLiteralExpression)) {
-                    found = true;
-                    return;
-                }
-                n.forEachChild(visit);
-            };
-            visit(st);
-            return found;
-        };
+        const storesOther = (st: any): boolean => [st, ...this.goDescendantsOf(st)].some((n: any) => (n.kind === SyntaxKind.BinaryExpression)
+            && (n.operatorToken.kind >= SyntaxKind.FirstAssignment) && (n.operatorToken.kind <= SyntaxKind.LastAssignment)
+            && isField(n.left) && (n.right?.kind !== SyntaxKind.ObjectLiteralExpression));
         let child: any = access;
         for (let parent: any = access.parent; parent !== undefined; child = parent, parent = parent.parent) {
             if (isFunctionLike(parent) || (parent.kind === SyntaxKind.SourceFile)) {
@@ -26357,38 +26062,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return true;
         }
         const name = nameNode.text;
-        let rebound = false;
-        const visit = (n) => {
-            if (rebound) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== nameNode)) {
-                if (this.goRebindingTargetOf(n) !== undefined) {
-                    rebound = true;
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        visit(scope);
-        return rebound;
+        return this.goScopeIdents(scope, name).some((n) => (n !== nameNode) && (this.goRebindingTargetOf(n) !== undefined));
     }
 
     // the local is assigned inside a nested function of the scope (a call may run it at any point)
     goLocalIsReboundInClosure(scope, nameNode): boolean {
-        let found = false;
-        const visit = (n) => {
-            if (found) {
-                return;
-            }
-            if ((n !== scope) && (isArrowFunction(n) || isFunctionExpression(n) || isFunctionDeclaration(n) || isMethodDeclaration(n))) {
-                found = this.goLocalIsRebound(n, nameNode);
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        visit(scope);
-        return found;
+        return this.hasNodeWhere(scope, (n) => (isArrowFunction(n) || isFunctionExpression(n) || isFunctionDeclaration(n) || isMethodDeclaration(n))
+            && this.goLocalIsRebound(n, nameNode));
     }
 
     // walks up from the identifier to the assignment it targets: `x = …` / `x += …` /
@@ -26474,12 +26154,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(node);
-        } catch (e) {
-            decl = undefined;
-        }
+        const decl: any = this.goValueDecl(node);
         if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
             return false;
         }
@@ -26619,12 +26294,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((producer === undefined) || !/^Handle[A-Z]/.test(producer)) {
             return false;
         }
-        let declared: any;
-        try {
-            declared = this.goValueDecl(holder.initializer.expression.name);
-        } catch (e) {
-            return false;
-        }
+        const declared: any = this.goValueDecl(holder.initializer.expression.name);
         return /[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(declared?.getSourceFile?.()?.fileName ?? ''))
             && (ccxtGoTupleParamsElementType(this, element) === GO_SAFE_DICT_LOCAL_TYPE);
     }
@@ -26641,12 +26311,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goValueDecl(node);
         if (declaration?.kind === SyntaxKind.BindingElement) {
             return this.goBaseTupleParamsSlot(declaration);
         }
@@ -26763,11 +26428,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goThisCallName(call): string | undefined {
-        const callee = this.goUnwrapParenthesizedNode(call)?.expression;
-        if ((call?.kind !== SyntaxKind.CallExpression) || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
-            return undefined;
-        }
-        return callee.name?.text;
+        // a CallExpression unwraps to itself, so test the kind before touching the callee
+        const callee = (call?.kind === SyntaxKind.CallExpression) ? call.expression : undefined;
+        return ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)) ? callee.name?.text : undefined;
     }
 
     goStoreFieldNeverNil(sourceFile, name: string, field): boolean {
@@ -26779,23 +26442,20 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (perFile.has(name)) {
             return perFile.get(name) as boolean;
         }
-        let ok = true;
-        const visit = (n) => {
-            if (!ok) {
-                return;
+        // every `this.<name> = …` write of the file is a fresh map or a self-copy call
+        const ok = this.goSourceFilePropAccesses(sourceFile, name).every((left) => {
+            const n: any = left.parent;
+            if ((left.expression?.kind !== SyntaxKind.ThisKeyword) || (n?.kind !== SyntaxKind.BinaryExpression)
+                || (n.operatorToken?.kind !== SyntaxKind.EqualsToken) || (n.left !== left)) {
+                return true;
             }
-            if ((n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.EqualsToken)
-                && (n.left?.kind === SyntaxKind.PropertyAccessExpression) && (n.left.expression?.kind === SyntaxKind.ThisKeyword) && (n.left.name?.text === name)) {
-                const right = this.goUnwrapParenthesizedNode(n.right);
-                const callName = this.goThisCallName(right);
-                const selfWrite = (callName !== undefined) && (field.selfCalls ?? []).includes(callName) && (right.arguments.length === 1)
-                    && (right.arguments[0]?.kind === SyntaxKind.PropertyAccessExpression) && (right.arguments[0].expression?.kind === SyntaxKind.ThisKeyword)
-                    && (right.arguments[0].name?.text === name);
-                ok = (right?.kind === SyntaxKind.ObjectLiteralExpression) || ((callName !== undefined) && (field.freshMapCalls ?? []).includes(callName)) || selfWrite;
-            }
-            n.forEachChild(visit);
-        };
-        visit(sourceFile);
+            const right = this.goUnwrapParenthesizedNode(n.right);
+            const callName = this.goThisCallName(right);
+            const selfWrite = (callName !== undefined) && (field.selfCalls ?? []).includes(callName) && (right.arguments.length === 1)
+                && (right.arguments[0]?.kind === SyntaxKind.PropertyAccessExpression) && (right.arguments[0].expression?.kind === SyntaxKind.ThisKeyword)
+                && (right.arguments[0].name?.text === name);
+            return (right?.kind === SyntaxKind.ObjectLiteralExpression) || ((callName !== undefined) && (field.freshMapCalls ?? []).includes(callName)) || selfWrite;
+        });
         perFile.set(name, ok);
         return ok;
     }
@@ -26809,26 +26469,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const checker: any = this.checkerOrUndefined();
-        let free = checker !== undefined;
-        const visit = (n) => {
-            if (!free) {
-                return;
-            }
-            if (n.kind === SyntaxKind.CallExpression) {
-                if (['spawn', 'delay'].includes(this.goThisCallName(n) ?? '')) {
-                    free = false;
-                    return;
-                }
-                const declaration = checker.getResolvedSignature(n)?.declaration?.resolve?.();
-                if ((declaration !== undefined) && this.hasAsyncModifier(declaration)) {
-                    free = false;
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        visit(fn.body);
-        return free;
+        return (checker !== undefined) && !this.hasNodeWhere(fn.body, (n) => (n.kind === SyntaxKind.CallExpression)
+            && (['spawn', 'delay'].includes(this.goThisCallName(n) ?? '') || this.hasAsyncModifier(this.goResolvedCallDecl(n) ?? {})));
     }
 
     goStoreValueIsPlain(valueNode, field): boolean {
@@ -27367,7 +27009,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((checker === undefined) || (statement === undefined)) {
             return false;
         }
-        const declaration = checker.getSymbolAtLocation(ident)?.valueDeclaration?.resolve();
+        const declaration = this.goSymbolValueDecl(ident);
         if (this.goLocalIsRebound(this.goEnclosingFunction(declaration ?? ident), ident)) {
             return false; // a rebound pointer's guard may be stale at the read
         }
@@ -27466,27 +27108,16 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = this.checkerOrUndefined()?.getSymbolAtLocation(decl.name);
-        let captured = false;
-        const visit = (n, nested: boolean) => {
-            if (captured) {
-                return;
+        return !this.goScopeIdents(scope, decl.name.text).some((n) => {
+            if ((n === decl.name) || (this.checkerOrUndefined()?.getSymbolAtLocation(n) !== symbol)) {
+                return false;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n !== decl.name) && (n.text === decl.name.text)
-                && (this.checkerOrUndefined()?.getSymbolAtLocation(n) === symbol)) {
-                // `m[k]` and `k in m` read the map without handing it to another holder
-                const receiver = ((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n))
-                    || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.right === n)
-                        && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword));
-                if (nested || (!receiver && this.goUseMayPrecede(n, writeSite, scope))) {
-                    captured = true;
-                }
-                return;
-            }
-            const inner = nested || isFunctionLike(n);
-            n.forEachChild((c) => visit(c, inner));
-        };
-        scope.forEachChild((c) => visit(c, false));
-        return !captured;
+            // `m[k]` and `k in m` read the map without handing it to another holder
+            const receiver = ((n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.expression === n))
+                || ((n.parent?.kind === SyntaxKind.BinaryExpression) && (n.parent.right === n)
+                    && (n.parent.operatorToken?.kind === SyntaxKind.InKeyword));
+            return this.goInFunctionBelow(n, scope) || (!receiver && this.goUseMayPrecede(n, writeSite, scope));
+        });
     }
 
     // An object-literal local whose every rebinding that can run before the store is a fresh non-nil map
@@ -27496,7 +27127,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const checker: any = this.checkerOrUndefined();
-        const decl: any = checker?.getSymbolAtLocation(node)?.valueDeclaration?.resolve();
+        const decl: any = this.goSymbolValueDecl(node);
         if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)
             || (this.goUnwrapParenthesizedNode(decl.initializer)?.kind !== SyntaxKind.ObjectLiteralExpression)) {
             return false;
@@ -27506,20 +27137,18 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const symbol = checker.getSymbolAtLocation(decl.name);
-        let ok = true;
-        const visit = (n, nested: boolean) => {
-            if (!ok) {
-                return;
+        return this.goScopeIdents(scope, decl.name.text).every((n) => (n === decl.name) || (checker.getSymbolAtLocation(n) !== symbol)
+            || (!this.goInFunctionBelow(n, scope) && this.goMapLocalUseKeepsNonNil(n, node, scope)));
+    }
+
+    // a function-like (or `isFn`) node sits between `n` and `scope` (both exclusive)
+    goInFunctionBelow(n, scope, isFn: (p: any) => boolean = isFunctionLike): boolean {
+        for (let p = n.parent; (p !== undefined) && (p !== scope); p = p.parent) {
+            if (isFn(p)) {
+                return true;
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n !== decl.name) && (n.text === decl.name.text) && (checker.getSymbolAtLocation(n) === symbol)) {
-                ok = !nested && this.goMapLocalUseKeepsNonNil(n, node, scope);
-                return;
-            }
-            const inner = nested || isFunctionLike(n);
-            n.forEachChild((c) => visit(c, inner));
-        };
-        scope.forEachChild((c) => visit(c, false));
-        return ok;
+        }
+        return false;
     }
 
     goMapLocalUseKeepsNonNil(use, writeSite, scope): boolean {
@@ -27568,12 +27197,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (name === undefined) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(call.expression);
-        } catch {
-            return undefined;
-        }
+        const declaration: any = this.goValueDecl(call.expression);
         const fileName = String(declaration?.getSourceFile?.()?.fileName ?? '');
         return /[\\/]base[\\/](Exchange(\.nooverloads\.\d+)?|functions[\\/]\w+)\.ts$/.test(fileName) ? name : undefined;
     }
@@ -27607,9 +27231,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || (this.goSafeDictMapLocal(decl) !== GO_SAFE_DICT_LOCAL_TYPE) || this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name)) {
             return undefined;
         }
-        const ptr = this.printNode(value, 0).trim();
-        const iden = this.getIden(identation);
-        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+        return this.goScalarPointerStoreText(containerStr, keyStr, value, identation);
     }
 
     // `m[k] = p` on a map local that is non-nil at the write (an object-literal local, or a never-rebound
@@ -27686,6 +27308,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return (this.goHasEnclosingNilGuard(keyNode) || this.goHasExitingNilGuard(keyNode)) ? `*${keyStr}` : undefined;
     }
 
+    // `m[k] = *p` or `m[k] = nil`: the DerefScalar store of a scalar pointer local
+    goScalarPointerStoreText(containerStr: string, keyStr: string, value, identation: number): string {
+        const ptr = this.printNode(value, 0).trim();
+        const iden = this.getIden(identation);
+        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+    }
+
     // `this.options[k] = p` with `p` a local declared *string/*int64/*float64/*bool: the plain-valued field stores
     // what DerefScalar(p) stores, *p or an untyped nil for a nil p
     goPlainFieldScalarPointerStore(containerNode, containerStr: string, keyNode, keyStr: string, valueNode, identation: number): string | undefined {
@@ -27695,9 +27324,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || ![ '*string', '*int64', '*float64', '*bool' ].includes(this.goDeclaredTypeOfIdentifier(value) ?? '')) {
             return undefined;
         }
-        const ptr = this.printNode(value, 0).trim();
-        const iden = this.getIden(identation);
-        return `if ${ptr} != nil {\n${iden}\t${containerStr}[${keyStr}] = *${ptr}\n${iden}} else {\n${iden}\t${containerStr}[${keyStr}] = nil\n${iden}}`;
+        return this.goScalarPointerStoreText(containerStr, keyStr, value, identation);
     }
 
     // `this.options[k] = this.safeString (..)` (Safe String/Integer/Number/Bool, typed pointer returns): the accessor is
@@ -28035,24 +27662,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return false;
         }
         const name = declaration.name.text;
-        let clean = true;
-        const visit = (n) => {
-            if (!clean) {
-                return;
+        return this.goScopeIdents(scope, name).every((n) => {
+            const parent: any = n.parent;
+            if (((parent?.kind === SyntaxKind.VariableDeclaration) || (parent?.kind === SyntaxKind.Parameter)) && (parent.name === n)) {
+                return parent === declaration; // a shadowing binding
             }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)) {
-                clean = this.goDictUseKeepsMap(n);
-                return;
-            }
-            if (((n.kind === SyntaxKind.VariableDeclaration) || (n.kind === SyntaxKind.Parameter)) && (n !== declaration)
-                && (n.name?.kind === SyntaxKind.Identifier) && (n.name.text === name)) {
-                clean = false; // a shadowing binding
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
-        return clean;
+            return this.goDictUseKeepsMap(n);
+        });
     }
 
     // the defaulted dict local is typed by the printer when a negated `k in m` read over it hoists (the hoisted
@@ -28063,23 +27679,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const scope: any = this.goEnclosingFunction(declaration);
         const name = declaration.name.text;
-        let backs = false;
-        const visit = (n) => {
-            if (backs) {
-                return;
+        return this.hasNodeWhere(scope, (n) => {
+            if ((n.kind !== SyntaxKind.IfStatement) || (n.parent?.kind !== SyntaxKind.Block)) {
+                return false;
             }
-            if ((n.kind === SyntaxKind.IfStatement) && (n.parent?.kind === SyntaxKind.Block)) {
-                const shape = this.goInOpHoistShape(n);
-                const dict: any = shape?.dict;
-                if ((dict?.kind === SyntaxKind.Identifier) && (dict.text === name) && (this.goDeclarationOfIdentifier(dict) === declaration)) {
-                    backs = true;
-                    return;
-                }
-            }
-            n.forEachChild(visit);
-        };
-        scope.forEachChild(visit);
-        return backs;
+            const dict: any = this.goInOpHoistShape(n)?.dict;
+            return (dict?.kind === SyntaxKind.Identifier) && (dict.text === name) && (this.goDeclarationOfIdentifier(dict) === declaration);
+        });
     }
 
     // the container of a defaulted dict read: a hand-written map field, or another map local the printer declared
@@ -28161,8 +27767,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 reads.push({ 'node': inner, 'negated': false });
                 return true;
             }
-            if ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken)
-                || (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+            if (this.goIsEqualityToken(op)) {
                 return this.goPureLeaf(inner.left) && this.goPureLeaf(inner.right);
             }
             return false;
@@ -28172,19 +27777,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // the identifier text anywhere in the function body (the flag name must be free)
     goNameIsUsed(scope, name: string): boolean {
-        let used = false;
-        const visit = (n) => {
-            if (used) {
-                return;
-            }
-            if ((n.kind === SyntaxKind.Identifier) && (n.text === name)) {
-                used = true;
-                return;
-            }
-            n.forEachChild(visit);
-        };
-        scope?.forEachChild(visit);
-        return used;
+        return this.goScopeIdents(scope, name).length > 0;
     }
 
     // `(m !== undefined) && (k in m)` over a Go map with a proven `*string` key: the comma-ok read of a nil
@@ -28367,24 +27960,29 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goLocalIsRebound(this.goEnclosingFunction(keyNode), keyNode)) {
             return undefined;
         }
-        const bookEntry = negated ? undefined : this.goBookEntryText(dict);
-        const dictText = bookEntry ?? this.printNode(dict, 0);
+        const dictText = (negated ? undefined : this.goBookEntryText(dict)) ?? this.printNode(dict, 0);
+        return this.goInOpNestedIfText(node, identation, dict, dictText, keyNode, negated, true,
+            () => [ this.goUnwrapPrintedParens(this.printNode(guard, 0)).trim() ]);
+    }
+
+    // `if G {\n if _, ok := m[*k]; ok {..} }` shared by the guarded / chained in-op rewrites
+    goInOpNestedIfText(node, identation, dict, dictText: string, keyNode, negated: boolean, tickerMap: boolean, guardTexts: () => string[]): string | undefined {
         const dictMapType = (dict?.kind === SyntaxKind.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined)
             ?? this.goInOpDictMapType(dict, dictText);
         const keyText = this.printNode(keyNode, 0);
         if (dictText.includes('\n') || keyText.includes('\n')
-            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any') && (dictMapType !== 'map[string]Ticker'))) {
+            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any') && (!tickerMap || (dictMapType !== 'map[string]Ticker')))) {
             return undefined;
         }
         const name = this.goIfInOpBindingName(node);
-        const guardText = this.goUnwrapPrintedParens(this.printNode(guard, 0)).trim();
-        if ((name === undefined) || guardText.includes('\n')) {
+        const guards = guardTexts();
+        if ((name === undefined) || guards.some((t) => t.includes('\n'))) {
             return undefined;
         }
         const indent = this.getIden(identation);
         const inner = `${this.getIden(identation + 1)}if _, ${name} := ${dictText}[*${keyText}]; ${negated ? '!' : ''}${name}`;
         const body = this.printBlock(node.thenStatement, identation + 1, false);
-        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guardText} {\n${inner}${body}\n${indent}}`);
+        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guards.join(' && ')} {\n${inner}${body}\n${indent}}`);
     }
 
     // `a && ... && (k in m)` (k a `*string`) with no else: `if G && R {}` runs exactly as
@@ -28434,23 +28032,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!plainReceiver || (this.goWsCacheHasText(dict, read.left) !== undefined)) {
             return undefined; // book entries keep the helper their passes key on; a ws cache prints its own test
         }
-        const dictText = this.printNode(dict, 0);
-        const dictMapType = (dict?.kind === SyntaxKind.Identifier ? this.goPrintedTypeOfExpression(dict, dictText) : undefined)
-            ?? this.goInOpDictMapType(dict, dictText);
-        const keyText = this.printNode(keyNode, 0);
-        if (dictText.includes('\n') || keyText.includes('\n')
-            || ((dictMapType !== 'map[string]any') && (dictMapType !== 'map[string]map[string]any'))) {
-            return undefined;
-        }
-        const name = this.goIfInOpBindingName(node);
-        const guardTexts = guards.map((g) => this.printNode(g, 0).trim()).concat(keyGuarded ? [] : [ `${guards.length > 0 ? '(' : ''}${this.printNode(keyNode, 0)} != nil${guards.length > 0 ? ')' : ''}` ]);
-        if ((name === undefined) || guardTexts.some((t) => t.includes('\n'))) {
-            return undefined;
-        }
-        const indent = this.getIden(identation);
-        const inner = `${this.getIden(identation + 1)}if _, ${name} := ${dictText}[*${keyText}]; ${negated ? '!' : ''}${name}`;
-        const body = this.printBlock(node.thenStatement, identation + 1, false);
-        return this.printNodeCommentsIfAny(node, identation, `${indent}if ${guardTexts.join(' && ')} {\n${inner}${body}\n${indent}}`);
+        return this.goInOpNestedIfText(node, identation, dict, this.printNode(dict, 0), keyNode, negated, false,
+            () => guards.map((g) => this.printNode(g, 0).trim()).concat(keyGuarded ? [] : [ `${guards.length > 0 ? '(' : ''}${this.printNode(keyNode, 0)} != nil${guards.length > 0 ? ')' : ''}` ]));
     }
 
     // the single `key in dict` read the condition can bind: a map-typed identifier
@@ -28458,7 +28041,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const reads = [];
         const inCount = this.goDescendantsOf(condition).filter((n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword)).length
             + (((condition?.kind === SyntaxKind.BinaryExpression) && (condition.operatorToken?.kind === SyntaxKind.InKeyword)) ? 1 : 0);
-        const visit = (n) => {
+        for (const n of [condition, ...this.goDescendantsOf(condition)]) {
             const ohlcvsRead = ((inCount === 1) && (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.InKeyword))
                 ? this.goOhlcvsInRead(n, statement) : undefined;  // a lone `in` only; a second one keeps the existing single-read rule
             if (ohlcvsRead !== undefined) {
@@ -28495,9 +28078,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     }
                 }
             }
-            n.forEachChild(visit);
-        };
-        visit(condition);
+        }
         return (reads.length === 1) ? reads[0] : undefined;
     }
 
@@ -28541,12 +28122,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (dictNode?.kind === SyntaxKind.Identifier) {
             // a GetArgMap-bound parameter is that Go map in the line that binds it; InOp only asks
             // membership, which the two-value read answers without the helper's deref of the value
-            let decl: any;
-            try {
-                decl = this.goValueDecl(dictNode);
-            } catch (e) {
-                decl = undefined;
-            }
+            const decl: any = this.goValueDecl(dictNode);
             return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : this.goInOpDeclaredMapLocal(dictNode);
         }
         const text = this.goUnwrapPrintedParens(dictText ?? '');
@@ -28578,16 +28154,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // `ok` unless the statement already names it: the init clause would shadow that name
     goIfInOpBindingName(statement): string | undefined {
-        const taken = new Set();
-        const visit = (n) => {
-            if ((n.kind === SyntaxKind.Identifier) && (typeof n.text === 'string')) {
-                taken.add(n.text);
-            }
-            n.forEachChild(visit);
-        };
-        statement.forEachChild(visit);
+        const idents = this.goScopeIndex(statement).idents;
         for (const candidate of ['ok', 'ok2', 'ok3']) {
-            if (!taken.has(candidate)) {
+            if (!idents.has(candidate)) {
                 return candidate;
             }
         }
@@ -29002,22 +28571,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     printIfStatement(node, identation) {
-        const tickersIn = this.goWsTickersPointerInIf(node, identation);
+        const tickersIn = this.goWsTickersPointerInIf(node, identation)
+            // a nil-guarded pointer key needs the read inside the guard
+            ?? this.goInOpGuardedNestedIf(node, identation)
+            ?? this.goInOpChainNestedIf(node, identation)
+            ?? this.goOrHoistIf(node, identation);
         if (tickersIn !== undefined) {
             return tickersIn;
-        }
-        // a nil-guarded pointer key needs the read inside the guard
-        const nested = this.goInOpGuardedNestedIf(node, identation);
-        if (nested !== undefined) {
-            return nested;
-        }
-        const chained = this.goInOpChainNestedIf(node, identation);
-        if (chained !== undefined) {
-            return chained;
-        }
-        const hoisted = this.goOrHoistIf(node, identation);
-        if (hoisted !== undefined) {
-            return hoisted;
         }
         return super.printIfStatement(node, identation);
     }
