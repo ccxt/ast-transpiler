@@ -29137,6 +29137,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (method === 'sortBy' || method === 'sortBy2') return !this.rustTestTierSource(call) && (this.extraArrSource(call) || this.rustSortOfTypedList(call)) ? 'list' : undefined;
         // base `sort` (exchange_stubs.rs) sorts a `Value::Arr` into a new `Value::Array` and hands anything else back: the same proof
         if (method === 'sort') return !this.rustTestTierSource(call) && call.arguments.length === 1 && this.rustSortOfTypedList(call) ? 'list' : undefined;
+        // base `safeOrder` / `safeTicker` end in `extend (x, {..})`: a fresh map on every input (typed `Dict` by the ccxt build)
+        if (RustTranspiler.RUST_BUILT_RECORD_BUILDERS.has(method)) return !this.rustTestTierSource(call) && this.rustCalleeIsRuntimeBase(call) && !this.rustVenueReturnTypesHas(call, method) ? 'dict' : undefined;
         if (/^(?:safe|extend$|deepExtend$|omit$|keysort$|parseJson$|watch|subscribe|unsubscribe|market$|currency$)/.test(method)) return undefined;
         if (this.rustTestTierSource(call) || this.rustTypedUnified.has(method)) return undefined;
         // base `handle*` tuples have their own slot rules; a venue `handle*` whose body builds its tuple list is a fresh list
@@ -29187,6 +29189,7 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_BUILT_HELPER_RETURNS: Record<string, 'dict' | 'list'> = {
         extend: 'dict', indexBy: 'dict', groupBy: 'dict', toArray: 'list', arrayConcat: 'list', filterBy: 'list',
     };
+    private static readonly RUST_BUILT_RECORD_BUILDERS = new Set([ 'safeOrder', 'safeTicker' ]);
 
     // Generated base list filters that answer a fresh list on every path: a missing input is `[]`, every other one goes
     // through `toArray` (a ws cache is snapshotted) and then `arraySlice` / `filterByLimit` of that list, both of which
