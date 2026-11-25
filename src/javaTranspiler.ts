@@ -7059,6 +7059,7 @@ export class JavaTranspiler extends BaseTranspiler {
             const arithmetic = this.printInlineHelperArithmetic(left, right, leftText, rightText, op)
                 ?? this.printDeclaredBoxArithmetic(node, left, right, leftText, rightText, op)
                 ?? this.printIntegralCallArithmetic(left, right, leftText, rightText, op)
+                ?? this.printFloorLongProduct(left, right, leftText, rightText, op)
                 ?? this.printParseToIntDoubleProduct(node, left, right, leftText, rightText, op)
                 ?? this.printNumSinkDoubleProduct(node, left, right, leftText, rightText, op);
             if (arithmetic !== undefined) {
@@ -8052,6 +8053,45 @@ export class JavaTranspiler extends BaseTranspiler {
         const a = ta === 'int' ? `((long) ${leftText})` : literal(left, leftText);
         const b = tb === 'int' && ta === 'int' ? `((long) ${rightText})` : literal(right, rightText);
         return `(${a} ${op === SyntaxKind.MinusToken ? '-' : '*'} ${/^-/.test(b) ? `(${b})` : b})`;
+    }
+
+    // `Math.floor/ceil (..) * n` with n a declared integral number: an integral double times an integer,
+    // which Helpers.multiply re-boxes as Long (null for a null n); NaN / infinite products aside
+    printFloorLongProduct(left, right, leftText: string, rightText: string, op): string | undefined {
+        if (op !== SyntaxKind.AsteriskToken) {
+            return undefined;
+        }
+        const unwrap = (n) => (n !== undefined && isParenthesizedExpression(n) ? unwrap(n.expression) : n);
+        const isFloor = (n) => isCallExpression(unwrap(n)) && this.javaPrintedCallKind(unwrap(n)) === 'double'
+            && ['floor', 'ceil'].includes(unwrap(n).expression?.name?.text);
+        const floorLeft = isFloor(left);
+        if (floorLeft === isFloor(right)) {
+            return undefined;
+        }
+        const other = floorLeft ? right : left;
+        const otherText = (floorLeft ? rightText : leftText).trim();
+        const kind = this.javaDeclaredBoxOperandKind(other, otherText) ?? this.javaConstIntegralProductKind(other, otherText);
+        if (!['longbox', 'longprim', 'intprim', 'longlit', 'intlit'].includes(kind)) {
+            return undefined;
+        }
+        const product = `(long) (${floorLeft ? leftText.trim() : otherText} * ${floorLeft ? otherText : rightText.trim()})`;
+        return kind === 'longbox' ? `((${otherText} == null) ? null : ${product})` : `(${product})`;
+    }
+
+    // a `const` read under its own name whose initializer printIntegralCallArithmetic prints as a long product
+    javaConstIntegralProductKind(node, text: string): string | undefined {
+        if (!isIdentifier(node) || text !== String(node.text) || !this.javaIdentifierPrintsDeclaredName(node)) {
+            return undefined;
+        }
+        const declaration = this.javaDeclarationOfIdentifier(node);
+        const init = declaration !== undefined && isVariableDeclaration(declaration)
+            && (getCombinedNodeFlags(declaration) & NodeFlags.Const) !== 0 ? declaration.initializer : undefined;
+        if (init === undefined || !isBinaryExpression(init) || init.operatorToken.kind !== SyntaxKind.AsteriskToken) {
+            return undefined;
+        }
+        const texts = [this.printNode(init.left, 0), this.printNode(init.right, 0)];
+        return this.printIntegralCallArithmetic(init.left, init.right, texts[0], texts[1], SyntaxKind.AsteriskToken) !== undefined
+            ? 'longprim' : undefined;
     }
 
     printDeclaredBoxArithmetic(node, left, right, leftText: string, rightText: string, op): string | undefined {
