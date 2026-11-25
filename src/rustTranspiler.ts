@@ -44733,7 +44733,9 @@ export class RustTranspiler extends BaseTranspiler {
     // a pro local built by `this.indexBy (..)` is a fresh runtime map (`index_by -> Dict`), never a ws marker map
     const fresh = isIdentifier(recv) && this.rustP22IndexByLocal(recv);
     if (!file.includes('ts/src/') || (field === undefined && !fresh && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
-    if (field === undefined && (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv))) return undefined;
+    // a local printed `indexmap::IndexMap<String, Value>` (a typed `Dict` literal) is a plain map too
+    const typedMap = isIdentifier(recv) && this.rustP22TypedMapLocal(recv);
+    if (field === undefined && !typedMap && (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv))) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
     const kind = isIdentifier(key) ? this.rustScalarLocalOf(key)?.kind : undefined;
     if (kind !== 'str' && kind !== 'ostr') return undefined;
@@ -44779,6 +44781,10 @@ export class RustTranspiler extends BaseTranspiler {
         out = `if let Some(Value::Dict(__p${i})) = ${from}.get(${JSON.stringify(cfg.path[i - 1])}) { ${out} } else { ${none} }`;
     }
     return `(${out})`;
+};
+(RustTranspiler.prototype as any).rustP22TypedMapLocal = function (this: any, recv: any): boolean {
+    const d: any = this.rustDeclarationOfIdentifier(recv);
+    return d?.kind === SyntaxKind.VariableDeclaration && d.name !== recv && this.rustDictLocalIsTyped(d);
 };
 // ===== end h34-H34-P22
 
