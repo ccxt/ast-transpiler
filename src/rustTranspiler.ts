@@ -27837,7 +27837,9 @@ export class RustTranspiler extends BaseTranspiler {
         if (key === undefined || key.startsWith('__') || init === undefined || !isElementAccessExpression(init) || this.rustUrlsMapEntry(init)) return false;
         if (!this.rustDictElementSource(init)) return false;
         if (!this.getChecker().isArrayType(this.typeOfNodeIfAny(init.expression))) return this.rustDictRowKeyWriteBackOk(n, init);
-        if (!/(?:^|[\\/])ts[\\/]src[\\/](?:prediction[\\/])?[^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
+        // or the prediction base, whose outcome rows come off a market's parsed `outcomes` list (no ws, cache or book tag)
+        const predictionBase = /(?:^|[\\/])ts[\\/]src[\\/]base[\\/]PredictionExchange\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''));
+        if (!predictionBase && !/(?:^|[\\/])ts[\\/]src[\\/](?:prediction[\\/])?[^\\/]+\.ts$/.test(String(n.getSourceFile?.()?.fileName ?? ''))) return false;
         const list: any = this.rustDeclarationOfIdentifier(init.expression);
         if (list === undefined || !isVariableDeclaration(list as any)) return false;
         const source: any = this.rustSkipWrappers((list as any).initializer);
