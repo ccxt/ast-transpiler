@@ -16985,8 +16985,7 @@ export class GoTranspiler extends BaseTranspiler {
             return false;
         }
         const index: number = call.arguments.indexOf(node);
-        let fn: any;
-        fn = this.goResolvedCallDecl(call);
+        const fn: any = this.goResolvedCallDecl(call);
         const param: any = (index >= 0) ? fn?.parameters?.[index] : undefined;
         return (param !== undefined) && (!requireArity || (fn.parameters.length >= call.arguments.length)) && checkParam(fn, param);
     }
@@ -19169,12 +19168,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((node?.kind !== SyntaxKind.PropertyAccessExpression) || !Object.prototype.hasOwnProperty.call(this.GO_MARKET_TABLES, node.name?.text)) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node.name);
-        } catch (e) {
-            declaration = undefined;
-        }
+        const declaration: any = this.goValueDecl(node.name);
         const owner: any = declaration?.parent;
         if ((declaration?.kind !== SyntaxKind.PropertyDeclaration) || (owner?.kind !== SyntaxKind.ClassDeclaration) || (owner.name?.text !== 'BaseExchange')) {
             return undefined;
@@ -19192,12 +19186,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (node?.kind !== SyntaxKind.Identifier) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            declaration = undefined;
-        }
+        const declaration: any = this.goValueDecl(node);
         const init: any = (declaration?.kind === SyntaxKind.VariableDeclaration) ? this.goUnwrapParenthesizedNode(declaration.initializer) : undefined;
         const constant = ((declaration?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
         const table = (constant && (init?.expression?.kind === SyntaxKind.ThisKeyword)) ? this.goMarketTable(init) : undefined;
@@ -19785,12 +19774,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (key?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(key);
-        } catch (e) {
-            return false;
-        }
+        const decl: any = this.goValueDecl(key);
         return (decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'string');
     }
 
@@ -19856,12 +19840,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             || !this.goMapLocalKeyIsString(keyNode, keyStr)) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(baseExpr);
-        } catch (e) {
-            return false;
-        }
+        const decl: any = this.goValueDecl(baseExpr);
         const isMap = (decl?.kind === SyntaxKind.Parameter) ? (this.goGetArgParameterType(decl) === 'map[string]any')
             : ((decl?.kind === SyntaxKind.VariableDeclaration) && ((this.goResolvedLocalGoType(baseExpr) === 'map[string]any')
                 || this.goAwaitedMapLocal(decl)));
@@ -20902,12 +20881,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return false;
         }
         const index = call.arguments.indexOf(node);
-        let declaration: any;
-        try {
-            declaration = this.goResolvedCallDecl(call);
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goResolvedCallDecl(call);
         const param: any = declaration?.parameters?.[index];
         if ((index < 0) || (param === undefined) || (param.questionToken !== undefined) || (param.initializer !== undefined)
             || (param.dotDotDotToken !== undefined)) {
@@ -25719,8 +25693,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const checker = this.getChecker();
         const result = [];
         for (const call of callsNamed(name)) {
-            let declaration;
-            declaration = this.goResolvedCallDecl(call);
+            const declaration: any = this.goResolvedCallDecl(call);
             if (declaration === fn) {
                 result.push(call);
             }
@@ -26062,12 +26035,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (!this.predictionMapFields.has(this.transformPropertyAccessExpressionName(node.name.text, node.name))) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goValueDecl(node);
         return (declaration?.kind === SyntaxKind.PropertyDeclaration) && (declaration.parent?.kind === SyntaxKind.ClassDeclaration)
             && ((declaration.parent.name?.escapedText ?? declaration.parent.name?.text) === 'PredictionExchange');
     }
@@ -26382,12 +26350,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let decl: any;
-        try {
-            decl = this.goValueDecl(node);
-        } catch (e) {
-            decl = undefined;
-        }
+        const decl: any = this.goValueDecl(node);
         if ((decl?.kind !== SyntaxKind.Parameter) || (this.goGetArgParameterType(decl) !== 'map[string]any')) {
             return false;
         }
@@ -26527,12 +26490,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((producer === undefined) || !/^Handle[A-Z]/.test(producer)) {
             return false;
         }
-        let declared: any;
-        try {
-            declared = this.goValueDecl(holder.initializer.expression.name);
-        } catch (e) {
-            return false;
-        }
+        const declared: any = this.goValueDecl(holder.initializer.expression.name);
         return /[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(declared?.getSourceFile?.()?.fileName ?? ''))
             && (ccxtGoTupleParamsElementType(this, element) === GO_SAFE_DICT_LOCAL_TYPE);
     }
@@ -26549,12 +26507,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (node?.kind !== SyntaxKind.Identifier) {
             return false;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(node);
-        } catch (e) {
-            return false;
-        }
+        const declaration: any = this.goValueDecl(node);
         if (declaration?.kind === SyntaxKind.BindingElement) {
             return this.goBaseTupleParamsSlot(declaration);
         }
@@ -27440,12 +27393,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (name === undefined) {
             return undefined;
         }
-        let declaration: any;
-        try {
-            declaration = this.goValueDecl(call.expression);
-        } catch {
-            return undefined;
-        }
+        const declaration: any = this.goValueDecl(call.expression);
         const fileName = String(declaration?.getSourceFile?.()?.fileName ?? '');
         return /[\\/]base[\\/](Exchange(\.nooverloads\.\d+)?|functions[\\/]\w+)\.ts$/.test(fileName) ? name : undefined;
     }
@@ -28380,12 +28328,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (dictNode?.kind === SyntaxKind.Identifier) {
             // a GetArgMap-bound parameter is that Go map in the line that binds it; InOp only asks
             // membership, which the two-value read answers without the helper's deref of the value
-            let decl: any;
-            try {
-                decl = this.goValueDecl(dictNode);
-            } catch (e) {
-                decl = undefined;
-            }
+            const decl: any = this.goValueDecl(dictNode);
             return ((decl?.kind === SyntaxKind.Parameter) && (this.goGetArgParameterType(decl) === 'map[string]any')) ? 'map[string]any' : this.goInOpDeclaredMapLocal(dictNode);
         }
         const text = this.goUnwrapPrintedParens(dictText ?? '');
