@@ -11210,6 +11210,21 @@ function clientSubscriptions (go: any, node: any) {
     return (decl.parent?.name?.text === SUBSCRIPTIONS_CLASS) ? node : undefined;
 }
 
+// `x = this.safeDict (R.subscriptions, k) as Dict` (a rebind, no default, string key): the owner's SubscriptionDict answers
+// the same nil map for a missing, nil or non-map entry, so a declared Dict local keeps map[string]any through it
+function subscriptionEntryDictRebind (go: any, node: any): { table: any, key: any } | undefined {
+    let call = node;
+    while ((call?.kind === SK.AsExpression) || (call?.kind === SK.ParenthesizedExpression)) { call = call.expression; }
+    let top = call;
+    while ((top?.parent?.kind === SK.AsExpression) || (top?.parent?.kind === SK.ParenthesizedExpression)) { top = top.parent; }
+    const rebind = top?.parent;
+    if ((rebind?.kind !== SK.BinaryExpression) || (rebind.operatorToken?.kind !== SK.EqualsToken) || (rebind.right !== top) || (rebind.parent?.kind !== SK.ExpressionStatement)) { return undefined; }
+    const args = (call?.kind === SK.CallExpression) && (call.arguments?.length === 2) ? go.goSafeAccessorLocalArgs (call, 'safeDict') : undefined;
+    const table = (args !== undefined) ? clientSubscriptions (go, args.container) : undefined;
+    if ((table === undefined) || !clientIsInterfaceFrame (call) || !go.h29g06StringKey (go.goUnwrapParenthesizedNode (args.key))) { return undefined; }
+    return { table, key: args.key };
+}
+
 // the pro and prediction trees are printed with the ws regexes: the client frame is `any` there
 function clientIsInterfaceFrame (node: any) {
     let current = node;
@@ -11266,6 +11281,10 @@ export function installFmGo5G01 (goTranspiler: any) {
         if (op === SK.InKeyword) {
             const table = clientSubscriptions (this, node.right);
             if (table !== undefined) { return owner (this, table) + '.SubscriptionHas(' + this.printNode (node.left, 0) + ')'; }
+        } else if ((op === SK.EqualsToken) && (node.left?.kind === SK.Identifier) && (subscriptionEntryDictRebind (this, node.right) !== undefined)
+            && (this.goDeclaredTypeOfIdentifier (node.left) === 'map[string]any')) {
+            const read = subscriptionEntryDictRebind (this, node.right);
+            return this.printNode (node.left, 0) + ' = ' + owner (this, read.table) + '.SubscriptionDict(' + this.printNode (read.key, 0) + ')';
         } else if ((op === SK.EqualsToken) && (node.left?.kind === SK.ElementAccessExpression)) {
             const keys: any[] = [];
             let root = node.left;
@@ -11296,6 +11315,7 @@ export function installFmGo5G01 (goTranspiler: any) {
     const initType = goTranspiler.goTypeOfInitializer;
     goTranspiler.goTypeOfInitializer = function (this: any, node: any, printed: string) {
         if ((node?.kind === SK.BinaryExpression) && (node.operatorToken?.kind === SK.InKeyword) && (clientSubscriptions (this, node.right) !== undefined)) { return 'bool'; }
+        if (subscriptionEntryDictRebind (this, node) !== undefined) { return 'map[string]any'; }
         if ((node?.kind === SK.CallExpression) && (node.arguments?.length === 1) && (clientSubscriptions (this, node.arguments[0]) !== undefined)) {
             const callee = node.expression?.getText?.();
             if (callee === 'Object.keys') { return '[]string'; }
@@ -11303,6 +11323,19 @@ export function installFmGo5G01 (goTranspiler: any) {
         }
         return initType.call (this, node, printed);
     };
+    // a declared Dict local whose only rebinds are object literals or owner entry reads holds a map (or the nil map) throughout
+    goInstAround (goTranspiler, 'goIsRebindFreeMapReceiver', function (this: any, rebindFree, receiver: any) {
+        if (rebindFree.call (this, receiver)) { return true; }
+        const declaration = (receiver?.kind === SK.Identifier) ? this.goValueDecl (receiver) : undefined;
+        if ((declaration?.kind !== SK.VariableDeclaration) || (declaration.name?.kind !== SK.Identifier) || (this.goDeclaredTypeOfIdentifier (receiver) !== 'map[string]any')) { return false; }
+        const scope = this.goEnclosingFunction (declaration);
+        const rebinds = (scope === undefined) ? [] : this.goScopeIdents (scope, declaration.name.text).filter ((n: any) => (n !== declaration.name) && (this.goRebindingTargetOf (n) !== undefined) && [ undefined, declaration ].includes (this.goValueDecl (n)));
+        return (scope !== undefined) && (rebinds.length > 0) && rebinds.every ((n: any) => {
+            const target = this.goRebindingTargetOf (n);
+            return (target.kind === SK.BinaryExpression) && (target.operatorToken.kind === SK.EqualsToken) && (target.parent?.kind === SK.ExpressionStatement)
+                && ((this.goUnwrapParenthesizedNode (target.right)?.kind === SK.ObjectLiteralExpression) || (subscriptionEntryDictRebind (this, target.right) !== undefined));
+        });
+    });
     goInstRewrite (goTranspiler, '', 'goSafeDictUnboxValue', function (this: any, known, declaration: any, identation: number) {
         // the initializer may carry a type assertion (`this.safeDict (R.subscriptions, k, {}) as Dict`)
         let initializer = declaration.initializer;
