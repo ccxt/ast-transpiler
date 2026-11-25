@@ -22500,8 +22500,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return (goType === '*bool') && (parent.expression === current);
         case SyntaxKind.CallExpression: {
             const callee: any = parent.expression;
+            const venueStringSlot = (goType === '*string') && (parent.arguments.indexOf(current) >= 0) && ccxtGoTupleStringPointerSlot(this, current);
             return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
-                && GO_TUPLE_POINTER_SLOT_CALLEES.has(String(callee.name?.text)) && parent.arguments.some((a: any) => a === current);
+                && (GO_TUPLE_POINTER_SLOT_CALLEES.has(String(callee.name?.text)) || venueStringSlot) && parent.arguments.some((a: any) => a === current);
         }
         case SyntaxKind.PropertyAccessExpression: return (parent.expression === current) && (parent.name?.text === 'length');
         }
