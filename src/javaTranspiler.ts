@@ -287,6 +287,8 @@ const JAVA_ELEMENT_WRITE_MAP_TYPE = 'java.util.Map<String, Object>';
 // the Java spellings a consumer declares an element-read receiver with when it is a List:
 // the read prints `x.get(i)` / `x.size()` with no cast, because the declaration is the List
 const JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
+// a ws cache local (ws/ArrayCache.java extends ArrayList<Object>, every subclass prints this type)
+const JAVA_DECLARED_ARRAY_CACHE_TYPE = 'io.github.ccxt.ws.ArrayCache';
 
 // the Java primitive spellings a declaration can publish: an operand that prints as one
 // cannot take the `instanceof` test a native map read guards with
@@ -4478,7 +4480,7 @@ export class JavaTranspiler extends BaseTranspiler {
             // ral-84j7: a local the embedding layer declared a java.util.List (a typed
             // parse*/filter return) needs no receiver cast; same int, same NPE on null
             const declaredList = this.javaDeclaredTypeOf(expression);
-            if (declaredList !== undefined && JAVA_DECLARED_LIST_TYPES.test(declaredList)) {
+            if (declaredList !== undefined && (JAVA_DECLARED_LIST_TYPES.test(declaredList) || declaredList === JAVA_DECLARED_ARRAY_CACHE_TYPE)) {
                 return `${leftSide}.size()`;
             }
         }
@@ -4848,7 +4850,7 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declared = this.javaDeclaredTypeOf(node.expression);
-        if (declared === undefined || !JAVA_DECLARED_LIST_TYPES.test(declared)) {
+        if (declared === undefined || (!JAVA_DECLARED_LIST_TYPES.test(declared) && declared !== JAVA_DECLARED_ARRAY_CACHE_TYPE)) {
             return undefined;
         }
         const key = node.argumentExpression;
@@ -4862,10 +4864,12 @@ export class JavaTranspiler extends BaseTranspiler {
         // the ccxt build pass nativeJavaElementReads already converts a numeric
         // literal, a counter, an int/long/Long/Integer name and the `((long) X) - 1L` form;
         // those sites stay byte-identical and are not ours to re-spell
-        if (/^[A-Za-z_$][\w$]*$/.test(index)) {
+        // (that pass reads declared Lists only: an ArrayCache receiver is printed here)
+        const cache = declared === JAVA_DECLARED_ARRAY_CACHE_TYPE;
+        if (!cache && /^[A-Za-z_$][\w$]*$/.test(index)) {
             return undefined;
         }
-        if (/^\(\(\(long\) [A-Za-z_$][\w$]*\) - 1L\)$/.test(index)) {
+        if (!cache && /^\(\(\(long\) [A-Za-z_$][\w$]*\) - 1L\)$/.test(index)) {
             return undefined;
         }
         if (!this.javaNonNullableNumberType(key)) {
