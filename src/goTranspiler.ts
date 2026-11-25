@@ -12883,8 +12883,8 @@ function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass, runnerRefs = 
             maskedCache.set (file, masked);
         }
         const code = h26g05BlankShadowLocal (masked, name);
-        const refs = (code.match (anyRef) ?? []).length;
-        const calls = (code.match (direct) ?? []).length + (code.match (declared) ?? []).length;
+        const refs = goRegexCount (code, anyRef);
+        const calls = goRegexCount (code, direct) + goRegexCount (code, declared);
         if (refs !== calls) {
             ok = false; // a method reference or a foreign receiver: fail closed
             break;
@@ -12894,9 +12894,23 @@ function goStringPtrParamOnlyDirectCalls (go, tree, name, myClass, runnerRefs = 
     return ok;
 }
 
+// the number of matches of a global regex, without building the match array
+function goRegexCount (text: string, re: RegExp): number {
+    re.lastIndex = 0;
+    let count = 0;
+    for (let m = re.exec (text); m !== null; m = re.exec (text)) {
+        count++;
+        if (m[0].length === 0) { re.lastIndex++; }
+    }
+    return count;
+}
+
 // a quoted method name is inert as an object key, a comparison operand, or a direct argument of a base
 const GO_INERT_NAME_READERS = /^(?:handle\w*AndParams\w*|safe\w*|getBybitType|handleStockParams|handleApiKeyIndex|handleAccountIndex|handleRouteAndParams)$/;
 function goQuotedNameNeverDispatched (file: string, text: string, name: string): boolean {
+    if (!text.includes ("'" + name) && !text.includes ('"' + name) && !text.includes ('`' + name)) {
+        return true; // no quoted occurrence at all
+    }
     const quoted = new RegExp ('[\'"`]' + name + '[\'"`]', 'g');
     let m: RegExpExecArray | null;
     while ((m = quoted.exec (text)) !== null) {
