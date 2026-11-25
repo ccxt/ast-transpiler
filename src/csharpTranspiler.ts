@@ -7660,6 +7660,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         return this.csharpNullGuardAdmitsRead(node, node.operand);
     }
 
+    // `-x` on a local the TypeScript declares `int` that prints `Int64?` (a parseToInt read): the lifted
+    // negation in place is the typed helper body; a null now stays null as in Go / Java / Rust
+    csharpDeclaredIntNegation(node, declaration, csharpType: string | undefined): boolean {
+        if ((csharpType !== 'Int64?') || (declaration?.type?.getText?.()?.trim() !== 'int')) {
+            return false;
+        }
+        return isPrefixUnaryExpression(node) && (node.operator === SyntaxKind.MinusToken) && isIdentifier(node.operand);
+    }
+
     // the C# type the local's printed declaration finally carries; an embedding build layer that
     // retypes `object x = ...` after printing overrides this with its own (final) answer
     csharpFinalDeclaredLocalType(declaration): string | undefined {
@@ -7678,7 +7687,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declared = this.csharpFinalDeclaredLocalType(declaration);
-        if (!this.csharpGuardedNullableNegation(node, declared)) {
+        if (!this.csharpGuardedNullableNegation(node, declared) && !this.csharpDeclaredIntNegation(node, declaration, declared)) {
             return undefined;
         }
         return `(${leftSide} = -${leftSide})`;
