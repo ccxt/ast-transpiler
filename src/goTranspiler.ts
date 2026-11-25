@@ -15763,6 +15763,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'getSupportedMapping': [ 0 ],
     // `outcome: Str`: callers pass a SafeString `*string` or an addressable Go string local; nil answers first
     'slugToOutcomeSymbol': [ 2 ],
+    // `subType: Str`: the one caller (featureValue) passes a SafeString `*string`; the body nil-tests it first
+    'featureValueByType': [ 1 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
