@@ -32,7 +32,7 @@ const print = (body: string): string => {
     }
 };
 
-const BIN = '    resolveAuthType (methodName: string, market: any = undefined, params: Dict = {}): [string, Str, Dict] {\n'
+const BIN = '    resolveAuthType (methodName: string, market: any = undefined, params: Dict = {}): [any, Str, Dict] {\n'
     + '        const [ t, p ] = this.handleMarketTypeAndParams (methodName, market, params);\n'
     + '        return [ t, undefined, p ];\n'
     + '    }\n'
