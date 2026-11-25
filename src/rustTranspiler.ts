@@ -44915,11 +44915,8 @@ export class RustTranspiler extends BaseTranspiler {
     const typedMap = isIdentifier(recv) && this.rustP22TypedMapLocal(recv);
     if (field === undefined && !typedMap && (!isIdentifier(recv) || !this.rustNeverNullDictLocalArg(recv))) return undefined;
     const key: any = this.rustSkipWrappers(call.arguments[1]);
-    let kind = isIdentifier(key) ? this.rustScalarLocalOf(key)?.kind : undefined;
-    const strParam = kind === undefined && typedMap && isIdentifier(key) ? this.rustVenueStrParamKind(this.rustDeclaredNode(key)) : undefined;
-    if (strParam !== undefined) kind = strParam;
-    if (kind !== 'str' && kind !== 'ostr') return undefined;
-    const k = `${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${strParam !== undefined ? (kind === 'str' ? '.as_str().unwrap_or_default()' : '.as_str().unwrap_or("null")') : kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}`;
+    const k = (this as any).rustP22StrKeyText(key);
+    if (k === undefined) return undefined;
     const m = `std::sync::Arc::clone(__m)`;
     const r = field !== undefined ? `self.${field}` : (BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     return `(if let Some(Value::Dict(__m)) = ${r}.get(${k}) { ${optional ? `Some(${m})` : m} } else { ${optional ? 'None' : 'Default::default()'} })`;
@@ -44948,11 +44945,7 @@ export class RustTranspiler extends BaseTranspiler {
     const key: any = this.rustSkipWrappers(call.arguments[1]);
     let k: string | undefined;
     if (isStringLiteral(key)) k = JSON.stringify(String(key.text));
-    else if (isIdentifier(key)) {
-        const kind = this.rustScalarLocalOf(key)?.kind;
-        if (kind !== 'str' && kind !== 'ostr') return undefined;
-        k = `${(BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text)}${kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}`;
-    }
+    else k = (this as any).rustP22StrKeyText(key);
     if (k === undefined || cfg.path.some((p) => /[\\"]/.test(p))) return undefined;
     const none = optional ? 'None' : 'Default::default()';
     let out = `if let Some(Value::Dict(__m)) = __p${cfg.path.length}.get(${k}) { ${optional ? 'Some(std::sync::Arc::clone(__m))' : 'std::sync::Arc::clone(__m)'} } else { ${none} }`;
@@ -44961,6 +44954,23 @@ export class RustTranspiler extends BaseTranspiler {
         out = `if let Some(Value::Dict(__p${i})) = ${from}.get(${JSON.stringify(cfg.path[i - 1])}) { ${out} } else { ${none} }`;
     }
     return `(${out})`;
+};
+// a string key: a `String` / `Option<String>` local, an `Option<String>` tuple slot or an unwritten typed string
+// parameter, spelled by the parameter's printed form (`Value::from(p)` is the borrow itself, a bare `p` its `Value` binding)
+(RustTranspiler.prototype as any).rustP22StrKeyText = function (this: any, key: any): string | undefined {
+    if (!isIdentifier(key)) return undefined;
+    const d: any = this.rustDeclarationOfIdentifier(key);
+    const name = (BaseTranspiler.prototype as any).transformIdentifier.call(this, key, this.ReservedKeywordsReplacements[key.text] ?? key.text);
+    if (d?.kind === SyntaxKind.Parameter && d.name !== key) {
+        const kind = this.rustOptParamKind(key);
+        if (kind !== 'str' && kind !== 'ostr') return undefined;
+        const lent = /^Value::from\((\w+)\)$/.exec(name);
+        if (lent !== null) return `${lent[1]}${kind === 'str' ? '' : '.unwrap_or("null")'}`;
+        return /^\w+$/.test(name) ? `${name}${kind === 'str' ? '.as_str().unwrap_or_default()' : '.as_str().unwrap_or("null")'}` : undefined;
+    }
+    const kind = d?.kind === SyntaxKind.BindingElement && this.rustTupleSlotKind(d) === 'str' ? 'ostr' : this.rustScalarLocalOf(key)?.kind;
+    if (kind !== 'str' && kind !== 'ostr') return undefined;
+    return /^\w+$/.test(name) ? `${name}${kind === 'str' ? '.as_str()' : '.as_deref().unwrap_or("null")'}` : undefined;
 };
 (RustTranspiler.prototype as any).rustP22TypedMapLocal = function (this: any, recv: any): boolean {
     const d: any = this.rustDeclarationOfIdentifier(recv);
