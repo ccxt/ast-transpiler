@@ -6120,7 +6120,8 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             if (clean && outerDeclaredCache.has (node)) { return outerDeclaredCache.get (node); }
             const known = shippedDeclared?.call (this, node);
             const result = (known !== undefined) ? known : (ccxtGoVenueStrPairElement (this, node) ? '*string' : undefined);
-            if (clean && ((this.goGetArgTypeComputing?.size ?? 0) === 0) && (goParamHookInProgressDepth === 0) && (goStrPtrProvingDepth === 0) && (GO_STR_PTR_ASSUMED.size === 0)) {
+            // an undefined answer can still settle to a type once the declaration has printed: only a type is kept
+            if (clean && (result !== undefined) && ((this.goGetArgTypeComputing?.size ?? 0) === 0) && (goParamHookInProgressDepth === 0) && (goStrPtrProvingDepth === 0) && (GO_STR_PTR_ASSUMED.size === 0)) {
                 outerDeclaredCache.set (node, result);
             }
             return result;
@@ -12738,43 +12739,31 @@ export class GoTranspiler extends BaseTranspiler {
         return this.goScopeIndex(scope).idents.get(name) ?? [];
     }
 
-    // Memoize pure 1-arg TS7 Checker queries per Checker instance to avoid redundant sync IPC.
-    goCheckerMemoCache = new WeakMap<object, Checker>();
+    // Memoize pure 1-arg TS7 Checker queries in place, so the printer keeps sharing the context checker.
+    goCheckerMemoized = new WeakSet<object>();
     getChecker(): Checker {
         const raw: any = super.getChecker();
-        if ((raw === undefined) || (raw === null)) { return raw; }
-        let wrapped = this.goCheckerMemoCache.get(raw);
-        if (wrapped === undefined) {
-            const memo1 = (fn: ((a: any) => any) | undefined) => {
-                if (typeof fn !== 'function') { return fn; }
-                const cache = new WeakMap<object, any>();
-                return (a: any) => {
-                    if ((a === undefined) || (a === null) || (typeof a !== 'object')) { return fn.call(raw, a); }
-                    if (cache.has(a)) { return cache.get(a); }
-                    const res = fn.call(raw, a);
-                    cache.set(a, res);
-                    return res;
-                };
+        if ((raw === undefined) || (raw === null) || this.goCheckerMemoized.has(raw)) { return raw; }
+        const memo1 = (name: string) => {
+            const fn = raw[name];
+            if (typeof fn !== 'function') { return; }
+            const cache = new WeakMap<object, any>();
+            const wrapper = (a: any, ...rest: any[]) => {
+                if ((a === undefined) || (a === null) || (typeof a !== 'object') || (rest.length > 0)) { return fn.call(raw, a, ...rest); }
+                if (cache.has(a)) { return cache.get(a); }
+                const res = fn.call(raw, a);
+                cache.set(a, res);
+                return res;
             };
-            const obj: any = {};
-            const seen = new Set<string>();
-            for (let proto = raw; (proto !== null) && (proto !== Object.prototype); proto = Object.getPrototypeOf(proto)) {
-                for (const key of Object.getOwnPropertyNames(proto)) {
-                    if ((key === 'constructor') || seen.has(key)) { continue; }
-                    seen.add(key);
-                    const desc = Object.getOwnPropertyDescriptor(proto, key);
-                    if (desc && (typeof desc.value === 'function')) { obj[key] = desc.value.bind(raw); } else if (desc && (desc.get !== undefined)) { Object.defineProperty(obj, key, { get: () => raw[key], enumerable: desc.enumerable, configurable: true }); } else { obj[key] = raw[key]; }
-                }
+            // keep the companions other printers' in-place wrappers read (`gen`, `has`)
+            for (const key of Object.getOwnPropertyNames(fn)) {
+                if (!['length', 'name', 'prototype', 'arguments', 'caller'].includes(key)) { Object.defineProperty(wrapper, key, Object.getOwnPropertyDescriptor(fn, key)!); }
             }
-            obj.getSymbolAtLocation = memo1(raw.getSymbolAtLocation);
-            obj.getTypeAtLocation = memo1(raw.getTypeAtLocation);
-            obj.getResolvedSignature = memo1(raw.getResolvedSignature);
-            obj.getSignatureFromDeclaration = memo1(raw.getSignatureFromDeclaration);
-            obj.getReturnTypeOfSignature = memo1(raw.getReturnTypeOfSignature);
-            wrapped = obj as Checker;
-            this.goCheckerMemoCache.set(raw, wrapped);
-        }
-        return wrapped;
+            Object.defineProperty(raw, name, { configurable: true, writable: true, value: wrapper });
+        };
+        for (const name of ['getSymbolAtLocation', 'getTypeAtLocation', 'getResolvedSignature', 'getSignatureFromDeclaration', 'getReturnTypeOfSignature']) { memo1(name); }
+        this.goCheckerMemoized.add(raw);
+        return raw;
     }
 
     goValueDecl(node: any): any { return this.goSymbolValueDecl(node); }
