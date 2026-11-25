@@ -28488,12 +28488,19 @@ export class RustTranspiler extends BaseTranspiler {
         return declaration === this.rustProHandlerShadowParam ? RustTranspiler.PRO_HANDLER_SHADOW_NAME : super.transformIdentifier(recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
     }
 
+    /** The bound handler view of an unwritten `message: Dict` handler parameter (a non-map binds the empty map, the helper's `[]`). */
+    rustProHandlerViewName(node: any): string | undefined {
+        const recv: any = this.rustSkipWrappers(node);
+        if (recv === undefined || !isIdentifier(recv) || this.rustProHandlerShadowParam === undefined) return undefined;
+        return this.rustDeclarationOfIdentifier(recv) === this.rustProHandlerShadowParam ? RustTranspiler.PRO_HANDLER_SHADOW_NAME : undefined;
+    }
+
     printBorrowedKeys(node: any, kind: 'keys' | 'values'): string | undefined {
         const arg = this.bearerEnumArg(node);
         // ral-61n: `None` enumerates nothing, exactly the empty list `object_keys` / `object_values` answer for Null
         const opt = arg === undefined ? undefined : this.rustOptKeySetDictName(arg);
         if (opt !== undefined) return kind === 'keys' ? `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect())` : `Value::Array(${opt}.as_deref().into_iter().flat_map(crate::value::HashMap::values).cloned().collect())`;
-        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg) ?? this.rustVenueDictSlotName(arg);
+        const name = arg === undefined ? undefined : this.rustBorrowedDictName(arg) ?? this.rustExtendCopyDictName(arg) ?? this.rustVenueDictSlotName(arg) ?? this.rustProHandlerViewName(arg);
         if (name === undefined) return undefined;
         return kind === 'keys' ? `Value::Array(${name}.keys().cloned().map(Value::from).collect())` : `Value::Array(${name}.values().cloned().collect())`;
     }
