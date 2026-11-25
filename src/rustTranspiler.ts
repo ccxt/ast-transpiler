@@ -30759,8 +30759,10 @@ export class RustTranspiler extends BaseTranspiler {
         // (never a ws store / field key list: the receiver is a plain local or parameter)
         const objectList = isCallExpression(init) && isPropertyAccessExpression(init.expression) && isIdentifier(init.expression.expression) && init.expression.expression.text === 'Object'
             && init.arguments.length === 1 && isIdentifier(this.rustSkipWrappers(init.arguments[0]));
+        // a string split is a fresh list too: a same-named split in a sibling block is another binding
+        const splitList = isCallExpression(init) && isPropertyAccessExpression(init.expression) && String(init.expression.name.text) === 'split';
         const usesAll = (accept: (n: any) => boolean): boolean => (defaulted ? this.rustScalarUsesAll(declaration, name, accept)
-            : (objectList ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept)));
+            : ((objectList || splitList) ? this.rustBlockLocalUsesAll(declaration, name, accept) : this.rustLocalUsesAll(declaration, name, false, accept)));
         const safe = usesAll((n: any) => {
             if (this.rustIdentifierIsPropertyName(n)) return !(n.parent?.kind === SyntaxKind.ShorthandPropertyAssignment && n.parent.name === n);
             if (!this.rustIdentifierRefersToDeclaration(n, declaration) || this.rustEnclosingFunction(n) !== fn) return false;
