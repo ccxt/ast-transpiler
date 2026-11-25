@@ -44848,6 +44848,8 @@ export class RustTranspiler extends BaseTranspiler {
     // the base config fields `options` / `urls` / `fees` print as plain `Dict` fields, never a ws marker map
     const field = [ 'options', 'urls', 'fees' ].includes(this.rustDictField(recv) ?? '') ? String(recv.name.text) : undefined;
     const nested = field === undefined ? (this as any).rustP22ConfigPath(recv) : undefined;
+    // a REST venue's `this.options[<lit>]` path is the same plain config map
+    if (nested !== undefined && nested.field === 'options' && file.includes('ts/src/') && !/ts[/]src[/](pro|prediction|test|base)[/]/.test(file) && !this.rustTestTierSource(call)) return (this as any).rustP22NestedRead(call, nested, optional);
     if (nested !== undefined) return !/ts[/]src[/](pro|prediction)[/]/.test(file) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call) ? undefined : (this as any).rustP22NestedRead(call, nested, optional);
     // a pro local built by `this.indexBy (..)` is a fresh runtime map (`index_by -> Dict`), never a ws marker map
     const fresh = isIdentifier(recv) && this.rustP22IndexByLocal(recv);
