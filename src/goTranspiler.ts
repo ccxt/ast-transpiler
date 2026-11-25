@@ -61975,3 +61975,60 @@ function h49g41PrintsAsMap (go: any, node: any): boolean {
     };
 }
 // ===== H49-G41 (end) =====
+// ===== H49-G44 (begin): a required `int` slot of an async venue method fed nil-proven *int64 locals =====
+// every same-file caller hands a literal, an int64 or a *int64 the checker narrows to a number: the slot takes
+// the declared int64 and each such argument prints its dereference
+function h49g44IntArgPasses (go: any, arg: any): boolean {
+    if (goNumericSlotArgPasses (go, arg, 'int64')) {
+        return true;
+    }
+    return (arg?.kind === SyntaxKind.Identifier) && (go.goDeclaredTypeOfIdentifier (arg) === '*int64') && go.goPointerNumberIsNonNil (arg);
+}
+function h49g44IntSlot (go: any, fn: any, index: number): boolean {
+    const param: any = fn?.parameters?.[index];
+    if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.name?.kind !== SyntaxKind.Identifier) || !go.isAsyncFunction (fn)
+        || (param?.type?.getText?.() !== 'int') || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || goIsBaseExchangeFile (fn) || go.goMethodKeepsBaseSignature (fn) || goHasDynamicCall (fn, fn.name.text)) {
+        return false;
+    }
+    const calls: any[] = go.goSameFileCallsOf (fn, fn.name.text);
+    if ((calls.length === 0) || calls.some ((c: any) => (c.runner !== undefined) || !h49g44IntArgPasses (go, c.arguments?.[index]))) {
+        return false;
+    }
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if (tree === undefined) {
+        return true;
+    }
+    const myClass = go.goEnclosingClassName (fn);
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    return !(tree.callIndex.get (fn.name.text) ?? []).some ((site: any) => (site.file !== myFile) && go.goTsSrcFileDerivesFrom (tree, site.file, myClass));
+}
+{
+    const candidatesH49g44 = GoTranspiler.prototype.goCallSiteParameterCandidates;
+    GoTranspiler.prototype.goCallSiteParameterCandidates = function (fn, param, index: number) {
+        const shipped = candidatesH49g44.call (this, fn, param, index);
+        return ((shipped.length === 0) && h49g44IntSlot (this, fn, index)) ? [ 'int64' ] : shipped;
+    };
+    const sitesPassTypeH49g44 = GoTranspiler.prototype.goParameterCallSitesPassType;
+    GoTranspiler.prototype.goParameterCallSitesPassType = function (fn, index: number, goType: string): boolean {
+        return sitesPassTypeH49g44.call (this, fn, index, goType) || ((goType === 'int64') && h49g44IntSlot (this, fn, index));
+    };
+    const identifierH49g44 = GoTranspiler.prototype.printIdentifier;
+    GoTranspiler.prototype.printIdentifier = function (node) {
+        const printed = identifierH49g44.call (this, node);
+        const call: any = node?.parent;
+        if ((printed !== node.text) || (call?.kind !== SyntaxKind.CallExpression) || !(call.arguments ?? []).includes (node)
+            || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return printed;
+        }
+        // only a this-call whose slot is a declared `int` of an async method is asked anything more
+        const param: any = this.goCallParamAt (call, call.arguments.indexOf (node));
+        if ((param?.type?.getText?.() !== 'int') || !this.isAsyncFunction (param.parent)) {
+            return printed;
+        }
+        return ((this.goDeclaredTypeOfIdentifier (node) === '*int64') && this.goPointerNumberIsNonNil (node)
+            && h49g44IntSlot (this, param.parent, param.parent.parameters.indexOf (param))
+            && (this.goNativeParameterType (param) === 'int64')) ? '*' + printed : printed;
+    };
+}
+// ===== H49-G44 (end) =====
