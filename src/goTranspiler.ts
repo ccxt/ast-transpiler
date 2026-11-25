@@ -7060,10 +7060,10 @@ function ccxtGoProducerDeclarationType (goTranspiler, declaration, family) {
     const readsTheValue = ownMap
         ? (n) => !ccxtGoProducerUseRebinds (n) && !ccxtGoProducerUseNilTest (n)
         : neverAbsent
-        ? (n) => !ccxtGoProducerUseRebinds (n)
-        : (dictLike
-            ? (n) => goTranspiler.goSafeDictUseReadsTheMap (n)
-            : (n) => goTranspiler.goSafeListUseReadsTheList (n) || ccxtGoSafeListIndexedAccessorRead (goTranspiler, n));
+            ? (n) => !ccxtGoProducerUseRebinds (n)
+            : (dictLike
+                ? (n) => goTranspiler.goSafeDictUseReadsTheMap (n)
+                : (n) => goTranspiler.goSafeListUseReadsTheList (n) || ccxtGoSafeListIndexedAccessorRead (goTranspiler, n));
     return goTranspiler.goDeclaredLocalTypeIfSafe (declaration, goType, readsTheValue);
 }
 
