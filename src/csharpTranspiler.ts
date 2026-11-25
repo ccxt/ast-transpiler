@@ -3241,7 +3241,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         const sync = !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword);
         const initializer = parameter.initializer;
         const undefinedDefault = sync && (initializer !== undefined) && isIdentifier(initializer) && (initializer.text === 'undefined');
-        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || ((initializer !== undefined) && !undefinedDefault)
+        // an integer literal default prints `Int64? <name>`; the `<name> ??= <n>;` prologue keeps the default
+        const literalDefault = sync && (initializer !== undefined) && isNumericLiteral(initializer) && /^\d{1,9}$/.test(initializer.text);
+        if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || ((initializer !== undefined) && !undefinedDefault && !literalDefault)
             || (parameter.type === undefined) || !isIdentifier(parameter.name)) {
             return undefined;
         }
@@ -3253,7 +3255,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             || this.csharpNameIsRebound(parameter, method)) {
             return undefined;
         }
-        const nullable = undefinedDefault || (members.length > 1);
+        const nullable = undefinedDefault || literalDefault || (members.length > 1);
         if (nullable && this.csharpVenueOverriddenMethods.has(method)) {
             return undefined;
         }
@@ -3264,7 +3266,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const kinds = new Set<string>(nullable ? [ 'nullable?', ...proKinds ] : proKinds);
         for (const call of calls) {
             const argument = call.arguments?.[index];
-            if ((argument === undefined) && undefinedDefault && (call.arguments.length <= method.parameters.length)
+            if ((argument === undefined) && (undefinedDefault || literalDefault) && (call.arguments.length <= method.parameters.length)
                 && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
                 continue; // omitted: the default null
             }
