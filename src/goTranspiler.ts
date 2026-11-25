@@ -12197,10 +12197,6 @@ const GO_MARKET_LOCAL_TYPE = 'map[string]any';
 // the market producers whose TS return type names no Go type (see goMarketProducerReturnType)
 const GO_MARKET_PRODUCER_METHODS = [ 'parseMarket', 'getMarketFromSymbols', 'getMarketFromClientAndMessage' ];
 
-// venues whose ws frames decode to a JSON array or to bare text: their handleMessage frame keeps
-// the `any` box even when the annotation says Dict, so the Go dispatch only types object frames
-const GO_ANY_FRAMED_VENUES = new Set([ 'bitfinex', 'toobit', 'coincheck', 'sxbet', 'gemini' ]);
-
 // base accessors/builders whose generated Go result is already the market dictionary
 const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Extend', 'DeepExtend', 'MapTyped', 'MarketTyped' ];
 
@@ -18700,8 +18696,6 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goWsFrameParameterType(fn, param): string | undefined {
         if ((fn.name?.text !== 'handleMessage') || (fn.parameters.indexOf(param) !== 1) || (param.name?.kind !== SyntaxKind.Identifier) || (fn.body === undefined)) { return undefined; }
         if (!((fn.modifiers ?? []).some(m => m.kind === SyntaxKind.OverrideKeyword))) { return undefined; } // only a venue override answers the ws dispatch
-        const venue = this.goEnclosingClassName(fn);
-        if ((venue !== undefined) && GO_ANY_FRAMED_VENUES.has(venue.toLowerCase())) { return undefined; } // array/text frames: one frame type cannot serve every venue
         const checker: any = this.checkerOrUndefined();
         const type = checker?.getTypeAtLocation(param);
         if (type === undefined) { return undefined; }
