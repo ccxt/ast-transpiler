@@ -17146,7 +17146,7 @@ describe('ral-45f: a declaration-initialised alias of a nullable safeDict const 
         const t1 = text.slice(text.indexOf('fn merge'), text.indexOf('fn returned'));
         expect(t1).toContain('let mut raw: Option<crate::value::Dict> = ');
         expect(t1).toContain('let mut out: Option<crate::value::Dict> = raw.clone();');
-        expect(t1).toMatch(/out = self\.extend\(raw, [\s\S]*\.into_opt_dict\(\);/);
+        expect(t1).toMatch(/out = Some\(self\.extend_t\(raw, [\s\S]*\)\);/);
         expect(t1).toContain('merged.push(out.map_or(Value::Null, Value::Dict));');
         // negative: an alias handed to a plain Value slot (not a local store) keeps the box
         const t2 = text.slice(text.indexOf('fn returned'));
@@ -22655,7 +22655,7 @@ describe('ral-65i: an endpoint-declared optional map rewritten by a self-extend,
         expect(out).toContain('let mut response: Option<crate::value::Dict> = None;');
         expect(out).toContain('let mut page: Option<crate::value::Dict> = response.clone();');
         expect(out).toContain('.into_opt_dict();\n');
-        expect(out).toContain('response = self.extend(&response, ');
+        expect(out).toContain('response = Some(self.extend_t(&response, ');
         expect(out).toContain('self.safe_bool_k(&page, "has_next"');
         expect(out).toContain('self.parseCustomBalance(&response, ');
     });

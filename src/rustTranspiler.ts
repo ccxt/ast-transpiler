@@ -26097,6 +26097,7 @@ export class RustTranspiler extends BaseTranspiler {
         let optAliasWrites = 0;
         // ral-48a: writes that rebuild the same never-null container kind (`x = this.extend (x, ..)` on a defaulted safeDict)
         let sameKindWrites = 0;
+        let optDictRewrites = 0;
         // ral-58a: `x = this.omit (x, k)` writes on a proven map local that the handed-map rule (ral-ra) does not take
         let selfOmitWrites = 0;
         const boxedElementUses: any[] = [];
@@ -26165,6 +26166,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // literal, or a base builder that answers that container on every path (`arrayConcat`, `filterBy`, `extend`, ..)
                 // ral-58a: `x = this.omit (x, k)` on a proven map local (sign query under the sign-params proof) keeps it a map
                 if (!nilDeclared && from === 'dict' && this.rustHandedSelfOmit(rhs, declaration) && this.rustOmitLineFits(rhs) && String(rhs.getText()).split('\n')[0].length <= 240) return reuseProducerWrites.push(up) > 0 && ++selfOmitWrites > 0 && ++sameKindWrites > 0;
+                // a map rewrite (`extend`, a map literal) answers a map: the optional form holds it as `Some`, its box the same `Dict`
+                if (!nilDeclared && from === 'dict' && this.rustSameKindRewrite(rhs, from)) optDictRewrites++;
                 if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return (this.rustSelfExtendWrite(n, declaration) ? ++sameKindWrites : 1) > 0 && String(rhs.getText()).split('\n')[0].length <= 240;
                 // ral-43f: `t = s` of a `const s = this.safeDict* (..)` / `safeList*` (nullable default) in the same function:
                 // the alias holds the same optional container (syntactic proof, no decision of `s` is read: fixed point in one pass)
@@ -26455,7 +26458,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (optional && boxedElementUses.length > 0 && (this.rustWsFieldRead(init) !== undefined || defaultedBoxes > 0)) return undefined;
         if (endpointBoxes > 0 && endpointBoxes !== boxedElementUses.length) return undefined;
         // a nullable reader result boxed whole keeps Null apart from the map: only the optional form prints that box
-        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || (writes > 0 && !optAliasInit && writes !== odictRewrites) || from !== 'dict')) return undefined;
+        if (optionalBoxes > 0 && (boxedElementUses.length !== optionalBoxes || nilDeclared || (writes > 0 && !optAliasInit && writes !== odictRewrites + optDictRewrites) || from !== 'dict')) return undefined;
         // a `handle*` params slot takes a `Value`: the map boxes there (the plain form only, its map is never Null)
         if (paramsBoxes > 0 && (optional || from !== 'dict')) return undefined;
         const onlySafeDictWrites = keyWrites > 0 && safeDictKeyWrites === keyWrites && keySets === 0;
@@ -29022,6 +29025,9 @@ export class RustTranspiler extends BaseTranspiler {
             const s = super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text);
             return `${name} = ${this.rustOwnedLastUse(rhs, src.declaration) ? s : `${s}.clone()`}`;
         }
+        // a base `extend` answers a map on every path: its typed form goes straight into `Some` (no box and convert)
+        const ext = local.kind === 'dict' && isCallExpression(rhs) && this.rustRuntimeExtendCall(rhs) ? this.printNode(right, 0).trim() : '';
+        if (ext.startsWith('self.extend(') && ext.endsWith(')') && this.rustBalancedText(ext.slice('self.extend('.length, -1))) return `${name} = Some(self.extend_t(${ext.slice('self.extend('.length)})`;
         if (local.kind === 'dict' && this.rustCacheRowBuiltRewriteDecl(rhs) && isCallExpression(rhs) && String((rhs.expression as any).name?.text) === 'safePosition') return `${name} = Some(${this.printNode(right, 0).trim()}.into_dict())`;
         return `${name} = ${(local.kind === 'list' ? this.rustOptListLiteralSome(right) : this.rustOdictCallText(right)) ?? `${this.printNode(right, 0).trim()}.into_opt_${local.kind}()`}`;
     }
