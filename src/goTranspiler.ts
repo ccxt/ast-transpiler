@@ -14047,6 +14047,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const receiver = pushNode?.expression?.expression;
         if (!this.goIsNativeAppendShape(receiver, pushNode)) { return false; }
         if (this.h29G04PushedStrPtrIsNonNil(pushNode)) { return true; }
+        if (this.goDefaultedSafeStringCall(goUnwrapParens(pushNode.arguments[0]))) { return true; } // never nil: appended dereferenced
         return this.goStringValueNodeIsProven(pushNode.arguments[0]);
     }
 
@@ -23256,6 +23257,7 @@ ${this.getIden(identation)}${returnStatement}`;
         const nativeReceiver = this.goNativeAppendReceiver(node);
         if (nativeReceiver !== undefined) {
             if (this.goPushedStringPointerIsNonNil(node) && /^\w+$/.test(parsedArg ?? '')) { return `${nativeReceiver} = append(${nativeReceiver}, *${parsedArg})`; }
+            if ((this.goResolvedLocalGoType((node.expression as any).expression) === GO_STRING_LIST_LOCAL_TYPE) && this.goDefaultedSafeStringCall(goUnwrapParens(node.arguments[0]))) { return `${nativeReceiver} = append(${nativeReceiver}, *${parsedArg})`; }
             return `${nativeReceiver} = append(${nativeReceiver}, ${parsedArg})`;
         }
         // a map/slice index or a GetValue box is not addressable: copy it into a local first
