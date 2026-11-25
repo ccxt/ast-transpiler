@@ -23483,6 +23483,12 @@ export class RustTranspiler extends BaseTranspiler {
         // a `Dict` parameter that already takes the dict handle hands on that same map
         if (local?.kind === SyntaxKind.Parameter && this.rustVenueDictParam(local) && this.rustVenueDictValueParam(local)) { const held = /^(?:Value::from\(([A-Za-z_]\w*)\)|([A-Za-z_]\w*))$/.exec(printed); if (held !== null) return `std::sync::Arc::clone(${held[1] ?? held[2]})`; }
         if (local !== undefined && isVariableDeclaration(local) && String(local.type?.getText?.() ?? '') === 'Dict' && /^[A-Za-z_]\w*$/.test(printed)) return `${printed}.into_dict()`;
+        // an optional map local the checker narrows to a map here (a `!== undefined` guard): the map it holds
+        const opt = kind === 'dict' ? this.rustOptContainerOf(this.unwrapParens(exp)) : undefined;
+        if (opt !== undefined && opt.kind === 'dict' && this.rustStaticContainerType(this.getChecker().getTypeAtLocation(this.unwrapParens(exp)), 'dict')) return `${super.transformIdentifier(this.unwrapParens(exp), this.ReservedKeywordsReplacements[this.unwrapParens(exp).text] ?? this.unwrapParens(exp).text)}.unwrap_or_default()`;
+        // a local that already prints as `crate::value::Dict` hands on its own handle (a return ends the function, so it moves)
+        const held = /^(?:Value::Dict\(([A-Za-z_]\w*)\)|Value::from\(&([A-Za-z_]\w*)\)|([A-Za-z_]\w*))$/.exec(printed);
+        if (opt === undefined && held !== null && local !== undefined && isVariableDeclaration(local) && this.rustBorrowedDictLocal(local) && this.rustBorrowedLocalKind(local) === 'dict' && !this.rustOptContainerLocals.has(local)) return held[1] ?? held[2] ?? held[3];
         // a `this.parseX (..)` parser declared to return the method's own record (a fresh map, never undefined)
         if (kind === 'dict' && fn !== undefined && this.rustOwnRecordParserReturn(exp, fn)) return `${printed}.into_dict()`;
         const box = /^Value::(Map|Dict|Arr)\(/.exec(printed);
