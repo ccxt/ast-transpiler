@@ -65990,9 +65990,25 @@ function h48g41WrittenThrough(go, target) {
     return !this.goWritesOrRebindsName(node, name, []) && thisCall(inner, ["safeDict"]) && inner.arguments[0] === node && thisCall(outer, ["safeList", "safeDict"]) && outer.arguments[0] === inner;
   };
 }
+var h49g41Verdicts = /* @__PURE__ */ new WeakMap();
+var h49g41Depth = 0;
 function h49g41PrintsAsMap(go, node) {
-  const decl = go.goAnyBoxLocalDeclaration(node);
-  return go.goDeclaredTypeOfIdentifier(node) === GO_SAFE_DICT_LOCAL_TYPE || decl?.kind === SyntaxKind5.VariableDeclaration && goAwaitedMapWritesOnlyLocal(go, decl);
+  const stable = h49g41Depth === 0 && go.goLocalTypeResolution.size === 0 && go.goDeclaredTypeInProgress.size === 0;
+  const known = stable ? h49g41Verdicts.get(node) : void 0;
+  if (known !== void 0) {
+    return known;
+  }
+  h49g41Depth++;
+  try {
+    const decl = go.goAnyBoxLocalDeclaration(node);
+    const verdict = go.goDeclaredTypeOfIdentifier(node) === GO_SAFE_DICT_LOCAL_TYPE || decl?.kind === SyntaxKind5.VariableDeclaration && goAwaitedMapWritesOnlyLocal(go, decl);
+    if (stable) {
+      h49g41Verdicts.set(node, verdict);
+    }
+    return verdict;
+  } finally {
+    h49g41Depth--;
+  }
 }
 {
   const useIsReadOnlyH49g41 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;

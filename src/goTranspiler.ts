@@ -62097,10 +62097,28 @@ function h48g41WrittenThrough (go: any, target: any): boolean {
 // `this.extend (.., R, ..)` copies R's top-level members into a fresh map and never writes R, so handing a decoded
 // JSON map to extend keeps it decoded JSON for every comma-ok read of it; only when R prints as a map (an
 // endpoint receive handed on as a value prints `r.Raw`, an any)
+// typing R prints R's uses, and each print of a use asks this again for the same identifier. Outside any nested
+// resolution the verdict depends only on the identifier, so the outermost answer is kept
+const h49g41Verdicts = new WeakMap<object, boolean>();
+let h49g41Depth = 0;
 function h49g41PrintsAsMap (go: any, node: any): boolean {
-    const decl: any = go.goAnyBoxLocalDeclaration(node);
-    return (go.goDeclaredTypeOfIdentifier(node) === GO_SAFE_DICT_LOCAL_TYPE)
-        || ((decl?.kind === SyntaxKind.VariableDeclaration) && goAwaitedMapWritesOnlyLocal(go, decl));
+    const stable = (h49g41Depth === 0) && (go.goLocalTypeResolution.size === 0) && (go.goDeclaredTypeInProgress.size === 0);
+    const known = stable ? h49g41Verdicts.get(node) : undefined;
+    if (known !== undefined) {
+        return known;
+    }
+    h49g41Depth++;
+    try {
+        const decl: any = go.goAnyBoxLocalDeclaration(node);
+        const verdict = (go.goDeclaredTypeOfIdentifier(node) === GO_SAFE_DICT_LOCAL_TYPE)
+            || ((decl?.kind === SyntaxKind.VariableDeclaration) && goAwaitedMapWritesOnlyLocal(go, decl));
+        if (stable) {
+            h49g41Verdicts.set(node, verdict);
+        }
+        return verdict;
+    } finally {
+        h49g41Depth--;
+    }
 }
 {
     const useIsReadOnlyH49g41 = GoTranspiler.prototype.goJsonOriginUseIsReadOnly;
