@@ -9263,6 +9263,12 @@ export class JavaTranspiler extends BaseTranspiler {
         if (n === undefined || isStringLiteral(n)) {
             return n !== undefined;
         }
+        // a String-declared `const` local bound to a string literal is never null
+        if (isIdentifier(n)) {
+            const d = this.javaDeclarationOfIdentifier(n);
+            return d !== undefined && isVariableDeclaration(d) && (getCombinedNodeFlags(d) & NodeFlags.Const) !== 0
+                && d.initializer !== undefined && isStringLiteral(d.initializer) && this.javaDeclaredStringType(n) === true;
+        }
         return isBinaryExpression(n) && n.operatorToken.kind === SyntaxKind.PlusToken
             && (isStringLiteral(this.unwrapParenthesized(n.left)) || isStringLiteral(this.unwrapParenthesized(n.right)))
             && typeof printed === 'string' && printed.startsWith('(') && !printed.startsWith('((');
@@ -9534,8 +9540,32 @@ export class JavaTranspiler extends BaseTranspiler {
         return false;
     }
 
-    printPadEndCall(_node, _identation, name, parsedArg, parsedArg2) {
-        return `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
+    printPadEndCall(node, _identation, name, parsedArg, parsedArg2) {
+        return this.printNativePadEnd(node, name, parsedArg) ?? `Helpers.padEnd((String)${name}, ((Number)${parsedArg}).intValue(), ((String)${parsedArg2}).charAt(0))`;
+    }
+
+    // `x.padEnd(n, 'c')` on a String receiver with a repeatable length and a one-char literal pad.
+    // Helpers.padEnd pads then keeps the FIRST `n` chars, so a longer receiver is truncated here too.
+    printNativePadEnd(node, name, parsedArg) {
+        const args = node?.arguments;
+        if (args === undefined || args.length !== 2 || name === undefined || parsedArg === undefined
+            || !this.javaIsRepeatableBound(args[0]) || this.javaScalarFamily(args[0]) !== 'number' || /\(/.test(args[0].getText())
+            || !isStringLiteral(args[1]) || !/^[\w .-]$/.test(args[1].text)) {
+            return undefined;
+        }
+        const receiver = node.expression?.expression;
+        if (!this.sideEffectFreeReceiver(receiver)) {
+            return undefined;
+        }
+        const castText = /^\(+\(String\)/.test(name);
+        // a String-declared local holding null throws in both forms (the helper reads its length too)
+        const declared = this.javaDeclaredStringType(receiver) === true;
+        if (!castText && !declared && this.javaScalarFamily(receiver) !== 'string') {
+            return undefined;
+        }
+        const r = castText || declared ? name : this.javaStringReceiverText(receiver, name);
+        const n = `((Number)${parsedArg}).intValue()`;
+        return `(${r}.length() >= ${n} ? ${r}.substring(0, ${n}) : ${r} + "${args[1].text}".repeat(${n} - ${r}.length()))`;
     }
 
     printPadStartCall(node, _identation, name, parsedArg, parsedArg2) {

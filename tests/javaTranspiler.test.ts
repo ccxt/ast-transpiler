@@ -5323,6 +5323,35 @@ describe('java parseInt/parseFloat/toString/padStart native emission', () => {
         expect(output).not.toContain("String.format(");
     });
 
+    test('padEnd with a repeatable length and one-char literal pad prints the native pad+truncate form', () => {
+        const input =
+        "class T {\n" +
+        "    f(value: string, n: number): void {\n" +
+        "        const a = value.padEnd(n + 1, '0');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output).toContain(".substring(0, ((Number)");
+        expect(output).toContain("\"0\".repeat(");
+        expect(output).not.toContain("Helpers.padEnd(");
+    });
+
+    test('padEnd keeps the helper for a call receiver, a non-literal pad, or an unproven receiver', () => {
+        const input =
+        "class T {\n" +
+        "    g(): string { return \"x\"; }\n" +
+        "    f(value: string, pad: string, o: any): void {\n" +
+        "        const a = this.g().padEnd(4, '0');\n" +
+        "        const b = value.padEnd(8, pad);\n" +
+        "        const c = o.padEnd(8, '0');\n" +
+        "        const d = value.padEnd(this.g().length, '0');\n" +
+        "    }\n" +
+        "}"
+        const output = transpiler.transpileJava(input).content;
+        expect(output.split("Helpers.padEnd(").length - 1).toBe(4);
+        expect(output).not.toContain(".repeat(");
+    });
+
     test('padStart keeps the helper for a receiver that is a call (evaluate once)', () => {
         const input =
         "class T {\n" +
@@ -10821,6 +10850,18 @@ describe('java native multiply/replace on printer-proven operands', () => {
     test('parseFloat keeps Helpers.multiply (integral double product re-boxes as Long)', () => {
         const output = transpiler.transpileJava(body("const t = parseFloat (s) * 1000;\n        return t;")).content;
         expect(output).toContain('Helpers.multiply(');
+    });
+    test('replace with a const string-literal local pattern on a String-declared receiver is a guarded replaceFirst', () => {
+        const printer: any = (transpiler as any).javaTranspiler;
+        const original = printer.javaDeclaredLocalTypeResolver;
+        try {
+            printer.javaDeclaredLocalTypeResolver = (declaration: any) => (['h', 'p', 'q'].includes(declaration?.name?.text) ? 'String' : undefined);
+            const output = transpiler.transpileJava(body("const h = this.f (s, x, y);\n        const p = 'https://a.b/';\n        let q = 'z';\n        const g = h.replace (p, '');\n        const k = h.replace (q, '');\n        return [ g, k ];")).content;
+            expect(output).toContain('(h == null ? null : ((String)h).replaceFirst(java.util.regex.Pattern.quote(p), \"\"))');
+            expect(output).toContain('Helpers.replace((String)h, (String)q, ');
+        } finally {
+            printer.javaDeclaredLocalTypeResolver = original;
+        }
     });
     test('replace on a String-declared receiver with a concat pattern is a guarded quoted replaceFirst', () => {
         const printer: any = (transpiler as any).javaTranspiler;
