@@ -10404,6 +10404,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustWsStrKey(node.argumentExpression)) return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(${this.rustWsKeyText(node.argumentExpression)})`);
         // an element of a key list (`client.subscriptions[keys[i]]`) is lent like a plain key local
         if (isElementAccessExpression(this.unwrapParens(node.argumentExpression)) && name === 'subscription') return `${this.rustClientHandleReceiver(access.plan, false)}.get_subscription(${this.rustWsKeyText(node.argumentExpression)})`;
+        // a literal key (`client.subscriptions['token']`) is lent as a `&str`
+        if (isStringLiteral(this.unwrapParens(node.argumentExpression)) && name === 'subscription') return `${this.rustClientHandleReceiver(access.plan, false)}.get_subscription(${this.rustWsKeyText(node.argumentExpression)})`;
         const key = this.printNode(node.argumentExpression, 0).trim();
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
         return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`);
