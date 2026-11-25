@@ -9115,6 +9115,13 @@ function goStrReturnCallersKeepNil (fileName, name, seen) {
     return calls > 0;
 }
 
+// `k in d` / `d[k]` on a local map: GetValue / InOp / AddElementToObject derefScalar the key, so a nil *string key
+// answers as the boxed nil did, and a native map key is printed only under the printer's own nil proof
+function h52g36LocalMapKeyUse (n) {
+    const p = n.parent;
+    if ((p?.kind === SyntaxKind.BinaryExpression) && (p.operatorToken.kind === SyntaxKind.InKeyword) && (p.left === n)) { return p.right.kind === SyntaxKind.Identifier; }
+    return (p?.kind === SyntaxKind.ElementAccessExpression) && (p.argumentExpression === n) && (p.expression.kind === SyntaxKind.Identifier);
+}
 function goStrCallBindsNilSafeLocal (id, fileName, seen) {
     const h30g05 = h30g05LetBindsNilSafeLocal (id, fileName, seen); if (h30g05 !== undefined) return h30g05;
     const access = id.parent;
@@ -9144,6 +9151,7 @@ function goStrCallBindsNilSafeLocal (id, fileName, seen) {
         if (!ok || ((n !== method.body) && isFunctionLike (n))) { ok = ok && !((n.kind !== SyntaxKind.MethodDeclaration) && n.getText ().includes (local)); return; }
         if ((n.kind === SyntaxKind.Identifier) && (n.text === local) && (n !== decl.name)) {
             if (h27g13LocalReadDerefs (n)) { return; }
+            if (h52g36LocalMapKeyUse (n)) { return; }
             const p = n.parent;
             const binary = (p?.kind === SyntaxKind.BinaryExpression) ? p : undefined;
             const op = binary?.operatorToken.kind;
@@ -9153,7 +9161,9 @@ function goStrCallBindsNilSafeLocal (id, fileName, seen) {
         }
         n?.forEachChild (visit);
     };
-    visit (method.body);
+    // a const is block-scoped: same-named locals of sibling blocks are other bindings
+    const scope = decl.parent.parent?.parent;
+    visit (((scope?.kind === SyntaxKind.Block) && (scope !== method.body)) ? scope : method.body);
     return ok;
 }
 
