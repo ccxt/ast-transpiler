@@ -14645,11 +14645,28 @@ function goAttachOr (target: any, method: string, fn: (this: any, ...args: any[]
     const list: Array<(this: any, ...args: any[]) => boolean> = [ fn ];
     const wrapped: any = function (this: any, a?: any, b?: any, c?: any, d?: any) {
         const n = arguments.length;
-        if ((n === 1 ? cur.call (this, a) : n === 2 ? cur.call (this, a, b) : n === 3 ? cur.call (this, a, b, c) : n === 0 ? cur.call (this) : n === 4 ? cur.call (this, a, b, c, d) : cur.apply (this, arguments))) { return true; }
-        for (let i = 0; i < list.length; i++) {
-            const f = list[i];
-            if ((n === 1 ? f.call (this, a) : n === 2 ? f.call (this, a, b) : n === 3 ? f.call (this, a, b, c) : n === 0 ? f.call (this) : n === 4 ? f.call (this, a, b, c, d) : f.apply (this, arguments))) { return true; }
+        if (n === 1) {
+            if (cur.call (this, a)) { return true; }
+            for (let i = 0; i < list.length; i++) { if (list[i].call (this, a)) { return true; } }
+            return false;
         }
+        if (n === 2) {
+            if (cur.call (this, a, b)) { return true; }
+            for (let i = 0; i < list.length; i++) { if (list[i].call (this, a, b)) { return true; } }
+            return false;
+        }
+        if (n === 3) {
+            if (cur.call (this, a, b, c)) { return true; }
+            for (let i = 0; i < list.length; i++) { if (list[i].call (this, a, b, c)) { return true; } }
+            return false;
+        }
+        if (n === 0) {
+            if (cur.call (this)) { return true; }
+            for (let i = 0; i < list.length; i++) { if (list[i].call (this)) { return true; } }
+            return false;
+        }
+        if (cur.apply (this, arguments)) { return true; }
+        for (let i = 0; i < list.length; i++) { if (list[i].apply (this, arguments)) { return true; } }
         return false;
     };
     wrapped.__goChainOr = list;
@@ -14661,13 +14678,27 @@ function goAttachFirst (target: any, method: string, fn: (this: any, ...args: an
     const list: Array<(this: any, ...args: any[]) => any> = [ fn ];
     const wrapped: any = function (this: any, a?: any, b?: any, c?: any, d?: any) {
         const n = arguments.length;
-        const base = n === 1 ? cur.call (this, a) : n === 2 ? cur.call (this, a, b) : n === 3 ? cur.call (this, a, b, c) : n === 0 ? cur.call (this) : n === 4 ? cur.call (this, a, b, c, d) : cur.apply (this, arguments);
-        if (base !== miss) { return base; }
-        for (let i = 0; i < list.length; i++) {
-            const f = list[i];
-            const res = n === 1 ? f.call (this, a) : n === 2 ? f.call (this, a, b) : n === 3 ? f.call (this, a, b, c) : n === 0 ? f.call (this) : n === 4 ? f.call (this, a, b, c, d) : f.apply (this, arguments);
-            if (res !== miss) { return res; }
+        if (n === 1) {
+            const base = cur.call (this, a);
+            if (base !== miss) { return base; }
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a); if (r !== miss) { return r; } }
+            return miss;
         }
+        if (n === 2) {
+            const base = cur.call (this, a, b);
+            if (base !== miss) { return base; }
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a, b); if (r !== miss) { return r; } }
+            return miss;
+        }
+        if (n === 3) {
+            const base = cur.call (this, a, b, c);
+            if (base !== miss) { return base; }
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a, b, c); if (r !== miss) { return r; } }
+            return miss;
+        }
+        const base = cur.apply (this, arguments);
+        if (base !== miss) { return base; }
+        for (let i = 0; i < list.length; i++) { const r = list[i].apply (this, arguments); if (r !== miss) { return r; } }
         return miss;
     };
     wrapped.__goChainFirst = list;
@@ -14680,11 +14711,25 @@ function goAttachRewrite (target: any, method: string, fn: (this: any, prev: any
     const list: Array<(this: any, prev: any, ...args: any[]) => any> = [ fn ];
     const wrapped: any = function (this: any, a?: any, b?: any, c?: any) {
         const n = arguments.length;
-        let out = n === 1 ? cur.call (this, a) : n === 2 ? cur.call (this, a, b) : n === 3 ? cur.call (this, a, b, c) : cur.apply (this, arguments);
-        for (let i = 0; i < list.length; i++) {
-            const f = list[i];
-            out = n === 1 ? f.call (this, out, a) : n === 2 ? f.call (this, out, a, b) : n === 3 ? f.call (this, out, a, b, c) : f.apply (this, [ out, ...Array.from (arguments) ]);
+        if (n === 1) {
+            let out = cur.call (this, a);
+            for (let i = 0; i < list.length; i++) { out = list[i].call (this, out, a); }
+            return out;
         }
+        if (n === 2) {
+            let out = cur.call (this, a, b);
+            for (let i = 0; i < list.length; i++) { out = list[i].call (this, out, a, b); }
+            return out;
+        }
+        if (n === 3) {
+            let out = cur.call (this, a, b, c);
+            for (let i = 0; i < list.length; i++) { out = list[i].call (this, out, a, b, c); }
+            return out;
+        }
+        let out = cur.apply (this, arguments);
+        const rest = [ out ];
+        for (let j = 0; j < n; j++) { rest.push (arguments[j]); }
+        for (let i = 0; i < list.length; i++) { rest[0] = out; out = list[i].apply (this, rest); }
         return out;
     };
     wrapped.__goChainRewrite = list;
@@ -14696,12 +14741,20 @@ function goAttachPre (target: any, method: string, fn: (this: any, ...args: any[
     const list: Array<(this: any, ...args: any[]) => any> = [ fn ];
     const wrapped: any = function (this: any, a?: any, b?: any, c?: any) {
         const n = arguments.length;
-        for (let i = 0; i < list.length; i++) {
-            const f = list[i];
-            const res = n === 1 ? f.call (this, a) : n === 2 ? f.call (this, a, b) : n === 3 ? f.call (this, a, b, c) : f.apply (this, arguments);
-            if (res !== undefined) { return res; }
+        if (n === 1) {
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a); if (r !== undefined) { return r; } }
+            return cur.call (this, a);
         }
-        return n === 1 ? cur.call (this, a) : n === 2 ? cur.call (this, a, b) : n === 3 ? cur.call (this, a, b, c) : cur.apply (this, arguments);
+        if (n === 2) {
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a, b); if (r !== undefined) { return r; } }
+            return cur.call (this, a, b);
+        }
+        if (n === 3) {
+            for (let i = 0; i < list.length; i++) { const r = list[i].call (this, a, b, c); if (r !== undefined) { return r; } }
+            return cur.call (this, a, b, c);
+        }
+        for (let i = 0; i < list.length; i++) { const r = list[i].apply (this, arguments); if (r !== undefined) { return r; } }
+        return cur.apply (this, arguments);
     };
     wrapped.__goChainPre = list;
     target[method] = wrapped;
@@ -56271,12 +56324,16 @@ goChainRewrite('goCallSiteParameterCandidates', function (shipped: any, fn, para
 goChainOr('goParameterCallSitesPassType', function (fn, index: number, goType: string) { return ((goType === 'int64') && h49g44IntSlot (this, fn, index)); });
 goChainRewrite('printIdentifier', function (printed: any, node) {
     const call: any = node?.parent;
-    if ((printed !== node.text) || (call?.kind !== SyntaxKind.CallExpression) || !(call.arguments ?? []).includes (node)
-        || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression) || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword)) {
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.expression?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (call.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (printed !== node.text)) {
+        return printed;
+    }
+    const argIndex = call.arguments ? call.arguments.indexOf (node) : -1;
+    if (argIndex < 0) {
         return printed;
     }
     // only a this-call whose slot is a declared `int` of an async method is asked anything more
-    const param: any = this.goCallParamAt (call, call.arguments.indexOf (node));
+    const param: any = this.goCallParamAt (call, argIndex);
     if ((param?.type?.getText?.() !== 'int') || !this.isAsyncFunction (param.parent)) {
         return printed;
     }
