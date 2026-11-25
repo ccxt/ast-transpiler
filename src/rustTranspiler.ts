@@ -25830,6 +25830,7 @@ export class RustTranspiler extends BaseTranspiler {
      *  it lends the dict handle. A direct caller may hold the message boxed, so it keeps the slot as it is. */
     rustVoidHandlerJsonOperand(node: any): boolean {
         if (!this.rustIsJsonOperand(node)) return false;
+        if (this.rustFrameLentJsonOperand(node)) return true;
         let fn: any = node.parent;
         while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
         if (fn === undefined || !isMethodDeclaration(fn) || fn.body === undefined || (fn.type !== undefined && fn.type.kind !== SyntaxKind.VoidKeyword)) return false;
@@ -42266,6 +42267,19 @@ export class RustTranspiler extends BaseTranspiler {
             targets++;
         }
         return targets > 0;
+    }
+
+    /** A `this.json (x)` operand of a pro method called by name only from routed `handleMessage` frames, each handing
+     *  its own borrowed frame: every caller holds the dict handle, so the slot takes it too. */
+    rustFrameLentJsonOperand(node: any): boolean {
+        let fn: any = node.parent;
+        while (fn !== undefined && !isFunctionLike(fn)) fn = fn.parent;
+        if (fn === undefined || !isMethodDeclaration(fn) || fn.body === undefined || !isIdentifier(fn.name) || this.rustMethodReferencedAsValue(fn)) return false;
+        const at = Array.from(fn.parameters).indexOf(this.rustDeclarationOfIdentifier(node));
+        if (at < 1 || !/(?:^|\/)ts\/src\/pro\/[^/]+\.ts$/.test(String(fn.getSourceFile().fileName).replace(/\\/g, '/'))) return false;
+        const calls: any[] = this.rustVenueStrCallSites(fn);
+        if (calls.length === 0 || this.rustVenueDictTextCallCount(fn, String(fn.name.text), calls.length) !== calls.length) return false;
+        return calls.every((c: any) => c.arguments[at] !== undefined && isIdentifier(c.arguments[at]) && this.rustRoutedFrameUse(c.arguments[at]));
     }
 
     /** Every use of the parameter is a whole argument of the runtime `this.extend (..)`: the merge copies it. */
