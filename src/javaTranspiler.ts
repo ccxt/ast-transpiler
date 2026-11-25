@@ -289,6 +289,8 @@ const JAVA_ELEMENT_WRITE_MAP_TYPE = 'java.util.Map<String, Object>';
 const JAVA_DECLARED_LIST_TYPES = /^(java\.util\.)?(List|ArrayList)\s*<[^;\n=]+>$/;
 // a ws cache local (ws/ArrayCache.java extends ArrayList<Object>, every subclass prints this type)
 const JAVA_DECLARED_ARRAY_CACHE_TYPE = 'io.github.ccxt.ws.ArrayCache';
+// an order-book side parameter (ws/OrderBookSide.java extends ArrayList<Object>, every subclass prints this type)
+const JAVA_DECLARED_BOOK_SIDE_TYPE = 'io.github.ccxt.ws.OrderBookSide';
 
 // the Java primitive spellings a declaration can publish: an operand that prints as one
 // cannot take the `instanceof` test a native map read guards with
@@ -386,10 +388,11 @@ const JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL: { [name: string]: string } = {
 const JAVA_NATIVE_PARAMETER_CLASS_TYPES: { [name: string]: string } = {
     'OrderBook': 'io.github.ccxt.ws.WsOrderBook',
     'WsOrderBook': 'io.github.ccxt.ws.WsOrderBook',
+    'OrderBookSide': 'io.github.ccxt.ws.OrderBookSide',
 };
 
 // a class-type annotation proves the printed class only when it resolves to that class declaration
-const JAVA_NATIVE_PARAMETER_CLASS_FILES = /(^|\/)ts\/src\/base\/ws\/OrderBook\.ts$/;
+const JAVA_NATIVE_PARAMETER_CLASS_FILES = /(^|\/)ts\/src\/base\/ws\/OrderBook(Side)?\.ts$/;
 
 // the keys WsOrderBook answers with its own `get` (its containsKey holds every one of them), so a
 // native read is exactly Helpers.GetValue's map branch - which answers null for a null receiver
@@ -1854,6 +1857,11 @@ export class JavaTranspiler extends BaseTranspiler {
                 && this.javaNativeParameterType(declaration) === type) {
                 return true;
             }
+        }
+        // an order-book side name the printer declares as the side class itself (parameter or ws local)
+        if (type === JAVA_DECLARED_BOOK_SIDE_TYPE && isIdentifier(arg)
+            && String(this.javaDeclaredTypeOf(arg) ?? '').replace(/^final\s+/, '').trim() === type) {
+            return true;
         }
         // a never-written Double / Long parameter the printer declares with the slot's own type
         if ((type === 'Double' || type === 'Long') && isIdentifier(arg)) {
@@ -4519,7 +4527,8 @@ export class JavaTranspiler extends BaseTranspiler {
             // ral-84j7: a local the embedding layer declared a java.util.List (a typed
             // parse*/filter return) needs no receiver cast; same int, same NPE on null
             const declaredList = this.javaDeclaredTypeOf(expression);
-            if (declaredList !== undefined && (JAVA_DECLARED_LIST_TYPES.test(declaredList) || declaredList === JAVA_DECLARED_ARRAY_CACHE_TYPE)) {
+            if (declaredList !== undefined && (JAVA_DECLARED_LIST_TYPES.test(declaredList) || declaredList === JAVA_DECLARED_ARRAY_CACHE_TYPE
+                || declaredList === JAVA_DECLARED_BOOK_SIDE_TYPE)) {
                 return `${leftSide}.size()`;
             }
         }
@@ -4889,7 +4898,8 @@ export class JavaTranspiler extends BaseTranspiler {
             return undefined;
         }
         const declared = this.javaDeclaredTypeOf(node.expression);
-        if (declared === undefined || (!JAVA_DECLARED_LIST_TYPES.test(declared) && declared !== JAVA_DECLARED_ARRAY_CACHE_TYPE)) {
+        if (declared === undefined || (!JAVA_DECLARED_LIST_TYPES.test(declared) && declared !== JAVA_DECLARED_ARRAY_CACHE_TYPE
+            && declared !== JAVA_DECLARED_BOOK_SIDE_TYPE)) {
             return undefined;
         }
         const key = node.argumentExpression;
@@ -4904,7 +4914,7 @@ export class JavaTranspiler extends BaseTranspiler {
         // literal, a counter, an int/long/Long/Integer name and the `((long) X) - 1L` form;
         // those sites stay byte-identical and are not ours to re-spell
         // (that pass reads declared Lists only: an ArrayCache receiver is printed here)
-        const cache = declared === JAVA_DECLARED_ARRAY_CACHE_TYPE;
+        const cache = declared === JAVA_DECLARED_ARRAY_CACHE_TYPE || declared === JAVA_DECLARED_BOOK_SIDE_TYPE;
         if (!cache && /^[A-Za-z_$][\w$]*$/.test(index)) {
             return undefined;
         }
@@ -5652,7 +5662,8 @@ export class JavaTranspiler extends BaseTranspiler {
         const declared = this.javaDeclaredTypeOf(node.expression);
         // a ws cache local (ArrayCache extends ArrayList<Object>) reads like a declared List
         const declaredList = declared !== undefined
-            && (JAVA_DECLARED_LIST_TYPES.test(declared) || (isCounter && declared === 'io.github.ccxt.ws.ArrayCache'));
+            && (JAVA_DECLARED_LIST_TYPES.test(declared) || (isCounter && declared === 'io.github.ccxt.ws.ArrayCache')
+                || (isCounter && declared === JAVA_DECLARED_BOOK_SIDE_TYPE));
         if (!declaredList) {
             const type = this.getChecker().getTypeAtLocation(node.expression);
             if (!this.isJavaListValueType(type) || this.isVarargsArrayReference(node.expression)
