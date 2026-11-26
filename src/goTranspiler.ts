@@ -18971,7 +18971,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const staticType = this.goOperandStaticType(inner, raw);
         if (slot === 'float64') {
             if ((staticType === 'float64') || (staticType === 'const-float') || (staticType === 'const-int')) { return printed; }
-            if ((staticType === 'int64') || (staticType === 'int') || (declType === 'int64') || (declType === 'int')) { return `float64(${raw})`; }
+            if ((staticType === 'int64') || (staticType === 'int') || (declType === 'int64') || (declType === 'int')
+                || ((inner?.kind === SyntaxKind.BinaryExpression) && (inner.operatorToken?.kind === SyntaxKind.PercentToken) && !raw.startsWith('Mod('))) { return `float64(${raw})`; }
             if ((declType === '*float64') && this.goPointerNumberIsNonNil(inner)) { return `*${raw}`; }
             if ((declType === '*int64') && this.goPointerNumberIsNonNil(inner)) { return `float64(*${raw})`; }
             if (this.goIsAnyBoxExpression(inner, raw) || (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0)) { return `Float64Arg(${raw})`; }

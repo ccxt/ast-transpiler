@@ -43,12 +43,16 @@ export class Demo {
         if (lev !== undefined) {
             ok = this.isRoundNumber (1000 % lev);
         }
+        let okInt64 = false;
+        if (leverage > 0) {
+            okInt64 = this.isRoundNumber (leverage % 2);
+        }
         const okRaw = this.isRoundNumber (raw);
         let picked: any = 0;
         if (lim !== undefined) {
             picked = this.findNearestCeiling ([ 5, 10, 50 ], lim);
         }
-        return [ ok, okRaw, picked ];
+        return [ ok, okInt64, okRaw, picked ];
     }
 }
 `);
@@ -59,7 +63,7 @@ export class Demo {
                 unifiedSliceParams: { findNearestCeiling: { 0: '[]int64' } },
             },
         });
-        installCcxtGoLocalTypes (t.goTranspiler, { findNearestCeiling: [ 1 ] }, { isRoundNumber: [ 0 ] });
+        installCcxtGoLocalTypes (t.goTranspiler, { findNearestCeiling: [ 1 ], run: [ 1 ] }, { isRoundNumber: [ 0 ] });
         installCcxtGoHooks (t.goTranspiler);
         installCcxtGoIndexableTypes (t.goTranspiler);
         installCcxtGoParamTypes (t.goTranspiler);
@@ -69,6 +73,7 @@ export class Demo {
         expect (go).toContain ('math.Mod(value, 1)');
         expect (go).not.toMatch (/(?<![A-Za-z_.])Mod\(/);
         expect (go).toContain ('this.IsRoundNumber(float64(1000 % *lev))');
+        expect (go).toContain ('this.IsRoundNumber(float64(leverage % 2))');
         expect (go).toContain ('this.IsRoundNumber(Float64Arg(raw))');
         expect (go).toContain ('FindNearestCeiling(arr []int64, providedValue int64)');
         expect (go).toContain ('var current int64 = arr[i]');
@@ -110,6 +115,12 @@ export class Exchange {
         }
         return [ ok, ok2, picked ];
     }
+    earlyExit (limit: number | undefined = undefined) {
+        if (limit === undefined) {
+            return 100;
+        }
+        return this.findNearestCeiling ([ 5, 10, 50 ], limit);
+    }
 }
 export default Exchange;
 `);
@@ -130,6 +141,7 @@ export default class venue extends Exchange {
                 isRoundNumber: { 0: 'double?' },
                 findNearestCeiling: { 0: 'IList<Int64>', 1: 'Int64' },
                 use: { 0: 'Int64?', 1: 'Int64', 2: 'double?' },
+                earlyExit: { 0: 'Int64?' },
             },
             callSiteArgTypes: {
                 isRoundNumber: { 0: 'double?' },
@@ -150,6 +162,7 @@ export default class venue extends Exchange {
         expect (baseCs).toContain ('providedValue <= current');
         expect (baseCs).not.toContain ('isLessThanOrEqual');
         expect (baseCs).toContain ('this.findNearestCeiling(new List<Int64>() {5, 10, 50}, limit.Value)');
+        expect (baseCs).toContain ('return this.findNearestCeiling(new List<Int64>() {5, 10, 50}, limit.Value);');
 
         const venueCs = t.transpileCSharpByPath (venueFile).content;
         expect (venueCs).toContain ('calculatePricePrecision(double midPx, double szDecimals)');

@@ -2432,8 +2432,9 @@ export class CSharpTranspiler extends BaseTranspiler {
                 const customDefaultValue = this.printCustomDefaultValueIfNeeded(initializer);
                 const defaultValue = customDefaultValue ? customDefaultValue : this.printNode(initializer, 0);
                 const baseList = this.csharpBaseListParamDeclarations.has(node);
-                type = (defaultValue === "null" && type !== "object" && !baseList) ? (type.endsWith('?') ? type + " " : type + "? ") : type + " ";
-                return type + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue;
+                const printedType = (defaultValue === "null" && type !== "object" && !baseList && !type.endsWith('?')) ? (type + '?') : type;
+                if (printedType !== type) { this.csharpParamTypes.set(node, printedType); }
+                return printedType + " " + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue;
             }
             return type + " " + name;
         }
