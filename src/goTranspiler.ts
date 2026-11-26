@@ -5582,6 +5582,9 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
                 && (this.goDeclaredTypeOfIdentifier (node.left) === '[]any')
                 && (this.goTypeOfInitializer (node.right, this.printNode (node.right, 0)) !== '[]any')) {
                 const conversion = ccxtGoArrayLiteralWriteConversion (this, node);
+                // a `[]`-defaulted safeList of a decoded JSON map: the comma-ok read plus the empty default is already a []any
+                const native = (conversion === 'ArrayTyped') ? h53g49JsonListRebind (this, node, identation) : undefined;
+                if (native !== undefined) { return native; }
                 if (conversion !== undefined) { return this.printNode (node.left, 0) + ' = ' + conversion + '(' + this.printNode (node.right, 0).trim () + ')'; }
             }
             return shippedBinary.call (this, node, identation);
@@ -30817,7 +30820,7 @@ export interface GoTranspiler {
     h26g49ClientLocalUsesAreSafe(declaration): boolean;
     h27a01ReceiverType(container): string | undefined;
     h27a02JsonListRead(node, identation: number, printed: string): string | undefined;
-    h27a02JsonOriginBeforeRead(container, read): boolean;
+    h27a02JsonOriginBeforeRead(container, read, stopAt?: any): boolean;
     goTypedMapDictRead(args, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
     h27a08RowRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
     h52g58AssignRowRead(node, identation: number, printed: string): string | undefined;
@@ -37598,12 +37601,13 @@ GoTranspiler.prototype.h27a02JsonListRead = function (node, identation: number, 
 };
 // the receiver of `read` holds its decoded JSON at the read: every use that can run before it is a read-only use
 // (as h27a02JsonOrigin); a use placed after it cannot run first, since no loop of the function encloses the read
-GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read) {
+// (or no loop between the read and `stopAt`, the block that re-declares the receiver on every pass)
+GoTranspiler.prototype.h27a02JsonOriginBeforeRead = function (container, read, stopAt?: any) {
     const declaration: any = this.goAnyBoxLocalDeclaration(container);
     const scope: any = this.goEnclosingFunction(read);
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
         || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)) { return false; }
-    for (let up: any = read.parent; (up !== undefined) && (up !== scope); up = up.parent) {
+    for (let up: any = read.parent; (up !== undefined) && (up !== scope) && (up !== stopAt); up = up.parent) {
         if ((up.kind === SyntaxKind.ForStatement) || (up.kind === SyntaxKind.ForOfStatement) || (up.kind === SyntaxKind.ForInStatement)
             || (up.kind === SyntaxKind.WhileStatement) || (up.kind === SyntaxKind.DoStatement)
             || (up.kind === SyntaxKind.ArrowFunction) || (up.kind === SyntaxKind.FunctionExpression)) { return false; }
@@ -40768,6 +40772,33 @@ goChainRewrite('printBinaryExpression', function (printed, node, identation) {
     const iden = this.getIden(identation);
     return `${m[1]}, _ = ${m[2]}[${m[3]}].([]any)\n${iden}if ${m[1]} == nil {\n${this.getIden(identation + 1)}${m[1]} = []any{}\n${iden}}`;
 });
+// the receiver (or a this.safe* read of it) is an argument of any other call in its function: it may be changed there
+function h53g49HandedToCall (go: any, recv: any): boolean {
+    const isSafe = (c: any) => (c?.expression?.kind === SyntaxKind.PropertyAccessExpression) && (c.expression.expression?.kind === SyntaxKind.ThisKeyword) && /^safe[A-Z]/.test(c.expression.name?.text ?? '');
+    return go.hasNodeWhere(go.goEnclosingFunction(recv), (n: any) => {
+        if ((n.kind !== SyntaxKind.Identifier) || (n.text !== recv.text)) { return false; }
+        for (let a: any = n; (a.parent?.kind === SyntaxKind.CallExpression) && (a.parent.expression !== a); a = a.parent) {
+            if (!isSafe(a.parent)) { return true; }
+        }
+        return false;
+    });
+}
+// `xs = this.safeList (C, 'k', [])` on an array-literal []any local, C a decoded JSON map local: the member is a []any,
+// another JSON value or absent, so the comma-ok read plus the empty default answers what ArrayTyped(SafeList) did
+function h53g49JsonListRebind (go: any, node: any, identation: number): string | undefined {
+    const right: any = goUnwrapTypeNonNull(node?.right);
+    const recv: any = right?.arguments?.[0];
+    const key: any = right?.arguments?.[1];
+    if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || !h24n04EmptyDefaultSafeList(right) || (right.expression.name.text !== 'safeList')
+        || (recv?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral) || !/^\w+$/.test(key.text)
+        || (go.h27a01ReceiverType(recv) !== GO_SAFE_DICT_LOCAL_TYPE)
+        || !(go.h27a02JsonOrigin(recv, 0) || (go.h27a02JsonOriginBeforeRead(recv, { kind: node.kind, parent: node.parent, end: node.end, initializer: right },
+            go.goAnyBoxLocalDeclaration(recv)?.parent?.parent?.parent)
+            && !h53g49HandedToCall(go, recv)))) { return undefined; }
+    const name = go.printNode(node.left, 0).trim();
+    const iden = go.getIden(identation);
+    return `${name}, _ = ${go.printNode(recv, 0).trim()}["${key.text}"].([]any)\n${iden}if ${name} == nil {\n${go.getIden(identation + 1)}${name} = []any{}\n${iden}}`;
+}
 // a `{}`-defaulted safeDict FIRST argument of a map parameter whose receiver is a typed []any local: the comma-ok read
 // into a local on the line before the statement, plus the `{}` SafeDictMap answered for nil, out of range and non-map
 function h37p01FirstArgPath (go: any, arg: any, statement: any): boolean {
@@ -42258,11 +42289,11 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node, ide
 });
 // a decoded-JSON local stored as `'info'` in the literal that initialises a local whose every use comes after the read:
 // nothing can reach the stored value before the read runs, so the store counts as a read-only use for that read
-goChainAround('h27a02JsonOriginBeforeRead', function (prev, container, read) {
+goChainAround('h27a02JsonOriginBeforeRead', function (prev, container, read, stopAt) {
     const outer = this.h51g44Read;
     this.h51g44Read = read;
     try {
-        return prev.call(this, container, read);
+        return prev.call(this, container, read, stopAt);
     } finally {
         this.h51g44Read = outer;
     }
