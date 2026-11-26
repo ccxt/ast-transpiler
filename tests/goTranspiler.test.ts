@@ -6344,12 +6344,12 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         "    }\n" +
         "}\n";
 
-    const treeFor = (name: string, proCall: string) => {
+    const treeFor = (name: string, proCall: string, exchange = EX_FIXTURE) => {
         const src = path.join(__dirname, 'files', name, 'ts', 'src');
         fs.mkdirSync(path.join(src, 'base'), { recursive: true });
         fs.mkdirSync(path.join(src, 'pro'), { recursive: true });
         fs.writeFileSync(path.join(src, 'base', 'Exchange.ts'), BASE_FIXTURE);
-        fs.writeFileSync(path.join(src, 'ex.ts'), EX_FIXTURE);
+        fs.writeFileSync(path.join(src, 'ex.ts'), exchange);
         fs.writeFileSync(path.join(src, 'pro', 'ex.ts'),
             "import { ex } from '../ex';\n" +
             "export class expro extends ex {\n" +
@@ -6363,6 +6363,7 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
     afterAll(() => {
         fs.rmSync(path.join(__dirname, 'files', 'tmp-b02-tree'), { recursive: true, force: true });
         fs.rmSync(path.join(__dirname, 'files', 'tmp-b02-tree-neg'), { recursive: true, force: true });
+        fs.rmSync(path.join(__dirname, 'files', 'tmp-b02-tree-return'), { recursive: true, force: true });
     });
 
     test('a proven sibling call site types the parameter', () => {
@@ -6375,6 +6376,21 @@ describe('native parameter types across the ts/src tree (B-02)', () => {
         const file = treeFor('tmp-b02-tree-neg', "this.parseStatus (this.safeValue (this.order, 'status'))");
         const output = new Transpiler({ verbose: false, go: {} }).transpileGoByPath(file).content;
         expect(output).toContain('func (this *ex) ParseStatus(status any) any {');
+    });
+
+    test('a scoped exchange keeps its map return type when its WebSocket subclass calls the method', () => {
+        const file = treeFor('tmp-b02-tree-return', 'this.createOrderRequest ()',
+            "import { Exchange } from './base/Exchange';\n" +
+            "type Dict = { [key: string]: any };\n" +
+            "export class ex extends Exchange {\n" +
+            "    createOrderRequest (): Dict {\n" +
+            "        return { 'side': 'buy' };\n" +
+            "    }\n" +
+            "}\n");
+        const scoped = new Transpiler({ verbose: false, go: {} });
+        installCcxtGoHooks(scoped.goTranspiler);
+        const output = scoped.transpileGoByPath(file).content;
+        expect(output).toContain('func (this *ex) CreateOrderRequest() map[string]any {');
     });
 
     test('a sibling caller passing its own any parameter keeps a local string parameter any on the relative driver path', () => {

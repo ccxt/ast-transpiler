@@ -13887,14 +13887,16 @@ function ccxtGoGeneralAnnotatedReturnTypes(node, type, key) {
   }
   return void 0;
 }
+var CCXT_GO_TS_SRC_MARKER = path2.normalize("/ts/src/");
+function ccxtGoTsSrcRoot(resolvedFileName) {
+  const at = resolvedFileName.lastIndexOf(CCXT_GO_TS_SRC_MARKER);
+  return at < 0 ? void 0 : resolvedFileName.slice(0, at + CCXT_GO_TS_SRC_MARKER.length - 1);
+}
 function ccxtGoTsSrcImportGraph(fileName) {
-  const resolved = path2.resolve(fileName);
-  const marker = "/ts/src/";
-  const at = resolved.lastIndexOf(marker);
-  if (at < 0) {
+  const root = ccxtGoTsSrcRoot(path2.resolve(fileName));
+  if (root === void 0) {
     return void 0;
   }
-  const root = resolved.substring(0, at + marker.length - 1);
   if (CCXT_GO_TS_SRC_IMPORT_CACHE.has(root)) {
     return CCXT_GO_TS_SRC_IMPORT_CACHE.get(root);
   }
@@ -16647,8 +16649,8 @@ function ccxtGoTupleDictFromLooseParam(method, goType) {
 }
 function ccxtGoTupleOverridesAgree(declaration, name, index, goType) {
   const fileName = path2.resolve(declaration.getSourceFile().fileName);
-  const at = fileName.lastIndexOf("/ts/src/");
-  if (at < 0) {
+  const root = ccxtGoTsSrcRoot(fileName);
+  if (root === void 0) {
     return false;
   }
   const key = fileName + "#" + name + "#" + index;
@@ -16656,11 +16658,10 @@ function ccxtGoTupleOverridesAgree(declaration, name, index, goType) {
     return CCXT_GO_TUPLE_OVERRIDE_CACHE.get(key) === goType;
   }
   let agreed = goType;
-  const root = fileName.substring(0, at) + "/ts/src";
   const pattern = new RegExp("^\\s+(?:override\\s+)?(?:async\\s+)?" + name + "\\s*\\(", "m");
-  const base = fileName.endsWith("/base/Exchange.ts");
+  const base = fileName.endsWith(path2.normalize("/base/Exchange.ts"));
   const texts = [];
-  for (const dir of [root, root + "/pro"]) {
+  for (const dir of [root, path2.join(root, "pro")]) {
     for (const file of fs2.readdirSync(dir).filter((f) => f.endsWith(".ts"))) {
       texts.push([path2.join(dir, file), fs2.readFileSync(path2.join(dir, file), "utf8")]);
     }
@@ -29859,13 +29860,10 @@ ${iden}}`;
   // `this.x(...)`, each file's text and its class -> base map. A scoped run's
   // program holds one exchange, so the sibling files are only provable textually.
   goTsSrcTree(file) {
-    const fileName = path2.resolve(file.fileName);
-    const marker = "/ts/src/";
-    const at = fileName.lastIndexOf(marker);
-    if (at < 0) {
+    const root = ccxtGoTsSrcRoot(path2.resolve(file.fileName));
+    if (root === void 0) {
       return void 0;
     }
-    const root = fileName.substring(0, at + marker.length - 1);
     if (!this.goTsSrcTreeCache.has(root)) {
       this.goTsSrcTreeCache.set(root, this.goTsSrcTreeBuild(root));
     }
@@ -46347,8 +46345,8 @@ var JavaTranspiler = class extends BaseTranspiler {
     if (declared === void 0) {
       return false;
     }
-    const normalize = (type) => String(type).replace(/^final\s+/, "").replace(/\s+/g, "").replace(/^java\.util\./, "");
-    return normalize(declared) === normalize(target);
+    const normalize2 = (type) => String(type).replace(/^final\s+/, "").replace(/\s+/g, "").replace(/^java\.util\./, "");
+    return normalize2(declared) === normalize2(target);
   }
   // a concrete (non-any, non-union, non-generic) type the structure proofs below can reason about
   javaConcreteStructureType(type) {

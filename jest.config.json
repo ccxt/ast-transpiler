@@ -1,7 +1,7 @@
 {
   "transform": {
     "^.+\\.ts$": "<rootDir>/tests/esbuild-transform.cjs",
-    "node_modules/typescript/.+\\.js$": "<rootDir>/tests/esbuild-transform.cjs"
+    "node_modules[/\\\\]typescript[/\\\\].+\\.js$": "<rootDir>/tests/esbuild-transform.cjs"
   },
   "testEnvironment": "node",
   "testRegex": "/tests/.*\\.(test|spec)?\\.(ts|tsx)$",
