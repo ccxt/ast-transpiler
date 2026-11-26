@@ -28832,6 +28832,7 @@ ${tryBodyBlock}
     h28g30OriginAtRead(container, read, depth: number): boolean {
         const declaration: any = this.goAnyBoxLocalDeclaration(container);
         const scope: any = this.goEnclosingFunction(read);
+        if ((depth > 0) && (declaration?.kind === SyntaxKind.BindingElement)) { return h53g44EndpointPairSlot(this, container, declaration, read); }
         if ((depth > 5) || (declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
             || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || (scope === undefined) || (this.goEnclosingFunction(declaration) !== scope)) { return false; }
         const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
@@ -28854,7 +28855,7 @@ ${tryBodyBlock}
         const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
         const call: any = declaration?.initializer;
         if ((typeof printed !== 'string') || (node.parent?.kind !== SyntaxKind.VariableStatement) || (declaration?.name?.kind !== SyntaxKind.Identifier)
-            || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)) { return undefined; }
+            || (call?.kind !== SyntaxKind.CallExpression) || ((call.arguments?.length !== 2) && !h53g44EmptyListDefault(call))) { return undefined; }
         const args: any = this.goSafeAccessorLocalArgs(call, 'safeList');
         if ((args?.container?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test(args.key.text)) { return undefined; }
         for (let up: any = declaration.parent; (up !== undefined) && (up.kind !== SyntaxKind.MethodDeclaration); up = up.parent) {
@@ -41120,6 +41121,37 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node, ide
     if ((m === null) || (m[3] !== name) || (m[4] !== c) || (m[5] !== k)) { return printed; }
     return `${m[1]}${m[2]}var ${name}, _ = ${c}[${k}].(map[string]any)`;
 });
+// `const [ a, b ] = await Promise.all ([ endpoint tasks ])`: a slot holds that endpoint's decoded JSON object, so a
+// `safeDict (slot, k)` cut is JSON origin while every slot use is a read (a list read on the slot itself re-boxes it)
+function h53g44EndpointPairSlot (goTranspiler: GoTranspiler, container, binding, read): boolean {
+    const pattern: any = binding.parent;
+    const declaration: any = pattern?.parent;
+    const init: any = goTranspiler.goUnwrapParenthesizedNode (declaration?.initializer);
+    const call: any = (init?.kind === SyntaxKind.AwaitExpression) ? goTranspiler.goUnwrapParenthesizedNode (init.expression) : undefined;
+    const callee: any = call?.expression;
+    if ((binding.name?.kind !== SyntaxKind.Identifier) || (binding.dotDotDotToken !== undefined) || (binding.initializer !== undefined)
+        || (pattern?.kind !== SyntaxKind.ArrayBindingPattern) || (declaration?.kind !== SyntaxKind.VariableDeclaration)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || ((declaration.parent.flags & NodeFlags.Const) === 0)
+        || (goTranspiler.goEnclosingFunction (declaration) !== goTranspiler.goEnclosingFunction (read))
+        || (call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 1) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.Identifier) || (callee.expression.text !== 'Promise') || (callee.name?.text !== 'all')
+        || (goTranspiler.goUnwrapParenthesizedNode (call.arguments[0])?.kind !== SyntaxKind.ArrayLiteralExpression)) { return false; }
+    // every task is an endpoint call (inline, or a const local bound to one) whose Go element is a map
+    const tasks: any[] = goTranspiler.goUnwrapParenthesizedNode (call.arguments[0]).elements.map ((e: any) => {
+        const t: any = goTranspiler.goUnwrapParenthesizedNode (e);
+        if (t?.kind !== SyntaxKind.Identifier) { return t; }
+        const d: any = goTranspiler.goAnyBoxLocalDeclaration (t);
+        return ((d?.kind === SyntaxKind.VariableDeclaration) && ((d.parent?.flags & NodeFlags.Const) !== 0)) ? goTranspiler.goUnwrapParenthesizedNode (d.initializer) : undefined;
+    });
+    if ((tasks.length === 0) || !tasks.every ((t: any) => ccxtGoEndpointElement (goTranspiler, t) === GO_SAFE_DICT_LOCAL_TYPE)) { return false; }
+    return goTranspiler.goJsonOriginBindingIsReadOnly (binding, (n, name) => !goTranspiler.goWritesOrRebindsName (n, name, [])
+        && (goTranspiler.goJsonOriginUseIsReadOnly (n, name) || goTranspiler.h27a02ScalarReaderUse (n)));
+}
+// `safeList (x, k, [])` the printer prints as SafeListTyped (the empty default dropped): it answers as the 2-argument form
+function h53g44EmptyListDefault (call): boolean {
+    const d: any = call?.arguments?.[2];
+    return (call?.arguments?.length === 3) && (d?.kind === SyntaxKind.ArrayLiteralExpression) && (d.elements.length === 0);
+}
 // `const xs = this.safeList (R, 'lit'[, []])` where R prints `var R map[string]any = nil` and every write is an awaited
 function h39g24UndefinedJsonLet (goTranspiler: GoTranspiler, container): boolean {
     const declaration: any = goTranspiler.goAnyBoxLocalDeclaration (container);
