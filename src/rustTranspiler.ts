@@ -5778,7 +5778,7 @@ export class RustTranspiler extends BaseTranspiler {
         const init84h: Node = this.unwrapParens(declaration.initializer);
         if (nativeUses === 0 && init84h !== undefined && isConditionalExpression(init84h) && [ init84h.whenTrue, init84h.whenFalse ].some((arm: Node) => this.rust84hDefaultedStrParamArm(this.unwrapParens(arm)))) return undefined;
         // a lent `String` key that is also an insert key before its last use would copy there (`k.clone()`): keep the `Value`
-        if (ok && kind === 'str' && this.rustLentStrKeyLocals.has(declaration) && this.rustStrKeyInsertCopies(declaration)) return undefined;
+        if (ok && kind === 'str' && this.rustLentStrKeyLocals.has(declaration) && this.rustStrKeyInsertCopies(declaration) && !this.rustHeldKeyReadInInsertValue(declaration)) return undefined;
         if (!ok || unused || storeOnly || clientOnce || (guarded && scope.kind !== SyntaxKind.MethodDeclaration) || this.rustOkeyBoxed(declaration, boxed) || this.rustElemKeyInCostly(declaration) || this.rust59pDeleteKeyInboxed(declaration)) return undefined;
         // of: a string compared against another local must not copy at a box where the `Value` was lent
         // (a call argument already copied the `Value`; an `in` key or other borrowed slot did not)
@@ -6042,6 +6042,25 @@ export class RustTranspiler extends BaseTranspiler {
             return true;
         });
         return copies;
+    }
+
+    /** Every copying insert key `m[k] = v` is read again only as the key of a held Dict / List read inside `v`
+     *  (rustHeldContainerKeyUse): the boxed form read through `get_value` there, the typed form keeps the one key copy. */
+    rustHeldKeyReadInInsertValue(declaration: any): boolean {
+        const writes: any[] = [];
+        const later: any[] = [];
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (this.rustScalarUseForms.get(n) === 'key' && !this.rustLocalLastUse(n, declaration)) writes.push(n);
+            return true;
+        });
+        if (writes.length !== 1) return false;
+        const w: any = writes[0].parent?.parent;
+        if (w === undefined || !isBinaryExpression(w) || w.operatorToken.kind !== SyntaxKind.EqualsToken || w.left !== writes[0].parent) return false;
+        this.rustLocalUsesAll(declaration, String(declaration.name.text), false, (n) => {
+            if (n.pos > writes[0].pos) later.push(n);
+            return true;
+        });
+        return later.length > 0 && later.every((n: any) => this.isNodeInsideNode(n, w.right) && this.rustHeldContainerKeyUse(n));
     }
 
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
@@ -9653,6 +9672,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'str' && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && !this.rust40bProTier(n) && this.rustOkeyReadUse(n)) { this.rustLentStrKeyLocals.add(this.rustDeclaredNode(n)); return 'okey'; }
         // ral-43c: a string key into an unproven `any` receiver reads through `get_value`, whose key is `impl ValueKey`
         if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rustAnyGetValueKeyUse(n)) return 'okey';
+        // a typed string key of a one-link read on a held Dict / List local: that read lends the key boxed (rust62nTypedStrKey)
+        if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rustHeldContainerKeyUse(n)) return 'okey';
         if (kind === 'ostr' && this.rustInitKeyLocal(n) && this.rustElemKeyInUse(n)) return 'kin';
         // ral-59p: the key of a statement `delete X[k]` (ws cache / client-handle deletes took their own forms above)
         if ((kind === 'str' || kind === 'ostr') && this.rustInitKeyLocal(n) && !this.rustTestTierSource(n) && this.rust59pDeleteKeyUse(n)) return 'dkey';
@@ -21718,6 +21739,8 @@ export class RustTranspiler extends BaseTranspiler {
                 const castKey: Expression | undefined = isAsExpression(key) && this.rust90rhCastKey(key.expression) && this.rustScalarUseForms.get(key.expression) === 'okey' ? key.expression : undefined;
                 const typedKey = castKey !== undefined ? `${super.printIdentifier(castKey)}.as_deref().map(Value::from).unwrap_or(Value::Null)`
                     : (isIdentifier(key) && !borrowedKey ? this.rust62nTypedStrKey(key) : undefined);
+                // a `String` key of a held map declared `Dict`: the native map read (a missing key answers Null, as the helper did)
+                if (castKey === undefined && isIdentifier(key) && this.rustScalarLocalOf(key)?.kind === 'str' && this.rustHeldContainerKeyUse(key)) { acc = `${super.printIdentifier(receiver)}.get(${super.printIdentifier(key)}.as_str()).cloned().unwrap_or(Value::Null)`; continue; }
                 acc = `crate::value::KeyRead::read(&&${super.printIdentifier(receiver)}, &${borrowedKey ? `Value::from(${super.printIdentifier(key)})` : (typedKey ?? this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0))})`;
                 continue;
             }
@@ -26896,6 +26919,16 @@ export class RustTranspiler extends BaseTranspiler {
         if (keyScalar !== undefined && (keyScalar.kind === 'str' || keyScalar.kind === 'ostr') && this.rust73eStrKeyRead(n)) return true;
         return keyScalar === undefined && this.rustNilLocalKind(keyDecl) === undefined && !this.rustWsUrlLocal(keyDecl)
             && this.rustBorrowedLocalKind(keyDecl) === undefined && !this.rustLentListLocal(keyDecl);
+    }
+
+    /** `k` keys a plain one-link read `x[k]` that the held-container rule may lend (rustBorrowedIndexReadUse). */
+    rustHeldContainerKeyUse(key: any): boolean {
+        const read: any = key.parent;
+        if (!isElementAccessExpression(read) || read.argumentExpression !== key || !isIdentifier(read.expression)) return false;
+        // the receiver is a local declared `Dict` from a call (the held map); typed books and other bearers keep their rules
+        const d: any = this.rustDeclaredNode(read.expression);
+        if (d === undefined || !isVariableDeclaration(d) || d.type === undefined || d.type.getText() !== 'Dict' || !isCallExpression(this.unwrapParens(d.initializer))) return false;
+        return this.rust73eStrKeyRead(read.expression) && this.rustBorrowedIndexReadUse(read.expression);
     }
 
     /** ral-73e A: `x[k]` (x the held container local `n`) is a plain one-link read: not the head of a chain (whose outer links
