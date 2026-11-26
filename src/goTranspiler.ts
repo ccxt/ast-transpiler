@@ -10560,6 +10560,11 @@ function goAwaitedListLocalArgType (go: any, arg: any): string | undefined {
     return (listChannel && !stringList && ccxtGoAsyncDeclaredShapeAgrees (go, callee, GO_SAFE_LIST_LOCAL_TYPE)) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
 }
 
+// a nil-declared local the container join prints `var x []any = nil` hands that slice to its callee
+function goNilJoinListLocalArgType (go: any, arg: any): string | undefined {
+    return (ccxtGoNilJoinDeclarationType (go, arg) === GO_SAFE_LIST_LOCAL_TYPE) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
+}
+
 function goDictParamUnboxedLocalArg (go: any, arg: any): boolean {
     const decl: any = (arg?.kind === SK.Identifier) ? go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.() : undefined;
     return (decl?.kind === SK.VariableDeclaration) && (go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE);
@@ -19108,7 +19113,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // the printed Go type of a call-site argument, or undefined when the printer cannot name it (then the call site does not prove anything)
     goPrintedArgType(arg): string | undefined {
-        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg) ?? goAwaitedListLocalArgType(this, arg); }
+        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg) ?? goAwaitedListLocalArgType(this, arg) ?? goNilJoinListLocalArgType(this, arg); }
         if (this.goIsClientUrl(arg)) { return 'string'; } // Client.url prints the string GetUrl()
         if ((arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.expression?.kind === SyntaxKind.ThisKeyword)
             && (arg.name?.text === 'privateKey')) { return 'string'; } // go/v4/exchange.go declares PrivateKey `string`
