@@ -41348,7 +41348,17 @@ function h39g24ListRead (goTranspiler: GoTranspiler, declaration, printed: strin
     if ((argc === 3) && (body === `var ${name} []any = this.SafeListSlice(${c}, "${k}", []any{})`)) { return `${read}\n${iden}if ${name} == nil {\n${iden}\t${name} = []any{}\n${iden}}`; }
     return undefined;
 }
-goChainRewriteDefined('printVariableDeclarationList', function (printed: any, node, identation) { return (node?.declarations?.length === 1) ? h39g24ListRead (this, node.declarations[0], printed) : undefined; });
+goChainRewriteDefined('printVariableDeclarationList', function (printed: any, node, identation) {
+    if (node?.declarations?.length !== 1) { return undefined; }
+    // an `'info'` store of the receiver in a literal used only after this read counts as read-only for it
+    const outer = this.h51g44Read;
+    this.h51g44Read = node.declarations[0];
+    try {
+        return h39g24ListRead (this, node.declarations[0], printed);
+    } finally {
+        this.h51g44Read = outer;
+    }
+});
 
 // `int` is a plain number alias (never undefined): int64 when every return is an int64 value or an integer literal
 function h40g15IntAllowed (node, name): string[] | undefined { return (!CCXT_GO_PARSE_METHOD.test (name) && (node.type?.getText () === 'int')) ? [ 'int64' ] : undefined; }
