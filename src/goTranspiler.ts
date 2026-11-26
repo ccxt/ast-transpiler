@@ -22134,6 +22134,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((param?.type?.kind === SyntaxKind.AnyKeyword) && !this.goGetArgBaseParamIsUnannotated(param)) { return undefined; }
         const shape = (printedDefault ?? '').trim();
         const byDefault = this.goGetArgTypeOfShape(shape);
+        // an empty `[]` default of a declared `string[]` / `Strings` parameter is an empty []string, not a []any
+        if ((shape === '[]any{}') && (param?.initializer?.kind === SyntaxKind.ArrayLiteralExpression) && ['string[]', 'Strings'].includes(String(param.type?.getText() ?? '').replace(/\s+/g, ''))
+            && this.goGetArgLocalIsSafe(body, param, '[]string')) { return '[]string'; }
         if (byDefault !== undefined) {
             // a declared type naming no single Go type (IndexType = number | string) admits other shapes;
             // an admitted `any` restatement binds by its default, as the base does
@@ -22972,7 +22975,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                     // a default that names a Go type exactly binds through its typed twin; others keep GetArg (ABI unchanged)
                     const goType = this.goGetArgParameterType(param);
                     const twinName = (goType !== undefined) ? this.goGetArgTwinName(goType) : undefined;
-                    if ((goType !== undefined) && (twinName !== undefined)) { initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${printedDefault})`); } else { initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${printedDefault})`); }
+                    const typedDefault = ((goType === '[]string') && (printedDefault === '[]any{}')) ? '[]string{}' : printedDefault;
+                    if ((goType !== undefined) && (twinName !== undefined)) { initParams.push(`var ${paramName} ${goType} = ${twinName}(optionalArgs, ${index}, ${typedDefault})`); } else { initParams.push(`${paramName} := GetArg(optionalArgs, ${index}, ${printedDefault})`); }
                     initParams.push(`_ = ${paramName}`);
                 } else {
                     offSetIndex--;
