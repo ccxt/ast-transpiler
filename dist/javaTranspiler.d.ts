@@ -40,6 +40,16 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaVenueCalleeInProgress: Set<Node>;
     javaVenueCalleeDeclarations: WeakMap<Node, Node>;
     javaOptionalParameterTypeCache: WeakMap<Node, string | typeof JAVA_MEMO_UNDEFINED>;
+    private javaPrintedFileCache;
+    private javaMethodWrittenParamsCache;
+    private javaMethodTypeofNamesCache;
+    private javaFixedParamTypeCache;
+    private javaNativeParamTypeCache;
+    private javaCoreParamTypesCache;
+    private javaScopeHasPromiseAllCache;
+    private javaHasReassignedVars;
+    javaParamTypeProbing: number;
+    javaResetParamTypeCaches(): void;
     private _exchangeTierMethods;
     javaMethodAssignedNames: WeakMap<Node, Set<string>>;
     javaReturnTypeCache: WeakMap<Node, string | undefined>;
@@ -360,7 +370,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, _identation: any): string;
     javaBaseDeclaredMapCacheField(expression: any): boolean;
     printObjectLiteralExpression(node: any, identation: any): string;
-    printObjectLiteralBuilder(node: any, identation: any): string;
+    printObjectLiteralBuilder(node: any, identation: any, keys?: string[]): string;
     printObjectLiteralBuilderText(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
     javaMapPutIsNative(baseExpr: any, keys: any[]): boolean;
@@ -668,6 +678,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h30J06List(declaration: any): boolean;
     h30J06FutureCall(element: any): boolean;
     h30J06SeedLocal(element: any, list: any): boolean;
+    javaScopeHasPromiseAll(scope: any): boolean;
     h30J06ListProof(declaration: any): boolean;
     h30J06ListDeclarationOf(identifier: any): import("typescript/ast").DeclarationBase;
     h30J06Declaration(declaration: any, indent: string): string | undefined;
