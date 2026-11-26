@@ -2245,6 +2245,11 @@ export class JavaTranspiler extends BaseTranspiler {
         if (name === 'Num' && this.javaVenueOrderRequestNumberSlot(node, method)) {
             return 'Double';
         }
+        // a venue method's plain `x: string = '<literal>'` slot holds a String like its default
+        if (node.type.kind === SyntaxKind.StringKeyword && node.initializer !== undefined && isStringLiteral(node.initializer)
+            && JAVA_NATIVE_PARAMETER_GENERATED_FILES.test(node.getSourceFile().fileName.replace(/\\/g, '/'))) {
+            return this.STRING_KEYWORD;
+        }
         if (name === undefined || JAVA_NATIVE_PARAMETER_TYPES_OPTIONAL[name] === undefined) {
             return undefined;
         }
@@ -4640,6 +4645,9 @@ export class JavaTranspiler extends BaseTranspiler {
             // A default-valued slot the printer typed in its signature: the dict family is the
             // one whose element accessors bind on the declaration, so only it resolves here.
             const optional = this.javaMemo(this.javaOptionalParameterTypeCache, declaration, () => this.javaTry(() => this.javaOptionalParameterType(declaration)));
+            if (optional === this.STRING_KEYWORD && isStringLiteral(declaration.initializer)) {
+                return optional; // read through its literal default, never null
+            }
             return optional === JAVA_NATIVE_DICT_PARAMETER_TYPE ? optional : undefined;
         }
         return undefined;
@@ -8863,6 +8871,9 @@ export class JavaTranspiler extends BaseTranspiler {
             return this.javaProvableString(node.expression);
         case SyntaxKind.BinaryExpression:
             return this.javaNativeConcat(node);
+        }
+        if (isIdentifier(node) && this.javaDefaultedLocalName(node) !== undefined && this.javaDeclaredTypeOf(node) === this.STRING_KEYWORD) {
+            return true; // a String slot read through its literal default
         }
         return this.javaResolvedString(node);
     }
