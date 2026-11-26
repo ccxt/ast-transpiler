@@ -37841,10 +37841,13 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
     let refs = 0;
     const valueRefsOk = goHandlerValueRefsOk(go, fn, methodName, true, () => { refs++; }, (c, callee, holder) => {
         const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
-        if (c === undefined) { return ((frame === undefined) || !go.h27a11FrameParam(frame)) ? true : undefined; }
+        const listFrame = (frame !== undefined) && h53g45ListFrame(go, frame);
+        if (c === undefined) { return ((frame === undefined) || !(listFrame || go.h27a11FrameParam(frame))) ? true : undefined; }
         if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply'))
-            && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) { return (callee.name.text === 'apply') || (go.goAnyBoxLocalDeclaration(c.arguments?.[2]) !== frame); }
-        return (callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration) && (go.goAnyBoxLocalDeclaration(c.arguments?.[1]) !== frame);
+            && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
+            return (callee.name.text === 'apply') || (listFrame ? !h53g45ListFrameItem(go, frame, c.arguments?.[2]) : (go.goAnyBoxLocalDeclaration(c.arguments?.[2]) !== frame));
+        }
+        return (callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration) && (listFrame || (go.goAnyBoxLocalDeclaration(c.arguments?.[1]) !== frame));
     });
     return valueRefsOk && ((callCount + refs) > 0);
 }
@@ -42199,6 +42202,24 @@ function h50g45ListFrameHead (go: any, arg: any): boolean {
         || !((fn.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword))) { return false; }
     const calledHere = go.goSourceFilePropAccesses(fn.getSourceFile(), 'handleListMessage').length > 0;
     return !calledHere && !h27a11WritesInto(go, fn.body, param.name.text, param);
+}
+
+// the list parameter of an unwritten `override handleListMessage` this file never calls: the ws dispatch hands it decoded JSON
+function h53g45ListFrame (go: any, param: any): boolean {
+    const fn: any = param?.parent;
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
+        || (fn.name?.text !== 'handleListMessage') || (fn.parameters.indexOf(param) !== 1) || (fn.body === undefined)
+        || !((fn.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword))) { return false; }
+    return (go.goSourceFilePropAccesses(fn.getSourceFile(), 'handleListMessage').length === 0) && !h27a11WritesInto(go, fn.body, param.name.text, param);
+}
+// `item` declared `const item = frame[i]` and never written: an element of the decoded JSON list frame
+function h53g45ListFrameItem (go: any, frame: any, arg: any): boolean {
+    const decl: any = (arg?.kind === SyntaxKind.Identifier) ? go.goAnyBoxLocalDeclaration(arg) : undefined;
+    if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.parent?.parent?.kind !== SyntaxKind.FirstStatement)
+        || ((decl.parent.flags & ts.NodeFlags.Const) === 0)) { return false; }
+    const init: any = go.goUnwrapParenthesizedNode(decl.initializer);
+    if ((init?.kind !== SyntaxKind.ElementAccessExpression) || (init.expression?.kind !== SyntaxKind.Identifier) || (go.goAnyBoxLocalDeclaration(init.expression) !== frame)) { return false; }
+    return !h27a11WritesInto(go, decl.parent.parent.parent, decl.name.text, decl);
 }
 
 // pro tree: a `const x` in one block and a same-named binding in a disjoint block print as two Go
