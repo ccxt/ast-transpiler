@@ -173,7 +173,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpParameterWrittenAnywhere(identifier: any): boolean;
     csharpArrayListParamType(node: any): string | undefined;
     csharpFunctionStringListParamType(node: any): string | undefined;
-    csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean): string | undefined;
+    csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean, stringCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean>;
     csharpListParamLineage(node: any): string;
     csharpParamCensus(rule: {
@@ -472,6 +472,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         small: boolean;
         literalKind?: string;
     } | undefined;
+    csharpNativeMinMaxOperandKind(node: any): string | undefined;
     csharpIsPreciseDecimalsRead(node: any): boolean;
     csharpNativeIntegralMod(node: any, leftText: string, rightText: string): string | undefined;
     csharpNativeIntegralMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
@@ -697,4 +698,5 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     h30c05JsonOrigin(receiver: any): boolean;
     h30c05WritesAll(scope: any, declaration: any, accept: any): boolean;
     h30c05AssignedBeforeUse(scope: any, declaration: any): boolean;
+    csharpNonNullIntegerSumArgument(argument: any): string | undefined;
 }

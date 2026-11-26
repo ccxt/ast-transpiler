@@ -157,6 +157,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
         type: any;
     } | undefined;
     javaNativeParameterTypeOf(node: any): string | undefined;
+    javaBaseSoleStringParameter(node: any, method: any, type: any): boolean;
+    javaStringSourceArgument(arg: any): boolean;
     javaUnifiedStringListParameterType(name: any, method: any, type: any, checker: any): string | undefined;
     javaVenueStringListParameterType(node: any, name: any, method: any, type: any, checker: any): string | undefined;
     javaOverrideStringListArgument(arg: any): boolean;
@@ -447,6 +449,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printInlineHelperArithmetic(left: any, right: any, leftText: any, rightText: any, op: any): string;
     javaNativeMathMinMaxOperandKind(node: any): any;
     javaGuardedLongLocalRead(node: any): boolean;
+    javaGuardedDoubleOperand(node: any): boolean;
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printJavaPreciseDecimalsWrite(left: any, right: any): string | undefined;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
