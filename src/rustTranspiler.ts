@@ -10683,6 +10683,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (bookField && keyUse) field = true;
         // a pro-file `String` keyed on a cache field whose copying boxes all sit at lending slots lends there too
         if (!lendable && RustTranspiler.RUST_PRO_TIER_FILE.test(String(declaration.getSourceFile().fileName)) && this.rustScalarDecisions.get(declaration) === 'str' && this.rustReaderLendBoxes(declaration)) lendable = true;
+        // an optional market-symbol string (`smkt` key_read) lends its copying boxes the same way (`Value::from(x.as_deref())`)
+        if (!lendable && RustTranspiler.RUST_PRO_TIER_FILE.test(String(declaration.getSourceFile().fileName)) && this.rustScalarDecisions.get(declaration) === 'ostr' && this.rustReaderLendBoxes(declaration)) lendable = true;
         if ((field || bookField) && boxed && lendable && !this.rustStrNoLend) {
             this.rustStrLentLocals.add(declaration);
             return false;
