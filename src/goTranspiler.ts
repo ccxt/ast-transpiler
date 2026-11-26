@@ -23351,8 +23351,10 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         if (pairReturn !== undefined) { return pairReturn; }
         const isAsyncFunction = this.isInsideAsyncFunction(node);
         if (!isAsyncFunction) {
-            if ((node.expression?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node.expression) === '*int64')
-                && (this.goValueDecl(node.expression)?.kind === SyntaxKind.Parameter)
+            const retDecl: any = (node.expression?.kind === SyntaxKind.Identifier) ? this.goValueDecl(node.expression) : undefined;
+            const retFn: any = (retDecl !== undefined) ? this.goEnclosingFunction(node) : undefined;
+            if ((retDecl?.kind === SyntaxKind.Parameter) && (retDecl.initializer !== undefined) && (this.goDeclaredTypeOfIdentifier(node.expression) === '*int64')
+                && ((retFn === undefined) || (this.printFunctionType(retFn).trim() !== '*int64'))
                 && (this.goHasEnclosingNilGuard(node.expression) || this.goHasEarlyExitNilGuard(node.expression))) {
                 return this.getIden(identation) + 'return *' + this.printNode(node.expression, 0).trim();
             }
