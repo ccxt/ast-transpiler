@@ -29001,6 +29001,14 @@ export class RustTranspiler extends BaseTranspiler {
         return kind === 'dict' ? isObjectLiteralExpression(dflt) && dflt.properties.length === 0 : isArrayLiteralExpression(dflt) && dflt.elements.length === 0;
     }
 
+    /** A `const` local seeded by an array literal: a list on every path, so a `safeList` read defaulted to it is a list. */
+    rustConstListLiteralLocal(node: any): boolean {
+        if (node === undefined || !isIdentifier(node)) return false;
+        const d: any = this.rustDeclarationOfIdentifier(node);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === node || (d.parent?.flags & NodeFlags.Const) === 0) return false;
+        return isArrayLiteralExpression(this.rustSkipWrappers(d.initializer));
+    }
+
     /** The optional form's local behind an identifier, else undefined. */
     rustOptContainerOf(node: any): { declaration: any, kind: 'dict' | 'list' } | undefined {
         if (node === undefined || !isIdentifier(node)) return undefined;
@@ -30808,13 +30816,13 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
-    rustDefaultedListRead(init: any): boolean {
+    rustDefaultedListRead(init: any, constLocalDefault = false): boolean {
         const callee: any = isCallExpression(init) && isPropertyAccessExpression(init.expression) ? init.expression : undefined;
         if (callee === undefined || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
         const method = String(callee.name.text);
         const keys = method === 'safeList2' ? 3 : (method === 'safeList' || method === 'safeListN' ? 2 : 0);
         const last: any = keys > 0 && init.arguments.length === keys + 1 ? this.rustSkipWrappers(init.arguments[keys]) : undefined;
-        if (last === undefined || !isArrayLiteralExpression(last) || last.elements.length !== 0) return false;
+        if (last === undefined || !(isArrayLiteralExpression(last) && last.elements.length === 0 || (constLocalDefault && this.rustConstListLiteralLocal(last)))) return false;
         const declaration: any = this.rustScalarCallee(init);
         return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
@@ -35369,7 +35377,7 @@ export class RustTranspiler extends BaseTranspiler {
                 if (split) return false;
                 if (nil) writes++;
                 return up.parent?.kind === SyntaxKind.ExpressionStatement && (this.rustOptListSource(up.right) || this.rustOptListLiteralWrite(up.right)
-                    || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right))) || (strVecAlias && this.rust80cBaseStrListField(up.right)));
+                    || (nil && this.rustDefaultedListRead(this.rustSkipWrappers(up.right), true)) || (strVecAlias && this.rust80cBaseStrListField(up.right)));
             }
             // ral-80c R1: a statement push onto the alias (a `None` alias pushes nothing, as `append_to_array` on `Null`)
             if (strVecAlias && isPropertyAccessExpression(up) && up.expression === n && String(up.name.text) === 'push' && isCallExpression(up.parent) && up.parent.expression === up) {
