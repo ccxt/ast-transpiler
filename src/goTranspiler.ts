@@ -28532,12 +28532,24 @@ ${tryBodyBlock}
     // `xs[last] = this.extend (..)` on a never-shrunk `[]any` local, `last` a const `n - 1` (n a const `xs.length`) under an
     // `n > 0` guard: in range, and Extend always returns a fresh non-nil map, so the native store is the intended write
     h28g15LastIndexExtendStore(containerNode, containerStr, keyNode, keyStr, valueStr, valueNode) {
-        const value: any = this.goUnwrapParenthesizedNode(valueNode);
+        let value: any = this.goUnwrapParenthesizedNode(valueNode);
+        const index: any = this.goUnwrapParenthesizedNode(keyNode);
+        const firstIndex = (index?.kind === SyntaxKind.NumericLiteral) && (index.text === '0');
+        // index 0 also takes a never-rebound const local seeded by this.extend (a fresh non-nil map)
+        const local: any = (firstIndex && (value?.kind === SyntaxKind.Identifier)) ? this.goDeclarationOfIdentifier(value) : undefined;
+        if ((local?.kind === SyntaxKind.VariableDeclaration) && (((local.parent?.flags ?? 0) & NodeFlags.Const) !== 0)) { value = this.goUnwrapParenthesizedNode(local.initializer); } else if (local !== undefined) { return undefined; }
         if ((containerNode?.kind !== SyntaxKind.Identifier) || (this.goElementAssignmentContainerType(containerNode, containerStr) !== '[]any')
             || (value?.kind !== SyntaxKind.CallExpression) || (value.expression?.kind !== SyntaxKind.PropertyAccessExpression)
             || (value.expression.expression?.kind !== SyntaxKind.ThisKeyword) || (value.expression.name?.text !== 'extend')
-            || !valueStr.startsWith('this.Extend(') || !this.h27g21SliceKeepsLength(containerNode)
-            || !this.h28g15ConstLastIndex(containerNode, this.goUnwrapParenthesizedNode(keyNode))) { return undefined; }
+            || !((local !== undefined) || valueStr.startsWith('this.Extend(')) || !this.h27g21SliceKeepsLength(containerNode)
+            || !(firstIndex ? this.h27g21LengthGuarded(containerNode, containerNode, undefined) : this.h28g15ConstLastIndex(containerNode, index))) { return undefined; }
+        // the same guard proves the extend's own `xs[0]` operand in range: it prints as a plain index, no bounds closure
+        const first: any = this.goUnwrapParenthesizedNode(value.arguments?.[0]);
+        if (firstIndex && (local === undefined) && (first?.kind === SyntaxKind.ElementAccessExpression) && (first.expression?.kind === SyntaxKind.Identifier)
+            && (first.expression.text === containerNode.text) && (first.argumentExpression?.kind === SyntaxKind.NumericLiteral) && (first.argumentExpression.text === '0')) {
+            const printed = 'this.Extend(' + this.printNode(first, 0) + ', ';
+            if (valueStr.startsWith(printed)) { valueStr = `this.Extend(${containerStr}[0], ` + valueStr.substring(printed.length); }
+        }
         return `${containerStr}[${keyStr}] = ${valueStr}`;
     }
     h28g15ConstLastIndex(containerNode, keyNode) {
