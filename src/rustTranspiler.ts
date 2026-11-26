@@ -23300,7 +23300,7 @@ export class RustTranspiler extends BaseTranspiler {
                 const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
                 if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
                 // a method of a parent venue file: the Rust struct derefs to the base exchange, whose stub keeps `Value`
-                if (v !== undefined && this.rustOtherVenueCall(v, node)) ok = false;
+                if (v !== undefined && this.rustOtherVenueCall(v, node) && !this.rustAwaitedDictEndpointReturn(v)) ok = false;
             }
             n.forEachChild(visit);
         };
@@ -23527,6 +23527,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'list' && this.rustBaseListFilterOperand(exp, printed)) return `${printed}.into_list()`;
         const read = this.rustEmptyDefaultReaderPayload(exp, printed, kind);
         if (read !== undefined) return read;
+        // an awaited implicit endpoint declared `Promise<Dict>`: the method converts once where each caller did
+        if (kind === 'dict' && this.rustAwaitedDictEndpointReturn(exp) && printed.endsWith('.await')) return `${printed}.into_dict()`;
         // the runtime `extend` builds a fresh map on every input, so its typed twin answers the same map
         if (kind === 'dict' && this.rustRuntimeExtendCall(exp) && printed.startsWith('self.extend(') && printed.endsWith(')') && this.rustBalancedText(printed.slice('self.extend('.length, -1))) return 'self.extend_t(' + printed.slice('self.extend('.length);
         // a list local that already prints as `crate::value::List` hands on its own handle
@@ -23549,6 +23551,11 @@ export class RustTranspiler extends BaseTranspiler {
         if (box === null || !printed.endsWith(')') || !this.rustBalancedText(printed.slice(box[0].length, -1)) || (box[1] === 'Arr') !== (kind === 'list')) return undefined;
         const inner = printed.slice(box[0].length, -1);
         return box[1] === 'Map' ? `std::sync::Arc::new(${inner})` : inner;
+    }
+
+    rustAwaitedDictEndpointReturn(exp: any): boolean {
+        const v: any = this.unwrapParens(exp);
+        return v?.kind === SyntaxKind.AwaitExpression && isCallExpression(this.unwrapParens(v.expression)) && this.rustDeclaredEndpointKind(this.unwrapParens(v.expression)) === 'dict';
     }
 
     /** A venue method another venue source calls as `this.m (..)`: the child struct reaches the base stub, which keeps `Value`. */

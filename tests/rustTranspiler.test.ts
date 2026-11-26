@@ -23291,7 +23291,7 @@ describe('ral-68c: declared-empty container locals written from awaited typed ca
     test('R1 polymarket createOrDeriveApiKey creds: writes from same-class Promise<Dict> venue methods hold Option<Dict>', () => {
         const out = write ('ral-68c-r1', venueMethods + "    async m (params: Dict = {}): Promise<Dict> {\n        let creds: NullableDict = undefined;\n        try {\n            creds = await this.deriveKey (params);\n        } catch (e) {\n            creds = await this.createKey (params);\n        }\n        if (creds === undefined) {\n            throw new Error ('none');\n        }\n        return creds;\n    }\n");
         expect(out).toContain('let mut creds: Option<crate::value::Dict> = None;');
-        expect(out).toMatch(/creds = self\.deriveKey\([^\n]*\)\.await\.into_opt_dict\(\);/);
+        expect(out).toMatch(/creds = Some\(self\.deriveKey\([^\n]*\)\.await\);/);
         expect(out).toContain('creds.is_none()');
     });
     test('R1 negative: a venue method declared without a container return keeps the local Value', () => {
