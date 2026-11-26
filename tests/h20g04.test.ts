@@ -104,14 +104,14 @@ describe ('h20g04 Dict local rebound by a Dict tuple slot', () => {
     test ('kraken shape: the local is a map, the slot read and the self-omit are native', () => {
         const out = print (KRAKEN ());
         expect (out).toContain ('var paramsOmitted map[string]any\n');
-        expect (out).toContain ('paramsOmitted = MapTyped(GetValue(postOnlyparamsOmittedVariable, 1))\n');
+        expect (out).toContain ('postOnly, paramsOmitted = this.HandlePostOnly((typeVar == "market"), false, paramsOmitted)\n');
         expect (out).toContain ('paramsOmitted = MapTyped(this.Omit(paramsOmitted, []any{"offset"}))\n');
         expect (out).not.toContain ('func() any');
     });
     test ('an unannotated copy of the map param is a map (handlePostOnly slot 1 is that map)', () => {
         const out = print (KRAKEN ('', 'params', ''));
         expect (out).toContain ('var paramsOmitted map[string]any = params\n');
-        expect (out).toContain ('paramsOmitted = MapTyped(GetValue(postOnlyparamsOmittedVariable, 1))\n');
+        expect (out).toContain ('postOnly, paramsOmitted = this.HandlePostOnly((typeVar == "market"), false, paramsOmitted)\n');
     });
     test ('a non-map write keeps the box', () => {
         const out = print (KRAKEN ('        paramsOmitted = this.safeString (params, \'x\');\n'));

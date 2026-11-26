@@ -20447,7 +20447,7 @@ describe ('goPostOnlyParamsSlot', () => {
     test('[ flag, query ] = this.handlePostOnly (.., query) keeps an omit-seeded local map[string]any', () => {
         const out = run (body ('this.handlePostOnly (false, false, query)'));
         expect (out).toContain ('var query map[string]any = MapTyped(this.Omit(params, "x"))');
-        expect (out).toContain ('query = MapTyped(GetValue(postOnlyqueryVariable, 1))');
+        expect (out).toContain ('postOnly, query = this.HandlePostOnly(false, false, query)');
     });
     test('another tuple producer, or a foreign boxed write (nil / wrong kind at run time), keeps the box', () => {
         expect (run (body ('this.other (false, query)'))).toContain ('var query any = this.Omit(params, "x")');

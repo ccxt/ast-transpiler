@@ -795,7 +795,8 @@ export function goNilJoinTypeSelfTest () {
     joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleMarginModeAndParams (a, b);\n        return bag;'), 'bag map[string]any');
     joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleParamString (a, b);\n        return bag;'), 'bag map[string]any');
     // a producer whose Go twin answers a []any holder stays `any`
-    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handlePostOnly (a, b);\n        return bag;'), '');
+    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handleTriggerPricesAndParams (a, b);\n        return bag;'), '');
+    joins (method ('let bag = undefined;\n        [ a, bag ] = this.handlePostOnly (a, b);\n        return bag;'), 'bag map[string]any');
     // a read reached without a write keeps the box
     joins (method ('let bag = undefined;\n        if (a) {\n            [ a, bag ] = this.handleUntilOption (a, b);\n        }\n        return bag;'), '');
     // reads the typed nil answers the same way are admitted before the write
@@ -5961,7 +5962,9 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             const pairSlot = ccxtGoPairSlot0 (this, node.right);
             const nullableBool = CCXT_GO_NULLABLE_BOOL_PAIRS.includes (node.right.expression.name.text) && ccxtGoTupleBoolCallIsNullable (node.right);
             const pairBind = (pairSlot !== undefined) && (node.left.elements.length === 2) ? () => ccxtGoPairBind (this, printed, node, pairSlot) : () => undefined;
-            if (Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, node.right.expression.name.text) || nullableBool) { return pairBind () ?? printed; }
+            // a value-slot twin (`bool`, no nil) joins like the other tuple results
+            const pointerTwin = Object.prototype.hasOwnProperty.call (GO_BASE_PAIR_TWINS, node.right.expression.name.text) && (GO_BASE_PAIR_TWINS[node.right.expression.name.text] !== 'bool');
+            if (pointerTwin || nullableBool) { return pairBind () ?? printed; }
             return ccxtGoTupleResultJoin (printed, node.left.elements.length, false, false, ccxtGoTupleResultFirst (node.right)) ?? pairBind () ?? printed;
         });
         // an override of a tuple-result method returns the pair: a forwarded call as is, `[ a, b ]` as two unwrapped results
@@ -8083,6 +8086,7 @@ const CCXT_GO_TUPLE_RESULT_METHODS = [
     'handleOptionStringAndParams2', 'handleParamString', 'handleParamString2', 'handleNetworkCodeAndParams', 'handleParamBool', 'handleParamBool2',
     'handleParamInteger', 'handleParamInteger2', 'handleOptionAndParams', 'handleOptionAndParams2', 'handleTriggerDirectionAndParams',
     'handleMaxEntriesPerRequestAndParams', 'handleTriggerAndParams', 'isTriggerOrder', 'encodeDydxTxForSigning',
+    'handlePostOnly',
 ];
 // element 0 unwrap per method (element 1 is always the params map); default SafeStringPtr
 const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handleOptionBoolAndParams': 'GetValueBool',
@@ -8092,7 +8096,8 @@ const CCXT_GO_TUPLE_RESULT_ELEMENT_0 = { 'handleUntilOption': 'MapTyped', 'handl
     'handleTriggerAndParams': 'SafeBoolPtr', 'isTriggerOrder': 'SafeBoolPtr',
     // the Go pair's `any` slot 0 is already the derefScalar'd option value, read as is
     'handleOptionAndParams': 'Raw', 'handleOptionAndParams2': 'Raw', 'handleMaxEntriesPerRequestAndParams': 'Raw',
-    'encodeDydxTxForSigning': 'Raw' };
+    'encodeDydxTxForSigning': 'Raw',
+    'handlePostOnly': 'GetValueBool' };
 // pair twins with their slot-0 Go type: the printed base twins (GO_BASE_PAIR_TWINS) and the hand-written pairs
 const CCXT_GO_PAIR_SLOT_0 = { 'handleParamString': '*string', 'handleParamString2': '*string', 'handleNetworkCodeAndParams': '*string',
     'handleParamBool': '*bool', 'handleParamBool2': '*bool', 'handleParamInteger': '*int64', 'handleParamInteger2': '*int64',
@@ -9688,7 +9693,7 @@ const GO_TUPLE_PAIR_PLAIN_PRODUCERS = [ 'handleOptionAndParams', 'handleOptionAn
 const GO_TUPLE_BASE_VALUE_SLOT_PRODUCERS = [ 'handleOptionAndParams', 'handleOptionAndParams2' ];
 
 // base tuple helpers the Go base declares with a `[]any` return (the rest of the base prints `any`)
-const GO_TUPLE_BASE_SLICE_PRODUCERS = ['handleOptionAndParams', 'handleOptionAndParams2', 'handlePostOnly', 'handleTriggerPricesAndParams', 'handleTriggerDirectionAndParams',];
+const GO_TUPLE_BASE_SLICE_PRODUCERS = ['handleOptionAndParams', 'handleOptionAndParams2', 'handleTriggerPricesAndParams', 'handleTriggerDirectionAndParams',];
 // base readers that read a map argument synchronously and keep no reference to it
 const GO_BASE_MAP_READER_CALLS = new Set([ 'safeValue', 'safeValue2', 'safeValueN', 'safeString', 'safeString2', 'safeStringN', 'safeStringLower',
     'safeStringUpper', 'safeDict', 'safeDict2', 'safeDictN', 'safeList', 'safeList2', 'safeListN', 'safeInteger', 'safeInteger2', 'safeIntegerN',
@@ -12577,6 +12582,7 @@ const GO_BASE_PAIR_TWINS: { [name: string]: string } = {
     'handleParamBool': '*bool', 'handleParamBool2': '*bool',
     'handleParamInteger': '*int64', 'handleParamInteger2': '*int64', 'handleTriggerDirectionAndParams': '*string',
     'handleTriggerAndParams': '*bool', 'isTriggerOrder': '*bool',
+    'handlePostOnly': 'bool',
 };
 
 // base helpers typed `any[]` that hand back, at this index, the params map they were given (unchanged, omitted or extended: always a map[string]any in Go)
@@ -15366,7 +15372,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if ((slot === undefined) || (node.body === undefined) || this.isAsyncFunction(node)
             || !/[\\/]base[\\/]Exchange(\.nooverloads\.\d+)?\.ts$/.test(String(node.getSourceFile?.()?.fileName ?? ''))) { return undefined; }
         const returns = this.goDescendantsOf(node.body).filter((n: any) => (n.kind === SyntaxKind.ReturnStatement) && (this.goEnclosingFunction(n) === node));
-        return (returns.length === 1) && this.goBasePairReturnIsPair(returns[0]) ? '(' + slot + ', map[string]any)' : undefined;
+        return (returns.length > 0) && returns.every((r: any) => this.goBasePairReturnIsPair(r)) ? '(' + slot + ', map[string]any)' : undefined;
     }
 
     goBasePairReturnIsPair(node): boolean {
@@ -19385,6 +19391,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             return this.goNativeParameterType(decl);
         }
         if (decl.kind === SyntaxKind.BindingElement) {
+            // the params slot of a joined `a, b := pair(..)` is the pair's map[string]any result
+            if (this.ccxtGoTupleJoinedParams?.has(decl) && ccxtGoElement1ElementIsMap(this, decl, 0) && !h53g02ElementWritten(this, decl)) { return 'map[string]any'; }
             return this.h26g32LiteralDefaultStringSlot(decl) ?? this.goTupleSlotPointerType(decl) ?? (this.goTuplePointerSlotProbing ? undefined : this.goTuplePointerSlotOfBinding(decl));
         }
         if (decl.kind !== SyntaxKind.VariableDeclaration || decl.name?.kind !== SyntaxKind.Identifier) { return undefined; }
@@ -31659,6 +31667,13 @@ function ral87g6PairMapWrite(n): boolean {
         && (assignment?.kind === SyntaxKind.BinaryExpression) && (assignment.left === pattern)
         && (assignment.parent?.kind === SyntaxKind.ExpressionStatement)
         && ((tupleJoinWriteType(assignment, n.text) === GO_SAFE_DICT_LOCAL_TYPE) || h34p03PostOnlyParamsWrite(assignment, n));
+}
+// `name[k] = v` anywhere in the binding's function: the store keeps its own nil-guarded form
+function h53g02ElementWritten(goTranspiler: GoTranspiler, decl): boolean {
+    const scope = goTranspiler.goEnclosingFunction(decl);
+    const name = decl.name?.text;
+    return (scope === undefined) || goTranspiler.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.BinaryExpression) && isAssignmentOperator(n.operatorToken?.kind)
+        && (n.left?.kind === SyntaxKind.ElementAccessExpression) && isIdentifierNamed(n.left.expression, name));
 }
 // slot 1 of base `handlePostOnly`: every Go return path holds the GetArgMap params or their OmitDict, a map[string]any
 function h34p03PostOnlyParamsWrite(assignment, n): boolean {
