@@ -37348,6 +37348,13 @@ export class RustTranspiler extends BaseTranspiler {
         return decision;
     }
 
+    /** A required venue `params: Dict` of a sync method: the borrowed-map rule decides it before the lent-`Value` form. */
+    rustVenueLentDictYields(param: any): boolean {
+        const method: any = param?.parent;
+        if (!isMethodDeclaration(method) || this.isAsyncFunction(method) || RustTranspiler.RUST_BASE_TIER_FILE.test(String(param.getSourceFile().fileName))) return false;
+        return String(param.type?.getText?.() ?? '').replace(/\s+/g, '') === 'Dict';
+    }
+
     rustParamIsLentDictUncached(param: any): boolean {
         const method: any = param.parent;
         if (!isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name)) return false;
@@ -37359,6 +37366,8 @@ export class RustTranspiler extends BaseTranspiler {
         const file: any = param.getSourceFile();
         if (!RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName))) {
             if (!this.rustVenueLocalMethod(method, name)) return false;
+            // a venue `Dict` slot the borrowed-map rule proves prints as that map, not as a boxed `Value`
+            if (this.rustVenueLentDictYields(param) && this.rustVenueDictParam(param)) return false;
         } else if (!/^handle\w+$/.test(name)) return false;
         const marker = String(file.text ?? '').indexOf('METHODS BELOW THIS LINE ARE TRANSPILED FROM TYPESCRIPT');
         if (RustTranspiler.RUST_BASE_TIER_FILE.test(String(file.fileName)) && (marker < 0 || (method.getStart?.() ?? method.pos) < marker)) return false;
@@ -42388,7 +42397,7 @@ export class RustTranspiler extends BaseTranspiler {
         const params: any[] = Array.from(method.parameters);
         const at = params.indexOf(param);
         if (params.slice(0, at).some((p: any) => p.initializer !== undefined || p.questionToken !== undefined || p.dotDotDotToken !== undefined)) return false;
-        if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || this.rustParamIsLentDict(param) || this.rustParamPrintsMap(param) || this.rustParamReadsByReference(param)) return false;
+        if (this.rustMarketSlotParam(param) || this.rustCurrencySlotParam(param) || (!this.rustVenueLentDictYields(param) && this.rustParamIsLentDict(param)) || this.rustParamPrintsMap(param) || this.rustParamReadsByReference(param)) return false;
         if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
         // every use a shadow read: the body never returns, stores or hands on the map
         // (a by-name handler that never names its message borrows it too: nothing reads the slot)
@@ -42770,6 +42779,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (arg === undefined || !isIdentifier(arg)) return false;
         const declaration: any = this.rustDeclarationOfIdentifier(arg);
         if (declaration?.kind !== SyntaxKind.Parameter && this.rustTableDictLocalArg(arg)) return true;
+        // a handed-on `extend` / `omit` / `handle*AndParams` local holds the shared map handle (`crate::value::Dict`)
+        if (declaration?.kind !== SyntaxKind.Parameter && declaration?.name !== arg && this.rustHandedDictLocal(declaration)) return true;
         // a row local of a converted `Dict[]` list (`const row = rows[i]`) holds the shared map
         if (declaration?.kind === SyntaxKind.VariableDeclaration && declaration.name !== arg && this.rustP21RowLocalLends(declaration)) return true;
         // a literal local printed as a plain map is lent as `&x` to an async slot only merged by `this.extend`
