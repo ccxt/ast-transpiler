@@ -2753,7 +2753,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustNnAliasDecls.has(declaration)) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::${this.rustBorrowedLocalKind(declaration) === 'list' ? 'List' : 'Dict'} = ${this.rustNnAliasSourceText(this.rustSkipWrappers(declaration.initializer), declaration)}.into_${this.rustBorrowedLocalKind(declaration) === 'list' ? 'list' : 'dict'}()`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration) && this.rustParamsAliasDecl(declaration) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(this.rustSkipWrappers(declaration.initializer)))) { this.rustPrintedBorrowed.add(declaration); return `${indent}let mut ${varName}: crate::value::Dict = ${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}`; }
         if (node.declarations.length === 1 && this.rustBorrowedDictLocal(declaration)) { this.rustPrintedBorrowed.add(declaration); const read = this.rustWsFieldGetText(this.rustSkipWrappers(declaration.initializer), false) ?? (this.rustSbDictAliasDecl(declaration) ? `Value::from(&${parsedValue.trim()})` : this.rustParamsAliasDecl(declaration) ? `${parsedValue.trim().replace(/\.clone\(\)$/, '')}${this.rustParamReadAfter(declaration) ? '.clone()' : ''}` : parsedValue); return this.rustBorrowedLocalKind(declaration) === 'list' ? `${indent}let mut ${varName}: crate::value::List = ${read}.into_list()` : (this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true) !== undefined ? `${indent}let mut ${varName}: crate::value::Dict = ${this.printOptMapDefaultTernary(this.rustSkipWrappers(declaration.initializer), true)}` : `${indent}let mut ${varName}: crate::value::Dict = ${(read === parsedValue ? this.rustDictLiteralArc(declaration.initializer, read) ?? this.rustOdictDefaultText(declaration.initializer) : undefined) ?? (this as any).rustP21RowReadText(declaration) ?? this.rustDictRowReaderText(declaration, read) ?? (this as any).rustP22KeyedDictRead(declaration.initializer, false) ?? this.rustDictTwinText(declaration.initializer, read, false) ?? `${read}.into_dict()`}`); }
-        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? this.rustDictTwinText(declaration.initializer, parsedValue, false) ?? (this.rustBaseTypedReturnKindAll(this.rustSkipWrappers(declaration.initializer)) === 'dict' ? this.rustBaseTypedBareText(this.rustSkipWrappers(declaration.initializer)) : undefined) ?? parsedValue + '.into_dict()'}`; }
+        if (node.declarations.length === 1 && this.rustHandedDictLocal(declaration)) { const arms = this.printDictTernaryArms(declaration.initializer, identation); return `${indent}let mut ${varName}: crate::value::Dict = ${arms ?? this.rustDictTwinText(declaration.initializer, parsedValue, false) ?? (this.rustBaseTypedReturnKindAll(this.rustSkipWrappers(declaration.initializer)) === 'dict' ? this.rustBaseTypedBareText(this.rustSkipWrappers(declaration.initializer)) : undefined) ?? (this.rustSuperOwnDictCall(this.rustSkipWrappers(declaration.initializer)) ? parsedValue.trim() : undefined) ?? parsedValue + '.into_dict()'}`; }
         if (node.declarations.length === 1 && this.rustMarketFlagBoolLocal(declaration)) {
             this.rustBoolDeclaredLocals.add(declaration);
             return `${indent}let mut ${varName}: bool = ${this.unwrapParens(declaration.initializer).kind === SyntaxKind.TrueKeyword ? 'true' : 'false'}`;
@@ -23309,6 +23309,14 @@ export class RustTranspiler extends BaseTranspiler {
         'FundingHistory[]',
     ]);
 
+    /** `super.m ()` in a ws class whose parent method prints its own `-> Dict` return (`super.describeData ()`). */
+    rustSuperOwnDictCall(call: any): boolean {
+        const callee: any = call?.expression;
+        if (!isCallExpression(call) || !isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.SuperKeyword || call.arguments.length !== 0) return false;
+        if (!/ts[\\/]src[\\/]pro[\\/]/.test(String(call.getSourceFile?.()?.fileName ?? ''))) return false;
+        return this.rustOwnContainerReturn(this.rustScalarCallee(call)) === 'dict';
+    }
+
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined {
         if (this.checkerOrUndefined() === undefined) return undefined;
         const baseList = this.rustBaseStringListReturn(node); if (baseList !== undefined) return baseList;
@@ -35991,7 +35999,7 @@ export class RustTranspiler extends BaseTranspiler {
                 // ral-51a: `const p: Dict = t[1]` of a never-rebound `const t = this.handle*AndParams (m, ..)` lent a proven map
                 && !this.rustHandleTupleMapSlotRead(init) && !this.rustRouteParamsDictCall(init) && !this.rust87raVenueTupleMapSlotRead(init)
                 // a call of a typed-return table method that answers `Dict` on every path (`restInstance.describe ()`)
-                && this.rustBaseTypedReturnKindAll(init) !== 'dict' || this.rustBorrowedDictLocal(declaration)) return false;
+                && this.rustBaseTypedReturnKindAll(init) !== 'dict' && !this.rustSuperOwnDictCall(init) || this.rustBorrowedDictLocal(declaration)) return false;
             if (this.rustReadBearerKindOfDeclaration(declaration) !== false || this.rustDictLocalIsTyped(declaration) || this.rustVecLocalIsTyped(declaration)
                 || this.rustNestedDictLocalIsTyped(declaration) || this.rustMarketLocalKind(declaration) !== false
                 || this.rustNilLocalKind(declaration) !== undefined || this.rustScalarLocalKind(declaration) !== undefined) return false;
