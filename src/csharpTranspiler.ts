@@ -2288,14 +2288,14 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // anyCell: the base tier boxes every array cell (`string[]`, `number[][]`) as the list's `object`
-    csharpListSpellingOfType(type, unionArms = 1, anyCell = false): string | undefined {
+    csharpListSpellingOfType(type, unionArms = 1, anyCell = false, stringCell = false): string | undefined {
         if (type === undefined || unionArms !== 1) {
             return undefined;
         }
         const checker: any = this.getChecker();
         if (type.isUnionType && type.isUnionType()) {
             const arms = (type.getTypes() ?? []).filter((arm) => (arm.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
-            return (arms.length === 1) ? this.csharpListSpellingOfType(arms[0], arms.length, anyCell) : undefined;
+            return (arms.length === 1) ? this.csharpListSpellingOfType(arms[0], arms.length, anyCell, stringCell) : undefined;
         }
         if (type.flags & (TypeFlags.TypeParameter | TypeFlags.Any | TypeFlags.Unknown | TypeFlags.EnumLike)) {
             return undefined;
@@ -2323,6 +2323,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (checker.isArrayType(element) || checker.isTupleType(element)) {
             return undefined;
+        }
+        // a venue `string[]` / `Strings` parameter holds the same list box its callers pass
+        if (stringCell && this.isStringType(element.flags)) {
+            return 'IList<object>';
         }
         if (this.isStringType(element.flags) || (element.flags & (TypeFlags.NumberLike | TypeFlags.BooleanLike))) {
             return undefined;
@@ -2416,7 +2420,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                     admitted = false;
                     break;
                 }
-                if (!followsBase && this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier) !== 'IList<object>') {
+                if (!followsBase && this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier, true) !== 'IList<object>') {
                     admitted = false;
                     break;
                 }
@@ -2425,6 +2429,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     break;
                 }
             }
+            // a string cell needs a caller that passes a list: the declaration alone keeps the box
+            let stringCellsUnproved = !baseTier && rows.some((parameter) => this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier) !== 'IList<object>');
             if (admitted && !baseTier) {
                 for (const call of calls.get(methodName) ?? []) {
                     // a `this.` call from another venue lineage reaches another method
@@ -2436,11 +2442,15 @@ export class CSharpTranspiler extends BaseTranspiler {
                         continue; // an omitted argument prints the parameter's own default
                     }
                     if (this.csharpListParamArgumentPrintsList(args[index], decide)) {
+                        stringCellsUnproved = false;
                         continue; // the argument's own C# declaration already holds a list
                     }
                     admitted = false; // an `object` argument would need a conversion at the call site
                     break;
                 }
+            }
+            if (stringCellsUnproved) {
+                admitted = false;
             }
             visiting.delete(key);
             memo.set(key, admitted);
