@@ -3702,6 +3702,14 @@ function ccxtGoWriteSiteConversion (goTranspiler, goType, right, nilJoin = false
     return (admitted === undefined) ? undefined : admitted[goType];
 }
 
+// a nil-seeded local whose every write is `x = await this.<endpoint> (..)` with a `[]any` stub element
+function goNilJoinWritesAreEndpointLists (goTranspiler, declaration, name: string): boolean {
+    if (!isNilDeclaredInitializer (declaration.initializer)) { return false; }
+    const writes = goTranspiler.goNameWriteSites (goTranspiler.goEnclosingFunction (declaration), name, declaration);
+    return (writes.length > 0) && writes.every ((site) => (site.parent?.kind === SyntaxKind.BinaryExpression) && (site.parent.left === site)
+        && (site.parent.operatorToken.kind === SyntaxKind.EqualsToken) && (ccxtGoNilJoinEndpointElement (goTranspiler, site.parent.right) === GO_SAFE_LIST_LOCAL_TYPE));
+}
+
 // the container element of an awaited typed implicit-API stub (`await this.<endpoint>(…)`), or undefined
 function ccxtGoNilJoinEndpointElement (goTranspiler, right) {
     if (right?.kind !== SyntaxKind.AwaitExpression) { return undefined; }
@@ -24489,6 +24497,9 @@ ${tryBodyBlock}
         } catch (e) {
             // fall through to the write proof
         }
+        // a nil-seeded local the endpoint join declares []any: every write is an awaited typed endpoint stub (decoded JSON)
+        if ((declaration.kind === SyntaxKind.VariableDeclaration) && (ccxtGoNilJoinDeclarationType(this, list) === GO_SAFE_LIST_LOCAL_TYPE)
+            && goNilJoinWritesAreEndpointLists(this, declaration, list.text)) { return true; }
         if ((declaration.kind !== SyntaxKind.VariableDeclaration) || (declaration.initializer === undefined) || !listValue(declaration.initializer, 0, list.text)) { return false; }
         const scope: any = this.goEnclosingFunction(declaration);
         return this.goNameWriteSites(scope, list.text, declaration).every((site: any) => {
@@ -25214,6 +25225,10 @@ ${tryBodyBlock}
             const nativeRead = this.goNativeListElementRead(node, containerStr, keys[0], keyStrs[0]);
             if (nativeRead !== undefined) { return this.goElementAccessChain(nativeRead, keyStrs); }
         }
+        // the endpoint join's `var x []any = nil` read in a counting loop over its own length, elements decoded JSON
+        if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n') && !this.isGoElementAccessAssignmentTarget(node)
+            && (ccxtGoNilJoinDeclarationType(this, baseExpr) === GO_SAFE_LIST_LOCAL_TYPE) && this.goBoundedLoopListRead(node)
+            && this.goListElementsArePointerFree(baseExpr)) { return `${containerStr}[${keyStrs[0]}]`; }
         // an awaited `[]any` local of objects (see goAwaitedObjectListRead)
         if ((baseExpr?.kind === SyntaxKind.Identifier) && (keys.length === 1) && !containerStr.includes('\n') && !keyStrs[0].includes('\n')
             && !this.isGoElementAccessAssignmentTarget(node) && this.goIntIndexExpression(keys[0])
