@@ -38028,6 +38028,7 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
     const fn: any = param?.parent;
     if ((param?.kind !== SyntaxKind.Parameter) || (param.name?.kind !== SyntaxKind.Identifier) || (fn?.kind !== SyntaxKind.MethodDeclaration)
         || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier) || (fn.parameters.indexOf(param) !== 1) || !go.goIsProHandlerMethod(fn)
+        && !goIsPredictionHandlerMethod(fn)
         && (fn.name.text !== 'handleMessage')) { return false; }
     if (go.goNativeParameterType(param) !== GO_SAFE_DICT_LOCAL_TYPE) { return false; }
     // the frame itself is never rebound and nothing is stored into it
@@ -38042,7 +38043,8 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
         if (goFrameListRowArg(go, decl)) {
             return true;
         }
-        return ((decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl)) || h50g45ListFrameHead(go, arg);
+        return ((decl?.kind === SyntaxKind.Parameter) && go.h27a11FrameParam(decl)) || h50g45ListFrameHead(go, arg)
+            || h55g45ListFrameElement(go, arg);
     };
     const calls = go.goSameFileCallsOf(fn, methodName);
     let callCount = 0;
@@ -38063,6 +38065,21 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
         return (callee?.kind === SyntaxKind.Identifier) && (go.goAnyBoxLocalDeclaration(callee)?.kind !== SyntaxKind.MethodDeclaration) && (listFrame || (go.goAnyBoxLocalDeclaration(c.arguments?.[1]) !== frame));
     });
     return valueRefsOk && ((callCount + refs) > 0);
+}
+// a prediction-tree ws handler (`handleX`): its frame is proven by its callers exactly as in the pro tree
+function goIsPredictionHandlerMethod (fn: any): boolean {
+    const fileName = String(fn.getSourceFile().fileName ?? '');
+    const name = String(fn.name?.text ?? '');
+    return /(^|[\\/])ts[\\/]src[\\/]prediction[\\/]/.test(fileName) && (name.length > 6) && name.startsWith('handle') && (name[6] === name[6].toUpperCase());
+}
+// `this.safeDict (frame, i, {})` on the list frame of an unwritten handleListMessage: a decoded element or a fresh `{}`
+function h55g45ListFrameElement (go: any, arg: any): boolean {
+    const call: any = go.goUnwrapParenthesizedNode(arg);
+    const args: any = go.goSafeAccessorLocalArgs(call, 'safeDict');
+    const fallback: any = call?.arguments?.[2];
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier) || (fallback?.kind !== SyntaxKind.ObjectLiteralExpression) || (fallback.properties.length !== 0)) { return false; }
+    const param: any = go.goAnyBoxLocalDeclaration(args.container);
+    return (param?.kind === SyntaxKind.Parameter) && h53g45ListFrame(go, param);
 }
 // the name appears in another ts/src file (a subclass, a parent or a by-name reference) or as a string here
 function h27a11NamedElsewhere (go: any, fn: any, name: string): boolean {
