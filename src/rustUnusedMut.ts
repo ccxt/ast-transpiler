@@ -9,45 +9,101 @@ const READ_METHODS = new Set([
     'into_list', 'into_dict', 'into_opt_dict', 'into_iter', 'into', 'is_truthy', 'raw', 'as_slice',
 ]);
 
-/** Index just past the brace closing the block that encloses `at`; the text length when unbalanced. */
-function blockEnd(text: string, at: number): number {
-    let depth = 0;
-    for (let i = at; i < text.length; i++) {
-        const c = text[i];
-        if (c === '"' || (c === 'r' && /^r#*"/.test(text.slice(i, i + 8)) && !/\w/.test(text[i - 1] ?? ''))) {
-            let hashes = '';
-            if (c === 'r') { const m = /^r(#*)"/.exec(text.slice(i))!; hashes = m[1]; i += m[0].length; } else i++;
-            const close = '"' + hashes;
-            for (; i < text.length; i++) {
-                if (c === '"' && text[i] === '\\') { i++; continue; }
-                if (text.startsWith(close, i)) { i += close.length - 1; break; }
-            }
-            continue;
-        }
-        if (c === '\'') { const m = /^'(?:\\.|[^\\'\n])'/.exec(text.slice(i, i + 6)); if (m) { i += m[0].length - 1; continue; } }
-        if (c === '/' && text[i + 1] === '/') { const nl = text.indexOf('\n', i); if (nl < 0) return text.length; i = nl; continue; }
-        if (c === '{') depth++;
-        else if (c === '}') { if (depth === 0) return i + 1; depth--; }
+const isWord = (c: number): boolean => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95;
+const isWs = (c: number): boolean => c === 32 || c === 9 || c === 10 || c === 13 || c === 12 || c === 11;
+
+const isAssignAt = (text: string, q: number, end: number, allowBit: boolean): boolean => {
+    if (q >= end) return false;
+    const c = text.charCodeAt(q);
+    if (c === 61) { const n = q + 1 < end ? text.charCodeAt(q + 1) : 0; return n !== 61 && n !== 62; }
+    if (q + 1 < end && text.charCodeAt(q + 1) === 61 && (c === 45 || c === 43 || c === 42 || c === 47 || c === 37 || (allowBit && (c === 38 || c === 124 || c === 94)))) return true;
+    return allowBit && q + 2 < end && text.charCodeAt(q + 2) === 61 && ((c === 60 && text.charCodeAt(q + 1) === 60) || (c === 62 && text.charCodeAt(q + 1) === 62));
+};
+
+const BRACKET_ASSIGN_RE = /\]\s*(?:=(?![=>])|[-+*/%]=)/;
+const TUPLE_ASSIGN_RE = /^\s*\(.*\)\s*=(?![=>])/;
+const TOKEN_RE = /[{}]|\/\/[^\n]*|"(?:\\.|[^"\\])*"|(?<!\w)r(#{0,6})"[\s\S]*?"\1|'(?:\\.|[^'\\\n])'/g;
+
+/** Fallback brace matcher only if a `let mut` starts inside a string/comment. */
+function blockEndFallback(text: string, at: number): number {
+    const re = new RegExp(TOKEN_RE.source, 'g');
+    re.lastIndex = at;
+    let depth = 0, m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+        const s = m[0];
+        if (s === '{') depth++;
+        else if (s === '}') { if (depth === 0) return m.index + 1; depth--; }
     }
     return text.length;
 }
 
-function mutated(region: string, name: string): boolean {
-    const n = name.replace(/\$/g, '\\$');
-    const id = `(?<![\\w])${n}\\b`;
-    if (new RegExp(`&\\s*mut\\s+${n}\\b|ref\\s+mut\\b|!\\(\\s*${n}\\b`).test(region)) return true;
-    if (new RegExp(`${id}\\s*(?:=(?![=>])|[-+*/%&|^]=|<<=|>>=|\\()`).test(region)) return true;
-    // every `x.a.b(..)` chain: fields are walked, the first call must be read-only, and the chain must not be stored to
-    for (const m of region.matchAll(new RegExp(`${id}((?:\\s*\\.\\s*\\w+)+)(\\s*\\(|\\s*\\[|\\s*(?:=(?![=>])|[-+*/%]=))?`, 'g'))) {
-        const segs = m[1].split('.').map(t => t.trim()).filter(Boolean);
-        if (m[2] === undefined || m[2].trim() === '[') { if (m[2] !== undefined) return true; continue; }
-        if (m[2].trim() !== '(') return true;
-        if (!READ_METHODS.has(segs[segs.length - 1])) return true;
+function lowerBound(arr: number[], x: number): number {
+    let lo = 0, hi = arr.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (arr[mid] < x) lo = mid + 1; else hi = mid; }
+    return lo;
+}
+
+function mutated(text: string, start: number, end: number, name: string, occs: number[] | undefined, refMutS: number[], refMutE: number[]): boolean {
+    if (refMutS.length > 0) {
+        const idx = lowerBound(refMutS, start);
+        if (idx < refMutS.length && refMutE[idx] <= end) return true;
     }
-    for (const line of region.split('\n')) {
-        if (!new RegExp(id).test(line)) continue;
-        if (new RegExp(`${id}\\s*\\[`).test(line) && /\]\s*(?:=(?![=>])|[-+*/%]=)/.test(line)) return true;
-        if (/^\s*\(.*\)\s*=(?![=>])/.test(line)) return true;
+    if (occs === undefined) return false;
+    const len = name.length;
+    let lastLine = -1;
+    for (let k = lowerBound(occs, start); k < occs.length; k++) {
+        const p = occs[k];
+        if (p + len > end) break;
+        if (p > start && isWord(text.charCodeAt(p - 1))) continue;
+        // `& mut x` or `!( x`
+        let b = p - 1;
+        while (b >= start && isWs(text.charCodeAt(b))) b--;
+        if (b >= start + 1 && text.charCodeAt(b) === 40 && text.charCodeAt(b - 1) === 33) return true;
+        if (b >= start + 3 && text.charCodeAt(b) === 116 && text.charCodeAt(b - 1) === 117 && text.charCodeAt(b - 2) === 109 && b < p - 1) {
+            let a = b - 3;
+            while (a >= start && isWs(text.charCodeAt(a))) a--;
+            if (a >= start && text.charCodeAt(a) === 38) return true;
+        }
+        // direct assign or call: `x =`, `x +=`, `x(`
+        let q = p + len;
+        while (q < end && isWs(text.charCodeAt(q))) q++;
+        if (q < end && (text.charCodeAt(q) === 40 || isAssignAt(text, q, end, true))) return true;
+        // every `x.a.b(..)` chain
+        if (q < end && text.charCodeAt(q) === 46) {
+            let r = q, lastSeg = '', segCount = 0;
+            while (r < end) {
+                let d = r;
+                while (d < end && isWs(text.charCodeAt(d))) d++;
+                if (d >= end || text.charCodeAt(d) !== 46) break;
+                d++;
+                while (d < end && isWs(text.charCodeAt(d))) d++;
+                const s0 = d;
+                while (d < end && isWord(text.charCodeAt(d))) d++;
+                if (d === s0) break;
+                lastSeg = text.slice(s0, d);
+                segCount++;
+                r = d;
+            }
+            if (segCount > 0) {
+                let s = r;
+                while (s < end && isWs(text.charCodeAt(s))) s++;
+                if (s < end) {
+                    const sc = text.charCodeAt(s);
+                    if (sc === 91) return true;
+                    if (sc === 40) { if (!READ_METHODS.has(lastSeg)) return true; }
+                    else if (isAssignAt(text, s, end, false)) return true;
+                }
+            }
+        }
+        // line checks: index store `x[..] =` or tuple destructuring assignment `(..) =`
+        const ls = Math.max(start, text.lastIndexOf('\n', p - 1) + 1);
+        const nl = text.indexOf('\n', p + len);
+        const le = nl < 0 || nl > end ? end : nl;
+        if (q < le && text.charCodeAt(q) === 91 && BRACKET_ASSIGN_RE.test(text.slice(ls, le))) return true;
+        if (ls !== lastLine) {
+            lastLine = ls;
+            if (text.indexOf('(', ls) >= 0 && text.indexOf('(', ls) < le && TUPLE_ASSIGN_RE.test(text.slice(ls, le))) return true;
+        }
     }
     return false;
 }
@@ -55,12 +111,57 @@ function mutated(region: string, name: string): boolean {
 /** `let mut x` -> `let x` for every binding the rest of its block never mutates. */
 export function rustDropUnusedMut(text: string): string {
     const decl = /(?<![\w.])let mut ([A-Za-z_]\w*)\b(?!\s*!)/g;
-    const drops: number[] = [];
+    const matches: Array<{ idx: number, after: number, name: string, end: number }> = [];
+    const byName = new Map<string, number[]>();
     for (const m of text.matchAll(decl)) {
-        const after = m.index + m[0].length;
-        if (!mutated(text.slice(after, blockEnd(text, after)), m[1])) drops.push(m.index + 'let '.length);
+        matches.push({ idx: m.index, after: m.index + m[0].length, name: m[1], end: -1 });
+        if (!byName.has(m[1])) byName.set(m[1], []);
     }
-    let out = '', last = 0;
-    for (const at of drops) { out += text.slice(last, at); last = at + 'mut '.length; }
-    return out + text.slice(last);
+    if (matches.length === 0) return text;
+    // Single native-regex pass for brace boundaries
+    const frames: number[][] = [[]];
+    let mi = 0, tm: RegExpExecArray | null;
+    TOKEN_RE.lastIndex = 0;
+    while ((tm = TOKEN_RE.exec(text)) !== null) {
+        const pos = tm.index, tok = tm[0];
+        while (mi < matches.length && matches[mi].after <= pos) frames[frames.length - 1].push(mi++);
+        if (tok === '{') {
+            frames.push([]);
+        } else if (tok === '}') {
+            const closed = frames.pop()!;
+            for (const k of closed) matches[k].end = pos + 1;
+            if (frames.length === 0) frames.push([]);
+        } else {
+            const tokEnd = pos + tok.length;
+            while (mi < matches.length && matches[mi].after < tokEnd) {
+                matches[mi].end = blockEndFallback(text, matches[mi].after);
+                mi++;
+            }
+        }
+    }
+    while (mi < matches.length) matches[mi++].end = text.length;
+    for (const f of frames) for (const k of f) matches[k].end = text.length;
+    // Single pass indexing all word occurrences of candidate names
+    const identRe = /[A-Za-z_]\w*/g;
+    let im: RegExpExecArray | null;
+    while ((im = identRe.exec(text)) !== null) {
+        const list = byName.get(im[0]);
+        if (list !== undefined) list.push(im.index);
+    }
+    const refMutS: number[] = [], refMutE: number[] = [];
+    if (text.includes('ref')) {
+        for (const m of text.matchAll(/ref\s+mut\b/g)) { refMutS.push(m.index); refMutE.push(m.index + m[0].length); }
+    }
+    const parts: string[] = [];
+    let last = 0;
+    for (const m of matches) {
+        if (!mutated(text, m.after, m.end, m.name, byName.get(m.name), refMutS, refMutE)) {
+            const at = m.idx + 4;
+            parts.push(text.slice(last, at));
+            last = at + 4;
+        }
+    }
+    if (parts.length === 0) return text;
+    parts.push(text.slice(last));
+    return parts.join('');
 }
