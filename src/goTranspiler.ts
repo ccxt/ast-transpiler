@@ -33525,6 +33525,14 @@ function ccxtGo92IsNumParseCall (goTranspiler: GoTranspiler, expression): boolea
     try { declaration = goTranspiler.getChecker ().getResolvedSignature (expression)?.declaration?.resolve (); } catch (e) { return false; }
     return ccxtGo92NumParseMethod (declaration) && (ccxtGoAnnotatedMethodReturnType (goTranspiler, declaration) === CCXT_GO_92_PARSE_POINTER[declaration.type.getText ()]);
 }
+// `const x: Num = this.parseX (..)`: the local declares the callee's own `Num` / `Int`, so it holds the callee's pointer
+function ccxtGo92AnnotatedLikeCallee (goTranspiler: GoTranspiler, declaration): boolean {
+    const annotation = declaration?.type?.getText?. ();
+    if ((annotation !== 'Num') && (annotation !== 'Int')) { return false; }
+    let callee;
+    try { callee = goTranspiler.getChecker ().getResolvedSignature (goUnwrapParens (declaration.initializer))?.declaration?.resolve (); } catch (e) { return false; }
+    return callee?.type?.getText () === annotation;
+}
 function ccxtGo92HasNilTest (goTranspiler: GoTranspiler, declaration): boolean {
     const scope = goTranspiler.goEnclosingFunction (declaration);
     return (scope !== undefined) && goTranspiler.hasNodeWhere (scope, (n) => (n.kind === SyntaxKind.Identifier) && (n !== declaration.name)
@@ -33532,7 +33540,8 @@ function ccxtGo92HasNilTest (goTranspiler: GoTranspiler, declaration): boolean {
 }
 goChainRewrite('getGoLocalType', function (known: any, declaration, parsedValue: string) {
     if (((known === '*float64') || (known === '*int64')) && (declaration?.kind === SyntaxKind.VariableDeclaration) && (declaration.initializer !== undefined)
-        && ccxtGo92IsNumParseCall (this, declaration.initializer) && !ccxtGo92HasNilTest (this, declaration)) { return 'any'; }
+        && ccxtGo92IsNumParseCall (this, declaration.initializer) && !ccxtGo92HasNilTest (this, declaration)
+        && !ccxtGo92AnnotatedLikeCallee (this, declaration)) { return 'any'; }
     return known;
 });
 // a nil-seeded local written from such a call (pointer-write scan) needs the same native nil test
