@@ -9490,7 +9490,7 @@ export class JavaTranspiler extends BaseTranspiler {
     // a slice bound as the integer the helper's toInt answers: an integral print is its own text, a
     // boxed number (an `Object` from indexOf, a Double) takes the helper's own intValue truncation
     javaSliceBoundOperand(node, printed): { text: string } | undefined {
-        if (this.javaPrintsIntegralNumber(node)) {
+        if (this.javaPrintsIntegralNumber(node) || this.javaIntCounterBound(node)) {
             return { text: this.javaIsAtomOperand(node) ? printed : `(${printed})` };
         }
         const n = this.unwrapParenthesized(node);
@@ -9623,6 +9623,31 @@ export class JavaTranspiler extends BaseTranspiler {
         default:
             return false;
         }
+    }
+
+    // a `for (let i = <int>; ..; i++)` counter (a Java int), integer literals, and `+`/`-`/`*` of those
+    javaIntCounterBound(node, depth = 0): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n === undefined || depth > 4) {
+            return false;
+        }
+        if (isBinaryExpression(n)) {
+            const op = n.operatorToken.kind;
+            return (op === SyntaxKind.PlusToken || op === SyntaxKind.MinusToken || op === SyntaxKind.AsteriskToken)
+                && this.javaIntCounterBound(n.left, depth + 1) && this.javaIntCounterBound(n.right, depth + 1);
+        }
+        if (n.kind === SyntaxKind.NumericLiteral) {
+            return this.javaPrintsIntegralNumber(n);
+        }
+        if (!isIdentifier(n)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(n);
+        if (declaration === undefined || declaration.kind !== SyntaxKind.VariableDeclaration
+            || this.javaForCounterStatement(declaration) === undefined) {
+            return false;
+        }
+        return this.javaSliceNonNegativeBound(n, depth + 1);
     }
 
     // a `const x = s.indexOf (..)` local: its value is never below -1
