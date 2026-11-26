@@ -29971,6 +29971,8 @@ ${tryBodyBlock}
     h30a03Receiver(container, read, call?) {
         if ((container?.kind !== SyntaxKind.Identifier) || (this.h27a01ReceiverType(container) !== GO_SAFE_DICT_LOCAL_TYPE)) { return false; }
         if (this.h28a03JoinedEndpointLocal(container)) { return true; }
+        // a read-only map parameter of a venue-internal method every caller hands decoded JSON (h28a01 proof)
+        if (this.h28a01JsonParam(container, 0)) { return true; }
         if (this.h27a11JsonContainer(container)) { return true; } // a ws frame (or read-only cut of one): decoded JSON, never written
         const source: any = this.goAnyBoxLocalDeclaration(container);
         const seed: any = this.goUnwrapParenthesizedNode(source?.initializer);
@@ -38649,8 +38651,18 @@ function h28a01OnlyDirectReadOnlyCalls (go: any, fn: any, param: any, name: stri
     if ((calls.length === 0) || (calls.length !== mentions) || calls.some((c: any) => (noRunner ? (c.runner !== undefined) : (c.arguments.length > fn.parameters.length))
         || (c.expression?.expression?.kind !== SyntaxKind.ThisKeyword))) { return false; } // a method reference, or a call the checker resolves elsewhere
     return go.goJsonOriginBindingIsReadOnly(param, (n: any, local: string) => go.goJsonOriginUseIsReadOnly(n, local)
-        || (!go.goWritesOrRebindsName(n, local, []) && (go.h27a02ScalarReaderUse(n)
+        || (!go.goWritesOrRebindsName(n, local, []) && (go.h27a02ScalarReaderUse(n) || h55g59DefaultedListAssign(n)
             || ((n.parent?.kind === SyntaxKind.PropertyAssignment) && (n.parent.initializer === n) && (n.parent.name?.text === 'info')))));
+}
+// `x = this.safeList (P, 'lit', [])` as a whole statement: the list is cut out of P, P itself is only read
+function h55g59DefaultedListAssign (n: any): boolean {
+    const call: any = n.parent;
+    const fallback: any = call?.arguments?.[2];
+    const write: any = call?.parent;
+    return (call?.kind === SyntaxKind.CallExpression) && (call.arguments.length === 3) && (call.arguments[0] === n) && goIsThisCall(call, 'safeList')
+        && (call.arguments[1]?.kind === SyntaxKind.StringLiteral) && (fallback?.kind === SyntaxKind.ArrayLiteralExpression) && (fallback.elements.length === 0)
+        && (write?.kind === SyntaxKind.BinaryExpression) && (write.right === call) && (write.operatorToken.kind === SyntaxKind.EqualsToken)
+        && (write.left?.kind === SyntaxKind.Identifier) && (write.parent?.kind === SyntaxKind.ExpressionStatement);
 }
 // parameter: as a JSON container, through a scalar reader, in a nil test, as `info`, or handed to another such slot
 function h28a01ProveReadOnly (go: any, fn: any, param: any, proWs = false): boolean {
