@@ -1727,7 +1727,7 @@ export class RustTranspiler extends BaseTranspiler {
         // A logical expression with a native-compare or native-bool-param operand no longer starts with a bool helper: box it.
         if ((op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken)
             && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node)
-                || this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right))) {
+                || (!this.isBooleanPosition(node) && (this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right))))) {
             return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
         }
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
@@ -3859,10 +3859,8 @@ export class RustTranspiler extends BaseTranspiler {
                     // the scalar rule re-checks and refuses on its own
                 }
             }
-            // a nested solve (a slot decision that walks another method) hands the outer seeding state back
-            const seeding = this.rustScalarSeeding;
             this.rustScalarSeeding = true;
-            try { for (let pass = 0; pass < 2; pass++) { for (const n of candidates) this.rustScalarDecisions.set(n, this.rustScalarTry(n)); } } finally { this.rustScalarSeeding = seeding; }
+            try { for (let pass = 0; pass < 2; pass++) { for (const n of candidates) this.rustScalarDecisions.set(n, this.rustScalarTry(n)); } } finally { this.rustScalarSeeding = false; }
             const unstable = new Set<any>();
             for (let pass = 0; pass < 12; pass++) {
                 let changed = false;

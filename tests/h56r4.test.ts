@@ -50,7 +50,6 @@ export class Demo {
         const go = t.transpileGoByPath (file).content;
         expect (go).toContain ('var a string = this.PadHexToEven(s)');
         expect (go).toContain ('var b string = this.HexToRlpBytes(s)');
-        expect (go).toContain ('var c string = this.RlpEncodeBytes(s)');
         expect (go).toContain ('var trimmed string = strings.TrimSpace(s)');
         expect (go).toContain ('Trim(raw)');
         expect (go).toContain ('*since % step');
@@ -120,7 +119,7 @@ export class Exchange {
     isPostOnly (isMarketOrder: boolean, exchangeSpecificParam: boolean): boolean {
         const postOnly = isMarketOrder || exchangeSpecificParam;
         if (postOnly) {
-            if (isMarketOrder) {
+            if (isMarketOrder || !exchangeSpecificParam) {
                 return false;
             }
             return true;
@@ -144,6 +143,7 @@ export default class venue extends Exchange {
         const rsBase = t.transpileRustByPath (base).content;
         expect (rsBase).toContain ('let tail: bool = get_arg(optional_args, 3, Value::Bool(false)).is_truthy()');
         expect (rsBase).toContain ('Value::Bool(!tail &&');
+        expect (rsBase).not.toContain ('if Value::Bool(');
         expect (rsBase).not.toContain ('is_true(&tail)');
         expect (rsBase).toContain ('pub fn isPostOnly(&self, isMarketOrder: bool, exchangeSpecificParam: bool)');
         expect (rsBase).not.toContain ('is_true(&exchangeSpecificParam)');
