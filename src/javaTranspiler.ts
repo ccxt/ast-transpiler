@@ -6228,6 +6228,12 @@ export class JavaTranspiler extends BaseTranspiler {
         const h30j06 = this.h30J06ListPush(_node, name, parsedArg); if (h30j06 !== undefined) return h30j06;
         const h28j06 = this.h28J06SeededListPush(_node, name, parsedArg); if (h28j06 !== undefined) return h28j06;
         const h27j06 = this.h27J06FutureListPush(_node, name, parsedArg); if (h27j06 !== undefined) return h27j06;
+        // a receiver whose declaration is already List<Object> needs no checkcast
+        const receiver = _node?.expression?.expression;
+        if (parsedArg !== undefined && isIdentifier(receiver) && name === receiver.text
+            && /^(java\.util\.)?List<Object>$/.test(String(this.javaTry(() => this.javaDeclaredTypeOf(receiver)) ?? '').replace(/^final\s+/, '').replace(/\s+/g, ''))) {
+            return `${name}.add(${parsedArg})`;
+        }
         return `((java.util.List<Object>)${name}).add(${parsedArg})`;
     }
 
