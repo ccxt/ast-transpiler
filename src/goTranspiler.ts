@@ -22363,6 +22363,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const other: any = (parent.left === n) ? parent.right : parent.left;
                 const equality = [SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken].includes(op);
                 if (equality && ((other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NumericLiteral))) { return true; }
+                // `x === this.safeString (..)`: both sides are *string, compared through IsEqual (derefs both)
+                if (equality && (goType === '*string') && h55g42SafeStringCall(other)) { return true; }
             }
             // a copy (ternary arm, `let r = x`, `r = x`) hands the value to a body local whose
             let use: any = n;
@@ -38879,6 +38881,13 @@ function h28g07SiblingNumBound (go: any, tree: any, name: string, site: any, ind
 }
 // a `Str = undefined` parameter as an argument (through parens / `as string`) of `Precise.stringXxx` or of a
 // `this.m` slot the audited GetArg consumer table marks deref: those bodies derefScalar it, so nil reads as the box
+// `this.safeString (..)` / `this.safeStringN (..)` with no default: a *string the printer compares through IsEqual
+function h55g42SafeStringCall (e) {
+    const c = goUnwrapParens(e);
+    return (c?.kind === SyntaxKind.CallExpression) && (c.expression?.kind === SyntaxKind.PropertyAccessExpression)
+        && (c.expression.expression?.kind === SyntaxKind.ThisKeyword) && (c.expression.name?.text === 'safeString') && ((c.arguments ?? []).length === 2);
+}
+
 function h28g08StrParamDerefArg (n) {
     let arg = n;
     while ((arg.parent?.kind === SyntaxKind.ParenthesizedExpression) || (arg.parent?.kind === SyntaxKind.AsExpression)) { arg = arg.parent; }
