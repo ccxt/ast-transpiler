@@ -96,7 +96,6 @@ describe ('h53g02 handlePostOnly (bool, map[string]any)', () => {
             + '        const paramsOmitted = this.omit (paramsCreate, [ \'cost\' ]);\n'
             + '        return [ postOnly, paramsOmitted ];\n'
             + '    }');
-        fs.writeFileSync ('/root/workspace/campaigns/hx12/work/h53/tmp-H53-G02/probe3.go', out);
         expect (out).toContain ('var paramsCreate map[string]any = paramsPostOnly');
     });
     test ('a rebind of declared locals assigns both slots', () => {

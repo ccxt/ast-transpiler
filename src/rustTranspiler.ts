@@ -23317,7 +23317,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isReturnStatement(n)) {
                 returns++;
                 const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
-                        if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
+                if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
                 // a method of a parent venue file: the Rust struct derefs to the base exchange, whose stub keeps `Value`
                 if (v !== undefined && this.rustOtherVenueCall(v, node) && !this.rustAwaitedDictEndpointReturn(v)) ok = false;
             }

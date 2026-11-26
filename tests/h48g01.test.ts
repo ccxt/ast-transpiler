@@ -76,6 +76,8 @@ describe('h48g01: a string ternary with a *string pair-slot arm', () => {
     });
     test('negative: a nil test on a slot-1 binding keeps its own form', () => {
         const out = run('tmp-h48g01-f', "    g (params: Dict = {}) {\n        const [ t, q ] = this.handleMarketTypeAndParams ('g', undefined, params);\n        const x: string = (q !== undefined) ? 'a' : 'b';\n        return x;\n    }\n");
-        expect(out).not.toContain('q != nil');
+        // slot 1 is the typed params map: its nil test is the map's own, never a pointer read
+        expect(out).not.toContain('*q');
+        expect(out).not.toContain('SafeStringPtr(q)');
     });
 });
