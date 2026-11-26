@@ -18078,7 +18078,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref().unwrap_or(""))`;
         }
         if (field !== undefined && this.rust87rhPrecisionLocal(declaration)) return `Value::from(${recv}.${field}.as_str())`;
-        if (field !== undefined) return `Value::from(${recv}.${field}.clone())`;
+        if (field !== undefined) return `Value::from(${recv}.${field}${this.rustMarketFieldMoves(receiver, declaration, node) ? '' : '.clone()'})`;
         if (optField !== undefined) return `Value::from(${recv}.${optField}.as_deref())`;
         // a declared flag's initializer keeps the raw read: the bool-local narrowing keys on it
         if (RustTranspiler.RUST_MARKET_OPT_BOOL_FIELDS.has(key) && !isCallExpression(node) && node.parent?.kind !== SyntaxKind.VariableDeclaration) {
@@ -18135,7 +18135,15 @@ export class RustTranspiler extends BaseTranspiler {
         }
         if (declaration === undefined || this.rustMarketReadKey(node) !== undefined) return undefined;
         if (this.rustMarketReaderArg(node) || this.rustMarketSlotUse(node)) return undefined;
-        return `(${String(node.text)}).raw.clone()`;
+        return `(${String(node.text)}).raw${this.rustMarketFieldMoves(node, declaration, node) ? '' : '.clone()'}`;
+    }
+
+    /** The last use of an owned market struct local, as a whole call argument: its field moves out (no `try`, loop or
+     *  closure between the use and the declaration, no other read of the local in the statement or after it). */
+    rustMarketFieldMoves(receiver: any, declaration: any, node: any): boolean {
+        if (this.rustMarketLocalKind(declaration) !== 'struct' || !isCallExpression(node.parent) || !Array.from(node.parent.arguments).includes(node)) return false;
+        for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) if (up.kind === SyntaxKind.TryStatement) return false;
+        return this.rustLocalLastUse(receiver, declaration);
     }
 
     // A literal argument of a typed unified call printed in the parameter's native type (`'market'` -> `"market"`).

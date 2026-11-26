@@ -8576,7 +8576,7 @@ describe('rust typed Market locals', () => {
         expect(output).toContain('(market).swap || (market.linear == Some(true))'.replace('market.linear', '(market).linear'));
         expect(output).toContain('crate::value::KeyRead::key_read(&&market, "info")');
         expect(output).toContain('Value::from((market).symbol.clone())');
-        expect(output).toContain('self.hold((market).raw.clone())');
+        expect(output).toContain('self.hold((market).raw)');
     });
 
     test('a market local re-written by this.market stays the struct', () => {
