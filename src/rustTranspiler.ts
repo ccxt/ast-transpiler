@@ -29803,7 +29803,8 @@ export class RustTranspiler extends BaseTranspiler {
 
     rustParamsDictSlotUncached(d: any): boolean {
         const tuple = this.rustBaseTupleParamsParam(d);
-        if (!tuple && !this.rustTypedParamsParam(d)) return false;
+        // a venue `*Request` helper's trailing `params: Dict = {}` that every caller proves a map takes the same slot
+        if (!tuple && !this.rustTypedParamsParam(d) && !(/Request$/.test(String(d.parent?.name?.text)) && this.rustHelperParamsProvenMap(d))) return false;
         let uses = 0; let extendUses = 0; let clonedArm = false;
         const safe = this.rustLocalUsesAll(d, 'params', false, (n: any) => {
             if (this.rustDeclaredNode(n) !== d) return false;
