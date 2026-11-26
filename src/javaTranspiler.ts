@@ -8275,6 +8275,10 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaGuardedLongLocalRead(node)) {
             return 'integral';
         }
+        // `(x === undefined) ? y : x` over null-guarded Double const locals is a non-null Double
+        if (this.javaGuardedDoubleOperand(node)) {
+            return 'double';
+        }
         // a nested Math.min/Math.max that prints natively is a primitive of its operands' family
         const inner = this.unwrapParenthesized(node);
         if (isCallExpression(inner) && inner.arguments.length === 2 && /^Math\.(?:min|max)$/.test(inner.expression.getText())) {
@@ -8296,6 +8300,24 @@ export class JavaTranspiler extends BaseTranspiler {
         }
         const type = this.javaTry(() => this.javaDeclaredTypeOfDeclaration(declaration));
         return typeof type === 'string' && type.replace(/^final\s+/, '').trim() === 'Long' && this.javaNullGuardAdmitsRead(node);
+    }
+
+    // a `const` local the printer declares `Double` read under a null test, or a conditional whose
+    // both arms are such reads (the test itself proves the arm it selects)
+    javaGuardedDoubleOperand(node): boolean {
+        const n = this.unwrapParenthesized(node);
+        if (n !== undefined && isConditionalExpression(n)) {
+            return this.javaGuardedDoubleOperand(n.whenTrue) && this.javaGuardedDoubleOperand(n.whenFalse);
+        }
+        if (n === undefined || !isIdentifier(n) || !this.javaIdentifierPrintsDeclaredName(n)) {
+            return false;
+        }
+        const declaration: any = this.javaDeclarationOfIdentifier(n);
+        if (declaration?.kind !== SyntaxKind.VariableDeclaration || (getCombinedNodeFlags(declaration) & NodeFlags.Const) === 0) {
+            return false;
+        }
+        const type = this.javaTry(() => this.javaDeclaredTypeOfDeclaration(declaration));
+        return typeof type === 'string' && type.replace(/^final\s+/, '').trim() === 'Double' && this.javaNullGuardAdmitsRead(n);
     }
 
     // a primitive has no members, so a receiver position (and the printer's cast wrappers) keep the
