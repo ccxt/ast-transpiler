@@ -38108,7 +38108,7 @@ function h27a11ProveFrameParam (go: any, param: any): boolean {
     let refs = 0;
     const valueRefsOk = goHandlerValueRefsOk(go, fn, methodName, true, () => { refs++; }, (c, callee, holder) => {
         const frame: any = (holder?.kind === SyntaxKind.MethodDeclaration) ? holder.parameters?.[1] : undefined;
-        const listFrame = (frame !== undefined) && h53g45ListFrame(go, frame);
+        const listFrame = (frame !== undefined) && (h53g45ListFrame(go, frame) || go.h29g05ListFrameParam(frame));
         if (c === undefined) { return ((frame === undefined) || !(listFrame || go.h27a11FrameParam(frame))) ? true : undefined; }
         if ((callee?.kind === SyntaxKind.PropertyAccessExpression) && ((callee.name?.text === 'call') || (callee.name?.text === 'apply'))
             && (callee.expression?.kind !== SyntaxKind.ThisKeyword)) {
