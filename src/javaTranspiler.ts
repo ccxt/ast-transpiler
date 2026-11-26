@@ -2487,6 +2487,9 @@ export class JavaTranspiler extends BaseTranspiler {
         if (venueDict !== undefined) {
             return venueDict;
         }
+        if (name === undefined && !testTier && this.javaBaseSoleStringParameter(node, method, type)) {
+            return this.STRING_KEYWORD;
+        }
         if (name === undefined) {
             return this.javaPlainParameterTypeOf(node, type, checker);
         }
@@ -2497,6 +2500,43 @@ export class JavaTranspiler extends BaseTranspiler {
         const declaration = symbol?.declarations?.[0]?.resolve();
         const fileName = declaration?.getSourceFile?.()?.fileName;
         return JAVA_NATIVE_PARAMETER_SOURCE_FILES.test(fileName ?? '') ? aliasType : this.javaPlainParameterTypeOf(node, type, checker);
+    }
+
+    // a plain `string` slot of a sole base-tier method (no override, no hand-written or foreign caller) prints String
+    // when every own-file caller already hands a String: a literal, a `safeString` local or a literal-list element
+    javaBaseSoleStringParameter(node, method, type): boolean {
+        if (node.type?.kind !== SyntaxKind.StringKeyword || (type.flags & TypeFlags.String) === 0
+            || !JAVA_NATIVE_PARAMETER_BASE_FILES.test(node.getSourceFile().fileName)
+            || !this.javaBaseMapReturnIsSole(method, JAVA_NATIVE_RETURN_MAP_TYPE)) {
+            return false;
+        }
+        const uses = this.javaTry(() => this.javaRepoMethodUses(String(method.name.text), node.getSourceFile().fileName));
+        const position = method.parameters.indexOf(node);
+        const calls = this.javaThisCallsInFile(node.getSourceFile(), String(method.name.text));
+        return uses !== undefined && (uses.calls ?? []).length === 0 && (uses.foreignCalls ?? 0) === 0 && calls.length > 0
+            && calls.every((call) => this.javaStringSourceArgument(call.arguments[position]));
+    }
+
+    javaStringSourceArgument(arg): boolean {
+        if (arg !== undefined && isStringLiteral(arg)) {
+            return true;
+        }
+        const checker: any = this.checkerOrUndefined();
+        const declaration = arg !== undefined && isIdentifier(arg) ? this.javaTry(() => checker?.getSymbolAtLocation(arg)?.valueDeclaration?.resolve()) : undefined;
+        const init = declaration !== undefined && isVariableDeclaration(declaration) ? this.unwrapParenthesized(declaration.initializer) : undefined;
+        if (init === undefined) {
+            return false;
+        }
+        if (isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword
+            && init.expression.name.text === 'safeString') {
+            return true;
+        }
+        if (!isElementAccessExpression(init) || !isIdentifier(init.expression)) {
+            return false;
+        }
+        const list = this.javaTry(() => checker.getSymbolAtLocation(init.expression)?.valueDeclaration?.resolve());
+        const items = list !== undefined && isVariableDeclaration(list) ? this.unwrapParenthesized(list.initializer) : undefined;
+        return items !== undefined && isArrayLiteralExpression(items) && items.elements.length > 0 && items.elements.every((e) => isStringLiteral(e));
     }
 
     // a fixed `string[]` / `Strings` parameter of an async method first declared in the Exchange tier prints

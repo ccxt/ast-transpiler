@@ -14910,6 +14910,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (this.goInsideNonNilBlock(node, name)) { return true; }
         if (nilTest || ((rebinds.size > 0) && this.goAfterNilGuardFill(node, rebinds)) || this.goAfterNilExitGuard(node, name)) { return true; } // `x == nil` answers the same for a nil map and for the nil box
         if ((parent.kind === SyntaxKind.CallExpression) && this.goMapArgCalleeTakesNilMap(parent, node, 0)) { return true; }
+        if ((parent.kind === SyntaxKind.CallExpression) && this.goInsideReaderPresenceBlock(node, name)) { return true; }
         if ((parent.kind === SyntaxKind.CallExpression) && (parent.arguments[0] === node)) {
             const callee: any = parent.expression;
             return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword) && /^safe[A-Z]/.test(callee.name?.text ?? '');
@@ -14969,6 +14970,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             && bindings.every((b: any) => b.kind === SyntaxKind.VariableDeclaration);
         if ((bindings.length !== 1) && !siblings) { return undefined; }
         const rebinds = new Set<any>();
+        const freshWrites = new Set<any>();
         const refs = this.goDescendantsOf(scope).filter((n: any) => (n.kind === SyntaxKind.Identifier) && (n.text === name) && (n !== declaration.name)
             && (!siblings || (this.goDeclarationOfIdentifier(n) === declaration))
             && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n))
@@ -14982,9 +14984,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         && !((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name === n)))) {
                     rebinds.add(write); // every write is again a never-nil safeDict: one map type
                 } else if (noDefault && this.goNilGuardFill(write, name, found.family, ws)) { rebinds.add(write); } else if (noDefault && this.goSelfNarrowingRead(write, name, found.family)) { rebinds.add(write); } else if (!noDefault && this.goMapLocalFreshMapWrite(write, name)) { rebinds.add(write); }
+                else if (noDefault && (this.goMapLocalFreshMapWrite(write, name) || this.goDeepExtendWrite(write))) { freshWrites.add(write); }
             }
         }
-        for (const ref of refs) { if (!this.goMapLocalUseKeepsMap(ref, rebinds, noDefault, ws, name)) { return undefined; } }
+        for (const ref of refs) { if (!freshWrites.has(ref.parent) && !this.goMapLocalUseKeepsMap(ref, rebinds, noDefault, ws, name)) { return undefined; } }
+        // a fresh-map write is a rebinding but never a nil fill: it stays out of the set the use proofs read
+        for (const write of freshWrites) { rebinds.add(write); }
         this.goMapLocalRebindWrites.set(declaration, rebinds);
         return GO_SAFE_DICT_LOCAL_TYPE;
     }
@@ -15003,6 +15008,39 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (method === 'extend') { return (value.arguments.length >= 1) && !value.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement); }
         const first: any = this.goUnwrapParenthesizedNode(value.arguments[0]);
         return (method === 'omit') && (value.arguments.length >= 2) && (first?.kind === SyntaxKind.Identifier) && (first.text === name);
+    }
+
+    // inside `if (s !== undefined)` with `const s = this.safeString (x, 'k')` (no default): s is nil for a nil map,
+    // so x is not nil there, as long as every write to x since s is a fresh map
+    goInsideReaderPresenceBlock(use, name: string): boolean {
+        for (let child: any = use, cur: any = use.parent; cur !== undefined; child = cur, cur = cur.parent) {
+            const test: any = (cur.kind === SyntaxKind.IfStatement) && (cur.thenStatement === child) ? this.goUnwrapParenthesizedNode(cur.expression) : undefined;
+            if ((test?.kind !== SyntaxKind.BinaryExpression) || (test.operatorToken.kind !== SyntaxKind.ExclamationEqualsEqualsToken)
+                || (test.left?.kind !== SyntaxKind.Identifier) || !goIsNilNode(test.right)) { continue; }
+            const decl: any = this.goSymbolValueDecl(test.left);
+            const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+            const callee: any = (init?.kind === SyntaxKind.CallExpression) ? init.expression : undefined;
+            const reads = (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0)
+                && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword) && (callee.name?.text === 'safeString')
+                && (init.arguments.length === 2) && (init.arguments[0]?.kind === SyntaxKind.Identifier) && (init.arguments[0].text === name)
+                && (init.arguments[1]?.kind === SyntaxKind.StringLiteral);
+            if (!reads) { continue; }
+            const scope: any = this.goEnclosingFunction(decl);
+            if ((scope === undefined) || (this.goEnclosingFunction(use) !== scope)) { return false; }
+            // every write to the local between the reader and the use prints a fresh map
+            return !this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken.kind === SyntaxKind.EqualsToken)
+                && (n.left?.kind === SyntaxKind.Identifier) && (n.left.text === name) && (n.pos > decl.end) && (n.end <= use.pos)
+                && !this.goMapLocalFreshMapWrite(n, name) && !this.goDeepExtendWrite(n));
+        }
+        return false;
+    }
+
+    // a statement `x = this.deepExtend (..)`: DeepExtend returns map[string]any
+    goDeepExtendWrite(write): boolean {
+        const value: any = this.goUnwrapParenthesizedNode(write.right);
+        const callee: any = (value?.kind === SyntaxKind.CallExpression) ? value.expression : undefined;
+        return (write.parent?.kind === SyntaxKind.ExpressionStatement) && (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
+            && (callee.name?.text === 'deepExtend') && (value.arguments.length >= 1) && !value.arguments.some((a: any) => a.kind === SyntaxKind.SpreadElement);
     }
 
     // `x = this.safeDict (x, k)` with no default: a sub-map of the map itself, or nil, so one map type
@@ -15097,14 +15135,14 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             // Omit of the map local is its OmitDict twin; `{}`, extend and map literals print their map as is
             return /^this\.Omit\(/.test(omit) ? `${this.printNode(node.left, 0)} = this.OmitDict(${omit.slice('this.Omit('.length)}` : undefined;
         }
-        const commaOk = (found.family === 'SafeDict') && (found.fallback === undefined) ? this.goCommaOkMapRead(found.call.arguments[0], found.call.arguments[1]) : undefined;
+        const commaOk = (found.family === 'SafeDict') && (found.fallback === undefined) ? this.goCommaOkMapRead(found.call.arguments[0], found.call.arguments[1], false, this.goSelfNarrowingRead(node, node.left.text, found.family)) : undefined;
         if (commaOk !== undefined) { return `${this.printNode(node.left, 0)}, _ = ${commaOk}`; }
         return `${this.printNode(node.left, 0)} = this.${found.family}Map(${this.printArgsForCallExpression(found.call, identation)})`;
     }
 
     // `c[k].(map[string]any)` when c is a typed dict local and k a key that is never nil:
     // the comma-ok read answers nil for a missing key or a non-map value, as SafeDictMap / SafeMapTyped do
-    goCommaOkMapRead(container, key, unboxed = false): string | undefined {
+    goCommaOkMapRead(container, key, unboxed = false, selfNarrowing = false): string | undefined {
         const c: any = this.goUnwrapParenthesizedNode(container);
         const local = (c?.kind === SyntaxKind.Identifier) && (this.goSymbolValueDecl(c)?.kind === SyntaxKind.VariableDeclaration) && ((this.goSafeDictMapLocal(this.goSymbolValueDecl(c)) === GO_SAFE_DICT_LOCAL_TYPE)
             || (unboxed && (this.goSafeDictLocalUnbox(this.goSymbolValueDecl(c)) === GO_SAFE_DICT_LOCAL_TYPE)));
@@ -15115,14 +15153,15 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (!local || !isBaseExchange(c)) { return undefined; } // user params in venue files are not decoded JSON
         // a container written through (`c[k] = v`) keeps the reader its write rules print from
         const scope: any = this.goEnclosingFunction(c);
-        if ((scope === undefined) || this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
-            && (n.expression.text === c.text) && this.isGoElementAccessAssignmentTarget(n))) { return undefined; }
+        // `x = this.safeDict (x, k)` replaces x by its own sub-map: later writes go to the map x then holds
+        if ((scope === undefined) || (!selfNarrowing && this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.ElementAccessExpression) && (n.expression?.kind === SyntaxKind.Identifier)
+            && (n.expression.text === c.text) && this.isGoElementAccessAssignmentTarget(n)))) { return undefined; }
         const k: any = this.goUnwrapParenthesizedNode(key);
         let keyText: string | undefined;
         if ((k?.kind === SyntaxKind.StringLiteral) && /^[\w.-]*$/.test(k.text)) { keyText = `"${k.text}"`; }
         else if ((k?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(k) === 'string')) { keyText = k.text; }
         else if ((k?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(k) === '*string')
-            && (this.goSplitHeadLocal(k) || this.goInElseOfNilTest(k) || this.goHasExitingNilGuard(k))) { keyText = '*' + k.text; }
+            && (this.goSplitHeadLocal(k) || this.goInElseOfNilTest(k) || this.goHasExitingNilGuard(k) || this.goHasEnclosingNilGuard(k))) { keyText = '*' + k.text; }
         if ((keyText === undefined) || !/^[\w*".-]+$/.test(keyText)) { return undefined; }
         return `${c.text}[${keyText}].(map[string]any)`;
     }
