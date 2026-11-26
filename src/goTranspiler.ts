@@ -41742,6 +41742,12 @@ goChainOr('goJsonOriginContainer', function (node, depth = 0) {
         || !h53g59TypedMapPromiseList (this, args.container)) { return false; }
     return this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => this.goJsonOriginUseIsReadOnly (n, name));
 });
+// a slot of `const [ a, b ] = await Promise.all ([ map endpoint tasks ])` that is only read holds one decoded JSON document,
+// so a literal-key safeDict hop of it is JSON-origin too (the slot proof of h53g44EndpointPairSlot, whole function)
+goChainOr('goJsonOriginContainer', function (node, depth = 0) {
+    const binding: any = (node?.kind === SyntaxKind.Identifier) ? this.goAnyBoxLocalDeclaration (node) : undefined;
+    return (binding?.kind === SyntaxKind.BindingElement) && h53g44EndpointPairSlot (this, node, binding, binding);
+});
 // `const x = this.safeDict (C, K[, {}])` where C prints `map[string]any`: the comma-ok read answers nil for a missing key,
 function h42g05OwnedReceiver (goTranspiler: GoTranspiler, container): boolean {
     const d: any = goTranspiler.goAnyBoxLocalDeclaration (container);
