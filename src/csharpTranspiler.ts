@@ -7170,6 +7170,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(init)) {
             init = init.expression;
         }
+        if (this.csharpParseToIntNeverNull(init)) {
+            return true;
+        }
         const callee: any = isCallExpression(init) ? init.expression : undefined;
         const position = ((callee !== undefined) && isPropertyAccessExpression(callee) && (callee.expression.kind === SyntaxKind.ThisKeyword))
             ? ({ 'safeInteger': 2, 'safeInteger2': 3, 'safeIntegerN': 2 })[callee.name.text] : undefined;
@@ -7181,6 +7184,40 @@ export class CSharpTranspiler extends BaseTranspiler {
             fallback = fallback.operand;
         }
         return isNumericLiteral(fallback) && /^\d{1,15}$/.test(fallback.text);
+    }
+
+    // `this.parseToInt (x)` that binds the non-null Int64 twin: x a typed number, or a ternary whose arms are each an
+    // integer literal, a typed number or a Math.min/max the printer prints native (so the C# argument is a long)
+    csharpParseToIntNeverNull(init): boolean {
+        const callee: any = isCallExpression(init) ? init.expression : undefined;
+        if ((callee === undefined) || !isPropertyAccessExpression(callee) || (callee.expression.kind !== SyntaxKind.ThisKeyword)
+            || (callee.name.text !== 'parseToInt') || (init.arguments.length !== 1) || !this.csharpCalleeResolves(init)) {
+            return false;
+        }
+        if (this.csharpParseToIntBindsTypedTwin(init)) {
+            return true;
+        }
+        let arg: any = init.arguments[0];
+        while (isParenthesizedExpression(arg)) {
+            arg = arg.expression;
+        }
+        if (!isConditionalExpression(arg)) {
+            return false;
+        }
+        const armIsLong = (arm: any) => {
+            while (isParenthesizedExpression(arm)) {
+                arm = arm.expression;
+            }
+            if (this.csharpIsIntegerLiteral(arm)) {
+                return true;
+            }
+            if (isCallExpression(arm) && isPropertyAccessExpression(arm.expression) && (arm.expression.expression.getText() === 'Math')
+                && [ 'min', 'max' ].includes(arm.expression.name.text)) {
+                return /^Math\.M(?:in|ax)\(/.test(this.printNode(arm, 0).trim());
+            }
+            return false;
+        };
+        return armIsLong(arg.whenTrue) && armIsLong(arg.whenFalse);
     }
 
     csharpIsIntegerLiteral(node): boolean {
