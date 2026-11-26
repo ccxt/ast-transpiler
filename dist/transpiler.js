@@ -4444,6 +4444,14 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (wanted === "IList<object>") {
       return void 0;
     }
+    if (wanted === "IList<Int64>") {
+      const listNode = this.csharpCallSiteOperand(argument);
+      if (isArrayLiteralExpression2(listNode) && listNode.elements.every((e) => isNumericLiteral3(e) && /^\d+$/.test(e.text))) {
+        const elements = listNode.elements.map((e) => this.printNode(e, 0).trim()).join(", ");
+        return { text: `new List<Int64>() {${elements}}`, tight: false };
+      }
+      return void 0;
+    }
     if (wanted.endsWith("Dictionary<string, object>")) {
       const typed = this.csharpTypedDictionaryArgument(argument, wanted);
       if (typed !== void 0) {
@@ -4536,6 +4544,10 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (wanted !== "Int64?" && wanted !== "Int64" && wanted !== "double?" && wanted !== "double") {
       return "";
     }
+    const rawOperand = this.csharpCallSiteOperand(argument);
+    if (wanted === "double?" && isBinaryExpression2(rawOperand) && rawOperand.operatorToken.kind === SyntaxKind4.PercentToken && /^[(].*%.*[)]$/.test(text) && !text.includes("mod(")) {
+      return text;
+    }
     const negated = wanted === "double" ? /^\(-([A-Za-z_]\w*)\)$/.exec(text) : null;
     const ident = negated !== null ? negated[1] : text;
     if (!/^[A-Za-z_]\w*$/.test(ident)) {
@@ -4555,6 +4567,15 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     const intOperand = declared === "int" || declared === void 0 && this.csharpExpressionTypeOf(operand) === "int";
     if (intOperand && (wanted === "Int64" || wanted === "Int64?")) {
       return text;
+    }
+    if (wanted === "Int64" && declared === "Int64?") {
+      if (this.csharpNeverNullInt64Read(operand)) {
+        return text + ".GetValueOrDefault()";
+      }
+      const nonNull = this.csharpIntegralNonNullText(argument, { kind: "Int64?", node: operand }, text);
+      if (nonNull !== void 0) {
+        return nonNull;
+      }
     }
     return wanted === "double" && declared === "double?" ? "(" + text + " ?? 0d)" : "";
   }
@@ -4911,7 +4932,8 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         }
         calls.push(call);
       }
-      if (!blocked && calls.length > 0) {
+      const syncUncalled = calls.length === 0 && !overridden.has(method) && !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind4.AsyncKeyword);
+      if (!blocked && (calls.length > 0 || syncUncalled)) {
         eligible.push({ method, calls });
       }
     }
@@ -4924,7 +4946,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
           if (decided.has(parameter)) {
             continue;
           }
-          const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls) ?? this.csharpVenueDictParamsKind(method, parameter, index, calls) ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
+          const kind = calls.length === 0 ? this.csharpVenueNumberParamKind(method, parameter, index, calls) : this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls) ?? this.csharpVenueDictParamsKind(method, parameter, index, calls) ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
           if (kind === "string") {
             this.csharpTypedLocals.set(parameter, kind);
           }
@@ -4959,6 +4981,12 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     const proKinds = this.csharpProFileCallKinds(method, index);
     if (proKinds === void 0) {
       return void 0;
+    }
+    if (calls.length === 0) {
+      if (nullable || proKinds.length > 0 || hasHostTable || this.csharpVenueOverriddenMethods.has(method)) {
+        return void 0;
+      }
+      return parameter.type.getText().trim() === "int" ? "Int64" : "double";
     }
     const kinds = new Set(nullable ? ["nullable?", ...proKinds] : proKinds);
     for (const call of calls) {
@@ -6676,7 +6704,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (types?.index !== "int") {
       return void 0;
     }
-    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression))
+    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" && types.receiver !== "IList<Int64>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression))
       return void 0;
     return this.printNode(expression, 0) + "[" + this.printNode(argumentExpression, 0) + "]";
   }
@@ -6709,11 +6737,21 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     const length = condition.right;
-    if (length?.kind !== SyntaxKind4.PropertyAccessExpression || length.name?.text !== "length" || this.csharpIdentifierSymbol(condition.left) !== indexSymbol)
-      return false;
-    if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(length.expression)) !== receiverSymbol) {
+    if (this.csharpIdentifierSymbol(condition.left) !== indexSymbol) {
       return false;
     }
+    let lengthExpr = length;
+    if (isIdentifier2(length)) {
+      const decl = this.csharpIdentifierSymbol(length)?.valueDeclaration?.resolve?.();
+      if (decl === void 0 || !isVariableDeclaration(decl) || ((decl.parent?.flags ?? 0) & NodeFlags2.Const) === 0) {
+        return false;
+      }
+      lengthExpr = decl.initializer;
+    }
+    if (lengthExpr?.kind !== SyntaxKind4.PropertyAccessExpression || lengthExpr.name?.text !== "length")
+      return false;
+    if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(lengthExpr.expression)) !== receiverSymbol)
+      return false;
     return !this.csharpIndexBoundIsVoided(forStatement.statement, receiverSymbol, indexSymbol);
   }
   // The identifier a `.length` receiver reads through wrappers whose C# print is the bare text: parentheses, and `as T` where printAsExpression does not cast (`any`/`string`/`T[]` p...
@@ -7991,8 +8029,12 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       }
       return isPropertyAccessExpression2(n) && n.expression?.kind === SyntaxKind4.ThisKeyword && Object.prototype.hasOwnProperty.call(CSHARP_SCALAR_FIELD_KINDS, n.name?.text) ? CSHARP_SCALAR_FIELD_KINDS[n.name.text] : void 0;
     };
-    let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left) ?? this.csharpNumericParamKind(left);
-    let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right) ?? this.csharpNumericParamKind(right);
+    const localNumeric = (n) => {
+      const t = this.csharpDeclaredLocalValueType(n);
+      return t !== void 0 && ["int", "Int64", "double", "Int64?", "double?"].indexOf(t) >= 0 ? t : void 0;
+    };
+    let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left) ?? this.csharpNumericParamKind(left) ?? localNumeric(left);
+    let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right) ?? this.csharpNumericParamKind(right) ?? localNumeric(right);
     const fraction = (n) => isNumericLiteral3(n) && /^\d*\.\d+$/.test(n.text) ? "double" : void 0;
     leftKind = leftKind ?? fraction(left);
     rightKind = rightKind ?? fraction(right);
@@ -8495,9 +8537,16 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return void 0;
     }
     const divisor = csharpLiteralNumericValue(right);
-    if (divisor === void 0 || !Number.isSafeInteger(divisor) || divisor === 0 || this.csharpExpressionTypeOf(left) !== "int")
+    if (divisor === void 0 || !Number.isSafeInteger(divisor) || divisor === 0)
       return void 0;
-    return `((Int64)${leftText} % ${divisor}L)`;
+    const kind = this.csharpExpressionTypeOf(left) ?? this.csharpNumericParamKind(left);
+    if (kind === "int") {
+      return `((Int64)${leftText} % ${divisor}L)`;
+    }
+    if (kind === "double?") {
+      return `(${leftText} % ${divisor})`;
+    }
+    return void 0;
   }
   // `-x` prints `prefixUnaryNeg(ref x)`, whose typed overloads negate in place and return the same box (`a = -a; return a;`): a local declared int / Int64 / double binds one, so the...
   csharpNativeNegatedLocal(operand, leftSide) {
@@ -9110,7 +9159,18 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     const shadows = [];
     const out = printed.map((text, index) => {
       const wanted = rows[0]?.[index] ?? rows[1]?.[index];
-      if (wanted === void 0 || !text.startsWith("object ")) {
+      if (wanted === void 0) {
+        return text;
+      }
+      if (wanted === "IList<Int64>" && text.startsWith("IList<object> ")) {
+        const param2 = node.parameters[index];
+        if (param2 !== void 0) {
+          this.csharpParamTypes.set(param2, wanted);
+          this.csharpTypedLocals.set(param2, wanted);
+        }
+        return wanted + text.slice("IList<object>".length);
+      }
+      if (!text.startsWith("object ")) {
         return text;
       }
       const param = node.parameters[index];
@@ -10139,7 +10199,8 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (!Number.isInteger(index) || index < 0) {
         return void 0;
       }
-      return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
+      const fallback = csharpType === "IList<Int64>" || csharpType === "List<Int64>" ? "(Int64?)null" : "null";
+      return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : ${fallback})`;
     }
     return void 0;
   }
@@ -11085,6 +11146,15 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         }
         return void 0;
       }
+      case SyntaxKind4.ElementAccessExpression: {
+        const recv = initializer.expression;
+        const arg = initializer.argumentExpression;
+        const recvType = isIdentifier2(recv) ? this.csharpTypedLocalType(recv) ?? this.csharpExpressionTypeOf(recv) : void 0;
+        if (recvType === "IList<Int64>" && isIdentifier2(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg)) {
+          return "Int64";
+        }
+        return void 0;
+      }
     }
     return this.csharpCallReturnType(initializer) ?? (this.csharpBoolCallTyped(initializer) ? "bool" : void 0);
   }
@@ -11614,7 +11684,8 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (keyType !== "int") {
       return void 0;
     }
-    return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
+    const fallback = csharpType === "IList<Int64>" || csharpType === "List<Int64>" ? "(Int64?)null" : "null";
+    return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : ${fallback})`;
   }
   // an `object` key identifier whose `(string)` cast cannot hide a later retype: a parameter the body writes (or defaults) gets a shadow local the embedding build layer retypes afte...
   csharpObjectKeyCastable(key) {
@@ -18173,6 +18244,12 @@ function ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType = "int
 function installCcxtGoUnifiedInt64Params(goTranspiler, table, goType = "int64") {
   if (table === void 0) {
     return;
+  }
+  if (goType === "int64") {
+    goTranspiler.unifiedInt64Params = table;
+  }
+  if (goType === "float64") {
+    goTranspiler.unifiedFloat64Params = table;
   }
   const verdicts = /* @__PURE__ */ new Map();
   const isTabled = (param) => {
@@ -27075,6 +27152,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedStringParams = {};
     // the slice mirror of the table above — inherited method name -> parameter
     this.unifiedSliceParams = {};
+    this.unifiedInt64Params = {};
     // inherited method name -> indexes of required `boolean` params that print `bool` on the base and every override (dynamic callers convert through BoolArg)
     this.unifiedBoolParams = {};
     // inherited methods whose nullable `Int` parameter prints `*int64` on the base and every override
@@ -28515,6 +28593,10 @@ func New${this.capitalize(this.className)}() *${this.className} {
     const widened = this.goNativeIntWideningArithmetic(node, leftType, rightType, leftText, rightText);
     if (widened !== void 0) {
       return widened;
+    }
+    if (op === SyntaxKind5.PercentToken && leftType === "float64" && rightType === "const-int" && this.isNonZeroIntegerLiteral(node.right) && this.goStdlibImportIsPlaceable()) {
+      this.goFileStdlibImports.add("math");
+      return { "goType": "float64", "text": `math.Mod(${this.goUnwrapPrintedParens(leftText.trim())}, ${this.goUnwrapPrintedParens(rightText.trim())})` };
     }
     const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
     if (goType === void 0) {
@@ -34030,6 +34112,9 @@ ${iden}}`;
     if (goType === "[]any") {
       return this.goUnifiedAnySliceParameterType(fn, param);
     }
+    if (goType === "[]int64") {
+      return this.goUnifiedInt64SliceParameterType(fn, param);
+    }
     const h27g22 = this.h27g22NumberRowSliceParameterType(fn, param, goType);
     if (h27g22 !== void 0)
       return h27g22;
@@ -34071,6 +34156,17 @@ ${iden}}`;
       throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`);
     }
     return "[]any";
+  }
+  // a `[]int64` slot types a required `number[]` / `int[]` parameter whose callers pass integer slices
+  goUnifiedInt64SliceParameterType(fn, param) {
+    const text = String(param.type?.getText?.() ?? "").replace(/\s+/g, "");
+    if (param.initializer !== void 0 || param.dotDotDotToken !== void 0 || param.name?.kind !== SyntaxKind5.Identifier || fn.body === void 0 || text !== "number[]" && text !== "int[]") {
+      return void 0;
+    }
+    if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, "[]int64")) {
+      throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []int64`);
+    }
+    return "[]int64";
   }
   // a `[][]any` slot types a required `string[][]` row list: every caller hands rows of boxed
   // strings (literals print `[][]any{[]any{..}}`, the typed wrapper converts its [][]string)
@@ -34331,6 +34427,9 @@ ${iden}}`;
     if (elements.length === 0) {
       return depth === 0 ? want : void 0;
     }
+    if (depth === 0 && want === "[]int64") {
+      return elements.every((e) => e.kind === SyntaxKind5.NumericLiteral && /^\d+$/.test(e.text)) ? "[]int64" : void 0;
+    }
     let element;
     for (const node2 of elements) {
       if (node2.kind === SyntaxKind5.SpreadElement) {
@@ -34458,7 +34557,81 @@ ${iden}}`;
       return void 0;
     }
     const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
-    return args.map((a) => this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim()).join(", ");
+    return args.map((a, i) => {
+      const printed = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+      return this.goFormatUnifiedNumericArg(name, i, a, printed);
+    }).join(", ");
+  }
+  goUnifiedNumericSlotType(name, index) {
+    if (this.unifiedInt64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name) && this.unifiedInt64Params[name].includes(index)) {
+      return "int64";
+    }
+    if (this.unifiedFloat64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name) && this.unifiedFloat64Params[name].includes(index)) {
+      return "float64";
+    }
+    return void 0;
+  }
+  goFormatUnifiedNumericArg(name, index, arg, printed) {
+    const slot = this.goUnifiedNumericSlotType(name, index);
+    if (slot === void 0) {
+      return printed;
+    }
+    const inner = this.goUnwrapParenthesizedNode(arg);
+    const raw = this.goUnwrapPrintedParens(printed.trim());
+    const declType = inner?.kind === SyntaxKind5.Identifier ? this.goDeclaredTypeOfIdentifier(inner) : void 0;
+    const staticType = this.goOperandStaticType(inner, raw);
+    if (slot === "float64") {
+      if (staticType === "float64" || staticType === "const-float" || staticType === "const-int") {
+        return printed;
+      }
+      if (staticType === "int64" || staticType === "int" || declType === "int64" || declType === "int") {
+        return `float64(${raw})`;
+      }
+      if (declType === "*float64" && this.goPointerNumberIsNonNil(inner)) {
+        return `*${raw}`;
+      }
+      if (declType === "*int64" && this.goPointerNumberIsNonNil(inner)) {
+        return `float64(*${raw})`;
+      }
+      if (this.goIsAnyBoxExpression(inner, raw) || GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0) {
+        return `Float64Arg(${raw})`;
+      }
+      return printed;
+    }
+    if (staticType === "int64" || staticType === "const-int") {
+      return printed;
+    }
+    if (staticType === "int" || declType === "int") {
+      return `int64(${raw})`;
+    }
+    if (declType === "*int64" && this.goPointerNumberIsNonNil(inner)) {
+      return `*${raw}`;
+    }
+    return printed;
+  }
+  goUnifiedNumericCallArgs(node, identation) {
+    const callee = node.expression;
+    const name = callee?.kind === SyntaxKind5.PropertyAccessExpression ? callee.name?.text : void 0;
+    const hasInt = this.unifiedInt64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name);
+    const hasFloat = this.unifiedFloat64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name);
+    if (typeof name !== "string" || !hasInt && !hasFloat) {
+      return void 0;
+    }
+    const args = node.arguments ?? [];
+    if (args.length === 0 || args.some((a) => a.kind === SyntaxKind5.SpreadElement)) {
+      return void 0;
+    }
+    const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
+    let changed = false;
+    const formatted = args.map((a, i) => {
+      const printed = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+      const next = this.goFormatUnifiedNumericArg(name, i, a, printed);
+      if (next !== printed) {
+        changed = true;
+      }
+      return next;
+    });
+    return changed ? formatted.join(", ") : void 0;
   }
   // the call arguments of a unified method whose parameter prints `string`: an argument the
   // printer cannot prove a Go string goes through StringArg, which panics on any other value
@@ -39674,7 +39847,7 @@ ${this.getIden(identation)}${returnStatement}`;
       return this.goWithExprDepth(1, () => this.printNode(e, identation)).trim();
     }).join(", ");
     const first = node.elements[0];
-    const arrayOpen = markedType === "[]string" || markedType === "[][]any" ? `${markedType}{` : markedType === "[][]string" ? "[][]string{" : first?.kind === SyntaxKind5.CallExpression && (this.getFunctionType(first) || true) ? "[]any{" : this.ARRAY_OPENING_TOKEN;
+    const arrayOpen = markedType === "[]string" || markedType === "[]int64" || markedType === "[][]any" ? `${markedType}{` : markedType === "[][]string" ? "[][]string{" : first?.kind === SyntaxKind5.CallExpression && (this.getFunctionType(first) || true) ? "[]any{" : this.ARRAY_OPENING_TOKEN;
     return arrayOpen + elements + this.ARRAY_CLOSING_TOKEN;
   }
   printArgsForCallExpression(node, identation) {
@@ -39689,6 +39862,10 @@ ${this.getIden(identation)}${returnStatement}`;
     const sliceArgs = this.goSliceCallArgs(node, identation);
     if (sliceArgs !== void 0) {
       return sliceArgs;
+    }
+    const numericArgs = this.goUnifiedNumericCallArgs(node, identation);
+    if (numericArgs !== void 0) {
+      return numericArgs;
     }
     const derefStringArg = this.goDerefStringArgCall(node, identation);
     if (derefStringArg !== void 0) {
@@ -41628,7 +41805,7 @@ ${this.getIden(level)}}()`;
     if ((listType === void 0 || listType === "any") && this.goAwaitedListLocal(baseExpr)) {
       listType = GO_SAFE_LIST_LOCAL_TYPE;
     }
-    if (listType !== GO_STRING_LIST_LOCAL_TYPE && !(listType === GO_SAFE_LIST_LOCAL_TYPE && (this.goListElementsAreObjects(baseExpr) || this.goAwaitedMapRowList(baseExpr)))) {
+    if (listType !== GO_STRING_LIST_LOCAL_TYPE && listType !== "[]int64" && !(listType === GO_SAFE_LIST_LOCAL_TYPE && (this.goListElementsAreObjects(baseExpr) || this.goAwaitedMapRowList(baseExpr)))) {
       return void 0;
     }
     return this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr);
@@ -41990,10 +42167,11 @@ ${ind}}
       return void 0;
     }
     const index = `${base.text}[${key.text}]`;
-    if (this.goResolvedLocalGoType(base) !== GO_STRING_LIST_LOCAL_TYPE) {
+    const sliceType = this.goResolvedLocalGoType(base);
+    if (sliceType !== GO_STRING_LIST_LOCAL_TYPE && sliceType !== "[]int64") {
       return void 0;
     }
-    return printedValue.trim() === index && this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index ? "string" : void 0;
+    return printedValue.trim() === index && this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index ? sliceType === "[]int64" ? "int64" : "string" : void 0;
   }
   // the prediction tier's dead bounds guard: `list[i]` in `for (let i = 0; i < list.length; i++)`, with
   goGb08PredictionFile() {
