@@ -78461,6 +78461,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   // Decides every scalar candidate of one function together: seeds each with its initializer kind, then re-checks all of them in declaration order until a whole pass changes nothing...
   rustScalarSolveScope(scope) {
     const candidates = this.rustScopeIndex(scope).nodes.filter((n) => (isVariableDeclaration3(n) && isIdentifier4(n.name) && (this.rustScalarInitShape(n.initializer) || this.rustBareTypedLet(n)) || isBindingElement(n) && this.rustSlotJoinsSolve(n)) && this.rustEnclosingFunction(n) === scope);
+    const outerSeeding = this.rustScalarSeeding;
     this.rustScalarSolving.add(scope);
     try {
       for (const n of candidates) {
@@ -78502,6 +78503,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       for (const n of candidates)
         this.rustScalarDecisions.set(n, null);
     } finally {
+      this.rustScalarSeeding = outerSeeding;
       this.rustScalarSolving.delete(scope);
       this.rustScalarSolved.add(scope);
     }
