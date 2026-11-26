@@ -500,6 +500,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustParamPrintsBoolUncached(param: any): boolean;
     /** `x === true|false` / `x !== true|false` on a native `bool` parameter, read as a condition: the same truth test. */
     rustBoolParamLiteralTest(n: any): boolean;
+    /** True when a logical/unary operand contains a native-`bool` parameter read (for Value::Bool boxing in value slots). */
+    rustHasBoolParamOperand(node: any): boolean;
     /** True when `this.<name>` is read as a value (not called) in the method's own file. */
     rustMethodReferencedAsValue(method: any): boolean;
     private rustValueReferencedMethods;

@@ -75703,7 +75703,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const boolLogical = this.isBooleanPosition(node) ? void 0 : this.rustScalarBoolLogicalText(node);
     if (boolLogical !== void 0)
       return `Value::Bool(${boolLogical})`;
-    if ((op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken) && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node))) {
+    if ((op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken) && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node) || this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right))) {
       return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
     }
     if (op in this.binaryExpressionsWrappers) {
@@ -77520,6 +77520,21 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (op !== SyntaxKind7.EqualsEqualsEqualsToken && op !== SyntaxKind7.ExclamationEqualsEqualsToken)
       return false;
     return this.literalKindOfNode(this.unwrapParens(parent.right)) === "boolean" && this.rustIdentifierUseIsCondition(parent);
+  }
+  /** True when a logical/unary operand contains a native-`bool` parameter read (for Value::Bool boxing in value slots). */
+  rustHasBoolParamOperand(node) {
+    const inner = this.unwrapParens(node);
+    if (inner === void 0)
+      return false;
+    if (inner.kind === SyntaxKind7.PrefixUnaryExpression && inner.operator === SyntaxKind7.ExclamationToken)
+      return this.rustHasBoolParamOperand(inner.operand);
+    if (inner.kind === SyntaxKind7.BinaryExpression && this.isLogicalOp(inner.operatorToken.kind))
+      return this.rustHasBoolParamOperand(inner.left) || this.rustHasBoolParamOperand(inner.right);
+    if (isIdentifier4(inner)) {
+      const d = this.rustDeclaredNode(inner);
+      return d?.kind === SyntaxKind7.Parameter && this.rustParamPrintsBool(d);
+    }
+    return false;
   }
   /** True when `this.<name>` is read as a value (not called) in the method's own file. */
   rustMethodReferencedAsValue(method) {
