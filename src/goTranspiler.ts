@@ -4540,6 +4540,8 @@ function ccxtGoAsyncReceiveReadsTheValue (goTranspiler, node, goType) {
         return (parent.operatorToken?.kind === SyntaxKind.InKeyword) && (parent.right === node);
     case SyntaxKind.CallExpression: {
         if (parent.expression === node) { return false; } // the local called as a function
+        // a map local handed to a GO_BASE_DICT_PARAMS slot of `this.m (..)`: the parameter takes the map as is
+        if ((goType === 'map[string]any') && ccxtGoBaseDictSlotArg (parent, node)) { return true; }
         if (parent.arguments.indexOf (node) !== 0) { return false; } // value position: the box escapes
         const callee = goTranspiler.goPrintedCallee (goTranspiler.printNode (parent, 0));
         if (callee === undefined) { return false; }
@@ -4548,6 +4550,12 @@ function ccxtGoAsyncReceiveReadsTheValue (goTranspiler, node, goType) {
     }
     default: return false;
     }
+}
+
+function ccxtGoBaseDictSlotArg (call, node) {
+    const callee = call.expression;
+    const name = ((callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)) ? callee.name?.text : undefined;
+    return (name !== undefined) && Object.prototype.hasOwnProperty.call (GO_BASE_DICT_PARAMS, name) && GO_BASE_DICT_PARAMS[name].includes (call.arguments.indexOf (node));
 }
 
 // a `this.x` / `{ x: v }` name or another scope's binding is not a use of the awaited local `x`
@@ -10431,6 +10439,8 @@ export const GO_BASE_DICT_PARAMS: { [method: string]: number[] } = {
     'parseGreeks': [ 0 ],
     // every tree caller passes a map response, a `{}`-defaulted safeDict row or an extend copy
     'parseMarginModification': [ 0 ],
+    // its venue callers pass the awaited fetchDepositAddressesByNetwork map or an indexBy map
+    'selectNetworkKeyFromNetworks': [ 2 ],
 };
 // the async rows above (each one's typed wrapper converts its struct argument)
 const GO_BASE_DICT_ASYNC_PARAMS: string[] = ['cancelUnifiedOrder', 'fetchUnifiedOrder',];
@@ -23274,7 +23284,10 @@ ${this.getIden(identation)}${returnStatement}`;
         // a defaulted `params = {}` is the GetArgMap-bound Go map in the line that binds it
         // a safeDict-seeded local whose every write prints a map keeps map[string]any through its rebinds
         if ((declaration.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictMapLocal(declaration) === GO_SAFE_DICT_LOCAL_TYPE)) { return true; }
-        const declared = (declaration.kind === SyntaxKind.Parameter) ? this.goGetArgParameterType(declaration) : this.goDeclaredTypeOfIdentifier(receiver);
+        // a required parameter the signature hooks print map[string]any is that map as well
+        const declared = (declaration.kind === SyntaxKind.Parameter)
+            ? (this.goGetArgParameterType(declaration) ?? ((declaration.initializer === undefined) ? this.goNativeParameterType?.(declaration) : undefined))
+            : this.goDeclaredTypeOfIdentifier(receiver);
         if (declared !== 'map[string]any') { return false; }
         return !this.h26g52SymbolIsRebound(this.goEnclosingFunction(declaration), declaration);
     }
