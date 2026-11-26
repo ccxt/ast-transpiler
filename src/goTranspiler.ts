@@ -12967,6 +12967,7 @@ export class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goGetArgTypeComputing: Set<any>;
+    goGetArgProvisionalHits: number;
     // declarations whose Go local type is being resolved right now (see goLocalStaticType)
     goLocalTypeResolution = new Set<any>();
     // goSelfConcatIsString's answer per non-self leaf node
@@ -14466,11 +14467,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         if (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) { return undefined; }
         if (cache.has(declaration)) { return cache.get(declaration); }
         cache.set(declaration, undefined); // in-progress guard
+        const provisional = this.goGetArgProvisionalHits ?? 0;
         let result: string | undefined;
         try {
             result = compute();
         } finally {
-            cache.set(declaration, result);
+            if ((this.goGetArgProvisionalHits ?? 0) === provisional) { cache.set(declaration, result); } else { cache.delete(declaration); }
         }
         return result;
     }
@@ -19421,6 +19423,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (this.goDeclaredTypeCache.has(decl)) { return this.goDeclaredTypeCache.get(decl); }
         if (this.goDeclaredTypeInProgress.has(decl)) { this.goProvCycleHits = (this.goProvCycleHits ?? 0) + 1; return undefined; }
         this.goDeclaredTypeInProgress.add(decl);
+        const provisional = this.goGetArgProvisionalHits ?? 0;
         let goType;
         try {
             // a `let x: Dict;` declaration has no initializer and prints `= nil`
@@ -19430,7 +19433,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             this.goDeclaredTypeInProgress.delete(decl);
         }
         const result = (goType === 'any') ? undefined : goType;
-        this.goDeclaredTypeCache.set(decl, result);
+        if ((this.goGetArgProvisionalHits ?? 0) === provisional) { this.goDeclaredTypeCache.set(decl, result); }
         return result;
     }
 
@@ -28430,7 +28433,9 @@ ${tryBodyBlock}
     h28G05GetArgSliceCopy(initializer, goType: string) {
         if ((initializer?.kind !== SyntaxKind.Identifier) || !goType.startsWith('[]')) { return undefined; }
         const decl: any = this.goValueDecl(initializer);
-        if ((decl?.kind !== SyntaxKind.Parameter) || this.goGetArgTypeComputing?.has(decl)) { return undefined; }
+        if (decl?.kind !== SyntaxKind.Parameter) { return undefined; }
+        // the parameter's own binding is still being decided: the answer is provisional and must not be memoised
+        if (this.goGetArgTypeComputing?.has(decl)) { this.goGetArgProvisionalHits = (this.goGetArgProvisionalHits ?? 0) + 1; return undefined; }
         return (this.goGetArgParameterType(decl) === goType) ? 'direct' : undefined;
     }
     // `const x = c ? a : b` that the printer already types `*string` (each arm a Go string, a `*string` or nil) prints
