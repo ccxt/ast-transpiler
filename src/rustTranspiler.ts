@@ -2620,6 +2620,10 @@ export class RustTranspiler extends BaseTranspiler {
     printVariableDeclarationList(node, identation) {
         const text = this.printVariableDeclarationListInner(node, identation);
         const only: any = node.declarations?.length === 1 ? node.declarations[0] : undefined;
+        const row = only?.initializer === undefined || !isIdentifier(only.name) ? undefined : (this as any).rustTypedListRowDictText(only.initializer);
+        const head = row === undefined ? undefined : /^(\s*let (?:mut )?\w+: crate::value::Dict = )self\.safeDict\((?:&\w+|Value::Arr\(\w+(?:\.clone\(\))?\)), Value::Int\(\w+\), &\[/.exec(text);
+        if (head !== null && head !== undefined) return head[1] + row;
+        if (only !== undefined && isIdentifier(only.name)) { const t = /^\s*let (?:mut )?\w+: (crate::value::List|Option<crate::value::List>) = /.exec(text); if (t !== null) (this as any).rustPrintedListKind.set(only, t[1].startsWith('Option') ? 'opt' : 'list'); }
         return only?.initializer === undefined ? text : this.rustOwnContainerUnwrap(only.initializer, text);
     }
 
@@ -45274,3 +45278,21 @@ const rustR14VenueCallText = new Map<string, string>();
     return `Value::Array(match ${map}.get(${k}) { Some(Value::Dict(__m)) => __m.keys().cloned().map(Value::from).collect(), _ => Vec::new() })`;
 };
 // ===== end h49-R52
+// a pro / prediction `const row = this.safeDict (xs, i[, {}])`, `xs` a typed `List` local and `i` an i64 counter: the
+// element's map (an Arc handle), the empty map out of range or for a non-map element, as `safe_dict_t` answered
+(RustTranspiler.prototype as any).rustTypedListRowDictText = function (this: any, initializer: any): string | undefined {
+    const call: any = this.rustSkipWrappers(initializer);
+    if (call === undefined || !isCallExpression(call) || !isPropertyAccessExpression(call.expression) || call.expression.expression.kind !== SyntaxKind.ThisKeyword) return undefined;
+    if (String(call.expression.name.text) !== 'safeDict' || call.arguments.length < 2 || call.arguments.length > 3 || this.rustTestTierSource(call)) return undefined;
+    if (!/ts[/]src[/](pro|prediction)[/]/.test(String(call.getSourceFile?.()?.fileName ?? '')) || /ts[/]src[/](pro|prediction)[/]test[/]/.test(String(call.getSourceFile?.()?.fileName ?? ''))) return undefined;
+    const [ recv, key, dflt ] = Array.from(call.arguments).map((a: any) => this.rustSkipWrappers(a));
+    if (dflt !== undefined && (!isObjectLiteralExpression(dflt) || dflt.properties.length !== 0)) return undefined;
+    if (!isIdentifier(recv) || !isIdentifier(key) || !this.rustI64CounterUse(key)) return undefined;
+    const d: any = this.rustDeclarationOfIdentifier(recv);
+    const kind = d?.kind === SyntaxKind.VariableDeclaration && d.name !== recv ? (this as any).rustPrintedListKind.get(d) : undefined;
+    if (kind === undefined) return undefined;
+    const r = (BaseTranspiler.prototype as any).transformIdentifier.call(this, recv, this.ReservedKeywordsReplacements[recv.text] ?? recv.text);
+    const read = (l: string) => `if let Some(Value::Dict(__m)) = ${l}.get(${String(key.text)} as usize) { std::sync::Arc::clone(__m) } else { Default::default() }`;
+    return kind === 'opt' ? `(if let Some(__l) = &${r} { ${read('__l')} } else { Default::default() })` : `(${read(r)})`;
+};
+(RustTranspiler.prototype as any).rustPrintedListKind = new WeakMap<any, 'list' | 'opt'>();
