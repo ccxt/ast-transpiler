@@ -3031,6 +3031,8 @@ const NIL_DECLARED_SAFE_ARG_SLOTS = {
     'this.DecimalToPrecision': 1,
     ...Object.fromEntries ([ 'Mul', 'Div', 'Sub', 'Add', 'Or', 'Max', 'Min', 'Abs', 'Neg', 'Mod', 'Gt', 'Ge', 'Lt', 'Le', 'Eq', 'Equals' ]
         .map ((op) => [ 'Precise.String' + op, 2 ])),
+    // the ws url slot: Client / Watch / WatchMultiple derefScalar it at entry
+    'this.Client': 1, 'this.Watch': 1, 'this.WatchMultiple': 1,
 };
 
 const COMPARISON_TOKENS = [SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,];
@@ -3083,6 +3085,13 @@ const NIL_DECLARED_READ_RULE = {
         [SyntaxKind.ArrayLiteralExpression]: goReadAccepts,
         [SyntaxKind.PropertyAssignment]: goReadIsInitializer,
         [SyntaxKind.ShorthandPropertyAssignment]: goReadAccepts,
+        // `(x as string)` handed whole to a url slot: the `as` prints nothing in Go
+        [SyntaxKind.AsExpression]: (parent, node, goTranspiler) => {
+            const { current, parent: outer } = goReadClimb (parent);
+            if (outer?.kind !== SyntaxKind.CallExpression) { return false; }
+            const callee = printedCalleeOfCall (goTranspiler, outer);
+            return [ 'this.Client', 'this.Watch', 'this.WatchMultiple' ].includes (callee) && (outer.arguments.indexOf (current) === 0);
+        },
     },
 };
 
