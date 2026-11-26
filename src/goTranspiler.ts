@@ -3567,15 +3567,19 @@ function ccxtGoGeneralAnnotatedReturnTypes (node, type, key) {
     return undefined;
 }
 
+const CCXT_GO_TS_SRC_MARKER = path.normalize ('/ts/src/');
+
+function ccxtGoTsSrcRoot (resolvedFileName: string) {
+    const at = resolvedFileName.lastIndexOf (CCXT_GO_TS_SRC_MARKER);
+    return at < 0 ? undefined : resolvedFileName.slice (0, at + CCXT_GO_TS_SRC_MARKER.length - 1);
+}
+
 // the ts/src tree of this root: each file's text and the files it imports (resolved)
 function ccxtGoTsSrcImportGraph (fileName) {
-    const resolved = path.resolve (fileName);
-    const marker = '/ts/src/';
-    const at = resolved.lastIndexOf (marker);
-    if (at < 0) {
+    const root = ccxtGoTsSrcRoot (path.resolve (fileName));
+    if (root === undefined) {
         return undefined;
     }
-    const root = resolved.substring (0, at + marker.length - 1);
     if (CCXT_GO_TS_SRC_IMPORT_CACHE.has (root)) {
         return CCXT_GO_TS_SRC_IMPORT_CACHE.get (root);
     }
@@ -6745,10 +6749,9 @@ function ccxtGoTupleDictFromLooseParam (method, goType) {
 }
 
 function ccxtGoTupleOverridesAgree (declaration, name, index, goType) {
-    // drivers pass relative names (`ts/src/x.ts`): resolve so the marker matches
     const fileName = path.resolve (declaration.getSourceFile ().fileName);
-    const at = fileName.lastIndexOf ('/ts/src/');
-    if (at < 0) {
+    const root = ccxtGoTsSrcRoot (fileName);
+    if (root === undefined) {
         return false;
     }
     // the scanned file set depends on the declaring file, so it is part of the key
@@ -6757,12 +6760,11 @@ function ccxtGoTupleOverridesAgree (declaration, name, index, goType) {
         return CCXT_GO_TUPLE_OVERRIDE_CACHE.get (key) === goType;
     }
     let agreed = goType;
-    const root = fileName.substring (0, at) + '/ts/src';
     const pattern = new RegExp ('^\\s+(?:override\\s+)?(?:async\\s+)?' + name + '\\s*\\(', 'm');
     // Exchange.ts reaches every exchange; an exchange file only files importing it (transitively)
-    const base = fileName.endsWith ('/base/Exchange.ts');
+    const base = fileName.endsWith (path.normalize ('/base/Exchange.ts'));
     const texts = [];
-    for (const dir of [ root, root + '/pro' ]) {
+    for (const dir of [ root, path.join (root, 'pro') ]) {
         for (const file of fs.readdirSync (dir).filter ((f) => f.endsWith ('.ts'))) {
             texts.push ([ path.join (dir, file), fs.readFileSync (path.join (dir, file), 'utf8') ]);
         }
@@ -21120,14 +21122,10 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     // `this.x(...)`, each file's text and its class -> base map. A scoped run's
     // program holds one exchange, so the sibling files are only provable textually.
     goTsSrcTree(file): any {
-        // drivers pass relative names (`ts/src/x.ts`): resolve so the marker and relativeOf match
-        const fileName: string = path.resolve(file.fileName);
-        const marker = '/ts/src/';
-        const at = fileName.lastIndexOf(marker);
-        if (at < 0) {
+        const root = ccxtGoTsSrcRoot(path.resolve(file.fileName));
+        if (root === undefined) {
             return undefined; // in-memory source (tests): no sibling files to prove
         }
-        const root = fileName.substring(0, at + marker.length - 1);
         if (!this.goTsSrcTreeCache.has(root)) {
             this.goTsSrcTreeCache.set(root, this.goTsSrcTreeBuild(root));
         }
