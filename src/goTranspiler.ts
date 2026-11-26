@@ -14290,7 +14290,26 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const statement = node.parent?.kind === SyntaxKind.ExpressionStatement;
         const local = statement ? (this.goStringCallLocalName(node.right) ?? this.goStringValueLocalName(node)) : undefined;
         if (local === undefined) { return undefined; }
+        const lowered = this.goStringTernaryIntoLocal(node.right, local, identation);
+        if (lowered !== undefined) { return `${lowered}\n${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`; }
         return `${local} := ${value.trim()}\n${this.getIden(identation)}${this.printNode(node.left, 0)} = &${local}`;
+    }
+
+    // `c ? a : b` with two Go string arms: an if/else on a declared string local, not a func literal
+    goStringTernaryIntoLocal(right, local: string, identation): string | undefined {
+        const ternary: any = this.goUnwrapParenthesizedNode(right);
+        if (ternary?.kind !== SyntaxKind.ConditionalExpression) { return undefined; }
+        const arm = (n: any): string | undefined => {
+            const text = this.goWithExprDepth(1, () => this.printNode(n, 0)).trim();
+            return ((this.goTypeOfInitializer(n, text) === 'string') && !text.includes('\n')) ? text : undefined;
+        };
+        const whenTrue = arm(ternary.whenTrue);
+        const whenFalse = arm(ternary.whenFalse);
+        if ((whenTrue === undefined) || (whenFalse === undefined)) { return undefined; }
+        const condition = this.goStripControlClauseParens(this.goWithExprDepth(1, () => this.printCondition(ternary.condition, 0)));
+        if (condition.includes('\n')) { return undefined; }
+        const iden = this.getIden(identation);
+        return `var ${local} string\n${iden}if ${condition} {\n${iden}\t${local} = ${whenTrue}\n${iden}} else {\n${iden}\t${local} = ${whenFalse}\n${iden}}`;
     }
 
     // the Go func a node prints into: arrow / function expressions inside a method print as closures

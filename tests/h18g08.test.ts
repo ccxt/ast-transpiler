@@ -32,7 +32,7 @@ const print = (body: string): string => {
     }
 };
 
-const BIN = '    resolveAuthType (methodName: string, market: any = undefined, params: Dict = {}): [any, Str, Dict] {\n'
+const BIN = '    resolveAuthType (methodName: string, market: any = undefined, params: Dict = {}): [string, Str, Dict] {\n'
     + '        const [ t, p ] = this.handleMarketTypeAndParams (methodName, market, params);\n'
     + '        return [ t, undefined, p ];\n'
     + '    }\n'
@@ -56,7 +56,7 @@ const TERNARY = "            type = (subType === \'inverse\') ? \'inverse\' : \'
 
 describe ('go statement ternary into a nil-seeded string box', () => {
     test ('string arms print an if/else, so the box holds only plain strings', () => {
-        const out = print (BIN);
+        const out = print (variant ('): [string, Str, Dict] {', '): [any, Str, Dict] {'));
         expect (out).toContain ('var typeVar any = nil');
         expect (out).toContain ('\t\tif subType == "inverse" {\n\t\t\ttypeVar = "inverse"\n\t\t} else {\n\t\t\ttypeVar = "linear"\n\t\t}');
         expect (out).not.toContain ('typeVar = func() string {');
@@ -72,5 +72,22 @@ describe ('go statement ternary into a nil-seeded string box', () => {
     test ('a local seeded with a value, not nil, keeps the literal', () => {
         const out = print (variant ('        let type: Str = undefined;\n', '        let type: any = this.request (0);\n'));
         expect (out).not.toContain ('\t\t\ttypeVar = "inverse"\n\t\t} else {');
+    });
+});
+
+describe ('go statement ternary into a *string local', () => {
+    test ('string arms print an if/else on a declared string local, not a func literal', () => {
+        const out = print (BIN);
+        expect (out).toContain ('var typeVar *string = nil');
+        expect (out).toContain ('\t\tvar typeVarStr string\n\t\tif subType == "inverse" {\n\t\t\ttypeVarStr = "inverse"\n\t\t} else {\n\t\t\ttypeVarStr = "linear"\n\t\t}\n\t\ttypeVar = &typeVarStr\n');
+        expect (out).not.toContain ('func() string {');
+    });
+    test ('an arm that is not a Go string keeps the earlier form', () => {
+        const out = print (variant (TERNARY, "            type = (subType === \'inverse\') ? \'inverse\' : this.request (1);\n"));
+        expect (out).not.toContain ('var typeVarStr string');
+    });
+    test ('a nil arm keeps the earlier form', () => {
+        const out = print (variant (TERNARY, "            type = (subType === \'inverse\') ? \'inverse\' : undefined;\n"));
+        expect (out).not.toContain ('var typeVarStr string');
     });
 });
