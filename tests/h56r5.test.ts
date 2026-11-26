@@ -19,6 +19,7 @@ describe ('h56r5: least-used helper elimination (Go Mod/IsLessThanOrEqual, C# mo
         fs.mkdirSync (root, { recursive: true });
         const file = path.join (root, 'demo.ts');
         fs.writeFileSync (file, `
+type Int = number | undefined;
 export class Demo {
     parseToNumeric (v: any): any { return v; }
     safeInteger (o: any, k: string): number | undefined { return undefined; }
@@ -54,6 +55,15 @@ export class Demo {
         }
         return [ ok, okInt64, okRaw, picked ];
     }
+    earlyExitLimit (limit: Int = undefined) {
+        if (limit === undefined) {
+            return 100;
+        }
+        if (limit > 500) {
+            return this.findNearestCeiling ([ 5, 10, 50 ], limit);
+        }
+        return limit;
+    }
 }
 `);
         const t = new Transpiler ({
@@ -80,6 +90,9 @@ export class Demo {
         expect (go).toContain ('if providedValue <= current');
         expect (go).not.toContain ('IsLessThanOrEqual');
         expect (go).toContain ('this.FindNearestCeiling([]int64{5, 10, 50}, *lim)');
+        expect (go).toContain ('var limit *int64 = GetArgInt64Ptr(optionalArgs, 0, nil)');
+        expect (go).toContain ('return this.FindNearestCeiling([]int64{5, 10, 50}, *limit)');
+        expect (go).toContain ('return *limit');
     });
 
     test ('C#: double? % 1 emits native %, IList<Int64> + Int64 findNearestCeiling emits native <=, and uncalled sync venue method types number params', () => {

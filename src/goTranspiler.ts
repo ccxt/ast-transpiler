@@ -18973,14 +18973,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((staticType === 'float64') || (staticType === 'const-float') || (staticType === 'const-int')) { return printed; }
             if ((staticType === 'int64') || (staticType === 'int') || (declType === 'int64') || (declType === 'int')
                 || ((inner?.kind === SyntaxKind.BinaryExpression) && (inner.operatorToken?.kind === SyntaxKind.PercentToken) && !raw.startsWith('Mod('))) { return `float64(${raw})`; }
-            if ((declType === '*float64') && this.goPointerNumberIsNonNil(inner)) { return `*${raw}`; }
-            if ((declType === '*int64') && this.goPointerNumberIsNonNil(inner)) { return `float64(*${raw})`; }
+            if ((declType === '*float64') && (this.goPointerNumberIsNonNil(inner) || this.goHasEarlyExitNilGuard(inner))) { return `*${raw}`; }
+            if ((declType === '*int64') && (this.goPointerNumberIsNonNil(inner) || this.goHasEarlyExitNilGuard(inner))) { return `float64(*${raw})`; }
             if (this.goIsAnyBoxExpression(inner, raw) || (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0)) { return `Float64Arg(${raw})`; }
             return printed;
         }
         if ((staticType === 'int64') || (staticType === 'const-int')) { return printed; }
         if ((staticType === 'int') || (declType === 'int')) { return `int64(${raw})`; }
-        if ((declType === '*int64') && this.goPointerNumberIsNonNil(inner)) { return `*${raw}`; }
+        if ((declType === '*int64') && (this.goPointerNumberIsNonNil(inner) || this.goHasEarlyExitNilGuard(inner))) { return `*${raw}`; }
         return printed;
     }
 
@@ -22215,6 +22215,26 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
+    goHasEarlyExitNilGuard(ident): boolean {
+        const checker: any = this.checkerOrUndefined();
+        if (checker === undefined) { return false; }
+        const decl = this.goValueDecl(ident);
+        const scope = this.goEnclosingFunction(decl ?? ident);
+        if (this.goLocalIsRebound(scope, ident)) { return false; }
+        for (let child: any = ident, parent: any = ident?.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+            if (parent.kind !== SyntaxKind.Block) { continue; }
+            for (const stmt of parent.statements ?? []) {
+                if (stmt === child) { break; }
+                if ((stmt.kind === SyntaxKind.IfStatement) && this.goNilComparisonOf(this.goUnwrapParenthesizedNode(stmt.expression), ident, SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken)) {
+                    const bodyStmts = (stmt.thenStatement?.kind === SyntaxKind.Block) ? (stmt.thenStatement.statements ?? []) : [ stmt.thenStatement ];
+                    const last = bodyStmts[bodyStmts.length - 1];
+                    if ((last?.kind === SyntaxKind.ReturnStatement) || (last?.kind === SyntaxKind.ThrowStatement)) { return true; }
+                }
+            }
+        }
+        return false;
+    }
+
     // the whole condition, or any conjunct of its `&&` chain, is the non-nil test
     goConditionProvesNonNil(condition, ident): boolean {
         const inner = this.goUnwrapParenthesizedNode(condition);
@@ -22536,6 +22556,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const parent: any = n.parent;
             // `return x` from the *string family method that owns x: handed on as the same *string
             if ((goType === '*string') && (parent?.kind === SyntaxKind.ReturnStatement) && strPtrFamilyOwnParamReturn(param, parent)) { return true; }
+            if ((goType === '*int64') && (this.goHasEnclosingNilGuard(n) || this.goHasEarlyExitNilGuard(n))) {
+                if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n)) === 'int64')) { return true; }
+                if ((parent?.kind === SyntaxKind.ReturnStatement) && (parent.expression === n) && !this.isInsideAsyncFunction(parent)) { return true; }
+            }
             if (parent === param) { return true; } // the parameter's own name is not a use
             if (nilable && (goType === 'map[string]any')) {
                 // goLocalIsSafeToType already matched the type of an assigned value
@@ -23325,7 +23350,14 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
         const pairReturn = this.goBasePairReturnText(node, identation);
         if (pairReturn !== undefined) { return pairReturn; }
         const isAsyncFunction = this.isInsideAsyncFunction(node);
-        if (!isAsyncFunction) { return super.printReturnStatement(node, identation); }
+        if (!isAsyncFunction) {
+            if ((node.expression?.kind === SyntaxKind.Identifier) && (this.goDeclaredTypeOfIdentifier(node.expression) === '*int64')
+                && (this.goValueDecl(node.expression)?.kind === SyntaxKind.Parameter)
+                && (this.goHasEnclosingNilGuard(node.expression) || this.goHasEarlyExitNilGuard(node.expression))) {
+                return this.getIden(identation) + 'return *' + this.printNode(node.expression, 0).trim();
+            }
+            return super.printReturnStatement(node, identation);
+        }
 
         const leadingComment = this.printLeadingComments(node, identation);
         let trailingComment = this.printTraillingComment(node, identation);
