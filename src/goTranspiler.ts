@@ -23810,6 +23810,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printConditionalExpression(node, identation) {
         const condition = this.goWithExprDepth(1, () => this.printCondition(node.condition, 0));
+        // a condition the printer folded to a Go constant (`x === undefined` on a Go string) selects one arm; the other never runs
+        const folded = this.goStripControlClauseParens(condition);
+        if ((folded === 'true') || (folded === 'false')) { return this.printNode((folded === 'true') ? node.whenTrue : node.whenFalse, 0); }
         if (!condition.includes('\n')) {
             const whenTrue = this.goPrintTernaryBranch(node.whenTrue, 2);
             const whenFalse = this.goPrintTernaryBranch(node.whenFalse, 1);
