@@ -6338,7 +6338,7 @@ describe('typed dict bearers', () => {
     test('a literal-only dict local is a bare IndexMap with native reads and inserts', () => {
         const out = rs("        const request = { 'type': 'limit' };\n        request['symbol'] = v;\n        const sym = request['symbol'];\n        return sym;");
         expect(out).toContain('let mut request: indexmap::IndexMap<String, Value> = ({');
-        expect(out).toContain('request.insert("symbol".into(), v.clone())');
+        expect(out).toContain('request.insert("symbol".into(), v)');
         expect(out).toContain('request.get("symbol").cloned().unwrap_or(Value::Null)');
         expect(out).not.toContain('add_element_to_object');
         expect(out).not.toContain('get_value(&request');
@@ -6348,7 +6348,7 @@ describe('typed dict bearers', () => {
     test('the final move is boxed once (return, and a `this.` argument)', () => {
         const ret = rs("        const res = {};\n        res['a'] = v;\n        return res;");
         expect(ret).toContain('let mut res: indexmap::IndexMap<String, Value> = ({');
-        expect(ret).toContain('res.insert("a".into(), v.clone())');
+        expect(ret).toContain('res.insert("a".into(), v)');
         expect(ret).toContain('return Value::Map(res);');
         const arg = rs("        const params = {};\n        params['a'] = v;\n        return this.parseX (params);");
         expect(arg).toContain('return self.parseX(Value::Map(params));');
@@ -6369,7 +6369,7 @@ describe('typed dict bearers', () => {
     test('a proven string key place reads and writes natively', () => {
         const out = rs("        const m = {};\n        m[k] = v;\n        return m[k];", 'v: any, k: string');
         expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = ({');
-        expect(out).toContain('m.insert(crate::runtime::stringify_param(&k), v.clone())');
+        expect(out).toContain('m.insert(crate::runtime::stringify_param(&k), v)');
         expect(out).toContain('m.get(k.as_str().unwrap_or("")).cloned().unwrap_or(Value::Null)');
     });
 
@@ -6424,7 +6424,7 @@ describe('bearer write shapes', () => {
     test('a string-proven computed key writes the bare map', () => {
         const out = rs("        const m = {};\n        m['a' + k] = v;\n        return m;", 'v: any, k: string');
         expect(out).toContain('let mut m: indexmap::IndexMap<String, Value> = ({');
-        expect(out).toContain('m.insert(format!("{}{}", "a", k), v.clone())');
+        expect(out).toContain('m.insert(format!("{}{}", "a", k), v)');
         expect(out).not.toContain('add_element_to_object');
     });
 
@@ -6440,7 +6440,7 @@ describe('bearer write shapes', () => {
     test('the final move into a parent object literal is boxed once', () => {
         const out = rs("        const d = {};\n        d['a'] = v;\n        const t = { 'x': d };\n        return t;");
         expect(out).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
-        expect(out).toContain('d.insert("a".into(), v.clone())');
+        expect(out).toContain('d.insert("a".into(), v)');
         expect(out).toContain('m.insert("x".to_string(), Value::Map(d))');
         expect(out).not.toContain('add_element_to_object');
     });
@@ -6451,7 +6451,7 @@ describe('bearer write shapes', () => {
         const late = rs("        const d = {};\n        d['a'] = v;\n        const t = { 'x': d };\n        d['b'] = v;\n        return t;");
         expect(late).toContain('let mut d: indexmap::IndexMap<String, Value> = ({');
         expect(late).toContain('m.insert("x".to_string(), Value::Map(d.clone()))');
-        expect(late).toContain('d.insert("b".into(), v.clone())');
+        expect(late).toContain('d.insert("b".into(), v)');
         expect(late).not.toContain('add_element_to_object');
     });
 
@@ -7963,7 +7963,7 @@ describe ('rustDictParamBearers', () => {
 
         test('its writes are plain inserts, with no COW guard', () => {
             expect(rust).toContain('orderParams.insert("limit_price".into(), self.omit(params.clone(), Value::from(vec![])))');
-            expect(rust).toContain('orderParams.insert("order_type".into(), method.clone())');
+            expect(rust).toContain('orderParams.insert("order_type".into(), method)');
             const body = rust.slice(rust.indexOf('pub fn orderRequest('), rust.indexOf('pub fn createOrder('));
             expect(body).not.toContain('= &mut orderParams');
             expect(body).not.toContain('add_element_to_object');
@@ -8085,7 +8085,7 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '        d[0] = v;\n'
                 + '        return d;\n'
                 + '    }\n');
-            expect(out).toContain('d.insert(crate::runtime::stringify_param(&(Value::Int(0))), v.clone());');
+            expect(out).toContain('d.insert(crate::runtime::stringify_param(&(Value::Int(0))), v);');
             expect(out).not.toContain('add_element_to_object(&mut d');
         });
 
@@ -8111,7 +8111,7 @@ describe ('rustBearerBoxedKeyWrites', () => {
                 + '        result[key] = values;\n'
                 + '        return result;\n'
                 + '    }\n');
-            expect(out).toContain('result.insert(crate::runtime::stringify_param(&key), values.clone());');
+            expect(out).toContain('result.insert(crate::runtime::stringify_param(&key), values);');
         });
 
         test('a value that reads the receiver still binds first', () => {
