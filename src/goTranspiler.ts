@@ -4653,7 +4653,9 @@ export function ccxtGoEndpointElement (goTranspiler, call) {
     const goName = name.charAt (0).toUpperCase () + name.slice (1);
     // a derived core embeds its parent's, whose companion holds the promoted stubs
     let element = undefined;
-    for (let file = fileName, hops = 0; (element === undefined) && (file !== undefined) && (hops < 8); hops++) {
+    // a pro abstract (`abstract/pro/x.ts`) declares the endpoints of the REST venue x, whose companion holds the stubs
+    const restFile = fileName.replace (/([\\/]ts[\\/]src[\\/]abstract[\\/])pro[\\/](\w+\.ts)$/, '$1$2');
+    for (let file = restFile, hops = 0; (element === undefined) && (file !== undefined) && (hops < 8); hops++) {
         element = ccxtGoEndpointTable (file)?.get (goName);
         if (element !== undefined) { break; }
         if (!GO_ABSTRACT_PARENT_CACHE.has (file)) {
