@@ -10535,6 +10535,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const methodName = expression.name?.text as string;
         const target = expression.expression;
+        // `s.slice (..)` on a checker-proven string binds the hand-written `string slice(object, object, object)`
+        if ((methodName === 'slice') && this.csharpIndexOfReceiverIsCheckedString(target)) {
+            return 'string?';
+        }
         if (target?.kind === SyntaxKind.ThisKeyword) {
             // the table names the C# signature of the same-name base helper, which the printed call only binds when the printer resolves the callee. An unresolvable one
             // (`this.proxyUrlCallback(...)` — a property holding the function — or a checker-less program) prints `callDynamically(this, "name", ...)` instead, and that helper
