@@ -6469,6 +6469,16 @@ function ccxtGoTupleStringPointerSlot (goTranspiler, node) {
         && (typeof goTranspiler.goGetArgParameterType === 'function') && (goTranspiler.goGetArgParameterType (param) === '*string');
 }
 
+// a venue optional boolean slot (GetArgBool / GetArgBoolPtr): both read a nil *bool as the omitted argument
+function ccxtGoTupleBoolPointerSlot (goTranspiler, node) {
+    const call = node.parent;
+    let declaration;
+    try { declaration = goTranspiler.getChecker ().getResolvedSignature (call)?.declaration?.resolve (); } catch (e) { return false; }
+    const param = declaration?.parameters?.[call.arguments.indexOf (node)];
+    return (param !== undefined) && !/[\\/]base[\\/]/.test (declaration.getSourceFile?.()?.fileName ?? '/base/')
+        && (typeof goTranspiler.goGetArgParameterType === 'function') && [ 'bool', '*bool' ].includes (goTranspiler.goGetArgParameterType (param));
+}
+
 // every `x = v` write of the local is a string literal or a tuple-producer slot
 function ccxtGoTupleStringWritesAreLiteralOrSlot (goTranspiler, declaration) {
     const scope = goTranspiler.goEnclosingFunction (declaration);
@@ -22566,8 +22576,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         case SyntaxKind.CallExpression: {
             const callee: any = parent.expression;
             const venueStringSlot = (goType === '*string') && (parent.arguments.indexOf(current) >= 0) && ccxtGoTupleStringPointerSlot(this, current);
+            const venueBoolSlot = (goType === '*bool') && (parent.arguments.indexOf(current) >= 0) && ccxtGoTupleBoolPointerSlot(this, current);
             return (callee?.kind === SyntaxKind.PropertyAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)
-                && (GO_TUPLE_POINTER_SLOT_CALLEES.has(String(callee.name?.text)) || venueStringSlot) && parent.arguments.some((a: any) => a === current);
+                && (GO_TUPLE_POINTER_SLOT_CALLEES.has(String(callee.name?.text)) || venueStringSlot || venueBoolSlot) && parent.arguments.some((a: any) => a === current);
         }
         case SyntaxKind.PropertyAccessExpression: return (parent.expression === current) && (parent.name?.text === 'length');
         }
