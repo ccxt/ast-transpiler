@@ -4938,14 +4938,16 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
   }
   // the one numeric kind every call passes at `index` (int widens to Int64), or undefined
   csharpVenueNumberParamKind(method, parameter, index, calls) {
+    const declared = parameter.type !== void 0 ? this.getChecker().getTypeFromTypeNode(parameter.type) : void 0;
+    const members = declared === void 0 ? [] : declared.isUnionType() ? declared.getTypes() : [declared];
     const sync = !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind4.AsyncKeyword);
+    const methodName = isIdentifier2(method.name) ? method.name.text : "";
+    const hasHostTable = this.csharpNumericArgTypes[methodName] !== void 0 || this.csharpCoreArgTypes[methodName] !== void 0 || this.csharpSignatureArgTypes[methodName] !== void 0;
     const initializer = parameter.initializer;
-    const undefinedDefault = sync && initializer !== void 0 && isIdentifier2(initializer) && initializer.text === "undefined";
+    const undefinedDefault = (sync || members.length > 1 && !hasHostTable) && initializer !== void 0 && isIdentifier2(initializer) && initializer.text === "undefined";
     const literalDefault = sync && initializer !== void 0 && isNumericLiteral3(initializer) && /^\d{1,9}$/.test(initializer.text);
     if (parameter.dotDotDotToken !== void 0 || parameter.questionToken !== void 0 || initializer !== void 0 && !undefinedDefault && !literalDefault || parameter.type === void 0 || !isIdentifier2(parameter.name))
       return void 0;
-    const declared = this.getChecker().getTypeFromTypeNode(parameter.type);
-    const members = declared === void 0 ? [] : declared.isUnionType() ? declared.getTypes() : [declared];
     const numbers = members.filter((m) => m.flags === TypeFlags3.Number).length;
     if (numbers !== 1 || members.some((m) => m.flags !== TypeFlags3.Number && (m.flags & (TypeFlags3.Undefined | TypeFlags3.Null)) === 0) || this.csharpNameIsRebound(parameter, method)) {
       return void 0;
@@ -4964,7 +4966,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (argument === void 0 && (undefinedDefault || literalDefault) && call.arguments.length <= method.parameters.length && !call.arguments.some((a) => a.kind === SyntaxKind4.SpreadElement)) {
         continue;
       }
-      const type = argument === void 0 ? void 0 : this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument) ?? this.csharpNonNullIntegerSumArgument(argument);
+      const type = argument === void 0 ? void 0 : this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument, nullable) ?? this.csharpNonNullIntegerSumArgument(argument);
       const kind = this.csharpArithmeticOperandKind(type);
       if (kind === void 0 || call.arguments.length > method.parameters.length) {
         return void 0;
@@ -5245,17 +5247,21 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     scan(caller.body);
     return written ? void 0 : printed;
   }
-  // a parameter (or its negation) the core table prints a non-null `double` / `Int64` and the body never writes
-  csharpCoreTypedNumberArgument(argument) {
+  // a parameter (or its negation) the core table prints numeric (`double`/`Int64`, or nullable when the target slot is nullable)
+  csharpCoreTypedNumberArgument(argument, allowNullable = false) {
     let value = this.csharpUnparenthesized(argument);
-    if (isPrefixUnaryExpression(value) && value.operator === SyntaxKind4.MinusToken) {
+    const negated = isPrefixUnaryExpression(value) && value.operator === SyntaxKind4.MinusToken;
+    if (negated) {
       value = this.csharpUnparenthesized(value.operand);
     }
     if (!isIdentifier2(value) || this.csharpReceiverBinding(value)?.kind !== SyntaxKind4.Parameter) {
       return void 0;
     }
     const printed = this.csharpCallSiteDeclaredType(value, value.text);
-    return printed === "double" || printed === "Int64" ? printed : void 0;
+    if (printed === "double" || printed === "Int64") {
+      return printed;
+    }
+    return allowNullable && !negated && (printed === "double?" || printed === "Int64?") ? printed : void 0;
   }
   // a bare parameter of the calling method whose printed signature the host layer types numeric (the narrowed core arguments, e.g. createOrder's `double amount` / `double? price`)
   csharpTypedParameterArgument(argument) {
@@ -13110,6 +13116,7 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "strings.Split": "[]string",
   "strings.Replace": "string",
   "strings.ReplaceAll": "string",
+  "strings.TrimSpace": "string",
   "strings.Join": "string",
   "strings.ToUpper": "string",
   "strings.ToLower": "string",
@@ -13148,6 +13155,9 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
   "this.RlpEncodeList": "string",
   "this.IntToRlpHex": "string",
+  "this.PadHexToEven": "string",
+  "this.HexToRlpBytes": "string",
+  "this.RlpEncodeBytes": "string",
   // exchange_prediction.go event filters: `: any[]`, no override, retyped `[]any` by build retypeGoMapMethod
   "this.FilterEventsByStatus": "[]any",
   "this.FilterEventsByTags": "[]any",
@@ -26230,6 +26240,7 @@ var GO_HELPER_RETURN_TYPES = {
   "strings.ToLower": "string",
   "strings.Replace": "string",
   "strings.ReplaceAll": "string",
+  "strings.TrimSpace": "string",
   "strings.HasPrefix": "bool",
   "strings.HasSuffix": "bool",
   "strconv.FormatInt": "string",
@@ -28478,7 +28489,11 @@ func New${this.capitalize(this.className)}() *${this.className} {
         return { "goType": "int64", "text": pointerAddition };
       }
     }
-    const pointerOp = { [SyntaxKind5.MinusToken]: [" - ", this.goInt64Operand], [SyntaxKind5.AsteriskToken]: [" * ", this.goInt64ProductOperand] }[node.operatorToken.kind];
+    const pointerOp = {
+      [SyntaxKind5.MinusToken]: [" - ", this.goInt64Operand],
+      [SyntaxKind5.AsteriskToken]: [" * ", this.goInt64ProductOperand],
+      [SyntaxKind5.PercentToken]: [" % ", this.goInt64Operand]
+    }[node.operatorToken.kind];
     const pointerArithmetic = pointerOp === void 0 ? void 0 : this.goNonNilPointerOperationText(node, leftText, rightText, pointerOp[0], pointerOp[1]);
     if (pointerArithmetic !== void 0) {
       return { "goType": "int64", "text": pointerArithmetic };
@@ -40174,7 +40189,7 @@ ${this.getIden(level)}}()`;
     return this.goStringsPairCall(node, name, parsedArg, "HasSuffix", "EndsWith");
   }
   printTrimCall(node, identation, name = void 0) {
-    return `Trim(${name})`;
+    return this.goNativeStringCallOr(node, [name], ["string"], (o) => `strings.TrimSpace(${o[0]})`, `Trim(${name})`);
   }
   printJoinCall(node, identation, name = void 0, parsedArg = void 0) {
     return this.goStringsPairCall(node, name, parsedArg, "Join", "Join", "[]string");
@@ -77484,7 +77499,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return false;
     }
     const baseFile = _RustTranspiler.RUST_BASE_TIER_FILE;
-    if (baseFile.test(param.getSourceFile().fileName)) {
+    const listed = this.rustBaseBoolParamMethod(method);
+    if (baseFile.test(param.getSourceFile().fileName) && !listed) {
       return false;
     }
     const hidden = this.getMethodOverride(method);
@@ -77493,7 +77509,17 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (this.rustMethodReferencedAsValue(method)) {
       return false;
     }
-    return this.rustLocalUsesAll(param, param.name.text, true, (n) => this.rustBoolParamUseAccepted(n));
+    return this.rustLocalUsesAll(param, param.name.text, true, (n) => this.rustBoolParamUseAccepted(n) || listed && this.rustClimbLogicalWrappers(n) !== n && (this.rustConditionBoolSlot(n) || isVariableDeclaration3(this.rustClimbLogicalWrappers(n).parent)) || listed && this.rustBoolParamLiteralTest(n));
+  }
+  /** `x === true|false` / `x !== true|false` on a native `bool` parameter, read as a condition: the same truth test. */
+  rustBoolParamLiteralTest(n) {
+    const parent = n.parent;
+    if (!isBinaryExpression5(parent) || parent.left !== n)
+      return false;
+    const op = parent.operatorToken.kind;
+    if (op !== SyntaxKind7.EqualsEqualsEqualsToken && op !== SyntaxKind7.ExclamationEqualsEqualsToken)
+      return false;
+    return this.literalKindOfNode(this.unwrapParens(parent.right)) === "boolean" && this.rustIdentifierUseIsCondition(parent);
   }
   /** True when `this.<name>` is read as a value (not called) in the method's own file. */
   rustMethodReferencedAsValue(method) {
@@ -77825,7 +77851,19 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (peeled !== void 0) {
       return `(${peeled})`;
     }
+    const bare2 = this.unwrapParens(node) ?? node;
+    if (isBinaryExpression5(bare2) && _RustTranspiler.COMPARISON_OPS.has(bare2.operatorToken.kind) && !printed.startsWith("Value::")) {
+      return `(${this.stripOuterParens(printed)})`;
+    }
     return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(printed) ? `${printed}.is_truthy()` : `(${printed}).is_truthy()`;
+  }
+  /** `n` is a whole argument of a call whose parameter at that place is a required native `bool`. */
+  rustBoolArgOfNativeSlot(n) {
+    const call = n?.parent;
+    if (call === void 0 || !isCallExpression7(call))
+      return false;
+    const at = Array.from(call.arguments).indexOf(n);
+    return at >= 0 && this.rustNativeBoolArgumentSlot(this.rustCalleeParams(call), at);
   }
   /** True when the call's `at`-th argument lands in a required native-`bool` slot. */
   rustNativeBoolArgumentSlot(params, at) {
@@ -77847,6 +77885,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (inner?.kind === SyntaxKind7.Identifier) {
       const declaration = this.rustDeclaredNode(inner);
       if (declaration?.kind === SyntaxKind7.Parameter && this.rustParamPrintsBool(declaration)) {
+        return this.printNode(inner, 0).trim();
+      }
+      if (declaration?.kind === SyntaxKind7.VariableDeclaration && this.rustScalarLocalOf(inner)?.kind === "bool") {
         return this.printNode(inner, 0).trim();
       }
       if (declaration?.kind === SyntaxKind7.VariableDeclaration && (this.rustMarketFlagBoolLocal(declaration) || this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== void 0))
@@ -78418,6 +78459,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         } catch (e) {
         }
       }
+      const seeding = this.rustScalarSeeding;
       this.rustScalarSeeding = true;
       try {
         for (let pass = 0; pass < 2; pass++) {
@@ -78425,7 +78467,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
             this.rustScalarDecisions.set(n, this.rustScalarTry(n));
         }
       } finally {
-        this.rustScalarSeeding = false;
+        this.rustScalarSeeding = seeding;
       }
       const unstable = /* @__PURE__ */ new Set();
       for (let pass = 0; pass < 12; pass++) {
@@ -82295,6 +82337,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         return "native";
     }
     if ((kind === "bool" || kind === "obool") && this.rustIdentifierUseIsCondition(n))
+      return "cond";
+    if (kind === "bool" && this.rustBoolParamUseAccepted(n) && this.rustBoolArgOfNativeSlot(n))
       return "cond";
     if (kind === "obool" && this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n) && this.rustMarketFlagFieldLocal(n))
       return "cond";
@@ -101850,7 +101894,7 @@ ${iden}} }`;
           uses++;
           return up.arguments.length === 2 && this.rustBaseCallNamed(up, _RustTranspiler.RUST_HANDED_DICT_OMIT);
         }
-        if (!(name in _RustTranspiler.RUST_BORROWED_DICT_READERS) && !_RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(name))
+        if (!(name in _RustTranspiler.RUST_BORROWED_DICT_READERS) && !_RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(name) && !this.rustParamsDictSlotBoolRead(up))
           return false;
         const callee2 = this.rustScalarCallee(up);
         uses++;
@@ -102461,6 +102505,8 @@ ${iden}} }`;
     const call = node.parent;
     if (call !== void 0 && isCallExpression7(call) && call.arguments[0] === node && isPropertyAccessExpression4(call.expression) && _RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(call.expression.name.text)) && this.rustGroupMapParamType(this.rustDeclarationOfIdentifier(node)) === RUST_MAPREF_TYPE)
       return _RustTranspiler.rustLentMark(text);
+    if (call !== void 0 && isCallExpression7(call) && call.arguments[0] === node && this.rustParamsDictSlotBoolRead(call) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node)))
+      return `&${text}`;
     if (call === void 0 || !isCallExpression7(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call))
       return void 0;
     const declaration = this.rustDeclarationOfIdentifier(node);
@@ -111481,6 +111527,10 @@ ${this.getIden(identation)}}`;
       const name = this.printNode(inner, 0).trim();
       return (op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken) === (literal2.kind === SyntaxKind7.TrueKeyword) ? name : `!${name}`;
     }
+    if (flagDecl?.kind === SyntaxKind7.Parameter && this.rustParamPrintsBool(flagDecl)) {
+      const name = this.printNode(inner, 0).trim();
+      return (op === SyntaxKind7.EqualsEqualsToken || op === SyntaxKind7.EqualsEqualsEqualsToken) === (literal2.kind === SyntaxKind7.TrueKeyword) ? name : `!${name}`;
+    }
     if (inner === void 0 || !isIdentifier4(inner) && !isCallExpression7(inner) || !this.printsValueExpression(inner) || isCallExpression7(inner) && this.rustCallPrintsBool(inner) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
       return void 0;
     }
@@ -112738,11 +112788,14 @@ ${this.getIden(identation)}}`;
   }
   // A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed signature: every call resolves to this one body, so typing its paramete...
   rustBaseOnlyMethod(method, file) {
+    return this.rustBaseOnlyMethodName(method, file, false);
+  }
+  rustBaseOnlyMethodName(method, file, listed) {
     const at = file.search(/(?:^|\/)ts\/src\/base\/(?:Exchange|\.__ExchangeNoOverloads)\.ts$/);
     if (at < 0)
       return false;
     const name = String(method.name.text);
-    if (!(this.isAsyncFunction(method) ? _RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS : _RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS).includes(name))
+    if (!listed && !(this.isAsyncFunction(method) ? _RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS : _RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS).includes(name))
       return false;
     if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name)))
       return false;
@@ -112753,6 +112806,23 @@ ${this.getIden(identation)}}`;
     } catch (e) {
     }
     return !predictionOverride && !this.rustVenueReturnTypes(root).has(name);
+  }
+  /** A listed base method (RUST_BASE_BOOL_PARAM_METHODS) with no override, no trait slot and no prediction override. */
+  rustBaseBoolParamMethod(method) {
+    if (!isIdentifier4(method.name) || !_RustTranspiler.RUST_BASE_BOOL_PARAM_METHODS.includes(String(method.name.text)))
+      return false;
+    return this.rustBaseOnlyMethodName(method, String(method.getSourceFile().fileName).replace(/\\/g, "/"), true);
+  }
+  /** A base `safeBool2` / `safeBoolN` call: both the boxed reader and its `_opt` twin take the container as `KeyRead`. */
+  rustParamsDictSlotBoolRead(call) {
+    const callee = call.expression;
+    if (!isPropertyAccessExpression4(callee) || callee.expression.kind !== SyntaxKind7.ThisKeyword)
+      return false;
+    const name = String(callee.name.text);
+    if (name !== "safeBool2" && name !== "safeBoolN")
+      return false;
+    const declaration = this.rustScalarCallee(call);
+    return declaration !== void 0 && _RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
   }
   // Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`, boolean -> `bool`; a nullable part makes it an `Option` (never for ...
   rustVenueScalarTypeOf(type, typeNode) {
@@ -118733,6 +118803,8 @@ _RustTranspiler.PARAMS_SLOT_ARG = {
 };
 // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds conversions at its callers); a method listed here must have no venue o...
 _RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS = ["convertExpireDate", "convertExpireDateToMarketIdDate", "convertMarketIdExpireDate", "isLeveragedCurrency"];
+// base-only methods whose `boolean` parameters print `bool` (rustParamPrintsBool)
+_RustTranspiler.RUST_BASE_BOOL_PARAM_METHODS = ["handlePostOnly", "fetchWebEndpoint", "isPostOnly", "filterBySinceLimit"];
 // ral-59e: async base methods typed the same way (no venue override, no trait slot); every caller in ts/src passes its own unwritten `since: Int` / `symbol: Str` / `limit: Int` pa...
 _RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS = ["fetchPaginatedCallDeterministic"];
 // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and eve...

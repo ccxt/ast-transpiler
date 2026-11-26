@@ -223,7 +223,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpProConstIntCallLocal(method: any, caller: any, argument: any): string | undefined;
     csharpProDictArgumentKind(method: any, call: any, index: number): string | undefined;
     csharpProCallArgumentKind(method: any, call: any, index: number): string | undefined;
-    csharpCoreTypedNumberArgument(argument: any): string | undefined;
+    csharpCoreTypedNumberArgument(argument: any, allowNullable?: boolean): string | undefined;
     csharpTypedParameterArgument(argument: any): string | undefined;
     csharpVenueStringParamKind(method: any, parameter: any, index: number, calls: any[]): string | undefined;
     csharpDeclaredStringFieldArgument(argument: any): boolean;
@@ -296,13 +296,16 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceBoundOperand(node: any, isEnd?: boolean): {
         kind: string;
-        text: string;
-    } | {
-        kind: string;
         value: any;
+        text?: undefined;
     } | {
-        kind: string;
         value?: undefined;
+        kind: string;
+        text?: undefined;
+    } | {
+        value?: undefined;
+        kind: string;
+        text: string;
     };
     csharpSliceArithmeticBound(node: any): {
         kind: string;
@@ -314,7 +317,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "string" | "list";
+    csharpSliceReceiverKind(expression: any): "list" | "string";
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     csharpPlusChainNonNullStringType(node: any, self?: any): string | undefined;
     csharpNonNullStringOperandType(node: any, self?: any, guardedConcat?: boolean): string | undefined;

@@ -274,7 +274,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     isDictionaryTsType(type: any, checker: any, depth: number): boolean;
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "String" | "List" | "StringOrNull" | "ListOrNull";
+    javaLengthKind(expression: any): "List" | "ListOrNull" | "String" | "StringOrNull";
     isJavaListValueType(type: any): any;
     isJavaListBackedClassType(type: any): boolean;
     isJavaNullishUnion(type: any, isMember: any): any;
@@ -387,13 +387,13 @@ export declare class JavaTranspiler extends BaseTranspiler {
     }): string | undefined;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
-    javaEqualityLiteralKind(node: any): "int" | "long" | "double";
+    javaEqualityLiteralKind(node: any): "double" | "int" | "long";
     javaCrc32Local(node: any): boolean;
     javaWsClientInstance(node: any): boolean;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
-    javaPrintedCallKind(node: any): "int" | "long" | "double";
+    javaPrintedCallKind(node: any): "double" | "int" | "long";
     printJavaArrayDestructuring(left: any, right: any, identation: any): string;
     printJavaElementWrite(node: any, left: any, right: any): string;
     javaTypedViewReceiver(expression: any): boolean;
@@ -442,7 +442,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
     javaWidenedNumericKind(node: any): string | undefined;
-    javaWidenedAddKind(node: any): "long" | "double";
+    javaWidenedAddKind(node: any): "double" | "long";
     printWidenedNativeAdd(left: any, right: any, leftText: any, rightText: any): string;
     printBoxedLongLiteralAdd(left: any, right: any, leftText: any, rightText: any): string;
     javaPrintWidenedOperand(kind: any, resultKind: any, node: any, text: any): any;
@@ -463,7 +463,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printJavaPreciseDecimalsWrite(left: any, right: any): string | undefined;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
-    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
+    javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
     javaEnclosingFunction(node: any): any;
     javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
     javaScopingBlock(node: any): any;
@@ -471,7 +471,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBindingsAreDisjoint(declaration: any, other: any): boolean;
     javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
-    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
+    javaArithmeticLocalType(declaration: any): "Double" | "Long" | "String";
     javaPrintsIntegralNumber(node: any): boolean;
     printPostFixUnaryExpression(node: any, identation: any): string;
     javaPrimitiveCounter(node: any): boolean;

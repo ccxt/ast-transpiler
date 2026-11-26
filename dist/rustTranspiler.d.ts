@@ -498,6 +498,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustBoolParamDecisions;
     rustParamPrintsBool(param: any): boolean;
     rustParamPrintsBoolUncached(param: any): boolean;
+    /** `x === true|false` / `x !== true|false` on a native `bool` parameter, read as a condition: the same truth test. */
+    rustBoolParamLiteralTest(n: any): boolean;
     /** True when `this.<name>` is read as a value (not called) in the method's own file. */
     rustMethodReferencedAsValue(method: any): boolean;
     private rustValueReferencedMethods;
@@ -543,6 +545,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustCalleeParams(call: any): any[] | undefined;
     /** `bool` text for an argument in a native-`bool` parameter slot. */
     rustBoolArgumentText(node: any, identation: any): string;
+    /** `n` is a whole argument of a call whose parameter at that place is a required native `bool`. */
+    rustBoolArgOfNativeSlot(n: any): boolean;
     /** True when the call's `at`-th argument lands in a required native-`bool` slot. */
     rustNativeBoolArgumentSlot(params: any, at: number): boolean;
     /** Argument shapes the printer already emits as a Rust `bool`. */
@@ -2276,7 +2280,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): string;
+    printLogicalInBooleanContext(node: any): any;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;
@@ -3992,6 +3996,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust63xNoArmStrMethod(method: any): boolean;
     rust64xOintParamArg(n: any): boolean;
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS;
+    private static readonly RUST_BASE_BOOL_PARAM_METHODS;
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS;
     private static readonly RUST_OVERRIDE_GROUP_STR_PARAMS;
     private static readonly RUST_OVERRIDE_GROUP_INT_PARAMS;
@@ -4012,6 +4017,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The group map type of the callee parameter at `at`. */
     rustGroupMapSlot(params: any[] | undefined, at: number): string | undefined;
     rustBaseOnlyMethod(method: any, file: string): boolean;
+    rustBaseOnlyMethodName(method: any, file: string, listed: boolean): boolean;
+    /** A listed base method (RUST_BASE_BOOL_PARAM_METHODS) with no override, no trait slot and no prediction override. */
+    rustBaseBoolParamMethod(method: any): boolean;
+    /** A base `safeBool2` / `safeBoolN` call: both the boxed reader and its `_opt` twin take the container as `KeyRead`. */
+    rustParamsDictSlotBoolRead(call: any): boolean;
     rustVenueScalarTypeOf(type: any, typeNode: any): string | undefined;
     rustVenueScalarArgExact(arg: any, rustType: string): boolean;
     rust64xLentStrParamArg(arg: any, method: any, at: number): boolean;
