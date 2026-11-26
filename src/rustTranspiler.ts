@@ -23298,7 +23298,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (isReturnStatement(n)) {
                 returns++;
                 const v: any = n.expression === undefined ? undefined : this.unwrapParens(n.expression);
-                if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
+                        if (v === undefined || (kind.kind === 'dict' && this.rustRuntimeExtendCall(v) ? false : !this.rustStaticContainerType(checker.getTypeAtLocation(v), kind.kind) || this.rustOwnContainerPayload(v, kind.kind) === undefined)) ok = false;
                 // a method of a parent venue file: the Rust struct derefs to the base exchange, whose stub keeps `Value`
                 if (v !== undefined && this.rustOtherVenueCall(v, node) && !this.rustAwaitedDictEndpointReturn(v)) ok = false;
             }
@@ -23522,6 +23522,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'list' && fn !== undefined && this.rustOwnContainerDecisions.get(fn) !== undefined && this.rustBaseStringListReturn(fn) === 'list') return this.rustBaseListPayload(this.unwrapParens(exp));
         // a list the method builds (`Vec<Value>` local or literal) of untyped / map elements hands on its own vector
         if (kind === 'list' && this.rustBoxedElementList(exp) && !this.rustUntypedLocalCaller(fn)) { const built = this.rustBaseListPayload(this.unwrapParens(exp)); if (built !== undefined) return built; }
+        // a string list the method builds is a `Vec<Value>` of text values too: it hands on its own vector the same way
+        if (kind === 'list' && this.rustBuiltStringList(exp)) { const built = this.rustBaseListPayload(this.unwrapParens(exp)); if (built !== undefined) return built; }
         const printed = this.printNode(exp, 0).trim();
         // a base list filter already returns `List` (the ccxt pass drops a trailing `.into_list()` on it)
         if (kind === 'list' && this.rustBaseListFilterOperand(exp, printed)) return `${printed}.into_list()`;
@@ -23626,6 +23628,16 @@ export class RustTranspiler extends BaseTranspiler {
         };
         fn.getSourceFile().forEachChild(visit);
         return found;
+    }
+
+    /** A plain local declared `string[]` and seeded with `[]`, filled only by `push`: it prints as a `Vec<Value>` of text values. */
+    rustBuiltStringList(exp: any): boolean {
+        const v: any = this.unwrapParens(exp);
+        if (v === undefined || !isIdentifier(v)) return false;
+        const local: any = this.rustDeclaredNode(v);
+        if (local === undefined || !isVariableDeclaration(local) || String(local.type?.getText?.() ?? '').replace(/\s+/g, '') !== 'string[]') return false;
+        const init: any = this.unwrapParens(local.initializer);
+        return init !== undefined && isArrayLiteralExpression(init) && init.elements.length === 0;
     }
 
     /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
