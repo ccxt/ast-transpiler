@@ -9678,6 +9678,9 @@ export class RustTranspiler extends BaseTranspiler {
             && parent.expression.expression.kind === SyntaxKind.ThisKeyword && isIdentifier(parent.expression.argumentExpression)) return 'box';
         // 41b: a bound / needle / operand of a string method its typed receiver prints natively
         if (this.rustStrMethodArgNative(n, kind)) return 'native';
+        // the needle of `p.endsWith (n)` / `p.replace (n, lit)` on an unbound `&str` parameter (rustStrParamAffixText)
+        if (kind === 'ostr' && isCallExpression(parent) && parent.arguments[0] === n && isPropertyAccessExpression(parent.expression) && isIdentifier(parent.expression.expression)
+            && this.rustStrParamAffixCall(parent.expression.expression) === parent && this.rustVenueStrParamUnboundRead(parent.expression.expression)) return 'native';
         // ral-43b: the typed string needle of `recv.indexOf(needle)` on a string-typed `Value` receiver (printNativeStringIndexOfString)
         if (this.rust43bValueRecvFindNeedle(n, kind)) return 'native';
         // ral-44b: an Int / Option<i64> bound of `recv.slice(a, b)` on a `Value` receiver prints straight into looseSlice's match
@@ -22694,6 +22697,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) {
+        const lent = this.rustStrParamAffixText(node); if (lent !== undefined) return `Value::Bool(${lent})`;
         const native = this.printNativeStringAffixTest(node, name, 'ends_with') ?? this.printAffixTest(node, name, 'ends_with');
         if (native !== undefined) return `Value::Bool(${native})`;
         return `Value::Bool(ends_with(&${name}, &${parsedArg}))`;
@@ -22898,7 +22902,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printReplaceCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
-        return this.printNativeStringReplace(node, name) ?? this.printRustReplace(node, name) ?? this.printReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
+        return this.rustStrParamAffixText(node) ?? this.printNativeStringReplace(node, name) ?? this.printRustReplace(node, name) ?? this.printReplace(node, name) ?? `replace_str(&${name}, &${parsedArg}, &${parsedArg2})`;
     }
 
     printReplaceAllCall(node, identation, name = undefined, parsedArg = undefined, parsedArg2 = undefined) {
@@ -39522,6 +39526,7 @@ export class RustTranspiler extends BaseTranspiler {
     // `s.replace(p, "lit")`: the helper replaces every occurrence when all three are `Str`, else
     // returns the receiver; `p` is a proven/checker string operand.
     printRustReplace(node, receiverText: string): string | undefined {
+        const lent = this.rustStrParamAffixText(node); if (lent !== undefined) return lent;
         if (node?.arguments?.length !== 2) return undefined;
         const receiver = this.rustReceiver(node, receiverText) ?? this.rustCheckerStrReceiver(node, receiverText);
         const to = this.rustNativeStringLiteralArg(node.arguments[1]);
@@ -39835,6 +39840,7 @@ export class RustTranspiler extends BaseTranspiler {
 
     // `x.startsWith(p)` / `x.endsWith(p)` with a proven/checker string operand: false unless both are `Str`.
     printAffixTest(node, receiverText: string, method: string): string | undefined {
+        if (method === 'ends_with') { const lent = this.rustStrParamAffixText(node); if (lent !== undefined) return lent; }
         if (node?.arguments?.length !== 1) return undefined;
         const receiver = this.strReceiverText(node, receiverText);
         // a typed string local operand lends its text (`Option<&str>`), as the `indexOf` needle does
@@ -40624,7 +40630,9 @@ export class RustTranspiler extends BaseTranspiler {
 
     // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds
     // conversions at its callers); a method listed here must have no venue override and no hand-written body.
-    private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate' ];
+    private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate',
+        'isLeveragedCurrency',
+    ];
 
     // ral-59e: async base methods typed the same way (no venue override, no trait slot); every caller in ts/src passes
     // its own unwritten `since: Int` / `symbol: Str` / `limit: Int` parameter (52 call sites of fetchPaginatedCallDeterministic)
@@ -40945,7 +40953,50 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustSpawnKeyParam(param.parent, param)) return true;
         // ral-64x: also a whole argument of a venue call whose parameter there prints `&str` (lent as it came in)
         return this.rust64xStrParamReadsLent(param, (call: any, at: number) => this.rustVenueStrSlot(this.rustCalleeParams(call), at) === '&str')
-            || this.rustStrParamTailSliceOnly(param);
+            || this.rustStrParamTailSliceOnly(param) || this.rustStrParamAffixOnly(param);
+    }
+
+    /** A `&str` parameter never written whose every read is the receiver of `x.endsWith (n)` / `x.replace (n, '')` with a
+     *  string-literal or borrowed string-element needle: the borrow answers both natively. */
+    rustStrParamAffixOnly(param: any): boolean {
+        if (this.rustLocalIsReassigned(param, String(param.name.text))) return false;
+        let uses = 0;
+        for (const n of this.rustScopeNameNodes(param.parent, String(param.name.text)) as any[]) {
+            if (n === param.name || n === param || n.parent === param) continue;
+            if (!isIdentifier(n) || this.rustDeclaredNode(n) !== param || this.rustStrParamAffixCall(n) === undefined) return false;
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    /** `p.endsWith (n)` / `p.replace (n, lit)` on the identifier `p`: the call, else undefined. */
+    rustStrParamAffixCall(n: any): any {
+        const access: any = n?.parent;
+        if (!isPropertyAccessExpression(access) || access.expression !== n || !isCallExpression(access.parent) || access.parent.expression !== access) return undefined;
+        const call: any = access.parent;
+        const name = String(access.name.text);
+        // a literal needle already prints natively through the `&str` receiver rules: leave it to them
+        if (call.arguments.length === 0 || !isIdentifier(this.unwrapParens(call.arguments[0]))) return undefined;
+        if (name === 'endsWith' && call.arguments.length === 1) return call;
+        if (name === 'replace' && call.arguments.length === 2 && this.rustNativeStringLiteralArg(call.arguments[1]) !== undefined) return call;
+        return undefined;
+    }
+
+    /** Native text of `p.endsWith (n)` / `p.replace (n, lit)` on an unbound `&str` parameter: a literal needle reads as is,
+     *  a typed `Str` local (`Option<String>` / a borrowed element) tests its `Some` (no element: false / the receiver, as the helpers gave). */
+    rustStrParamAffixText(node: any): string | undefined {
+        const access: any = node?.expression;
+        if (!isPropertyAccessExpression(access) || !isIdentifier(access.expression) || !this.rustVenueStrParamUnboundRead(access.expression)) return undefined;
+        if (this.rustStrParamAffixCall(access.expression) !== node) return undefined;
+        const s = super.printIdentifier(access.expression);
+        const needle: any = this.unwrapParens(node.arguments[0]);
+        const literal = this.rustNativeStringLiteralArg(needle);
+        const local = literal === undefined && isIdentifier(needle) ? this.rustScalarLocalOf(needle) : undefined;
+        const elem = local === undefined || local.kind !== 'ostr' ? undefined : this.rustBorrowedStrElems.has(local.declaration) ? super.printIdentifier(needle) : `${super.printIdentifier(needle)}.as_deref()`;
+        if (literal === undefined && elem === undefined) return undefined;
+        if (String(access.name.text) === 'endsWith') return literal !== undefined ? `${s}.ends_with(${JSON.stringify(literal)})` : `matches!(${elem}, Some(__p) if ${s}.ends_with(__p))`;
+        const to = JSON.stringify(this.rustNativeStringLiteralArg(node.arguments[1]));
+        return literal !== undefined ? `Value::from(${s}.replace(${JSON.stringify(literal)}, ${to}))` : `Value::from(match ${elem} { Some(__p) => ${s}.replace(__p, ${to}), None => ${s}.to_string() })`;
     }
 
     /** A `&str` parameter never written whose every read is the receiver of `x.slice (n)` with one integer literal bound. */
