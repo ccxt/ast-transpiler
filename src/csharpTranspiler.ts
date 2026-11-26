@@ -3277,7 +3277,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
                 continue; // omitted: the default null
             }
-            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument));
+            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument)
+                ?? this.csharpNonNullIntegerSumArgument(argument));
             const kind = this.csharpArithmeticOperandKind(type);
             if ((kind === undefined) || (call.arguments.length > method.parameters.length)) {
                 return undefined;
@@ -11642,4 +11643,20 @@ export class CSharpTranspiler extends BaseTranspiler {
         return false;
     }
     // ===== end h30-H30-C05
+
+    // `a + b` / `a - b` over two non-null integer operands (a for counter, an integer literal) that prints the native
+    // operator: a venue-private number slot fed only by such sums prints Int64
+    csharpNonNullIntegerSumArgument(argument): string | undefined {
+        const node = this.csharpUnparenthesized(argument);
+        const op = node?.operatorToken?.kind;
+        if ((node?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.PlusToken) && (op !== SyntaxKind.MinusToken))) {
+            return undefined;
+        }
+        const nonNull = (n) => [ 'Int64', 'long', 'int' ].indexOf(this.csharpArithmeticOperandType(n) as string) >= 0;
+        if (!nonNull(node.left) || !nonNull(node.right)) {
+            return undefined;
+        }
+        // the printed sum must be the native operator, never add(..) / subtract(..) boxing an object
+        return (this.csharpPrintedArithmeticKind(node, this.printNode(node, 0)) === undefined) ? undefined : 'Int64';
+    }
 }
