@@ -3036,6 +3036,8 @@ const NIL_DECLARED_SAFE_ARG_SLOTS = {
     'this.Client': 1, 'this.Watch': 1, 'this.WatchMultiple': 1,
     // the outcome handle slot: HasOutcome / SafeOutcome / SafeOutcomeSymbol read it only through IsEqual / InOp / SafeValue (derefScalar)
     'this.HasOutcome': 1, 'this.SafeOutcome': 1, 'this.SafeOutcomeSymbol': 1,
+    // subHash / unsubHash: every read derefScalars them (IsEqual, Subscription*, FutureHas, Resolve, StartsWith, Add)
+    'this.CleanUnsubscription': 3,
 };
 
 const COMPARISON_TOKENS = [SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,];
@@ -9117,6 +9119,7 @@ function goStrNilDeclaredJoinType (goTranspiler, declaration) {
     if (scope === undefined) { return undefined; }
     const name = declaration.name.text;
     let pointerWrites = 0;
+    let stringWrites = 0;
     let unsafe = false;
     const feedsBaseStrPtr = goTranspiler.goDescendantsOf (scope).some ((n) => ts.isIdentifier (n) && (n.text === name) && goIsBaseStrPtrArg (n));
     for (const n of goTranspiler.goDescendantsOf (scope)) {
@@ -9130,13 +9133,19 @@ function goStrNilDeclaredJoinType (goTranspiler, declaration) {
                 const right = parent.right;
                 if (!isNilLiteralExpression (right)) {
                     const written = ts.isIdentifier (right) ? goTranspiler.goDeclaredTypeOfIdentifier (right) : goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
-                    unsafe = (written !== '*string');
-                    pointerWrites += 1;
+                    // a plain Go string write is stored through a fresh string local's address (goStringPointerStore)
+                    const literal = [ SyntaxKind.StringLiteral, SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.ConditionalExpression ].includes (goUnwrapParens (right)?.kind);
+                    const stored = (written === 'string') && !literal && !ts.isIdentifier (right) && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && !feedsBaseStrPtr;
+                    stringWrites += stored ? 1 : 0;
+                    unsafe = (written !== '*string') && !stored;
+                    pointerWrites += stored ? 0 : 1;
                 }
             } else if (!goReadRuleAccepts (NIL_DECLARED_READ_RULE, goTranspiler, n)) { unsafe = true; }
         }
     }
-    if (unsafe || (pointerWrites === 0) || goTranspiler.goTypeNameIsShadowed (scope, '*string')) { return undefined; }
+    if (unsafe || ((pointerWrites + stringWrites) === 0) || goTranspiler.goTypeNameIsShadowed (scope, '*string')) { return undefined; }
+    // a definitely-assigned string local already prints `string`
+    if ((stringWrites > 0) && new GoNilDeclaredAssignmentScan (goTranspiler, declaration, name).run ()) { return undefined; }
     return '*string';
 }
 
