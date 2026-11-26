@@ -811,6 +811,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
     goUnwrapPrintedParens(printedText: string): string;
+    goStringNarrowedKey(node: any): string;
     goLocalStaticType(node: any): string | undefined;
     goInferredLocalStaticType(node: any): string | undefined;
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
@@ -1386,6 +1387,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTsSrcFileDerivesFrom(tree: any, file: string, className: string | undefined): boolean;
     goTextArgMatchesType(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
     goDeclaredTypeCache: Map<any, string>;
+    goStringNarrowedInit: Map<string, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
@@ -1563,6 +1565,18 @@ export declare class GoTranspiler extends BaseTranspiler {
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     goWsTickersPointerInIf(node: any, identation: any): string | undefined;
+    goTypeofStringCheck(expr: any, negated: boolean): any;
+    goIsAwaitedAnyLocal(ident: any): boolean;
+    goTypeofStringAssignMatch(ifStmt: any): {
+        src: any;
+        target: any;
+    } | undefined;
+    goTypeofStringAssignParent(assignExpr: any): any;
+    goEarlyExitTypeofStringNextDecl(ifStmt: any): {
+        src: any;
+        decl: any;
+    } | undefined;
+    goPrintTypeofStringIf(node: any, identation: any): string | undefined;
     printIfStatement(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
@@ -1593,6 +1607,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         [kind: number]: [string, string];
     };
     goHasEnclosingNilGuard(ident: any): boolean;
+    goInsideNonReboundNilIf(ident: any): boolean;
     goHasEarlyExitNilGuard(ident: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
