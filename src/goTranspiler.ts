@@ -12594,6 +12594,7 @@ const GO_STRING_PTR_SAFE_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith
 const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket', 'generateClientOrderId' ];
 // string methods whose Go helper derefScalars its receiver (exchange_helpers.go)
 const GO_STRING_PTR_GUARDED_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase', 'replace' ];
+GO_STRING_PTR_GUARDED_METHODS.push ('slice'); // Slice derefScalars a pointer receiver
 
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = { 'fetch2': [ 1, 3 ], 'request': [ 1, 3 ], 'sign': [ 1, 3 ], };
 
