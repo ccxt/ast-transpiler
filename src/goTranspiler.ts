@@ -3596,7 +3596,8 @@ function ccxtGoNilDeclaredContainerJoinTypeUncached (goTranspiler, declaration, 
     if (goTranspiler.goTypeNameIsShadowed (scope, state.goType)) { return undefined; }
     // a seeded copy's nil writes are joined by the walk (`c = nil` on a typed map); the shipped veto reads them as foreign
     const nilWritesJoined = copySeed && state.nilWrites;
-    if (!nilWritesJoined && !goTranspiler.goLocalIsSafeToType (scope, declaration, name, state.goType) && !(state.mapCallWrites && (state.goType === 'map[string]any'))) { return undefined; }
+    if (!nilWritesJoined && !goTranspiler.goLocalIsSafeToType (scope, declaration, name, state.goType) && !(state.mapCallWrites && (state.goType === 'map[string]any'))
+        && !goEmptyMapSeedJoin (goTranspiler, declaration)) { return undefined; }
     return state.goType;
 }
 
@@ -3834,11 +3835,14 @@ function ccxtGoWriteSiteLocalGoType (goTranspiler, node) {
     return cache.get (param);
 }
 
+// a `{}`-seeded local whose every write is an awaited map endpoint: joined like a nil seed, keeping the empty map
+function goEmptyMapSeedJoin (go: any, declaration: any): boolean { return goEmptyMapSeed (declaration?.initializer) && goAwaitedMapWritesOnlyLocal (go, declaration, true); }
+
 // the container join type of the nil-declared local an identifier binds to (same predicate the declaration printer uses), or undefined
 function ccxtGoNilJoinDeclarationType (goTranspiler, node) {
     const declaration = ccxtGoParamDeclarationOf (goTranspiler, node);
     if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
-        || !isNilDeclaredInitializer (declaration.initializer)
+        || !(isNilDeclaredInitializer (declaration.initializer) || goEmptyMapSeedJoin (goTranspiler, declaration))
         || (declaration.parent?.parent?.kind !== SyntaxKind.VariableStatement)) { return undefined; }
     return ccxtGoNilDeclaredContainerJoinType (goTranspiler, declaration);
 }
@@ -5483,6 +5487,9 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // printVariableDeclarationList prints `var x any = nil` for a nil declaration before it
     ccxtGoWrapSingleDeclaration (goTranspiler, (printed, declaration) => {
         if (declaration.name?.kind !== SyntaxKind.Identifier) { return printed; }
+        const seeded = /^(\s*)var (\w+) any = map\[string\]any\{\}$/.exec (printed);
+        if ((seeded !== null) && (seeded[2] === goTranspiler.printNode (declaration.name)) && goEmptyMapSeedJoin (goTranspiler, declaration)
+            && (ccxtGoNilDeclaredContainerJoinType (goTranspiler, declaration) === 'map[string]any')) { return seeded[1] + 'var ' + seeded[2] + ' map[string]any = map[string]any{}'; }
         const match = new RegExp ('^(\\s*)var (\\w+) any = ' + goTranspiler.UNDEFINED_TOKEN + '$').exec (printed);
         if ((match === null) || (match[2] !== goTranspiler.printNode (declaration.name))) { return ccxtGoNilJoinCopyDeclaration (goTranspiler, printed, declaration); }
         const goType = ccxtGoNilDeclaredContainerJoinType (goTranspiler, declaration);
@@ -10625,10 +10632,14 @@ function goNilJoinWritesNeverNilMaps (go: any, arg: any): boolean {
 // `await this.<endpoint> (..)` of an implicit-API stub whose element is map[string]any
 function goAwaitsMapEndpoint (go: any, v: any): boolean { return (v?.kind === SK.AwaitExpression) && (ccxtGoEndpointElement (go, v.expression) === GO_BASE_DICT_PARAM_TYPE); }
 
+// a `{}` seed: an empty map the awaited-map join keeps as its typed seed
+function goEmptyMapSeed (init: any): boolean { return (init?.kind === SK.ObjectLiteralExpression) && (init.properties.length === 0); }
+
 // `let x[: T] [= undefined]` whose writes are all plain `x = await this.<endpoint> (..)` of a map stub (the endpoint join declares x map[string]any)
-function goAwaitedMapWritesOnlyLocal (go: any, decl: any): boolean {
+// emptySeed: only the declaration join admits a `{}` seed; read rules keep asking for a nil seed so they never outrun it
+function goAwaitedMapWritesOnlyLocal (go: any, decl: any, emptySeed = false): boolean {
     const init: any = decl.initializer;
-    const nilSeed = (init === undefined) || ((init.kind === SK.Identifier) && (init.text === 'undefined'));
+    const nilSeed = (init === undefined) || ((init.kind === SK.Identifier) && (init.text === 'undefined')) || (emptySeed && goEmptyMapSeed (init));
     const body: any = go.goTopFunction (decl);
     if (!nilSeed || (decl.name?.kind !== SK.Identifier) || (body === undefined) || go.goDeclaredTypeInProgress.has (decl)) { return false; }
     const checker: any = go.checkerOrUndefined ();
