@@ -3034,6 +3034,8 @@ const NIL_DECLARED_SAFE_ARG_SLOTS = {
         .map ((op) => [ 'Precise.String' + op, 2 ])),
     // the ws url slot: Client / Watch / WatchMultiple derefScalar it at entry
     'this.Client': 1, 'this.Watch': 1, 'this.WatchMultiple': 1,
+    // the outcome handle slot: HasOutcome / SafeOutcome / SafeOutcomeSymbol read it only through IsEqual / InOp / SafeValue (derefScalar)
+    'this.HasOutcome': 1, 'this.SafeOutcome': 1, 'this.SafeOutcomeSymbol': 1,
 };
 
 const COMPARISON_TOKENS = [SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken, SyntaxKind.ExclamationEqualsToken, SyntaxKind.ExclamationEqualsEqualsToken,];
