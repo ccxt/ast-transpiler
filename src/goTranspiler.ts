@@ -13752,6 +13752,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             return this.goOperandStaticType(this.goUnwrapPrintedAssertions(node.expression), printedText);
         case SyntaxKind.BinaryExpression: if (goLengthMinusZeroOperand(node) !== undefined) { return this.goOperandStaticType(goLengthMinusZeroOperand(node), printedText); } return this.goConstantProductKind(node) ?? this.goNativeArithmeticType(node);
         case SyntaxKind.Identifier: return this.goLocalStaticType(node) ?? this.goInferredLocalStaticType(node) ?? this.goDeclaredParamStaticType(node);
+        case SyntaxKind.PrefixUnaryExpression:
+            // `-N` the printer writes as the bare constant (never OpNeg) is an int constant
+            return ((node.operator === SyntaxKind.MinusToken) && (node.operand?.kind === SyntaxKind.NumericLiteral) && /^[0-9]+$/.test(node.operand.text)
+                && (this.printInlineOpNeg(node, node.operand.text) !== undefined)) ? 'const-int' : undefined;
         case SyntaxKind.PropertyAccessExpression:
             // `a.length` / `s.replace(...)` print as helper calls, `this.Id` as a field
             return this.goStringFieldStaticType(node, printedText) ?? this.goStringCallStaticType(node, printedText);
@@ -21342,6 +21346,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 const op = parent.operatorToken.kind;
                 if ((op === SyntaxKind.GreaterThanToken) || (op === SyntaxKind.GreaterThanEqualsToken)
                     || (op === SyntaxKind.LessThanToken) || (op === SyntaxKind.LessThanEqualsToken)) { return `-${printedText}`; }
+                // `x * -N` with an int64 `x`: the constant takes x's type, the product OpNeg's box would hold
+                const other = (parent.right === node) ? parent.left : undefined;
+                const powArgument = (parent.parent?.kind === SyntaxKind.CallExpression) && /^Math\.pow$/.test(parent.parent.expression?.getText?.() ?? '');
+                if ((op === SyntaxKind.AsteriskToken) && (other !== undefined) && !powArgument
+                    && (this.goOperandStaticType(other, this.printNode(other, 0)) === 'int64')) { return `-${printedText}`; }
             }
         }
         return undefined;
