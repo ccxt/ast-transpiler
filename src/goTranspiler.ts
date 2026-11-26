@@ -41626,6 +41626,30 @@ goChainOr('h29a10EndpointTask', function (node) { return this.h41g25WrapperTask(
 goChainOr('h28a10JsonList', function (node) { return this.h29a10PromiseAllList(node); });
 // its slots are decoded documents (or the empty literal), so lists cut from it hold no scalar pointer
 goChainOr('goJsonOriginContainer', function (node, depth = 0) { return ((node?.kind === SyntaxKind.Identifier) && this.h29a10PromiseAllList(node)); });
+// `const r = this.safeDict (L, i[, {}])` where L is a read-only `Promise.all` of a literal list of map endpoints (the ccxt
+// pass types it `[]map[string]any`): each slot is a decoded JSON document, so r is one while it is only read
+function h53g59TypedMapPromiseList (go: GoTranspiler, list): boolean {
+    const declaration: any = go.goStatementBoxLocal (list);
+    const init: any = go.goUnwrapParenthesizedNode (declaration?.initializer);
+    const call: any = (init?.kind === SyntaxKind.AwaitExpression) ? go.goUnwrapParenthesizedNode (init.expression) : undefined;
+    const callee: any = call?.expression;
+    if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments.length !== 1) || (callee?.kind !== SyntaxKind.PropertyAccessExpression)
+        || (callee.expression?.kind !== SyntaxKind.Identifier) || (callee.expression.text !== 'Promise') || (callee.name?.text !== 'all')
+        || !go.h29a10EndpointTaskList (call.arguments[0])
+        || !go.h29a10Tasks (call.arguments[0]).every ((t: any) => (t.parent?.kind !== SyntaxKind.CallExpression)
+            && (ccxtGoEndpointElement (go, go.goUnwrapParenthesizedNode (t)) === GO_SAFE_DICT_LOCAL_TYPE))) { return false; }
+    return go.goJsonOriginBindingIsReadOnly (declaration, (n, name) => go.h27a09SafeReaderArg (n, name)
+        || ((n.parent?.kind === SyntaxKind.PropertyAccessExpression) && (n.parent.name?.text === 'length') && go.goJsonOriginListUseIsReadOnly (n, name)));
+}
+goChainOr('goJsonOriginContainer', function (node, depth = 0) {
+    const declaration: any = (node?.kind === SyntaxKind.Identifier) ? this.goStatementBoxLocal (node) : undefined;
+    const init: any = this.goUnwrapParenthesizedNode (declaration?.initializer);
+    const args: any = this.goSafeAccessorLocalArgs (init, 'safeDict');
+    if ((args === undefined) || (args.container?.kind !== SyntaxKind.Identifier)
+        || ((args.key?.kind !== SyntaxKind.NumericLiteral) && (args.key?.kind !== SyntaxKind.Identifier))
+        || !h53g59TypedMapPromiseList (this, args.container)) { return false; }
+    return this.goJsonOriginBindingIsReadOnly (declaration, (n, name) => this.goJsonOriginUseIsReadOnly (n, name));
+});
 // `const x = this.safeDict (C, K[, {}])` where C prints `map[string]any`: the comma-ok read answers nil for a missing key,
 function h42g05OwnedReceiver (goTranspiler: GoTranspiler, container): boolean {
     const d: any = goTranspiler.goAnyBoxLocalDeclaration (container);
