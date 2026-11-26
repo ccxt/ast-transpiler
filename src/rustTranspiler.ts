@@ -29054,9 +29054,29 @@ export class RustTranspiler extends BaseTranspiler {
         // a slice element `xs.get(i as usize)`: its map (an Arc handle), `None` out of range or for a non-map (as `into_opt_dict`)
         const sliceRow = /^(.+)\.get\((\w+) as usize\)\.cloned\(\)\.unwrap_or\(Value::Null\)$/.exec(printed);
         if (sliceRow !== null && this.rustBalancedText(sliceRow[1])) return `(match ${sliceRow[1]}.get(${sliceRow[2]} as usize) { Some(Value::Dict(__m)) => Some(std::sync::Arc::clone(__m)), _ => None })`;
+        const listDict = this.rustTypedListRowDict(init, printed);
+        if (listDict !== undefined) return listDict;
         const row = /^\(match (\w+\.get\([\w ]+\)) \{ Some\(__row\) if matches!\(__row\.raw, Value::Dict\(_\)\) => crate::Value::from\(__row\), _ => Value::Null \}\)$/.exec(printed);
         if (row !== null && isCallExpression(init)) return `(match ${row[1]} { Some(__row) => match &__row.raw { Value::Dict(__m) => Some(std::sync::Arc::clone(__m)), _ => None }, None => None })`;
         return undefined;
+    }
+
+    /** `this.safeDict (xs, i)` (no default) where `xs` is a const local printed as a typed `List` and `i` a literal or an
+     *  i64 `for` counter: the element's map, `None` out of range or for a non-map, as `safe_dict_o` answers. */
+    rustTypedListRowDict(init: any, printed: string): string | undefined {
+        const m = /^self\.safe(?:_d|D)ict\(&(\w+), Value::Int\((\w+)\), &\[\]\)$/.exec(printed);
+        if (m === null || !isCallExpression(init) || init.arguments.length !== 2 || !isPropertyAccessExpression(init.expression)) return undefined;
+        if (init.expression.expression.kind !== SyntaxKind.ThisKeyword || String(init.expression.name.text) !== 'safeDict') return undefined;
+        const recv: any = this.rustSkipWrappers(init.arguments[0]);
+        const key: any = this.rustSkipWrappers(init.arguments[1]);
+        // pro and prediction tiers only (the REST venue files keep their own rule)
+        if (!/ts[/]src[/](pro|prediction)[/]/.test(String(init.getSourceFile?.()?.fileName ?? '')) || !isIdentifier(recv)) return undefined;
+        const d: any = this.rustDeclarationOfIdentifier(recv);
+        if (d === undefined || !isVariableDeclaration(d) || d.name === recv || ((d.parent?.flags ?? 0) & NodeFlags.Const) === 0) return undefined;
+        if (this.rustOptContainerLocals.has(d) || !(this as any).rustP21TypedListLocal(d)) return undefined;
+        if (!isNumericLiteral(key) && !(isIdentifier(key) && this.rustI64CounterUse(key))) return undefined;
+        const index = isNumericLiteral(key) ? String(Number(key.text)) : `${m[2]} as usize`;
+        return `(match ${m[1]}.get(${index}) { Some(Value::Dict(__m)) => Some(std::sync::Arc::clone(__m)), _ => None })`;
     }
 
     private static readonly RUST_RECORD_MAP_TYPES = new Set([ 'Tickers', 'FundingRates', 'OpenInterests', 'Leverages', 'MarginModes',
