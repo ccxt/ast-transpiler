@@ -7026,6 +7026,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!negative && this.csharpIsPreciseDecimalsRead(inner) && this.csharpOperandIsPlainNumber(inner)) {
             return { kind: 'Int64', node: inner, literal: false, zero: false, small: false };
         }
+        // a nested `Math.min/max` this printer prints native is a non-null int / Int64 of its operands' kind
+        const nested = negative ? undefined : this.csharpNativeMinMaxOperandKind(inner);
+        if (nested !== undefined) {
+            return { kind: nested, node: inner, literal: false, zero: false, small: false };
+        }
         if (negative || !isIdentifier(inner)) {
             return undefined;
         }
@@ -7039,6 +7044,23 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         return { kind, node: inner, literal: false, zero: false, small: false };
+    }
+
+    // the kind of a `Math.min/max (a, b)` operand that prints native (Math.Min/Max, never null): Int64 when
+    // either side is Int64 / Int64? or a long literal, int otherwise
+    csharpNativeMinMaxOperandKind(node): string | undefined {
+        const callee: any = isCallExpression(node) ? node.expression : undefined;
+        if ((callee === undefined) || !isPropertyAccessExpression(callee) || (callee.expression.getText() !== 'Math')
+            || ![ 'min', 'max' ].includes(callee.name.text) || (node.arguments.length !== 2)) {
+            return undefined;
+        }
+        const left = this.csharpIntegralMinMaxOperand(node.arguments[0]);
+        const right = this.csharpIntegralMinMaxOperand(node.arguments[1]);
+        if ((left === undefined) || (right === undefined) || !/^Math\.M(?:in|ax)\(/.test(this.printNode(node, 0).trim())) {
+            return undefined;
+        }
+        const wide = (o) => (o.literal ? (o.literalKind !== 'int') : (o.kind !== 'int'));
+        return (wide(left) || wide(right)) ? 'Int64' : 'int';
     }
 
     csharpIsPreciseDecimalsRead(node): boolean {
