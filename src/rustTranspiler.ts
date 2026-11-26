@@ -3763,6 +3763,9 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarAliasMoveSite(n: any, declaration: any): boolean {
         let top: any = n;
         while (isParenthesizedExpression(top.parent)) top = top.parent;
+        // a write source `n as string` (the assertion prints nothing)
+        while (isAsExpression(top.parent) && top.parent.type?.kind === SyntaxKind.StringKeyword && isBinaryExpression(this.rustSkipWrappersUp(top.parent.parent))) top = top.parent;
+        while (isParenthesizedExpression(top.parent)) top = top.parent;
         const parent: any = top.parent;
         const whole = (isVariableDeclaration(parent) && parent.initializer === top && isIdentifier(parent.name))
             || (isBinaryExpression(parent) && parent.right === top && parent.operatorToken.kind === SyntaxKind.EqualsToken && isIdentifier(parent.left) && parent.parent?.kind === SyntaxKind.ExpressionStatement);
@@ -11430,6 +11433,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (node === undefined || depth > 3) return false;
         // 40b: `x = <expr> as T` writes the operand itself (the assertion prints nothing and converts nothing)
         if (depth === 0 && this.rustScalarAsWrite(node) !== undefined) return this.rustScalarWriteOk(kind, this.rustScalarAsWrite(node), 0);
+        // a `x = s as string` write of a typed string local: the assertion prints nothing, the source's own kind decides
+        if (depth === 0 && (kind === 'str' || kind === 'ostr') && this.rustStrAsIdentWrite(node) !== undefined) return this.rustScalarWriteOk(kind, this.rustStrAsIdentWrite(node), 0);
         if (this.rustOptParamWriteOk(kind, node)) return true;
         if (depth === 0 && kind.startsWith('o') && this.rustNilNeverWrite(node)) return true;
         if (kind === 'oint' && this.rustLimitCall(node)) return true;
@@ -12260,6 +12265,12 @@ export class RustTranspiler extends BaseTranspiler {
         return inner === undefined || isIdentifier(inner) || this.literalKindOfNode(inner) === 'null' ? undefined : inner;
     }
 
+    /** The identifier under one top-level `as string` write source (parens only around it), else undefined. */
+    rustStrAsIdentWrite(rhs): any {
+        const peeled = this.rustAsOperand(rhs, true);
+        return peeled.casts === 1 && isIdentifier(peeled.operand) && peeled.operand.text !== 'undefined' ? peeled.operand : undefined;
+    }
+
     /** INT-48: the one `as T` decision shared by ral-40a (`(x as string)` read-through), ral-40b (`as T` write operand)
      *  and the ral-40h alias rules: peel parens and `as` assertions (only `as string` when `stringOnly`), counting the
      *  assertions; the assertion prints nothing, so the operand is what every rule decides on. */
@@ -12283,6 +12294,8 @@ export class RustTranspiler extends BaseTranspiler {
             const typedDecl = isVariableDeclaration(decl) && decl.initializer !== undefined && this.rustScalarNativeText(local.kind, decl.initializer) !== undefined;
             return typedDecl ? this.printRustScalarLocalWrite(left, this.rustScalarAsWrite(right)) : undefined;
         }
+        // `x = s as string` on a typed string local prints the identifier write `x = s`
+        if ((local?.kind === 'str' || local?.kind === 'ostr') && this.rustStrAsIdentWrite(right) !== undefined) return this.printRustScalarLocalWrite(left, this.rustStrAsIdentWrite(right));
         const alias: any = this.unwrapParens(right);
         // za: `x = undefined` (an Identifier node) on an optional scalar local writes `None`: nothing to copy
         if (local !== undefined && local.kind.startsWith('o') && isIdentifier(alias) && (this.literalKindOfNode(alias) === 'null' || this.rustNilNeverWrite(alias))) return `${super.printIdentifier(left)} = \u0004None`;
@@ -13088,7 +13101,7 @@ export class RustTranspiler extends BaseTranspiler {
         for (const n of this.rustScopeNameNodes(this.rustEnclosingFunction(declaration), String(declaration.name.text)) as any[]) {
             const parent: any = n.parent;
             if (!isIdentifier(n) || !isBinaryExpression(parent) || parent.left !== n || parent.operatorToken.kind !== SyntaxKind.EqualsToken) continue;
-            const src: any = this.rustScalarAsWrite(parent.right) ?? parent.right;
+            const src: any = this.rustScalarAsWrite(parent.right) ?? ((joined === 'str' || joined === 'ostr') ? this.rustStrAsIdentWrite(parent.right) : undefined) ?? parent.right;
             const write = isIdentifier(this.unwrapParens(src)) && this.literalKindOfNode(this.unwrapParens(src)) !== 'null'
                 ? this.rustScalarIdentifierKind(this.unwrapParens(src)) ?? this.rustOptParamKind(src) : this.rustScalarValueKind(src, true)
                     // ral-76a S2: a write from a venue `Str` method (every venue declaration `string` / `Str`; rustScalarWriteOk's vd arm) holds its string or Null
