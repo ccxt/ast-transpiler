@@ -10670,7 +10670,7 @@ function goDictParamCallSitesPassMap (go: any, fn: any, index: number): boolean 
         if (goIsBaseExchangeFile (fn) && goCallAboveTranspileDelimiter (call)) { continue; }
         // a base call inside a method the writer replaces by a hand-written Go twin is not printed either
         if ((goIsBaseExchangeFile (fn) && go.goHandWrittenBaseMethods.includes (go.goEnclosingFunction (call)?.name?.text)) || (h29g22OwnParamPassedThrough (go, fn, index, arg))) { continue; }
-        if (h30a18MapArg (go, name, call, arg)) { continue; }
+        if (h30a18MapArg (go, name, call, arg) || h54g49DeclaredMapLocalArg (go, name, arg)) { continue; }
         if ((go.goPrintedArgType (arg) !== GO_BASE_DICT_PARAM_TYPE) && !goDictParamAwaitedMapArg (go, arg) && !goDictParamTabledSafeDictArg (go, call, arg)
             && !goDictParamAwaitedBoxedLocal (go, arg) && !goDictParamBalanceFieldArg (arg)) { return false; }
     }
@@ -10745,7 +10745,7 @@ function goDictParamSiblingSiteProven (go: any, tree: any, name: string, site: a
     const saved = go.context;
     go.setContext ({ src, 'checker': entry.batch['checker'], program });
     try {
-        if (h30a18MapArg (go, name, call, arg)) { return true; }
+        if (h30a18MapArg (go, name, call, arg) || h54g49DeclaredMapLocalArg (go, name, arg)) { return true; }
         return (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) || goDictParamAwaitedMapArg (go, arg) || goDictParamTabledSafeDictArg (go, call, arg) || goDictParamBalanceFieldArg (arg);
     } catch (e) { return false; } finally {
         go.setContext (saved);
@@ -40208,6 +40208,15 @@ function h30a18PairSlot1 (go: any, element: any): boolean {
         const signature: any = go.getChecker ().getResolvedSignature (call)?.declaration?.resolve ();
         return CCXT_GO_ELEMENT_1_BASE_FILE.test (String (signature?.getSourceFile?.()?.fileName ?? ''));
     } catch (e) { return false; }
+}
+// a `let x = undefined` local whose every write is a map slot of a tuple handler (the tuple-join proof): Go declares
+// it `map[string]any`, so the handler's map parameter takes it as is (the compiler checks the type)
+function h54g49DeclaredMapLocalArg (go: any, name: string, arg: any): boolean {
+    if (!H30A18_METHODS.has (name) || (arg?.kind !== SK.Identifier)) { return false; }
+    let decl: any;
+    try { decl = go.goSymbolValueDecl (arg); } catch (e) { return false; }
+    if ((decl?.kind !== SK.VariableDeclaration) || (decl.name?.kind !== SK.Identifier)) { return false; }
+    try { return tupleJoinType (go, decl, decl.name.text) === GO_BASE_DICT_PARAM_TYPE; } catch (e) { return false; }
 }
 function h30a18InlinedProbeCall (go: any, call: any): boolean {
     const declaration: any = call?.parent;
