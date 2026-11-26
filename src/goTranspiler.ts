@@ -10543,6 +10543,23 @@ function goDictParamSafeDictArg (go: any, arg: any): boolean {
 }
 
 // a local the safeDict unbox rule declares `map[string]any` (a comma-ok map read): the Go value is that map
+// a const local bound to `await this.m (..)` whose channel carries a list (the `[]any` async table, or a struct
+// list the host receives through its `*ToList` carrier) is declared `[]any` and hands that slice to its callee
+function goAwaitedListLocalArgType (go: any, arg: any): string | undefined {
+    const decl: any = go.goSymbolValueDecl (arg);
+    const call: any = (decl?.initializer?.kind === SK.AwaitExpression) ? decl.initializer.expression : undefined;
+    const callee: any = call?.expression;
+    if ((decl?.kind !== SK.VariableDeclaration) || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (call?.kind !== SK.CallExpression)
+        || (callee?.kind !== SK.PropertyAccessExpression) || (callee.expression?.kind !== SK.ThisKeyword)) { return undefined; }
+    const name = String (callee.name?.text ?? '');
+    const exported = name.charAt (0).toUpperCase () + name.slice (1);
+    const listChannel = ((CCXT_GO_ASYNC_ELEM_TYPES[exported + 'Async'] === GO_SAFE_LIST_LOCAL_TYPE) && !CCXT_GO_ASYNC_ELEM_EXCLUDED.includes (exported + 'Async'))
+        || (h27g08StructRowCallees (go).has (exported));
+    // a `string[]` channel is received boxed (a string-slice carrier), never as the []any slice
+    const stringList = go.goAnnotatedSliceParameterType (decl) === '[]string';
+    return (listChannel && !stringList && ccxtGoAsyncDeclaredShapeAgrees (go, callee, GO_SAFE_LIST_LOCAL_TYPE)) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
+}
+
 function goDictParamUnboxedLocalArg (go: any, arg: any): boolean {
     const decl: any = (arg?.kind === SK.Identifier) ? go.checkerOrUndefined ()?.getSymbolAtLocation (arg)?.valueDeclaration?.resolve?.() : undefined;
     return (decl?.kind === SK.VariableDeclaration) && (go.goSafeDictLocalUnbox (decl) === GO_BASE_DICT_PARAM_TYPE);
@@ -19067,7 +19084,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // the printed Go type of a call-site argument, or undefined when the printer cannot name it (then the call site does not prove anything)
     goPrintedArgType(arg): string | undefined {
-        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg); }
+        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg) ?? goAwaitedListLocalArgType(this, arg); }
         if (this.goIsClientUrl(arg)) { return 'string'; } // Client.url prints the string GetUrl()
         if ((arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.expression?.kind === SyntaxKind.ThisKeyword)
             && (arg.name?.text === 'privateKey')) { return 'string'; } // go/v4/exchange.go declares PrivateKey `string`
