@@ -11855,6 +11855,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'slugToOutcomeSymbol': [ 2 ],
     // `subType: Str`: the one caller (featureValue) passes a SafeString `*string`; the body nil-tests it first
     'featureValueByType': [ 1 ],
+    // `address: Str`: callers pass a SafeString `*string` or a wallet-address string local; nil answers first
+    'padHexAddress': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
@@ -12128,6 +12130,8 @@ const GO_FIELD_STRING_LOCAL_READ_RULE = {
         ...GO_STRING_READ_ARMS,
         [SyntaxKind.CallExpression]: (parent, current, goTranspiler) => {
             if (!goNilInitIsAnyArgument (parent, current)) { return false; }
+            // a tabled base `*string` slot takes a never-rebound string local by address
+            if (goIsBaseStrPtrArg (current)) { return true; }
             const callee = goTranspiler.goAstCalleeName (parent);
             return (callee !== undefined) && GO_NIL_INIT_ANY_ARG_CALLEES.has (callee);
         },

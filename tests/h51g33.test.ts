@@ -50,8 +50,8 @@ describe ('go slugToOutcomeSymbol outcome prints *string', () => {
     };
     afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h51g33'), { recursive: true, force: true }));
 
-    test ('padHexAddress is not tabled: its address stays any', () => {
-        expect (print ()).toContain ('func (this *Exchange) PadHexAddress(address any) ');
+    test ('padHexAddress is tabled: its address is *string', () => {
+        expect (print ()).toContain ('func (this *Exchange) PadHexAddress(address *string) ');
     });
     test ('slugToOutcomeSymbol outcome is *string; the other slots keep their type', () => {
         const out = print ();
