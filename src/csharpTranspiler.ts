@@ -7022,6 +7022,10 @@ export class CSharpTranspiler extends BaseTranspiler {
             && ((inner.expression as any)?.name?.text === 'parseToInt') && this.csharpCalleeResolves(inner) && this.csharpParseToIntBindsTypedTwin(inner)) {
             return { kind: 'Int64', node: inner, literal: false, zero: false, small: false };
         }
+        // `<Precise>.decimals`: the hand-written field is declared `Int64` (Exchange.Precise.cs)
+        if (!negative && this.csharpIsPreciseDecimalsRead(inner) && this.csharpOperandIsPlainNumber(inner)) {
+            return { kind: 'Int64', node: inner, literal: false, zero: false, small: false };
+        }
         if (negative || !isIdentifier(inner)) {
             return undefined;
         }
@@ -7035,6 +7039,14 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         return { kind, node: inner, literal: false, zero: false, small: false };
+    }
+
+    csharpIsPreciseDecimalsRead(node): boolean {
+        if (!isPropertyAccessExpression(node) || (node.name?.text !== 'decimals')) {
+            return false;
+        }
+        const type: any = this.checkerOrUndefined()?.getTypeAtLocation(node.expression);
+        return (type?.getSymbol?.()?.escapedName === 'Precise') && ((type.flags & TypeFlags.Union) === 0);
     }
 
     // `a % b` over Int64 / Int64? / literal operands (not two literals, divisor not 0 or a small positive literal):
