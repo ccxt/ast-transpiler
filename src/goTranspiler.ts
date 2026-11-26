@@ -16036,10 +16036,34 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goNilInitStrLiteralWriteOk(writes: any[], write): boolean {
         const right = this.goUnwrapParenthesizedNode(write.right);
         if ((right?.kind !== SyntaxKind.StringLiteral) || (this.goStringValueLocalName(write) === undefined)) { return false; }
+        // a declared `Str` local written only with literals: each literal is kept in its own typed local too
+        // (never handed to a method of its own class, whose body may give the pointer back, and never a `+` operand)
+        if (writes.every((w) => this.goUnwrapParenthesizedNode(w.right)?.kind === SyntaxKind.StringLiteral)) {
+            const declaration: any = this.goValueDecl(write.left);
+            // the plain `string` literal join wins wherever it applies
+            if ((declaration === undefined) || new GoNilDeclaredAssignmentScan(this, declaration, declaration.name.text).run()) { return false; }
+            return !this.goNilInitStrOwnClassArgument(write.left) && !this.goNilInitStrConcatOperand(write.left);
+        }
         return writes.some((w) => {
             const r = this.goUnwrapParenthesizedNode(w.right);
             return (r?.kind === SyntaxKind.CallExpression) && (this.goTypeOfInitializer(r, this.printNode(r, 0)) === '*string');
         });
+    }
+
+    // `ident` is an argument of a `this.m (..)` whose declaration sits in the class that reads it
+    goNilInitStrOwnClassArgument(ident): boolean {
+        const scope = this.goEnclosingFunction(ident);
+        const own = scope?.parent;
+        return (scope !== undefined) && this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.CallExpression) && (n.expression?.kind === SyntaxKind.PropertyAccessExpression)
+            && (n.expression.expression?.kind === SyntaxKind.ThisKeyword) && n.arguments.some((a: any) => (a.kind === SyntaxKind.Identifier) && (a.text === ident.text))
+            && (this.goValueDecl(n.expression)?.parent === own));
+    }
+
+    // `ident` is an operand of a `+` in its function
+    goNilInitStrConcatOperand(ident): boolean {
+        const scope = this.goEnclosingFunction(ident);
+        return (scope !== undefined) && this.hasNodeWhere(scope, (n: any) => (n.kind === SyntaxKind.BinaryExpression) && (n.operatorToken?.kind === SyntaxKind.PlusToken)
+            && [ n.left, n.right ].some((o: any) => (this.goUnwrapParenthesizedNode(o)?.kind === SyntaxKind.Identifier) && (this.goUnwrapParenthesizedNode(o).text === ident.text)));
     }
 
     goNilInitStrDeclaredReadOk(n): boolean {
