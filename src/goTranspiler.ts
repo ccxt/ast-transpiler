@@ -15104,9 +15104,10 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     // `c[k].(map[string]any)` when c is a typed dict local and k a key that is never nil:
     // the comma-ok read answers nil for a missing key or a non-map value, as SafeDictMap / SafeMapTyped do
-    goCommaOkMapRead(container, key): string | undefined {
+    goCommaOkMapRead(container, key, unboxed = false): string | undefined {
         const c: any = this.goUnwrapParenthesizedNode(container);
-        const local = (c?.kind === SyntaxKind.Identifier) && (this.goSymbolValueDecl(c)?.kind === SyntaxKind.VariableDeclaration) && (this.goSafeDictMapLocal(this.goSymbolValueDecl(c)) === GO_SAFE_DICT_LOCAL_TYPE);
+        const local = (c?.kind === SyntaxKind.Identifier) && (this.goSymbolValueDecl(c)?.kind === SyntaxKind.VariableDeclaration) && ((this.goSafeDictMapLocal(this.goSymbolValueDecl(c)) === GO_SAFE_DICT_LOCAL_TYPE)
+            || (unboxed && (this.goSafeDictLocalUnbox(this.goSymbolValueDecl(c)) === GO_SAFE_DICT_LOCAL_TYPE)));
         // a base map field of go/v4/exchange.go read with a Go string key
         const field = (c?.kind === SyntaxKind.PropertyAccessExpression) && (c.expression?.kind === SyntaxKind.ThisKeyword) && isBaseExchange(c)
             && H26G14_BASE_MAP_FIELDS.includes(this.transformPropertyAccessExpressionName(c.name.text, c.name)) && (key?.kind === SyntaxKind.Identifier) && ((this.goDeclaredTypeOfIdentifier(key) ?? ((this.goSymbolValueDecl(key)?.kind === SyntaxKind.Parameter) ? this.goNativeParameterType(this.goSymbolValueDecl(key)) : undefined)) === 'string');
@@ -42839,4 +42840,17 @@ goChainOr('h27g21StoreValueIsPlain', function (valueNode) {
     const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
     return (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0) && goIsThisCall(init)
         && (init.expression.name?.text === 'extend') && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
+});
+// `const x = this.safeDict (C, K, {})` declared map[string]any where goCommaOkMapRead proves C and K: the comma-ok read
+// plus the `{}` fill (missing key, nil or a non-map member answer a fresh empty map, as the defaulted reader does)
+goChainRewrite('printVariableDeclarationList', function (printed: any, node) {
+    const decl: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    const found = (typeof printed === 'string') ? this.goSafeDictCallArgs(decl?.initializer) : undefined;
+    if ((found === undefined) || (found.family !== 'SafeDict') || (found.fallback?.kind !== SyntaxKind.ObjectLiteralExpression)
+        || (found.fallback.properties.length !== 0) || (decl.name?.kind !== SyntaxKind.Identifier)) { return printed; }
+    const m = /^(\n*)(\t*)var (\w+) map\[string\]any = (?:this\.SafeDictMap\(|MapTyped\(this\.SafeDict\()(.*), map\[string\]any\{\}\)\)?$/.exec(printed);
+    const read = (m !== null) && (m[3] === decl.name.text) ? this.goCommaOkMapRead(found.call.arguments[0], found.call.arguments[1], true) : undefined;
+    if (read === undefined) { return printed; }
+    const ind = m[2];
+    return `${m[1]}${ind}var ${m[3]}, _ = ${read}\n${ind}if ${m[3]} == nil {\n${ind}\t${m[3]} = map[string]any{}\n${ind}}`;
 });
