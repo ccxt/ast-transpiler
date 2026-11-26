@@ -2439,7 +2439,8 @@ export class RustTranspiler extends BaseTranspiler {
             const rhs: any = this.rustSkipWrappers(right);
             const self = isCallExpression(rhs) && this.rustHandedSelfOmit(rhs, this.rustHandedRewriteOf(left));
             const target = super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text);
-            const value = self ? `self.omit(Value::Dict(${target}), ${this.printNode(rhs.arguments[1], 0).trim()}, &[])` : this.printNode(right, 0).trim();
+            if (this.rustHandedSlotIdentifier(rhs) && this.rustLocalLastUse(rhs, this.rustDeclaredNode(rhs))) return `${target} = \u0004${super.transformIdentifier(rhs, this.ReservedKeywordsReplacements[rhs.text] ?? rhs.text)}`;
+            const value = self ? `self.omit(\u0004${target}, ${this.printNode(rhs.arguments[1], 0).trim()}, &[])` : this.printNode(right, 0).trim();
             return `${target} = ${value}.into_dict()`;
         }
         if (isAssign && this.rustNilSlotDictOf(left) !== undefined) return `${super.transformIdentifier(left, this.ReservedKeywordsReplacements[left.text] ?? left.text)} = ${this.printNode(right, 0).trim()}.into_dict()`;
@@ -36155,6 +36156,8 @@ export class RustTranspiler extends BaseTranspiler {
         const up: any = n.parent;
         if (!isBinaryExpression(up) || up.left !== n || up.operatorToken.kind !== SyntaxKind.EqualsToken || up.parent?.kind !== SyntaxKind.ExpressionStatement) return false;
         const rhs: any = this.rustSkipWrappers(up.right);
+        // a handed params slot (`[ v, p ] = this.handle*AndParams (x, ..)`) already holds the map: it moves in
+        if (rhs !== undefined && this.rustHandedSlotIdentifier(rhs) && this.rustLocalLastUse(rhs, this.rustDeclaredNode(rhs))) return true;
         if (rhs === undefined || !isCallExpression(rhs) || String(up.getText()).split('\n')[0].length > 240) return false;
         if (this.rustBaseCallNamed(rhs, RustTranspiler.RUST_ALWAYS_MAP_HELPERS)) return true;
         return (this.rustHandedSelfOmit(rhs, declaration) || this.rustOmitOfDict(rhs)) && this.rustOmitLineFits(rhs);

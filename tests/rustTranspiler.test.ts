@@ -9263,7 +9263,7 @@ describe('ral-ra: omit / extend remainder', () => {
     test('a reassigned omit of a proven map stays crate::value::Dict; its self-omit moves the map through the call', () => {
         const b = body('rewritten');
         expect(b).toMatch(/let mut rest: crate::value::Dict = self\.omit\(/);
-        expect(b).toContain('rest = self.omit(Value::Dict(rest), &["b", "c"], &[]).into_dict();');
+        expect(b).toContain('rest = self.omit(rest, &["b", "c"], &[]).into_dict();');
     });
     test('a reassigned omit of an unproven params value keeps the box', () => {
         expect(body('opaqueRewritten')).toMatch(/let mut rest: Value = self\.omit\(params/);
