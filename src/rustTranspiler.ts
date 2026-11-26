@@ -3848,6 +3848,7 @@ export class RustTranspiler extends BaseTranspiler {
     rustScalarSolveScope(scope): void {
         // ral-54s: a typed `let x: Num;` with no initializer starts as `undefined` too, so it joins the solve like `let x = undefined`
         const candidates = (this.rustScopeIndex(scope).nodes as any[]).filter((n) => ((isVariableDeclaration(n) && isIdentifier(n.name) && (this.rustScalarInitShape(n.initializer) || this.rustBareTypedLet(n))) || (isBindingElement(n) && this.rustSlotJoinsSolve(n))) && this.rustEnclosingFunction(n) === scope);
+        const outerSeeding = this.rustScalarSeeding;
         this.rustScalarSolving.add(scope);
         try {
             // the other typed-local rules decide first and cache, so they never see a trial kind
@@ -3873,6 +3874,7 @@ export class RustTranspiler extends BaseTranspiler {
             }
             for (const n of candidates) this.rustScalarDecisions.set(n, null);
         } finally {
+            this.rustScalarSeeding = outerSeeding;
             this.rustScalarSolving.delete(scope);
             this.rustScalarSolved.add(scope);
         }
