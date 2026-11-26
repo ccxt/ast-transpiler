@@ -648,6 +648,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h29J04ContainerUseOk(node: any): boolean;
     h29J04RowLocal(declaration: any): boolean;
     h29J04SeedGuard(guard: any, containerName: string, keyName: string): boolean;
+    h53J40ContainerRowRead(expression: any): boolean;
+    h53J40RowKeyRead(baseExpr: any, keys: any, rowText: string): string | undefined;
+    h53J40RowText(expression: any): string | undefined;
     h29J04RowMapDeclaration(declaration: any, indent: string): string | undefined;
     h29J06Lists: WeakMap<any, string>;
     h29J06Busy: boolean;

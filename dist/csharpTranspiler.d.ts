@@ -472,6 +472,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         small: boolean;
         literalKind?: string;
     } | undefined;
+    csharpIsPreciseDecimalsRead(node: any): boolean;
     csharpNativeIntegralMod(node: any, leftText: string, rightText: string): string | undefined;
     csharpNativeIntegralMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpIntegralMinMaxOperand(node: any): any;

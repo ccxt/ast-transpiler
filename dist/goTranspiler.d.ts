@@ -1041,6 +1041,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilInitStrGuardedBalanceKey(n: any): boolean;
     goNilInitStrLeftOperandIsRead(parent: any): boolean;
     goNilInitStrLiteralWriteOk(writes: any[], write: any): boolean;
+    goNilInitStrOwnClassArgument(ident: any): boolean;
+    goNilInitStrConcatOperand(ident: any): boolean;
     goNilInitStrDeclaredReadOk(n: any): boolean;
     goNilInitStrLiteralTernaryArmRead(current: any, parent: any): boolean;
     goNilInitStrBalanceKeyRead(n: any, parent: any, current: any): boolean;
@@ -2029,6 +2031,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     h26g53ConstComparisonLocal(arg: any, checker: any): any;
     h26g53ComparisonExpression(expr: any): any;
     h26g55GuardedSlice(node: any, receiverText: any, goType: any): string;
+    h54g42ReboundInGuard(node: any, receiver: any): boolean;
+    h54g42Contains(outer: any, inner: any): boolean;
     h26g55GuardConjuncts(node: any): any[];
     h26g55LiteralInt(node: any): any;
     h26g55IsLengthOf(node: any, name: any): boolean;

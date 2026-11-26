@@ -4239,6 +4239,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustSelfDefaultedRead(call: Node, kind: 'dict' | 'list' | 'api'): boolean;
     /** A base `safeDict*` / `safeList*` call (default absent, nullish or an empty literal of its kind), or a base `extend`/`omit`. */
     rustOptContainerSourceOk(call: any, kind: 'dict' | 'list' | 'api'): boolean;
+    /** A `const` local seeded by an array literal: a list on every path, so a `safeList` read defaulted to it is a list. */
+    rustConstListLiteralLocal(node: any): boolean;
     /** The optional form's local behind an identifier, else undefined. */
     rustOptContainerOf(node: any): {
         declaration: any;
@@ -4507,7 +4509,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-64i: `this.arraySlice (..)` of the base tier (no venue redeclares it), outside the test tier. */
     rust64iBaseSliceInit(init: any): boolean;
     /** A base `safeList*` read with an empty `[]` default: a list on every path. */
-    rustDefaultedListRead(init: any): boolean;
+    rustDefaultedListRead(init: any, constLocalDefault?: boolean): boolean;
     /** ral-87rd R1: some statement `name.push (v)` on this very binding inside its own function, and no other binding of the same
      *  name in that function (ccxt build/'s container-op prover reads the function text by name: a typed sibling `let` would make it
      *  drop a native `len()` it proves for the other, still boxed, binding). */
@@ -5448,6 +5450,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `const [ a, b ] = await Promise.all ([ x, y ])` where every operand is a once-read local printed as a map: `promise_all`
      *  hands each operand back as it came, so each slot takes its operand's map (a `Value` slot boxes it). */
     printPromiseAllDictLocals(declaration: any, names: string[], indent: string): string | undefined;
+    /** `const [ a, b ] = await Promise.all ([ x, y ])` where every operand is a once-read local printed as a list: `promise_all`
+     *  hands each operand back as it came, so a list slot takes its operand's list (any other slot boxes it). */
+    printPromiseAllListLocals(declaration: any, names: string[], indent: string): string | undefined;
     /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */
     printPromiseAllListSlot(element: any, printedName: string, read: string, indent: string): string | undefined;
     rustDeclaredDictSlot(element: any): boolean;
