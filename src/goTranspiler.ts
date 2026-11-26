@@ -41245,7 +41245,21 @@ function h38h01JsonMemberRead (goTranspiler: GoTranspiler, declaration): boolean
     return (container?.kind === SyntaxKind.Identifier) && (key?.kind === SyntaxKind.StringLiteral) && /^[A-Za-z0-9_]+$/.test (key.text)
         && (declaration.initializer.expression.name.text === 'safeList')
         && (h38h01AwaitedMapReceiver (goTranspiler, container) || ((goTranspiler.goResolvedLocalGoType (container) === GO_SAFE_DICT_LOCAL_TYPE)
-            && (goTranspiler.h27a02JsonOrigin (container, 0) || goTranspiler.h27a02JsonOriginBeforeRead (container, declaration))));
+            && (goTranspiler.h27a02JsonOrigin (container, 0) || goTranspiler.h27a02JsonOriginBeforeRead (container, declaration)
+                || h55g30JsonDictParam (goTranspiler, container))));
+}
+// a read-only `Dict` parameter every same-file caller fills inline with `this.safeDict (R, 'k', {})`, R decoded JSON
+function h55g30JsonDictParam (goTranspiler: GoTranspiler, container): boolean {
+    return goTranspiler.goReadOnlyParamCallers (container, (fn, param) => goTranspiler.h28a01ParamReadOnly (fn, param), (arg) => {
+        const args: any = goTranspiler.goSafeAccessorLocalArgs (arg, 'safeDict');
+        if ((args?.key?.kind !== SyntaxKind.StringLiteral) || (args.container?.kind !== SyntaxKind.Identifier)) { return false; }
+        if (goTranspiler.h27a02JsonOrigin (args.container, 1)) { return true; }
+        // an awaited endpoint answer of any JSON kind: safeDict hands on its map member or the fresh `{}`
+        const seed: any = goTranspiler.goJsonOriginSeedDecl (args.container, 1, false, true, false, (c, d) => goTranspiler.h27a02JsonOrigin (c, d));
+        return (goTranspiler.goUnwrapParenthesizedNode (seed?.initializer)?.kind === SyntaxKind.AwaitExpression)
+            && goTranspiler.goJsonOriginBindingIsReadOnly (seed, (n, name) => goTranspiler.goJsonOriginUseIsReadOnly (n, name) || goTranspiler.h27a09SafeReaderArg (n, name)
+                || (!goTranspiler.goWritesOrRebindsName (n, name, []) && goTranspiler.h27a02ScalarReaderUse (n)));
+    });
 }
 // `xs = []` as a statement: the write is itself a []any
 function h38h01EmptyListWrite (node): boolean {
@@ -41284,6 +41298,22 @@ function h38h01DefaultedListLocalUncached (goTranspiler: GoTranspiler, declarati
         return `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${key.text}"].([]any)\n${iden}if ${name} == nil {\n${this.getIden (identation + 1)}${name} = []any{}\n${iden}}`;
     });
 }
+// the same member read where another list rule already typed the local (`SafeListTyped`): the JSON-filled parameter receiver
+goChainRewrite('printVariableDeclarationList', function (printed: any, node, identation) {
+    const declaration: any = (node?.declarations?.length === 1) ? node.declarations[0] : undefined;
+    if ((typeof printed !== 'string') || (declaration?.name?.kind !== SyntaxKind.Identifier) || (declaration.type !== undefined)
+        || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) || !h24n04EmptyDefaultSafeList (declaration.initializer)
+        || (declaration.initializer.expression.name.text !== 'safeList')) { return printed; }
+    const [ container, key ] = declaration.initializer.arguments;
+    if ((container?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral) || !/^[A-Za-z0-9_]+$/.test (key.text)
+        || (this.goResolvedLocalGoType (container) !== GO_SAFE_DICT_LOCAL_TYPE) || !h55g30JsonDictParam (this, container)) { return printed; }
+    const name = this.printNode (declaration.name, 0).trim ();
+    const c = this.printNode (container, 0).trim ();
+    const iden = this.getIden (identation);
+    const lead = /^\n*/.exec (printed)[0];
+    if (printed.substring (lead.length) !== `${iden}var ${name} []any = SafeListTyped(${c}, "${key.text}")`) { return printed; }
+    return `${lead}${iden}var ${name} []any\n${iden}${name}, _ = ${c}["${key.text}"].([]any)\n${iden}if ${name} == nil {\n${this.getIden (identation + 1)}${name} = []any{}\n${iden}}`;
+});
 
 // a slice-table slot naming the book side interface (`handleDelta (bookside, ..)`): every caller hands a side read
 // (`book['asks']`) or the forwarded side parameter, and the Go compiler checks each one against the interface
@@ -42669,4 +42699,44 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node) {
     const m = /^(\n*)(\t*)var (\w+) map\[string\]any = (?:this\.SafeDictMap|(?:ccxt\.)?SafeMapTyped)\((.*)\)$/.exec(printed);
     const read = (m !== null) && (m[3] === decl.name.text) ? this.goCommaOkMapRead(found.call.arguments[0], found.call.arguments[1]) : undefined;
     return (read === undefined) ? printed : `${m[1]}${m[2]}var ${m[3]}, _ = ${read}`;
+});
+// `xs[n - 1] = v` / `xs[0] = v` under the slice's own length guard (h27g21), n a const `xs.length` (always a Go int): a
+// list use, since the native store keeps every answer AddElementToObject gave, so the store no longer boxes the local
+function h54g30GuardedIndex (go: GoTranspiler, list, keyNode): boolean {
+    const key: any = go.goUnwrapParenthesizedNode (keyNode);
+    if ((key?.kind === SyntaxKind.NumericLiteral) && (key.text === '0')) { return go.h27g21LengthGuarded (list, list, undefined); }
+    const symbol = go.checkerOrUndefined ()?.getSymbolAtLocation (list);
+    return (symbol !== undefined) && (key?.kind === SyntaxKind.BinaryExpression) && (key.operatorToken.kind === SyntaxKind.MinusToken)
+        && (key.right.kind === SyntaxKind.NumericLiteral) && (key.right.text === '1') && (key.left.kind === SyntaxKind.Identifier)
+        && go.h27g21IsLengthOf (key.left, symbol) && go.h27g21LengthGuarded (list, list, key.left);
+}
+function h54g30GuardedStore (go: GoTranspiler, node): boolean {
+    const access: any = node?.parent;
+    return (access?.kind === SyntaxKind.ElementAccessExpression) && (access.expression === node) && go.isGoElementAccessAssignmentTarget(access)
+        && (access.parent.operatorToken.kind === SyntaxKind.EqualsToken) && go.h27g21SliceKeepsLength(node)
+        && h54g30GuardedIndex(go, node, access.argumentExpression);
+}
+// such a local returned whole (into a `List` return, Go `any` / `[]any`) hands on the very []any the box held
+goChainOr('goSafeListUseReadsTheList', function (node) {
+    if (h54g30GuardedStore(this, node)) { return true; }
+    const fn: any = (node?.parent?.kind === SyntaxKind.ReturnStatement) ? this.goEnclosingFunction(node) : undefined;
+    const decl: any = (fn !== undefined) ? this.goDeclarationOfIdentifier(node) : undefined;
+    return (decl?.kind === SyntaxKind.VariableDeclaration) && [ 'List', 'any[]' ].includes(String(fn.type?.getText?.() ?? ''))
+        && this.goScopeIdents(fn, node.text).some((n: any) => (this.goDeclarationOfIdentifier(n) === decl) && h54g30GuardedStore(this, n));
+});
+// a read `xs[k]` of such a local under the same in-range proof is the plain index (no bounds closure)
+goChainPre('goNativeListElementRead', function (node, containerStr: string, keyNode, keyStr: string) {
+    const list: any = node?.expression;
+    if ((list?.kind !== SyntaxKind.Identifier) || containerStr.includes('\n') || keyStr.includes('\n') || this.isGoElementAccessAssignmentTarget(node)
+        || (this.goDeclaredTypeOfIdentifier(list) !== GO_SAFE_LIST_LOCAL_TYPE) || !this.h27g21SliceKeepsLength(list)
+        || !h54g30GuardedIndex(this, list, keyNode)) { return undefined; }
+    return (this.goListElementsArePointerFree(list) || goElementReadHasDerefConsumer(this, node, keyNode)) ? `${containerStr}[${keyStr}]` : undefined;
+});
+// a never-rebound const local seeded by `this.extend (..)` is a fresh non-nil map: the store keeps it as AddElementToObject did
+goChainOr('h27g21StoreValueIsPlain', function (valueNode) {
+    const value: any = this.goUnwrapParenthesizedNode(valueNode);
+    const decl: any = (value?.kind === SyntaxKind.Identifier) ? this.goDeclarationOfIdentifier(value) : undefined;
+    const init: any = this.goUnwrapParenthesizedNode(decl?.initializer);
+    return (decl?.kind === SyntaxKind.VariableDeclaration) && (((decl.parent?.flags ?? 0) & NodeFlags.Const) !== 0) && goIsThisCall(init)
+        && (init.expression.name?.text === 'extend') && !this.goLocalIsRebound(this.goEnclosingFunction(decl), decl.name);
 });
