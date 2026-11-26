@@ -10752,12 +10752,16 @@ function goDictParamSiblingSiteProven (go: any, tree: any, name: string, site: a
     const arg: any = call?.arguments?.[index];
     if ((arg === undefined) || (arg.kind === SK.SpreadElement)) { return false; }
     const saved = go.context;
+    // the venue file prints its own calls plainly: the base stage's virtual-call wrapping must not reach its proof
+    const savedWrap = go.wrapCallMethods;
+    go.wrapCallMethods = [];
     go.setContext ({ src, 'checker': entry.batch['checker'], program });
     try {
         if (h30a18MapArg (go, name, call, arg) || h54g49DeclaredMapLocalArg (go, name, arg)) { return true; }
         return (go.goPrintedArgType (arg) === GO_BASE_DICT_PARAM_TYPE) || goDictParamAwaitedMapArg (go, arg) || goDictParamTabledSafeDictArg (go, call, arg) || goDictParamBalanceFieldArg (arg);
     } catch (e) { return false; } finally {
         go.setContext (saved);
+        go.wrapCallMethods = savedWrap;
     }
 }
 
