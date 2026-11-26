@@ -3660,7 +3660,7 @@ export class RustTranspiler extends BaseTranspiler {
     // An empty local written from known scalar sources and only boxed back keeps that type: each box
     // converts once; a string box must move it (return or last use), so no string is copied.
     rustNilScalarHandOff(declaration, scope, kind: string, boxed: any[]): boolean {
-        if (boxed.length === 0 || this.rustStrReturnedLocal(declaration, scope)) return false;
+        if (boxed.length === 0 || (this.rustStrReturnedLocal(declaration, scope) && !this.rustBaseValueReturnHandOff(scope))) return false;
         // a string read anywhere but a moving box, or any local written from another local, would copy (or retype that local)
         let ok = true;
         let unmoved = false;
@@ -3698,6 +3698,11 @@ export class RustTranspiler extends BaseTranspiler {
 
     private rustNilStrLentLocals = new WeakSet<any>();
 
+    /** A base-tier method that keeps `-> Value`: its `return x` boxes the string once and moves it (no signature to flip). */
+    rustBaseValueReturnHandOff(scope: any): boolean {
+        return RustTranspiler.RUST_BASE_TIER_FILE.test(String(scope?.getSourceFile?.()?.fileName ?? '')) && this.rustNativeStrReturnKind(scope) !== 'str';
+    }
+
     /** ral-ld: `m[k] = x` / `m.k = x` as a statement on a plain identifier receiver (not `x` itself), one level deep. */
     rustNilStrStoreBox(n: any): boolean {
         const up: any = n.parent;
@@ -3720,7 +3725,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind !== 'ostr' && kind !== 'oint' && kind !== 'onum') return false;
         const source: any = this.rustDeclarationOfIdentifier(rhs);
         if (source === undefined || !isVariableDeclaration(source) || source.name === rhs || this.rustScalarIdentifierKind(rhs) !== kind) return false;
-        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(rhs) || !this.rustLocalLastUse(rhs, source)) return false;
+        if (this.rustEnclosingFunction(source) !== this.rustEnclosingFunction(rhs) || !this.rustLocalLastUse(rhs, source, true)) return false;
         this.rustNilAliasMoves.add(rhs);
         return true;
     }
@@ -9980,7 +9985,7 @@ export class RustTranspiler extends BaseTranspiler {
         return !jumps;
     }
 
-    rustLocalLastUse(node, declaration): boolean {
+    rustLocalLastUse(node, declaration, skipOtherBranch = false): boolean {
         let statement: any = node;
         while (statement.parent !== undefined && !isStatement(statement)) statement = statement.parent;
         // every name node in the function counts unless the checker binds it to another symbol
@@ -9993,6 +9998,7 @@ export class RustTranspiler extends BaseTranspiler {
             if (n === (scope as any).name && (scope as any).kind === SyntaxKind.MethodDeclaration) continue;
             const symbol = this.rustSymbolOf(n);
             if (symbol !== undefined && symbol !== own) continue;
+            if (skipOtherBranch && this.rustInOtherIfBranch(node, n)) continue;
             if (n.pos > node.pos || (n.pos >= statement.pos && n.end <= statement.end)) return false;
         }
         for (let up: any = node.parent; up !== undefined && !(up.pos <= declaration.pos && declaration.end <= up.end); up = up.parent) {
@@ -10000,6 +10006,19 @@ export class RustTranspiler extends BaseTranspiler {
                 || up.kind === SyntaxKind.WhileStatement || up.kind === SyntaxKind.DoStatement) return false;
         }
         return true;
+    }
+
+    /** `node` sits in one arm of an `if` and `other` in its other arm, with no loop or function between them and that `if`. */
+    rustInOtherIfBranch(node: any, other: any): boolean {
+        for (let up: any = node.parent; up !== undefined && !isFunctionLike(up); up = up.parent) {
+            const k = up.kind;
+            if (k === SyntaxKind.ForStatement || k === SyntaxKind.ForOfStatement || k === SyntaxKind.ForInStatement || k === SyntaxKind.WhileStatement || k === SyntaxKind.DoStatement) return false;
+            if (k !== SyntaxKind.IfStatement || up.elseStatement === undefined) continue;
+            const inThen = (x: any) => x.pos >= up.thenStatement.pos && x.end <= up.thenStatement.end;
+            const inElse = (x: any) => x.pos >= up.elseStatement.pos && x.end <= up.elseStatement.end;
+            if ((inThen(node) && inElse(other)) || (inElse(node) && inThen(other))) return true;
+        }
+        return false;
     }
 
     // ── ws keys and hashes (rustWsSettleCall / rustWsKeyUse / rustWsKeyText / printWsSettleCall) ──
