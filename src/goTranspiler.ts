@@ -30918,6 +30918,7 @@ export interface GoTranspiler {
     goTypedMapDictRead(args, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
     h27a08RowRead(declaration, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
     h52g58AssignRowRead(node, identation: number, printed: string): string | undefined;
+    h53g58AssignKeyRead(node, identation: number, printed: string): string | undefined;
     h27a08JsonList(list): boolean;
     h27a09JsonOriginList(baseExpr): boolean;
     h27a11FrameParam(param): boolean;
@@ -42478,6 +42479,31 @@ GoTranspiler.prototype.h52g58AssignRowRead = function (node, identation: number,
     return `${lead}${iden}${name} = nil\n${iden}if ${k} < len(${xs}) {\n${in1}${name}, _ = ${xs}[${k}].(map[string]any)\n${iden}}\n${iden}if ${name} == nil {\n${in1}${name} = map[string]any{}\n${iden}}`;
 };
 goChainReadHook('printExpressionStatement', 'h52g58AssignRowRead', [0, 1, -1]);
+// `m = this.safeDict (R, 'k'[, {}])` into a map local, R a decoded JSON map (the h27a01 declaration proof): the comma-ok
+// key read; a missing or non-map value answers nil, or the fresh empty map of a `{}` default
+GoTranspiler.prototype.h53g58AssignKeyRead = function (node, identation: number, printed: string) {
+    const e: any = node?.expression;
+    if ((typeof printed !== 'string') || (e?.kind !== SyntaxKind.BinaryExpression) || (e.operatorToken.kind !== SyntaxKind.EqualsToken) || (e.left?.kind !== SyntaxKind.Identifier)) { return undefined; }
+    const args: any = this.goSafeAccessorLocalArgs(goUnwrapTypeNonNull(e.right), 'safeDict');
+    const map: any = args?.container;
+    if ((map?.kind !== SyntaxKind.Identifier) || (args.key?.kind !== SyntaxKind.StringLiteral) || (map.text === e.left.text)
+        || (this.h27a01ReceiverType(map) !== GO_SAFE_DICT_LOCAL_TYPE) || !this.goJsonOriginContainer(map)) { return undefined; }
+    if ((this.goResolvedLocalGoType(e.left) !== GO_SAFE_DICT_LOCAL_TYPE) && (ccxtGoNilJoinDeclarationType(this, e.left) !== GO_SAFE_DICT_LOCAL_TYPE)) { return undefined; }
+    const name = this.printNode(e.left, 0).trim();
+    const m = this.printNode(map, 0).trim();
+    const key = this.printNode(args.key, 0).trim();
+    if (!/^"[^"\\\n]*"$/.test(key)) { return undefined; }
+    const iden = this.getIden(identation);
+    const lead = /^(?:\n|[ \t]*\/\/[^\n]*\n)*/.exec(printed)[0];
+    const body = printed.substring(lead.length).replace(/;?\s*$/, '');
+    const forms = (d: string) => [ `this.SafeDictMap(${m}, ${key}${d})`, `MapTyped(this.SafeDict(${m}, ${key}${d}))`, `SafeMapTyped(${m}, ${key})` ];
+    const read = `${lead}${iden}${name}, _ = ${m}[${key}].(map[string]any)`;
+    // the printed form decides the answer: a dropped default (SafeMapTyped) already answers nil
+    if (forms('').some((f) => body === `${iden}${name} = ${f}`)) { return read; }
+    if (!forms(', map[string]any{}').some((f) => body === `${iden}${name} = ${f}`)) { return undefined; }
+    return `${read}\n${iden}if ${name} == nil {\n${this.getIden(identation + 1)}${name} = map[string]any{}\n${iden}}`;
+};
+goChainReadHook('printExpressionStatement', 'h53g58AssignKeyRead', [0, 1, -1]);
 
 // `const row = this.safeDict (xs, i, {})` where xs is a read-only list cut from a proven frame (h28a13FrameList)
 // and row is never written: the row is a decoded JSON map (or the fresh empty default), so it proves as a frame
