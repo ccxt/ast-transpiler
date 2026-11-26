@@ -178,6 +178,6 @@ export default class venue extends Exchange {
         expect (baseCs).toContain ('return this.findNearestCeiling(new List<Int64>() {5, 10, 50}, limit.Value);');
 
         const venueCs = t.transpileCSharpByPath (venueFile).content;
-        expect (venueCs).toContain ('calculatePricePrecision(double midPx, double szDecimals)');
+        expect (venueCs).toContain ('calculatePricePrecision(double midPx, object szDecimals)');
     });
 });

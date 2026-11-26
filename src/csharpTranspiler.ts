@@ -2100,6 +2100,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (proKinds === undefined) { return undefined; }
         if (calls.length === 0) {
             if (nullable || (proKinds.length > 0) || hasHostTable || this.csharpVenueOverriddenMethods.has(method)) { return undefined; }
+            const ordered = this.hasNodeWhere(method.body, (n: any) => isBinaryExpression(n)
+                && [ SyntaxKind.LessThanToken, SyntaxKind.LessThanEqualsToken, SyntaxKind.GreaterThanToken, SyntaxKind.GreaterThanEqualsToken ].includes(n.operatorToken.kind)
+                && ((isIdentifier(n.left) && (n.left.text === parameter.name.text)) || (isIdentifier(n.right) && (n.right.text === parameter.name.text))));
+            if (!ordered) { return undefined; }
             return (parameter.type.getText().trim() === 'int') ? 'Int64' : 'double';
         }
         const kinds = new Set<string>(nullable ? [ 'nullable?', ...proKinds ] : proKinds);
@@ -3383,11 +3387,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (types?.index !== 'int') {
             return undefined; // only an int index binds the List<object> indexer
         }
-        if (((types.receiver !== 'List<object>') && (types.receiver !== 'IList<object>') && (types.receiver !== 'IList<Int64>')) || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression)) return undefined;
+        if (((types.receiver !== 'List<object>') && (types.receiver !== 'IList<object>') && (types.receiver !== 'IList<Int64>')) || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression, types.receiver === 'IList<Int64>')) return undefined;
         return this.printNode(expression, 0) + '[' + this.printNode(argumentExpression, 0) + ']';
     }
     // the read sits in the body of a `for` that re-tests `index < receiver.length`, both resolved to the very symbols the read uses, and nothing in the body can move either
-    csharpIndexIsLoopBounded(read, receiver, index): boolean {
+    csharpIndexIsLoopBounded(read, receiver, index, allowConstLength = false): boolean {
         const receiverSymbol = this.csharpIdentifierSymbol(receiver);
         const indexSymbol = this.csharpIdentifierSymbol(index);
         if (receiverSymbol === undefined || indexSymbol === undefined) { return false; }
@@ -3397,12 +3401,12 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (isFunctionLike(parent)) {
                 return false; // a read under a nested function is not dominated by the condition
             }
-            if (isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol)) { return true; }
+            if (isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol, allowConstLength)) { return true; }
             node = parent;
         }
         return false;
     }
-    csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol): boolean {
+    csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol, allowConstLength = false): boolean {
         if (!this.csharpContains(forStatement.statement, read)) {
             return false; // the read is in the loop header, not the body
         }
@@ -3411,7 +3415,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const length: any = condition.right;
         if (this.csharpIdentifierSymbol(condition.left) !== indexSymbol) { return false; }
         let lengthExpr: any = length;
-        if (isIdentifier(length)) {
+        if (allowConstLength && isIdentifier(length)) {
             const decl: any = this.csharpIdentifierSymbol(length)?.valueDeclaration?.resolve?.();
             if ((decl === undefined) || !isVariableDeclaration(decl) || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0)) { return false; }
             lengthExpr = decl.initializer;
@@ -6614,7 +6618,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             const recv = initializer.expression;
             const arg = initializer.argumentExpression;
             const recvType = isIdentifier(recv) ? (this.csharpTypedLocalType(recv) ?? this.csharpExpressionTypeOf(recv)) : undefined;
-            if ((recvType === 'IList<Int64>') && isIdentifier(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg)) {
+            if ((recvType === 'IList<Int64>') && isIdentifier(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg, true)) {
                 return 'Int64';
             }
             return undefined;
