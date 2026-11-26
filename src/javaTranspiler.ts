@@ -5698,7 +5698,8 @@ export class JavaTranspiler extends BaseTranspiler {
         if (this.javaElementReadClaimed(node)) {
             return undefined;
         }
-        if (!this.javaDeclaredMapReceiver(node.expression) && !this.javaTypedViewReceiver(node.expression)) {
+        if (!this.javaDeclaredMapReceiver(node.expression) && !this.javaTypedViewReceiver(node.expression)
+            && !this.h53J40ContainerRowRead(node.expression)) {
             return undefined;
         }
         const key = node.argumentExpression;
@@ -5716,7 +5717,7 @@ export class JavaTranspiler extends BaseTranspiler {
             || this.getChecker().isArrayType(keyType) || this.getChecker().isTupleType(keyType)) {
             return undefined;
         }
-        const target = this.printNode(node.expression, 0);
+        const target = this.h53J40RowText(node.expression) ?? this.printNode(node.expression, 0);
         const keyText = this.printNode(key, 0);
         if (keyType.getAliasSymbol?.() === undefined && keyType.flags === TypeFlags.String) {
             // a plain `string` key prints a java String; the null test keeps a receiver that
@@ -6886,7 +6887,8 @@ export class JavaTranspiler extends BaseTranspiler {
                         : this.javaWsClientMapReadText(baseExpr, keys[0]));
         let acc = firstRead ?? containerStr;
         for (let i = firstRead === undefined ? 0 : 1; i < keyStrs.length - 1; i++) {
-            acc = `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
+            const h53j40 = i === 1 ? this.h53J40RowKeyRead(baseExpr, keys, acc) : undefined;
+            acc = h53j40 ?? `${this.ELEMENT_ACCESS_WRAPPER_OPEN}${acc}, ${keyStrs[i]}${this.ELEMENT_ACCESS_WRAPPER_CLOSE}`;
         }
 
         const lastKey = keyStrs[keyStrs.length - 1];
@@ -11723,7 +11725,8 @@ export class JavaTranspiler extends BaseTranspiler {
             const callee = parent.expression;
             return isPropertyAccessExpression(callee)
                 && ((isIdentifier(callee.expression) && callee.expression.text === 'Object' && callee.name.text === 'keys')
-                    || (callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeDict'));
+                    || (callee.expression.kind === SyntaxKind.ThisKeyword && callee.name.text === 'safeDict')
+                    || (isIdentifier(callee.expression) && callee.expression.text === 'Object' && callee.name.text === 'values'));
         }
         if (!isElementAccessExpression(parent) || parent.expression !== node) {
             return false;
@@ -11794,6 +11797,35 @@ export class JavaTranspiler extends BaseTranspiler {
             && isElementAccessExpression(write.left) && isIdentifier(write.left.expression) && write.left.expression.text === containerName
             && isIdentifier(write.left.argumentExpression) && write.left.argumentExpression.text === keyName
             && isObjectLiteralExpression(this.unwrapPrintTransparentExpression(write.right));
+    }
+
+    // `c[k]` with c a row container and k a name: prints the guarded `c.get(k)`, a `Map<String, Object>` or null
+    h53J40ContainerRowRead(expression): boolean {
+        const read = this.unwrapParenthesized(expression);
+        if (read === undefined || !isElementAccessExpression(read) || !isIdentifier(read.expression)
+            || !isIdentifier(read.argumentExpression) || !this.javaRepeatableOperand(read.argumentExpression)) {
+            return false;
+        }
+        const container = this.javaDeclarationOfIdentifier(read.expression);
+        return container !== undefined && read.expression.text === container.name?.text && this.h29J04RowContainer(container)
+            && this.printNode(read, 0).trim().endsWith(`.get(${read.argumentExpression.text}))`);
+    }
+
+    // `c[k1][k2] = ..` (deeper chains too): the row `c.get(k1)` is a `Map<String, Object>` or null
+    h53J40RowKeyRead(baseExpr, keys, rowText: string): string | undefined {
+        const key = keys[1];
+        if (!isIdentifier(baseExpr) || !isElementAccessExpression(key?.parent?.expression) || !isIdentifier(key)
+            || !this.javaRepeatableOperand(key) || this.javaKeyPrintsPrimitive(key)
+            || !this.h53J40ContainerRowRead(key.parent.expression)) {
+            return undefined;
+        }
+        return this.javaNullGuardedGet(this.h53J40RowText(key.parent.expression) ?? rowText, this.printNode(key, 0), this.printNode(key, 0));
+    }
+
+    // the row `c.get(k)` of a const row container: c is a fresh HashMap (never null) and its puts take the same key
+    h53J40RowText(expression): string | undefined {
+        const read = this.unwrapParenthesized(expression);
+        return this.h53J40ContainerRowRead(expression) ? `${read.expression.text}.get(${read.argumentExpression.text})` : undefined;
     }
 
     h29J04RowMapDeclaration(declaration, indent: string): string | undefined {
