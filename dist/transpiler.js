@@ -5406,8 +5406,11 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         const customDefaultValue = this.printCustomDefaultValueIfNeeded(initializer);
         const defaultValue2 = customDefaultValue ? customDefaultValue : this.printNode(initializer, 0);
         const baseList = this.csharpBaseListParamDeclarations.has(node);
-        type = defaultValue2 === "null" && type !== "object" && !baseList ? type.endsWith("?") ? type + " " : type + "? " : type + " ";
-        return type + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue2;
+        const printedType = defaultValue2 === "null" && type !== "object" && !baseList && !type.endsWith("?") ? type + "?" : type;
+        if (printedType !== type) {
+          this.csharpParamTypes.set(node, printedType);
+        }
+        return printedType + " " + name + this.SPACE_DEFAULT_PARAM + "=" + this.SPACE_DEFAULT_PARAM + defaultValue2;
       }
       return type + " " + name;
     }
@@ -34584,7 +34587,7 @@ ${iden}}`;
       if (staticType === "float64" || staticType === "const-float" || staticType === "const-int") {
         return printed;
       }
-      if (staticType === "int64" || staticType === "int" || declType === "int64" || declType === "int") {
+      if (staticType === "int64" || staticType === "int" || declType === "int64" || declType === "int" || inner?.kind === SyntaxKind5.BinaryExpression && inner.operatorToken?.kind === SyntaxKind5.PercentToken && !raw.startsWith("Mod(")) {
         return `float64(${raw})`;
       }
       if (declType === "*float64" && this.goPointerNumberIsNonNil(inner)) {
