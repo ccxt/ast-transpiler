@@ -2060,16 +2060,18 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
     // the one numeric kind every call passes at `index` (int widens to Int64), or undefined
     csharpVenueNumberParamKind(method, parameter, index: number, calls: any[]): string | undefined {
-        // an `= undefined` default only on a sync method: async venue methods also pass through the host's signature tables
+        const declared = (parameter.type !== undefined) ? this.getChecker().getTypeFromTypeNode(parameter.type) : undefined;
+        // `Num` / `Int` (number | undefined) and an `= undefined` default print the nullable kind
+        const members = (declared === undefined) ? [] : (declared.isUnionType() ? declared.getTypes() : [ declared ]);
+        // an `= undefined` default on sync methods, or async venue-private methods with nullable TS type (`Int`/`Num`) not in host signature tables
         const sync = !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword);
+        const methodName = isIdentifier(method.name) ? method.name.text : '';
+        const hasHostTable = (this.csharpNumericArgTypes[methodName] !== undefined) || (this.csharpCoreArgTypes[methodName] !== undefined) || (this.csharpSignatureArgTypes[methodName] !== undefined);
         const initializer = parameter.initializer;
-        const undefinedDefault = sync && (initializer !== undefined) && isIdentifier(initializer) && (initializer.text === 'undefined');
+        const undefinedDefault = (sync || ((members.length > 1) && !hasHostTable)) && (initializer !== undefined) && isIdentifier(initializer) && (initializer.text === 'undefined');
         // an integer literal default prints `Int64? <name>`; the `<name> ??= <n>;` prologue keeps the default
         const literalDefault = sync && (initializer !== undefined) && isNumericLiteral(initializer) && /^\d{1,9}$/.test(initializer.text);
         if ((parameter.dotDotDotToken !== undefined) || (parameter.questionToken !== undefined) || ((initializer !== undefined) && !undefinedDefault && !literalDefault) || (parameter.type === undefined) || !isIdentifier(parameter.name)) return undefined;
-        const declared = this.getChecker().getTypeFromTypeNode(parameter.type);
-        // `Num` (number | undefined) and an `= undefined` default print the nullable kind
-        const members = (declared === undefined) ? [] : (declared.isUnionType() ? declared.getTypes() : [ declared ]);
         const numbers = members.filter((m) => m.flags === TypeFlags.Number).length;
         if ((numbers !== 1) || members.some((m) => (m.flags !== TypeFlags.Number) && ((m.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0)) || this.csharpNameIsRebound(parameter, method)) { return undefined; }
         const nullable = undefinedDefault || literalDefault || (members.length > 1);
@@ -2083,7 +2085,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
                 continue; // omitted: the default null
             }
-            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument)
+            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument, nullable)
                 ?? this.csharpNonNullIntegerSumArgument(argument));
             const kind = this.csharpArithmeticOperandKind(type);
             if ((kind === undefined) || (call.arguments.length > method.parameters.length)) { return undefined; }
@@ -2296,13 +2298,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         scan(caller.body);
         return written ? undefined : printed;
     }
-    // a parameter (or its negation) the core table prints a non-null `double` / `Int64` and the body never writes
-    csharpCoreTypedNumberArgument(argument): string | undefined {
+    // a parameter (or its negation) the core table prints numeric (`double`/`Int64`, or nullable when the target slot is nullable)
+    csharpCoreTypedNumberArgument(argument, allowNullable = false): string | undefined {
         let value = this.csharpUnparenthesized(argument);
-        if (isPrefixUnaryExpression(value) && (value.operator === SyntaxKind.MinusToken)) { value = this.csharpUnparenthesized(value.operand); }
+        const negated = isPrefixUnaryExpression(value) && (value.operator === SyntaxKind.MinusToken);
+        if (negated) { value = this.csharpUnparenthesized(value.operand); }
         if (!isIdentifier(value) || (this.csharpReceiverBinding(value)?.kind !== SyntaxKind.Parameter)) { return undefined; }
         const printed = this.csharpCallSiteDeclaredType(value, value.text);
-        return ((printed === 'double') || (printed === 'Int64')) ? printed : undefined;
+        if ((printed === 'double') || (printed === 'Int64')) { return printed; }
+        return (allowNullable && !negated && ((printed === 'double?') || (printed === 'Int64?'))) ? printed : undefined;
     }
     // a bare parameter of the calling method whose printed signature the host layer types numeric (the narrowed core arguments, e.g. createOrder's `double amount` / `double? price`)
     csharpTypedParameterArgument(argument): string | undefined {

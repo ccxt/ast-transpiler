@@ -3109,12 +3109,23 @@ export class RustTranspiler extends BaseTranspiler {
         if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.StaticKeyword)) { return false; }
         // The base tier and every base override keep the fixed `Value` ABI that the hand-written trait declares.
         const baseFile = RustTranspiler.RUST_BASE_TIER_FILE;
-        if (baseFile.test(param.getSourceFile().fileName)) { return false; }
+        const listed = this.rustBaseBoolParamMethod(method);
+        if (baseFile.test(param.getSourceFile().fileName) && !listed) { return false; }
         const hidden: any = this.getMethodOverride(method);
         if (hidden !== undefined && baseFile.test(hidden.getSourceFile().fileName) || !this.rustTypeIsBoolean(param.name)) return false;
         // A method reference handed to `this.spawn(...)` / `.bind` keeps the function-pointer shape, so the whole method stays boxed.
         if (this.rustMethodReferencedAsValue(method)) { return false; }
-        return this.rustLocalUsesAll(param, param.name.text, true, (n) => this.rustBoolParamUseAccepted(n));
+        return this.rustLocalUsesAll(param, param.name.text, true, (n) => this.rustBoolParamUseAccepted(n)
+            || (listed && this.rustClimbLogicalWrappers(n) !== n && (this.rustConditionBoolSlot(n) || isVariableDeclaration(this.rustClimbLogicalWrappers(n).parent)))
+            || (listed && this.rustBoolParamLiteralTest(n)));
+    }
+    /** `x === true|false` / `x !== true|false` on a native `bool` parameter, read as a condition: the same truth test. */
+    rustBoolParamLiteralTest(n: any): boolean {
+        const parent: any = n.parent;
+        if (!isBinaryExpression(parent) || parent.left !== n) return false;
+        const op = parent.operatorToken.kind;
+        if (op !== SyntaxKind.EqualsEqualsEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return false;
+        return this.literalKindOfNode(this.unwrapParens(parent.right)) === 'boolean' && this.rustIdentifierUseIsCondition(parent);
     }
     /** True when `this.<name>` is read as a value (not called) in the method's own file. */
     rustMethodReferencedAsValue(method): boolean {
@@ -3360,8 +3371,20 @@ export class RustTranspiler extends BaseTranspiler {
         const printed = this.printNode(node, identation).trim();
         const peeled = this.peelValueBoolBox(this.stripOuterParens(printed));
         if (peeled !== undefined) { return `(${peeled})`; }
+        // a comparison the printer left unboxed is already a Rust `bool`
+        const bare: any = this.unwrapParens(node) ?? node;
+        if (isBinaryExpression(bare) && RustTranspiler.COMPARISON_OPS.has(bare.operatorToken.kind) && !printed.startsWith('Value::')) {
+            return `(${this.stripOuterParens(printed)})`;
+        }
         // A plain path reads without the wrapping parens.
         return /^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$/.test(printed) ? `${printed}.is_truthy()` : `(${printed}).is_truthy()`;
+    }
+    /** `n` is a whole argument of a call whose parameter at that place is a required native `bool`. */
+    rustBoolArgOfNativeSlot(n): boolean {
+        const call: any = n?.parent;
+        if (call === undefined || !isCallExpression(call)) return false;
+        const at = Array.from(call.arguments).indexOf(n);
+        return at >= 0 && this.rustNativeBoolArgumentSlot(this.rustCalleeParams(call), at);
     }
     /** True when the call's `at`-th argument lands in a required native-`bool` slot. */
     rustNativeBoolArgumentSlot(params, at: number): boolean {
@@ -3377,6 +3400,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (inner?.kind === SyntaxKind.Identifier) {
             const declaration: any = this.rustDeclaredNode(inner);
             if (declaration?.kind === SyntaxKind.Parameter && this.rustParamPrintsBool(declaration)) { return this.printNode(inner, 0).trim(); }
+            if (declaration?.kind === SyntaxKind.VariableDeclaration && this.rustScalarLocalOf(inner)?.kind === 'bool') { return this.printNode(inner, 0).trim(); }
             if (declaration?.kind === SyntaxKind.VariableDeclaration && (this.rustMarketFlagBoolLocal(declaration) || this.getRustBoolLocalInitializer(declaration, this.printNode(inner, 0)) !== undefined)) return this.printNode(inner, 0).trim();
             return undefined;
         }
@@ -3825,8 +3849,10 @@ export class RustTranspiler extends BaseTranspiler {
                     // the scalar rule re-checks and refuses on its own
                 }
             }
+            // a nested solve (a slot decision that walks another method) hands the outer seeding state back
+            const seeding = this.rustScalarSeeding;
             this.rustScalarSeeding = true;
-            try { for (let pass = 0; pass < 2; pass++) { for (const n of candidates) this.rustScalarDecisions.set(n, this.rustScalarTry(n)); } } finally { this.rustScalarSeeding = false; }
+            try { for (let pass = 0; pass < 2; pass++) { for (const n of candidates) this.rustScalarDecisions.set(n, this.rustScalarTry(n)); } } finally { this.rustScalarSeeding = seeding; }
             const unstable = new Set<any>();
             for (let pass = 0; pass < 12; pass++) {
                 let changed = false;
@@ -6950,6 +6976,8 @@ export class RustTranspiler extends BaseTranspiler {
                 && this.primitiveKindOfType(this.typeOfNodeIfAny(this.unwrapParens(other))) === 'string' && this.printsValueExpression(this.unwrapParens(other)) && this.rustScalarLocalOf(this.unwrapParens(other)) === undefined) return 'native';
         }
         if ((kind === 'bool' || kind === 'obool') && this.rustIdentifierUseIsCondition(n)) return 'cond';
+        // a `bool` local as an argument of a required native-`bool` parameter passes as is
+        if (kind === 'bool' && this.rustBoolParamUseAccepted(n) && this.rustBoolArgOfNativeSlot(n)) return 'cond';
         // ral-46d: an `Option<bool>` leaf of a logical the printer emits as a native `bool` (a narrowed bool local's initializer, a `Value::Bool(..)` box): the leaf prints its truthiness ...
         if (kind === 'obool' && this.rustClimbLogicalWrappers(n) !== n && this.rustConditionBoolSlot(n) && this.rustMarketFlagFieldLocal(n)) return 'cond';
         // ral-80e: a `bool` leaf of a logical the printer emits as a native `bool` (a narrowed bool local's initializer, a `Value::Bool(..)` box): the leaf prints bare, the very truthines...
@@ -22786,7 +22814,8 @@ export class RustTranspiler extends BaseTranspiler {
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
                 const name = String(callee.name.text);
                 if (name === 'omit') { uses++; return up.arguments.length === 2 && this.rustBaseCallNamed(up, RustTranspiler.RUST_HANDED_DICT_OMIT); }
-                if (!(name in RustTranspiler.RUST_BORROWED_DICT_READERS) && !RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(name)) return false;
+                // the two-key bool readers print a `KeyRead` twin (`safe_bool2_opt(&params, ..)`) that lends a `Dict` as is
+                if (!(name in RustTranspiler.RUST_BORROWED_DICT_READERS) && !RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(name) && !this.rustParamsDictSlotBoolRead(up)) return false;
                 const callee2: any = this.rustScalarCallee(up);
                 uses++;
                 return callee2 !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(callee2.getSourceFile().fileName));
@@ -23267,6 +23296,8 @@ export class RustTranspiler extends BaseTranspiler {
         const call: any = node.parent;
         // a lent group map slot (handleErrors `headers`) is already `&HashMap`, a `KeyRead` container: pass it uncloned
         if (call !== undefined && isCallExpression(call) && call.arguments[0] === node && isPropertyAccessExpression(call.expression) && RustTranspiler.RUST_BORROWED_ANY_KEY_READERS.test(String(call.expression.name.text)) && this.rustGroupMapParamType(this.rustDeclarationOfIdentifier(node)) === RUST_MAPREF_TYPE) return RustTranspiler.rustLentMark(text);
+        // the Dict-bound params slot is lent to a base two-key bool reader too (its container is a `KeyRead`)
+        if (call !== undefined && isCallExpression(call) && call.arguments[0] === node && this.rustParamsDictSlotBoolRead(call) && this.rustParamsDictSlot(this.rustDeclarationOfIdentifier(node))) return `&${text}`;
         if (call === undefined || !isCallExpression(call) || call.arguments[0] !== node || !this.rustBorrowedAnyKeyReader(call)) return undefined;
         const declaration: any = this.rustDeclarationOfIdentifier(node);
         if (declaration === undefined || declaration === node || declaration.name === node) return undefined;
@@ -30419,6 +30450,11 @@ export class RustTranspiler extends BaseTranspiler {
             const name = this.printNode(inner, 0).trim();
             return ((op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) === (literal.kind === SyntaxKind.TrueKeyword)) ? name : `!${name}`;
         }
+        // a parameter printed `bool` against a literal is the bool itself
+        if (flagDecl?.kind === SyntaxKind.Parameter && this.rustParamPrintsBool(flagDecl)) {
+            const name = this.printNode(inner, 0).trim();
+            return ((op === SyntaxKind.EqualsEqualsToken || op === SyntaxKind.EqualsEqualsEqualsToken) === (literal.kind === SyntaxKind.TrueKeyword)) ? name : `!${name}`;
+        }
         if (inner === undefined || (!isIdentifier(inner) && !isCallExpression(inner)) || !this.printsValueExpression(inner)
             || (isCallExpression(inner) && this.rustCallPrintsBool(inner)) || this.rustBoolMemberLocal(inner) || this.rustNativeBoolLocal(inner) || !this.rustBoolValue(inner)) {
             return undefined;
@@ -31369,6 +31405,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
     // Base methods whose scalar parameters print typed (measured one by one: each frees more locals than it adds conversions at its callers); a method listed here must have no venue o...
     private static readonly RUST_BASE_SCALAR_PARAM_METHODS: string[] = [ 'convertExpireDate', 'convertExpireDateToMarketIdDate', 'convertMarketIdExpireDate', 'isLeveragedCurrency', ];
+    // base-only methods whose `boolean` parameters print `bool` (rustParamPrintsBool)
+    private static readonly RUST_BASE_BOOL_PARAM_METHODS: string[] = [ 'handlePostOnly', 'fetchWebEndpoint', 'isPostOnly', 'filterBySinceLimit', ];
     // ral-59e: async base methods typed the same way (no venue override, no trait slot); every caller in ts/src passes its own unwritten `since: Int` / `symbol: Str` / `limit: Int` pa...
     private static readonly RUST_BASE_ASYNC_SCALAR_PARAM_METHODS: string[] = [ 'fetchPaginatedCallDeterministic' ];
     // Trait-slot override groups typed together: method -> its first parameter, printed `&str` by the base, every override, the `DerivedExchange` slot (rustDispatch.isSlotStr) and eve...
@@ -31458,10 +31496,13 @@ export class RustTranspiler extends BaseTranspiler {
     rustGroupMapSlot(params: any[] | undefined, at: number): string | undefined { return params !== undefined && at < params.length ? this.rustGroupMapParamType(params[at]) : undefined; }
     // A sync method of the base `Exchange` class with no override in any venue file, no trait slot and no typed signature: every call resolves to this one body, so typing its paramete...
     rustBaseOnlyMethod(method: any, file: string): boolean {
+        return this.rustBaseOnlyMethodName(method, file, false);
+    }
+    rustBaseOnlyMethodName(method: any, file: string, listed: boolean): boolean {
         const at = file.search(/(?:^|\/)ts\/src\/base\/(?:Exchange|\.__ExchangeNoOverloads)\.ts$/);
         if (at < 0) return false;
         const name = String(method.name.text);
-        if (!(this.isAsyncFunction(method) ? RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS : RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS).includes(name)) return false;
+        if (!listed && !(this.isAsyncFunction(method) ? RustTranspiler.RUST_BASE_ASYNC_SCALAR_PARAM_METHODS : RustTranspiler.RUST_BASE_SCALAR_PARAM_METHODS).includes(name)) return false;
         if (this.toSnakeCaseName(name) in (this.rustVirtualDispatch ?? {}) || this.rustNonVirtualShims?.has(this.toSnakeCaseName(name))) return false;
         const root = file.slice(0, file.indexOf('ts/src/', at)) + 'ts/src';
         let predictionOverride = false;
@@ -31469,6 +31510,20 @@ export class RustTranspiler extends BaseTranspiler {
             predictionOverride = new RegExp(`^\\s+(?:(?:override|async|public|protected)\\s+)*${name}\\s*\\(`, 'm').test(fs.readFileSync(root + '/base/PredictionExchange.ts', 'utf8'));
         } catch (e) { /* no prediction tier */ }
         return !predictionOverride && !this.rustVenueReturnTypes(root).has(name);
+    }
+    /** A listed base method (RUST_BASE_BOOL_PARAM_METHODS) with no override, no trait slot and no prediction override. */
+    rustBaseBoolParamMethod(method: any): boolean {
+        if (!isIdentifier(method.name) || !RustTranspiler.RUST_BASE_BOOL_PARAM_METHODS.includes(String(method.name.text))) return false;
+        return this.rustBaseOnlyMethodName(method, String(method.getSourceFile().fileName).replace(/\\/g, '/'), true);
+    }
+    /** A base `safeBool2` / `safeBoolN` call: both the boxed reader and its `_opt` twin take the container as `KeyRead`. */
+    rustParamsDictSlotBoolRead(call: any): boolean {
+        const callee: any = call.expression;
+        if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;
+        const name = String(callee.name.text);
+        if (name !== 'safeBool2' && name !== 'safeBoolN') return false;
+        const declaration: any = this.rustScalarCallee(call);
+        return declaration !== undefined && RustTranspiler.RUST_BASE_TIER_FILE.test(String(declaration.getSourceFile().fileName));
     }
     // Rust type of a scalar TS parameter type: string -> `&str`, `number` / `Num` -> `f64`, `int` / `Int` -> `i64`, boolean -> `bool`; a nullable part makes it an `Option` (never for ...
     rustVenueScalarTypeOf(type: any, typeNode: any): string | undefined {

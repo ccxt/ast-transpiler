@@ -1008,7 +1008,7 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'Replace': 'string',
     'Join': 'string',
     // their native forms, printed when every operand is a proven non-nil Go string
-    'strings.Split': '[]string', 'strings.Replace': 'string', 'strings.ReplaceAll': 'string',
+    'strings.Split': '[]string', 'strings.Replace': 'string', 'strings.ReplaceAll': 'string', 'strings.TrimSpace': 'string',
     'strings.Join': 'string', 'strings.ToUpper': 'string', 'strings.ToLower': 'string',
     'strings.HasPrefix': 'bool', 'strings.HasSuffix': 'bool', 'strconv.FormatInt': 'string',
     'Slice': 'string',
@@ -1043,6 +1043,9 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
     'this.RlpEncodeList': 'string',
     'this.IntToRlpHex': 'string',
+    'this.PadHexToEven': 'string',
+    'this.HexToRlpBytes': 'string',
+    'this.RlpEncodeBytes': 'string',
     // exchange_prediction.go event filters: `: any[]`, no override, retyped `[]any` by build retypeGoMapMethod
     'this.FilterEventsByStatus': '[]any',
     'this.FilterEventsByTags': '[]any',
@@ -12189,6 +12192,7 @@ const GO_HELPER_RETURN_TYPES: { [name: string]: string } = {
     'strings.ToLower': 'string',
     'strings.Replace': 'string',
     'strings.ReplaceAll': 'string',
+    'strings.TrimSpace': 'string',
     'strings.HasPrefix': 'bool',
     'strings.HasSuffix': 'bool',
     'strconv.FormatInt': 'string',
@@ -13978,7 +13982,11 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             const pointerAddition = this.goNonNilPointerOperationText(node, leftText, rightText, ' + ', this.goInt64Operand);
             if (pointerAddition !== undefined) { return { 'goType': 'int64', 'text': pointerAddition }; }
         }
-        const pointerOp = { [SyntaxKind.MinusToken]: [ ' - ', this.goInt64Operand ], [SyntaxKind.AsteriskToken]: [ ' * ', this.goInt64ProductOperand ] }[node.operatorToken.kind];
+        const pointerOp = {
+            [SyntaxKind.MinusToken]: [ ' - ', this.goInt64Operand ],
+            [SyntaxKind.AsteriskToken]: [ ' * ', this.goInt64ProductOperand ],
+            [SyntaxKind.PercentToken]: [ ' % ', this.goInt64Operand ],
+        }[node.operatorToken.kind];
         const pointerArithmetic = (pointerOp === undefined) ? undefined : this.goNonNilPointerOperationText(node, leftText, rightText, pointerOp[0], pointerOp[1]);
         if (pointerArithmetic !== undefined) { return { 'goType': 'int64', 'text': pointerArithmetic }; }
         const pointerDivision = this.goNonNilPointerDivisionText(node, leftText, rightText);
@@ -23733,7 +23741,9 @@ ${this.getIden(identation)}${returnStatement}`;
 
     printEndsWithCall(node, identation, name = undefined, parsedArg = undefined) { return this.goStringsPairCall(node, name, parsedArg, 'HasSuffix', 'EndsWith'); }
 
-    printTrimCall(node, identation, name = undefined) { return `Trim(${name})`; }
+    printTrimCall(node, identation, name = undefined) {
+        return this.goNativeStringCallOr(node, [name], ['string'], (o) => `strings.TrimSpace(${o[0]})`, `Trim(${name})`);
+    }
 
     printJoinCall(node, identation, name = undefined, parsedArg = undefined) {
         // only a declared `[]string` receiver can skip the per-element ToString the helper applies to a []any
