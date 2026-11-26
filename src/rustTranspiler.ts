@@ -22530,6 +22530,8 @@ export class RustTranspiler extends BaseTranspiler {
     }
 
     printObjectKeysCall(node, identation, parsedArg = undefined) {
+        const cacheMap = node.arguments?.length === 1 ? this.rustWsCacheHashmapText(this.unwrapParens(node.arguments[0])) : undefined;
+        if (cacheMap !== undefined) return `Value::Array(${cacheMap}.keys().cloned().map(Value::from).collect())`;
         const typedKeys = this.printTypedResultKeys(node); if (typedKeys !== undefined) return typedKeys;
         const memberKeys = (this as any).rustH49MemberDictKeys(node); if (memberKeys !== undefined) return memberKeys;
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'keys'); if (h27 !== undefined) return h27;
@@ -24493,7 +24495,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (!isObjectLiteralExpression(literal) && !produced) return false;
         // A dict read out of a live store (`x.hashmap()`, `x.subscriptions`) is a
         // tagged handle: its writes must reach the store, so it keeps the helper.
-        if (produced && this.rustInitReadsTaggedStore(init)) return false;
+        if (produced && this.rustInitReadsTaggedStore(init) && !this.rustReadOnlyCacheBucket(declaration)) return false;
         if (!produced && this.rustReaderTableLocal(declaration, literal)) return true;
         const entries: any[] = produced ? [] : literal.properties;
         for (const property of entries) {
@@ -31912,6 +31914,35 @@ export class RustTranspiler extends BaseTranspiler {
 
     /** `x.hashmap` on a cache handle is the handle's own `hashmap()` snapshot. */
     printWsCacheHashmapRead(node: any): string | undefined {
+        if (!isPropertyAccessExpression(node) || String(node.name.text) !== 'hashmap' || !this.rustWsCacheMethodReceiver(node.expression)) return undefined;
+        const recv: any = node.expression;
+        const text = this.rustWsCacheHashmapText(node);
+        // the snapshot is a typed `Dict`: a call argument lends it (`&Dict` is a `KeyRead` and converts into a `Value`)
+        return text !== undefined && isCallExpression(node.parent) && node.parent.expression !== node ? `&${text}` : text;
+    }
+
+    /** `const b = this.safeDict (cache.hashmap, k[, {}])` in a pro file whose `b` is never written: a read-only bucket
+     *  needs no write-back, so the typed snapshot map is read as is. */
+    rustReadOnlyCacheBucket(declaration: any): boolean {
+        if (!isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || (declaration.parent.flags & NodeFlags.Const) === 0) return false;
+        if (!String(declaration.getSourceFile?.()?.fileName ?? '').includes('ts/src/pro/')) return false;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression) || String(init.expression.name.text) !== 'safeDict') return false;
+        if (this.rustWsCacheHashmapText(this.rustSkipWrappers(init.arguments[0])) === undefined) return false;
+        const body: any = declaration.parent?.parent?.parent;
+        let written = false;
+        const visit = (x: any) => {
+            if (written) return;
+            if (isBinaryExpression(x) && rustIsAssignmentOperator(x.operatorToken.kind) && isElementAccessExpression(x.left) && isIdentifier(x.left.expression)
+                && this.rustDeclarationOfIdentifier(x.left.expression) === declaration) written = true;
+            x.forEachChild?.(visit);
+        };
+        if (body !== undefined) visit(body);
+        return !written;
+    }
+
+    /** The typed `Dict` snapshot text of `x.hashmap` on a cache handle (no borrow). */
+    rustWsCacheHashmapText(node: any): string | undefined {
         if (!isPropertyAccessExpression(node) || String(node.name.text) !== 'hashmap' || !this.rustWsCacheMethodReceiver(node.expression)) return undefined;
         const recv: any = node.expression;
         if (this.rustWsCacheField(recv)) return `self.${String(recv.name.text)}.hashmap()`;
@@ -45132,6 +45163,12 @@ export class RustTranspiler extends BaseTranspiler {
     if (nested !== undefined) return !/ts[/]src[/](pro|prediction)[/]/.test(file) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call) ? undefined : (this as any).rustP22NestedRead(call, nested, optional);
     // a pro local built by `this.indexBy (..)` is a fresh runtime map (`index_by -> Dict`), never a ws marker map
     const fresh = isIdentifier(recv) && this.rustP22IndexByLocal(recv);
+    // a ws cache `hashmap` snapshot is a typed `Dict` (its symbol buckets keep their write-back tag)
+    const cacheMap = field === undefined && !fresh ? this.rustWsCacheHashmapText(recv) : undefined;
+    if (cacheMap !== undefined && !optional && file.includes('ts/src/pro/') && !this.rustTestTierSource(call) && isVariableDeclaration(call.parent) && this.rustReadOnlyCacheBucket(call.parent)) {
+        const ck = (this as any).rustP22StrKeyText(this.rustSkipWrappers(call.arguments[1]));
+        if (ck !== undefined) return `${cacheMap}.key_dict(${ck})`;
+    }
     if (!file.includes('ts/src/') || (field === undefined && !fresh && /ts[/]src[/]pro[/]/.test(file)) || /ts[/]src[/](test|base)[/]/.test(file) || this.rustTestTierSource(call)) return undefined;
     // a local printed `indexmap::IndexMap<String, Value>` (a typed `Dict` literal) is a plain map too
     const typedMap = isIdentifier(recv) && this.rustP22TypedMapLocal(recv);
