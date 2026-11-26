@@ -857,7 +857,8 @@ export const CCXT_GO_STRING_PTR_METHOD_NAMES = [ 'NetworkIdToCode', 'FindTimefra
     'CurrencyToPrecision', 'NetworkCodeToId', 'HandleTimeInForce', 'ConvertMarketIdExpireDate', 'SafeOutcomeSymbol', 'MarketOutcomeToSymbol',
     'CommonCurrencyCode', 'MarketId', 'GetBaseDomainFromUrl', 'CostToPrecision', 'FeeToPrecision',
     'ParsePrecision', 'IntegerPrecisionToAmount', 'ConvertExpireDate', 'ConvertExpireDateToMarketIdDate', 'CreateCcxtTradeId', 'OmitZero', 'FormatVaultAddress',
-    'OutcomeSearchQuery' ];
+    'OutcomeSearchQuery',
+    'CheckAddress' ];
 
 export const CCXT_GO_HELPER_RETURN_TYPES = {
     // Typed twins of GetArg (go/v4/exchange_helpers.go) -- the `var x <T> = GetArg<T>(...)` locals the printer declares for a provable optional argument
@@ -4287,7 +4288,8 @@ export const CCXT_GO_GETARG_SAFE_CONSUMERS = {
     // SafeValue (exchange_safe.go) derefScalars the container, every key and the default
     'SafeValue': '*',
     // base date formatters (exchange_time.go) derefScalar the timestamp at entry: a nil *int64 returns ""
-    'Yyyymmdd': {'0': 'deref'}, 'Ymdhms': {'0': 'deref'}, 'Ymd': {'0': 'deref'}, 'Yymmdd': {'0': 'deref'},
+    'Yyyymmdd': {'0': 'deref'}, 'Ymdhms': {'0': 'deref'}, 'Ymd': {'0': 'deref'}, 'Yymmdd': {'0': 'deref'},    // exchange.go StringToCharsArray derefScalars its string argument first
+    'StringToCharsArray': {'0': 'deref'},
 };
 
 // Typed async receive: `x := <-this.FooAsync(..)` + PanicOnError(x) becomes
@@ -12617,6 +12619,7 @@ const GO_STRING_PTR_METHOD_PARAMS = [ 'safeMarket', 'generateClientOrderId' ];
 // string methods whose Go helper derefScalars its receiver (exchange_helpers.go)
 const GO_STRING_PTR_GUARDED_METHODS = [ 'split', 'indexOf', 'startsWith', 'endsWith', 'toUpperCase', 'toLowerCase', 'replace' ];
 GO_STRING_PTR_GUARDED_METHODS.push ('slice'); // Slice derefScalars a pointer receiver
+GO_STRING_PTR_GUARDED_METHODS.push ('toString');
 
 const GO_GETARG_EXCLUDED_POSITIONS: { [name: string]: number[] } = { 'fetch2': [ 1, 3 ], 'request': [ 1, 3 ], 'sign': [ 1, 3 ], };
 
@@ -22317,6 +22320,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((parent?.kind === SyntaxKind.ExpressionStatement)
                 || (pointer && (this.goGetArgPointerStoredAsValue(n, param) || this.goGetArgPointerInHelperArithmetic(n) || this.h21g06GuardedIntNegation(n, goType)))
                 || ((goType === '*string') && (this.goGetArgPointerIsBalanceKey(n) || this.goGetArgStrPtrGuardedStringCall(n, param)))) { return true; }
+            // `x.length` on a nil-guarded `Str` parameter: GetLength derefScalars the pointer exactly as it did the box
+            if ((goType === '*string') && this.goGetArgStrPtrGuardedLength(n, param)) { return true; }
             // a bare read hands the local on as `any`: a pointer or a nil-defaulted container would no longer compare equal to nil there, so both keep the box
             return !pointer && !nilable;
         };
@@ -22340,6 +22345,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             || !GO_STRING_PTR_GUARDED_METHODS.includes(parent.name?.text) || (parent.parent?.kind !== SyntaxKind.CallExpression)
             || (parent.parent.expression !== parent)) { return false; }
         return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n) || this.goStrParamCheckerNarrowed(n, param);
+    }
+
+    goGetArgStrPtrGuardedLength(n: any, param: any): boolean {
+        const parent: any = n.parent;
+        if ((param?.type?.getText?.()?.trim() !== 'Str') || (parent?.kind !== SyntaxKind.PropertyAccessExpression) || (parent.expression !== n) || (parent.name?.text !== 'length')) { return false; }
+        return this.goHasEnclosingNilGuard(n) || this.goHasExitingNilGuard(n);
     }
 
     // `s.split (x)` / `s.indexOf (x)` / ... with `x` a parameter declared `Str` / `string` as the sole
