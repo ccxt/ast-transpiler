@@ -11921,6 +11921,8 @@ export const GO_BASE_STR_PTR_PARAMS: { [method: string]: number[] } = {
     'featureValueByType': [ 1, 2 ],
     // `address: Str`: callers pass a SafeString `*string` or a wallet-address string local; nil answers first
     'padHexAddress': [ 0 ],
+    // `networkCode: Str`: callers pass handleNetworkCodeAndParams / SafeString `*string` values; nil answers first
+    'networkCodeToId': [ 0 ],
 };
 function goBaseStrPtrParamDerived (go: any, param: any): string | undefined {
     const fn = goPlainParamMethod (param);
