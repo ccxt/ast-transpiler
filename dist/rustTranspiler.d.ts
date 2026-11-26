@@ -1856,6 +1856,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rust40bProTier(n: any): boolean;
     /** 40b: the operand of a top-level `<expr> as T` write source (parens only around it), else undefined. */
     rustScalarAsWrite(rhs: any): any;
+    /** The identifier under one top-level `as string` write source (parens only around it), else undefined. */
+    rustStrAsIdentWrite(rhs: any): any;
     /** INT-48: the one `as T` decision shared by ral-40a (`(x as string)` read-through), ral-40b (`as T` write operand)
      *  and the ral-40h alias rules: peel parens and `as` assertions (only `as string` when `stringOnly`), counting the
      *  assertions; the assertion prints nothing, so the operand is what every rule decides on. */
@@ -3428,6 +3430,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The bare twin call where the own-container rule asks for the native result. */
     printRustFilterTwinBare(node: any): string | undefined;
     rustOwnContainerBareText(node: any): string;
+    /** The expression is a statement of its own: its result is thrown away and needs no box. */
+    rustDiscardedResult(node: any): boolean;
     /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
     printOwnContainerCallBox(node: any): string | undefined;
     /** The native text of `[await] this.m (..)` for a typed local of the same kind, else undefined. */
@@ -3436,6 +3440,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustBalancedText(text: string): boolean;
     /** The native text of a return operand: an own-container call, or a printed box of the kind (`Value::Map(m)`, `Value::Arr(l)`). */
     rustOwnContainerPayload(exp: any, kind: 'dict' | 'list'): string | undefined;
+    rustAwaitedDictEndpointReturn(exp: any): boolean;
     /** A venue method another venue source calls as `this.m (..)`: the child struct reaches the base stub, which keeps `Value`. */
     rustCalledFromOtherVenueFile(fn: any): boolean;
     /** `[await] this.m (..)` whose declaration lives in another venue file than `fn` (an inherited venue method). */
@@ -3446,6 +3451,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOwnRecordParserReturn(exp: any, fn: any): boolean;
     /** A `const x = this.m (..)` with no annotation in m's own file: that local stays `Value`, so m keeps its boxed return. */
     rustUntypedLocalCaller(fn: any): boolean;
+    /** A plain local declared `string[]` and seeded with `[]`, filled only by `push`: it prints as a `Vec<Value>` of text values. */
+    rustBuiltStringList(exp: any): boolean;
     /** A list literal or plain local whose element type is `any` or a map (never string / number lists, which print typed vectors). */
     rustBoxedElementList(exp: any): boolean;
     /** A runtime-base `this.keysort (..)` (and `this.omit (..)` when `omit` is set) read into a map: its typed twin answers
@@ -4242,6 +4249,9 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** The `Option<Dict>` an optional-map initialiser answers, printed natively: the 45g ternary's `safeDict` arm (no default)
      *  as `safe_dict_o` beside `None`, and the 67g typed row read as the row's own map (`None` out of range / non-dict). */
     rustOptDictNativeInit(init: any, printed: string): string | undefined;
+    /** `this.safeDict (xs, i)` (no default) where `xs` is a const local printed as a typed `List` and `i` a literal or an
+     *  i64 `for` counter: the element's map, `None` out of range or for a non-map, as `safe_dict_o` answers. */
+    rustTypedListRowDict(init: any, printed: string): string | undefined;
     private static readonly RUST_RECORD_MAP_TYPES;
     /** `this.safeDict (r, k)` with no default, `r` (printed `name`) a const local of a typed call whose result is a record map. */
     rustRecordMapLocalRead(init: any, name: string): boolean;
@@ -5130,6 +5140,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printOptListJoin(node: any): string | undefined;
     private static readonly RUST_HANDED_DICT_SOURCES;
     private rustHandedDictDecisions;
+    private rustPromiseAllPendingHits;
     rustHandedDictLocal(declaration: any): boolean;
     /** `this.m (..)` resolved to the base tier, `m` in `names`. */
     rustBaseCallNamed(call: any, names: Set<string>): boolean;
@@ -5345,6 +5356,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustLentParamDecisions;
     private rustLentOverrideNames;
     rustParamIsLentDict(param: any): boolean;
+    /** A required venue `params: Dict` of a sync method: the borrowed-map rule decides it before the lent-`Value` form. */
+    rustVenueLentDictYields(param: any): boolean;
     rustParamIsLentDictUncached(param: any): boolean;
     /** A method of that name is declared outside the base tier: in this program (checker-visible), or in a venue
      *  source next to the base tier, which a base-only program does not load. Either keeps the `Value` signature. */
@@ -5812,6 +5825,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustVenueStrUnbound;
     rustVenueStrParamUnbound(param: any): boolean;
     rustVenueStrParamUnboundUncached(param: any): boolean;
+    /** A `&str` parameter never written whose every read is the receiver of `x.endsWith (n)` / `x.replace (n, '')` with a
+     *  string-literal or borrowed string-element needle: the borrow answers both natively. */
+    rustStrParamAffixOnly(param: any): boolean;
+    /** `p.endsWith (n)` / `p.replace (n, lit)` on the identifier `p`: the call, else undefined. */
+    rustStrParamAffixCall(n: any): any;
+    /** Native text of `p.endsWith (n)` / `p.replace (n, lit)` on an unbound `&str` parameter: a literal needle reads as is,
+     *  a typed `Str` local (`Option<String>` / a borrowed element) tests its `Some` (no element: false / the receiver, as the helpers gave). */
+    rustStrParamAffixText(node: any): string | undefined;
     /** A `&str` parameter never written whose every read is the receiver of `x.slice (n)` with one integer literal bound. */
     rustStrParamTailSliceOnly(param: any): boolean;
     /** `x.slice (n)` on an unbound `&str` parameter: the runtime's char slice read from the borrow, boxed once. */

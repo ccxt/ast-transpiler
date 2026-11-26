@@ -523,6 +523,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     } | undefined;
     javaTypedStringSliceCall(node: any, name: any, parsedArg: any, parsedArg2: any, identation: any): string | undefined;
     javaSliceNonNegativeBound(node: any, depth?: number): boolean;
+    javaIntCounterBound(node: any, depth?: number): boolean;
     javaIndexOfConstLocal(node: any): boolean;
     javaSliceIsOwnLength(node: any, receiver: any): boolean;
     javaTypedStringReplaceAllCall(node: any, name: any, parsedArg: any, parsedArg2: any): string | undefined;

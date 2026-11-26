@@ -393,6 +393,9 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
     Yymmdd: {
         '0': string;
     };
+    StringToCharsArray: {
+        '0': string;
+    };
 };
 export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
     AddMarginAsync: string;
@@ -761,6 +764,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goGetArgTypeComputing: Set<any>;
+    goGetArgProvisionalHits: number;
     goLocalTypeResolution: Set<any>;
     goSelfConcatLeafCache: WeakMap<any, boolean>;
     goLocalStaticTypeCache: WeakMap<object, string>;
@@ -878,6 +882,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
     goPointerWriteText(node: any, identation: any): string | undefined;
     goStringPointerStore(node: any, value: string, identation: any): string | undefined;
+    goStringTernaryIntoLocal(right: any, local: string, identation: any): string | undefined;
     goOutermostFunction(node: any): any;
     goStringReturningThisCall(call: any): boolean;
     goStringCallLocals: WeakMap<object, Map<string, {
@@ -946,12 +951,14 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
     goMapLocalFreshMapWrite(write: any, name: string): boolean;
+    goSelfNarrowingRead(write: any, name: string, family: string): boolean;
     goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
     goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
     goClientSubscriptionsContainer(container: any): boolean;
     goAfterNilExitGuard(use: any, name: string): boolean;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
+    goCommaOkMapRead(container: any, key: any): string | undefined;
     goMapLocalKeyIsString(key: any, printed: string): boolean;
     goIsPointerFreeValue(value: any): boolean;
     goMapWritesArePointerFree(scope: any, name: string): boolean;
@@ -1448,6 +1455,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         dictText: string;
         keyText: string;
     } | undefined;
+    goSplitHeadLocal(ident: any): boolean;
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;
@@ -1595,6 +1603,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
     goGetArgPointerIsBalanceKey(n: any): boolean;
     goGetArgStrPtrGuardedStringCall(n: any, param: any): boolean;
+    goGetArgStrPtrGuardedLength(n: any, param: any): boolean;
     goGetArgStrPtrGuardedNeedle(n: any, param: any): boolean;
     goStrParamCheckerNarrowed(n: any, param: any): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
@@ -1986,6 +1995,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     h25g17NonNilOptionSlotArg(arg: any): boolean;
     h26g06BaseMapFieldArg(arg: any): boolean;
     h26g14FieldNonNilBefore(declaration: any, fieldName: any): any;
+    goInElseOfNilTest(k: any): boolean;
     goBaseLocalHasNullableKey(declaration: any): boolean;
     h26g21AliasDefines(node: any, name: string, outcome: boolean): boolean;
     h26g21IsWritten(scope: any, declaration: any): boolean;
@@ -2385,10 +2395,11 @@ export interface GoTranspiler {
     h26g49ClientLocalUsesAreSafe(declaration: any): boolean;
     h27a01ReceiverType(container: any): string | undefined;
     h27a02JsonListRead(node: any, identation: number, printed: string): string | undefined;
-    h27a02JsonOriginBeforeRead(container: any, read: any): boolean;
+    h27a02JsonOriginBeforeRead(container: any, read: any, stopAt?: any): boolean;
     goTypedMapDictRead(args: any, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
     h27a08RowRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
     h52g58AssignRowRead(node: any, identation: number, printed: string): string | undefined;
+    h53g58AssignKeyRead(node: any, identation: number, printed: string): string | undefined;
     h27a08JsonList(list: any): boolean;
     h27a09JsonOriginList(baseExpr: any): boolean;
     h27a11FrameParam(param: any): boolean;
