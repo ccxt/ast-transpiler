@@ -24259,7 +24259,8 @@ export class RustTranspiler extends BaseTranspiler {
                 || this.rustBearerLiteralMove(node))) {
             // Only the map's last use moves into the box; an earlier
             // one boxes a clone, so a bearer may be handed out more than once.
-            const moved = this.rustReturnOperand(node) || this.rustVecIsFinalUse(node, String(node.text));
+            const moved = this.rustReturnOperand(node) || this.rustVecIsFinalUse(node, String(node.text))
+                || (isVariableDeclaration(bearer) && this.rustOwnedOtherArmLastUse(node, bearer));
             return `Value::Map(${text}${!this.rustDictBearerCloned.has(bearer) && moved ? '' : '.clone()'})`;
         }
         const stringMethod: any = this.rustDeclarationOfIdentifier(node);
