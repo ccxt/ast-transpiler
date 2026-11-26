@@ -138,7 +138,6 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.IntToRlpHex': string;
     'this.PadHexToEven': string;
     'this.HexToRlpBytes': string;
-    'this.RlpEncodeBytes': string;
     'this.FilterEventsByStatus': string;
     'this.FilterEventsByTags': string;
     'this.FilterEventsBySearchIn': string;

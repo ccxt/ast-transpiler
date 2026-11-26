@@ -13157,7 +13157,6 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   "this.IntToRlpHex": "string",
   "this.PadHexToEven": "string",
   "this.HexToRlpBytes": "string",
-  "this.RlpEncodeBytes": "string",
   // exchange_prediction.go event filters: `: any[]`, no override, retyped `[]any` by build retypeGoMapMethod
   "this.FilterEventsByStatus": "[]any",
   "this.FilterEventsByTags": "[]any",
@@ -75703,7 +75702,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     const boolLogical = this.isBooleanPosition(node) ? void 0 : this.rustScalarBoolLogicalText(node);
     if (boolLogical !== void 0)
       return `Value::Bool(${boolLogical})`;
-    if ((op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken) && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node) || this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right))) {
+    if ((op === SyntaxKind7.AmpersandAmpersandToken || op === SyntaxKind7.BarBarToken) && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node) || !this.isBooleanPosition(node) && (this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right)))) {
       return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
     }
     if (op in this.binaryExpressionsWrappers) {
@@ -78474,7 +78473,6 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         } catch (e) {
         }
       }
-      const seeding = this.rustScalarSeeding;
       this.rustScalarSeeding = true;
       try {
         for (let pass = 0; pass < 2; pass++) {
@@ -78482,7 +78480,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
             this.rustScalarDecisions.set(n, this.rustScalarTry(n));
         }
       } finally {
-        this.rustScalarSeeding = seeding;
+        this.rustScalarSeeding = false;
       }
       const unstable = /* @__PURE__ */ new Set();
       for (let pass = 0; pass < 12; pass++) {
