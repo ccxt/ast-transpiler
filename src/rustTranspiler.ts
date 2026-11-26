@@ -4061,6 +4061,8 @@ export class RustTranspiler extends BaseTranspiler {
             if (peeled !== undefined && peeled.startsWith('format!(') && peeled.endsWith('.into()')) {
                 return `${name} = Some(${peeled.slice(0, -'.into()'.length)})`;
             }
+            // a boxed string literal (a method name used as a handler) is the payload itself
+            if (peeled !== undefined && /^"(?:[^"\\]|\\.)*"\.into\(\)$/.test(peeled)) return `${name} = Some(${peeled.slice(0, -'.into()'.length)}.to_string())`;
             return `${name} = ${this.rustOptReaderCallText(node) ?? `${text}.as_str().map(str::to_owned)`}`;
         }
         if (local.kind === 'int') return `${name} = ${text}.as_i64()`;
@@ -23168,6 +23170,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustNativeStrReturnKind(fn) === 'str') { const own = this.rust56xStrReturnText(this.unwrapParensNode(exp), fn); if (own !== undefined) return `${idn}return ${own};`; }
         if (this.rustNativeStrReturnKind(fn) === 'str' && this.rustStrReturnValueConverts(exp)) {
             if (this.literalKindOfNode(this.unwrapParensNode(exp)) === 'null') return `${idn}return None;`;
+            // a string literal is the payload itself, not a box read back
+            if (this.literalKindOfNode(this.unwrapParensNode(exp)) === 'string') return `${idn}return Some(${this.quotedStringLiteral(this.unwrapParensNode(exp).text)}.to_string());`;
             const local = this.rustVenueStrReturnLocal(this.unwrapParensNode(exp));
             if (local !== undefined) return `${idn}return ${local};`;
             if (this.rustStrRuntimeCall(this.unwrapParens(exp))) return `${idn}return Some(${this.rustStrRuntimeBareText(this.unwrapParens(exp))});`;
@@ -35796,12 +35800,14 @@ export class RustTranspiler extends BaseTranspiler {
     private static readonly RUST_HANDED_DICT_SOURCES = new Set([ 'extend', 'omit', 'indexBy', 'groupBy' ]);
 
     private rustHandedDictDecisions = new WeakMap<any, boolean>();
+    private rustPromiseAllPendingHits = 0;
 
     rustHandedDictLocal(declaration: any): boolean {
         if (declaration?.kind !== SyntaxKind.VariableDeclaration && declaration?.kind !== SyntaxKind.BindingElement) return false;
         let decision = this.rustHandedDictDecisions.get(declaration);
         if (decision === undefined) {
             this.rustHandedDictDecisions.set(declaration, false); // re-entrancy guard
+            const allHits = this.rustPromiseAllPendingHits;
             this.rustHandedPending.add(declaration);
             try {
                 decision = this.rustHandedDictLocalUncached(declaration);
@@ -35811,6 +35817,7 @@ export class RustTranspiler extends BaseTranspiler {
                 this.rustHandedPending.delete(declaration);
             }
             this.rustHandedDictDecisions.set(declaration, decision);
+            if (!decision && this.rustPromiseAllPendingHits !== allHits) this.rustHandedDictDecisions.delete(declaration);
         }
         return decision;
     }
@@ -37847,6 +37854,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (isArrayLiteralExpression(list)) {
             const operand: any = this.rustSkipWrappers(list.elements[element.parent.elements.indexOf(element)]);
             const d: any = operand !== undefined && isIdentifier(operand) ? this.rustDeclarationOfIdentifier(operand) : undefined;
+            // an operand still deciding its own kind (a nested measure) answers no now; the slot is asked again once it settles
+            if (d !== undefined && this.rustBorrowedPending.has(d)) this.rustPromiseAllPendingHits++;
             if (d !== undefined && isVariableDeclaration(d) && d.name !== operand && this.rustBorrowedLocalKind(d) === 'dict' && !this.rustOptContainerLocals.has(d)) return true;
         }
         // xi: the operand's awaited producer is an implicit endpoint declared `Promise<Dict>` (the signature table)

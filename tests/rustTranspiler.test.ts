@@ -4582,7 +4582,7 @@ describe('rust native Option<String> returns for `: Str` methods', () => {
         const ts = HEAD + "class E {\n    parseStatus (status: any): Str {\n        return 'open';\n    }\n}";
         const output = transpiler.transpileRust(ts).content;
         expect(output).toContain('pub fn parseStatus(&self, status: Value) -> Option<String>');
-        expect(output).toContain('return Value::Str("open".into()).as_str().map(str::to_owned);');
+        expect(output).toContain('return Some("open".to_string());');
     });
 
     test('a nullish return becomes the None arm', () => {
