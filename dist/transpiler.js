@@ -4986,6 +4986,10 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (nullable || proKinds.length > 0 || hasHostTable || this.csharpVenueOverriddenMethods.has(method)) {
         return void 0;
       }
+      const ordered = this.hasNodeWhere(method.body, (n) => isBinaryExpression2(n) && [SyntaxKind4.LessThanToken, SyntaxKind4.LessThanEqualsToken, SyntaxKind4.GreaterThanToken, SyntaxKind4.GreaterThanEqualsToken].includes(n.operatorToken.kind) && (isIdentifier2(n.left) && n.left.text === parameter.name.text || isIdentifier2(n.right) && n.right.text === parameter.name.text));
+      if (!ordered) {
+        return void 0;
+      }
       return parameter.type.getText().trim() === "int" ? "Int64" : "double";
     }
     const kinds = new Set(nullable ? ["nullable?", ...proKinds] : proKinds);
@@ -6707,12 +6711,12 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (types?.index !== "int") {
       return void 0;
     }
-    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" && types.receiver !== "IList<Int64>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression))
+    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" && types.receiver !== "IList<Int64>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression, types.receiver === "IList<Int64>"))
       return void 0;
     return this.printNode(expression, 0) + "[" + this.printNode(argumentExpression, 0) + "]";
   }
   // the read sits in the body of a `for` that re-tests `index < receiver.length`, both resolved to the very symbols the read uses, and nothing in the body can move either
-  csharpIndexIsLoopBounded(read, receiver, index) {
+  csharpIndexIsLoopBounded(read, receiver, index, allowConstLength = false) {
     const receiverSymbol = this.csharpIdentifierSymbol(receiver);
     const indexSymbol = this.csharpIdentifierSymbol(index);
     if (receiverSymbol === void 0 || indexSymbol === void 0) {
@@ -6724,14 +6728,14 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (isFunctionLike(parent)) {
         return false;
       }
-      if (isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol)) {
+      if (isForStatement(parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol, allowConstLength)) {
         return true;
       }
       node = parent;
     }
     return false;
   }
-  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol) {
+  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol, allowConstLength = false) {
     if (!this.csharpContains(forStatement.statement, read)) {
       return false;
     }
@@ -6744,7 +6748,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     let lengthExpr = length;
-    if (isIdentifier2(length)) {
+    if (allowConstLength && isIdentifier2(length)) {
       const decl = this.csharpIdentifierSymbol(length)?.valueDeclaration?.resolve?.();
       if (decl === void 0 || !isVariableDeclaration(decl) || ((decl.parent?.flags ?? 0) & NodeFlags2.Const) === 0) {
         return false;
@@ -11153,7 +11157,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         const recv = initializer.expression;
         const arg = initializer.argumentExpression;
         const recvType = isIdentifier2(recv) ? this.csharpTypedLocalType(recv) ?? this.csharpExpressionTypeOf(recv) : void 0;
-        if (recvType === "IList<Int64>" && isIdentifier2(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg)) {
+        if (recvType === "IList<Int64>" && isIdentifier2(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg, true)) {
           return "Int64";
         }
         return void 0;
@@ -34596,7 +34600,7 @@ ${iden}}`;
       if (declType === "*int64" && (this.goPointerNumberIsNonNil(inner) || this.goHasEarlyExitNilGuard(inner))) {
         return `float64(*${raw})`;
       }
-      if (this.goIsAnyBoxExpression(inner, raw) || GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0) {
+      if (this.goIsAnyBoxExpression(inner, raw) || GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0 || this.goPrintedCallee(raw) === "Divide") {
         return `Float64Arg(${raw})`;
       }
       return printed;

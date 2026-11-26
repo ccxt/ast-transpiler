@@ -4985,6 +4985,10 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (nullable || proKinds.length > 0 || hasHostTable || this.csharpVenueOverriddenMethods.has(method)) {
         return void 0;
       }
+      const ordered = this.hasNodeWhere(method.body, (n) => _is.isBinaryExpression.call(void 0, n) && [_ast.SyntaxKind.LessThanToken, _ast.SyntaxKind.LessThanEqualsToken, _ast.SyntaxKind.GreaterThanToken, _ast.SyntaxKind.GreaterThanEqualsToken].includes(n.operatorToken.kind) && (_is.isIdentifier.call(void 0, n.left) && n.left.text === parameter.name.text || _is.isIdentifier.call(void 0, n.right) && n.right.text === parameter.name.text));
+      if (!ordered) {
+        return void 0;
+      }
       return parameter.type.getText().trim() === "int" ? "Int64" : "double";
     }
     const kinds = new Set(nullable ? ["nullable?", ...proKinds] : proKinds);
@@ -6706,12 +6710,12 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (_optionalChain([types, 'optionalAccess', _797 => _797.index]) !== "int") {
       return void 0;
     }
-    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" && types.receiver !== "IList<Int64>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression))
+    if (types.receiver !== "List<object>" && types.receiver !== "IList<object>" && types.receiver !== "IList<Int64>" || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression, types.receiver === "IList<Int64>"))
       return void 0;
     return this.printNode(expression, 0) + "[" + this.printNode(argumentExpression, 0) + "]";
   }
   // the read sits in the body of a `for` that re-tests `index < receiver.length`, both resolved to the very symbols the read uses, and nothing in the body can move either
-  csharpIndexIsLoopBounded(read, receiver, index) {
+  csharpIndexIsLoopBounded(read, receiver, index, allowConstLength = false) {
     const receiverSymbol = this.csharpIdentifierSymbol(receiver);
     const indexSymbol = this.csharpIdentifierSymbol(index);
     if (receiverSymbol === void 0 || indexSymbol === void 0) {
@@ -6723,14 +6727,14 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (_chunkSLNKTM7Ocjs.isFunctionLike.call(void 0, parent)) {
         return false;
       }
-      if (_is.isForStatement.call(void 0, parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol)) {
+      if (_is.isForStatement.call(void 0, parent) && this.csharpForBoundsIndex(parent, read, receiverSymbol, indexSymbol, allowConstLength)) {
         return true;
       }
       node = parent;
     }
     return false;
   }
-  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol) {
+  csharpForBoundsIndex(forStatement, read, receiverSymbol, indexSymbol, allowConstLength = false) {
     if (!this.csharpContains(forStatement.statement, read)) {
       return false;
     }
@@ -6743,7 +6747,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     let lengthExpr = length;
-    if (_is.isIdentifier.call(void 0, length)) {
+    if (allowConstLength && _is.isIdentifier.call(void 0, length)) {
       const decl = _optionalChain([this, 'access', _802 => _802.csharpIdentifierSymbol, 'call', _803 => _803(length), 'optionalAccess', _804 => _804.valueDeclaration, 'optionalAccess', _805 => _805.resolve, 'optionalCall', _806 => _806()]);
       if (decl === void 0 || !_is.isVariableDeclaration.call(void 0, decl) || ((_nullishCoalesce(_optionalChain([decl, 'access', _807 => _807.parent, 'optionalAccess', _808 => _808.flags]), () => ( 0))) & _ast.NodeFlags.Const) === 0) {
         return false;
@@ -11152,7 +11156,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         const recv = initializer.expression;
         const arg = initializer.argumentExpression;
         const recvType = _is.isIdentifier.call(void 0, recv) ? _nullishCoalesce(this.csharpTypedLocalType(recv), () => ( this.csharpExpressionTypeOf(recv))) : void 0;
-        if (recvType === "IList<Int64>" && _is.isIdentifier.call(void 0, arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg)) {
+        if (recvType === "IList<Int64>" && _is.isIdentifier.call(void 0, arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg, true)) {
           return "Int64";
         }
         return void 0;
@@ -34595,7 +34599,7 @@ ${iden}}`;
       if (declType === "*int64" && (this.goPointerNumberIsNonNil(inner) || this.goHasEarlyExitNilGuard(inner))) {
         return `float64(*${raw})`;
       }
-      if (this.goIsAnyBoxExpression(inner, raw) || GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0) {
+      if (this.goIsAnyBoxExpression(inner, raw) || GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0 || this.goPrintedCallee(raw) === "Divide") {
         return `Float64Arg(${raw})`;
       }
       return printed;

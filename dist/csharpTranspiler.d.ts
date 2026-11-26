@@ -367,8 +367,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         index: string;
     } | undefined;
     csharpListIndexRead(node: any): string | undefined;
-    csharpIndexIsLoopBounded(read: any, receiver: any, index: any): boolean;
-    csharpForBoundsIndex(forStatement: any, read: any, receiverSymbol: any, indexSymbol: any): boolean;
+    csharpIndexIsLoopBounded(read: any, receiver: any, index: any, allowConstLength?: boolean): boolean;
+    csharpForBoundsIndex(forStatement: any, read: any, receiverSymbol: any, indexSymbol: any, allowConstLength?: boolean): boolean;
     csharpLengthReceiverIdentifier(node: any): any;
     csharpIndexBoundIsVoided(body: any, receiverSymbol: any, indexSymbol: any): boolean;
     csharpReceiverUseKeepsBound(node: any): boolean;
