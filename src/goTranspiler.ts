@@ -35889,17 +35889,8 @@ function goSearchQueriesListLocal (goTranspiler: GoTranspiler, declaration): boo
         return goTranspiler.goIsNilComparisonOperand(n, parent) || ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression !== n));
     }) !== undefined;
 }
-// callees whose typed public wrapper takes the []any list: their argument local stays []any
-const GO_SEARCH_QUERIES_LIST_CALLEES = [ 'fetchRawTopicsByQueries' ];
-function goSearchQueriesFeedsListCallee (goTranspiler: GoTranspiler, declaration): boolean {
-    const name = declaration.name.text;
-    return goTranspiler.hasNodeWhere(goTranspiler.goEnclosingFunction(declaration), (n) => (n.kind === SyntaxKind.Identifier) && (n.text === name)
-        && (n.parent?.kind === SyntaxKind.CallExpression) && (n.parent.expression !== n) && (n.parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
-        && GO_SEARCH_QUERIES_LIST_CALLEES.includes(String(n.parent.expression.name?.text ?? '')));
-}
 goChainRewrite('getGoLocalType', function (shipped: any, declaration, parsedValue: string) {
-    const boxed = (shipped === 'any') || ((shipped === GO_STRING_LIST_LOCAL_TYPE) && goSearchQueriesListLocal(this, declaration) && goSearchQueriesFeedsListCallee(this, declaration));
-    return (boxed && goSearchQueriesListLocal(this, declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
+    return ((shipped === 'any') && goSearchQueriesListLocal(this, declaration)) ? GO_SAFE_LIST_LOCAL_TYPE : shipped;
 });
 goChainRewrite('goSafeListUnboxValue', function (shipped: any, declaration, identation: number) {
     if ((shipped !== undefined) || !goSearchQueriesListLocal(this, declaration)) { return shipped; }

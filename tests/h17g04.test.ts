@@ -69,10 +69,11 @@ describe ('go parseSearchQueries string[] result locals', () => {
         expect (out).toContain ('queries == nil');
         expect (out).not.toContain ('IsEqual(queries');
     });
-    test ('a callee whose public wrapper takes the []any list keeps that list', () => {
+    test ('a string[] callee takes the []string result itself', () => {
         const out = print ('        const queries = this.parseSearchQueries (params);\n' +
             '        return await this.fetchRawTopicsByQueries (queries, params);\n');
-        expect (out).toContain ('var queries []any = ArrayTyped(this.ParseSearchQueries(params))');
-        expect (out).not.toContain ('FetchRawTopicsByQueries(queries []string');
+        expect (out).toContain ('var queries []string = this.ParseSearchQueries(params)');
+        expect (out).not.toContain ('ArrayTyped(this.ParseSearchQueries');
+        expect (out).toContain ('FetchRawTopicsByQueries(queries []string');
     });
 });
