@@ -2612,10 +2612,11 @@ export class JavaTranspiler extends BaseTranspiler {
     }
 
     // an identifier that resolves to a parameter the printer records as reassigned
+    // (a comparison such as `x === undefined` also marks ReassignedVars: only a real write counts)
     javaReassignedParameter(arg): boolean {
         const declaration = this.javaDeclarationOfIdentifier(arg);
         return declaration !== undefined && isParameterDeclaration(declaration)
-            && Boolean(this.ReassignedVars[this.getVarKey(declaration)]);
+            && Boolean(this.ReassignedVars[this.getVarKey(declaration)]) && this.javaParameterIsWritten(declaration);
     }
 
     // the `amount` / `price` slot of a venue order-request builder no base tier declares
@@ -9237,7 +9238,9 @@ export class JavaTranspiler extends BaseTranspiler {
         const inner = isParenthesizedExpression(arg) && isAsExpression(arg.expression) ? arg.expression.expression : undefined;
         if (inner !== undefined && isIdentifier(inner) && this.javaDeclaredStringType(inner) === true
             && argType.getAliasSymbol?.() === undefined && this.isStringType(argType.flags)) {
-            return `${this.javaStringReceiverText(receiver, name)}.indexOf(${this.printNode(inner, 0)})`;
+            // the cast hides a nullable target: a null one answers -1 like the helper
+            const target = this.printNode(inner, 0);
+            return `(${target} == null ? -1 : ${this.javaStringReceiverText(receiver, name)}.indexOf(${target}))`;
         }
         return undefined;
     }
