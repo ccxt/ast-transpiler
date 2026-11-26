@@ -2288,14 +2288,14 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
 
     // anyCell: the base tier boxes every array cell (`string[]`, `number[][]`) as the list's `object`
-    csharpListSpellingOfType(type, unionArms = 1, anyCell = false): string | undefined {
+    csharpListSpellingOfType(type, unionArms = 1, anyCell = false, stringCell = false): string | undefined {
         if (type === undefined || unionArms !== 1) {
             return undefined;
         }
         const checker: any = this.getChecker();
         if (type.isUnionType && type.isUnionType()) {
             const arms = (type.getTypes() ?? []).filter((arm) => (arm.flags & (TypeFlags.Undefined | TypeFlags.Null)) === 0);
-            return (arms.length === 1) ? this.csharpListSpellingOfType(arms[0], arms.length, anyCell) : undefined;
+            return (arms.length === 1) ? this.csharpListSpellingOfType(arms[0], arms.length, anyCell, stringCell) : undefined;
         }
         if (type.flags & (TypeFlags.TypeParameter | TypeFlags.Any | TypeFlags.Unknown | TypeFlags.EnumLike)) {
             return undefined;
@@ -2323,6 +2323,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         if (checker.isArrayType(element) || checker.isTupleType(element)) {
             return undefined;
+        }
+        // a venue `string[]` / `Strings` parameter holds the same list box its callers pass
+        if (stringCell && this.isStringType(element.flags)) {
+            return 'IList<object>';
         }
         if (this.isStringType(element.flags) || (element.flags & (TypeFlags.NumberLike | TypeFlags.BooleanLike))) {
             return undefined;
@@ -2416,7 +2420,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                     admitted = false;
                     break;
                 }
-                if (!followsBase && this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier) !== 'IList<object>') {
+                if (!followsBase && this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier, true) !== 'IList<object>') {
                     admitted = false;
                     break;
                 }
@@ -2425,6 +2429,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                     break;
                 }
             }
+            // a string cell needs a caller that passes a list: the declaration alone keeps the box
+            let stringCellsUnproved = !baseTier && rows.some((parameter) => this.csharpListSpellingOfType(this.getChecker().getTypeAtLocation(parameter), 1, baseTier) !== 'IList<object>');
             if (admitted && !baseTier) {
                 for (const call of calls.get(methodName) ?? []) {
                     // a `this.` call from another venue lineage reaches another method
@@ -2436,11 +2442,15 @@ export class CSharpTranspiler extends BaseTranspiler {
                         continue; // an omitted argument prints the parameter's own default
                     }
                     if (this.csharpListParamArgumentPrintsList(args[index], decide)) {
+                        stringCellsUnproved = false;
                         continue; // the argument's own C# declaration already holds a list
                     }
                     admitted = false; // an `object` argument would need a conversion at the call site
                     break;
                 }
+            }
+            if (stringCellsUnproved) {
+                admitted = false;
             }
             visiting.delete(key);
             memo.set(key, admitted);
@@ -3277,7 +3287,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 && !call.arguments.some((a) => a.kind === SyntaxKind.SpreadElement)) {
                 continue; // omitted: the default null
             }
-            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument));
+            const type = (argument === undefined) ? undefined : (this.csharpArithmeticOperandType(argument) ?? this.csharpTypedParameterArgument(argument) ?? this.csharpCoreTypedNumberArgument(argument)
+                ?? this.csharpNonNullIntegerSumArgument(argument));
             const kind = this.csharpArithmeticOperandKind(type);
             if ((kind === undefined) || (call.arguments.length > method.parameters.length)) {
                 return undefined;
@@ -7026,6 +7037,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!negative && this.csharpIsPreciseDecimalsRead(inner) && this.csharpOperandIsPlainNumber(inner)) {
             return { kind: 'Int64', node: inner, literal: false, zero: false, small: false };
         }
+        // a nested `Math.min/max` this printer prints native is a non-null int / Int64 of its operands' kind
+        const nested = negative ? undefined : this.csharpNativeMinMaxOperandKind(inner);
+        if (nested !== undefined) {
+            return { kind: nested, node: inner, literal: false, zero: false, small: false };
+        }
         if (negative || !isIdentifier(inner)) {
             return undefined;
         }
@@ -7039,6 +7055,23 @@ export class CSharpTranspiler extends BaseTranspiler {
             return undefined;
         }
         return { kind, node: inner, literal: false, zero: false, small: false };
+    }
+
+    // the kind of a `Math.min/max (a, b)` operand that prints native (Math.Min/Max, never null): Int64 when
+    // either side is Int64 / Int64? or a long literal, int otherwise
+    csharpNativeMinMaxOperandKind(node): string | undefined {
+        const callee: any = isCallExpression(node) ? node.expression : undefined;
+        if ((callee === undefined) || !isPropertyAccessExpression(callee) || (callee.expression.getText() !== 'Math')
+            || ![ 'min', 'max' ].includes(callee.name.text) || (node.arguments.length !== 2)) {
+            return undefined;
+        }
+        const left = this.csharpIntegralMinMaxOperand(node.arguments[0]);
+        const right = this.csharpIntegralMinMaxOperand(node.arguments[1]);
+        if ((left === undefined) || (right === undefined) || !/^Math\.M(?:in|ax)\(/.test(this.printNode(node, 0).trim())) {
+            return undefined;
+        }
+        const wide = (o) => (o.literal ? (o.literalKind !== 'int') : (o.kind !== 'int'));
+        return (wide(left) || wide(right)) ? 'Int64' : 'int';
     }
 
     csharpIsPreciseDecimalsRead(node): boolean {
@@ -11620,4 +11653,20 @@ export class CSharpTranspiler extends BaseTranspiler {
         return false;
     }
     // ===== end h30-H30-C05
+
+    // `a + b` / `a - b` over two non-null integer operands (a for counter, an integer literal) that prints the native
+    // operator: a venue-private number slot fed only by such sums prints Int64
+    csharpNonNullIntegerSumArgument(argument): string | undefined {
+        const node = this.csharpUnparenthesized(argument);
+        const op = node?.operatorToken?.kind;
+        if ((node?.kind !== SyntaxKind.BinaryExpression) || ((op !== SyntaxKind.PlusToken) && (op !== SyntaxKind.MinusToken))) {
+            return undefined;
+        }
+        const nonNull = (n) => [ 'Int64', 'long', 'int' ].indexOf(this.csharpArithmeticOperandType(n) as string) >= 0;
+        if (!nonNull(node.left) || !nonNull(node.right)) {
+            return undefined;
+        }
+        // the printed sum must be the native operator, never add(..) / subtract(..) boxing an object
+        return (this.csharpPrintedArithmeticKind(node, this.printNode(node, 0)) === undefined) ? undefined : 'Int64';
+    }
 }

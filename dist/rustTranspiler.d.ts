@@ -428,6 +428,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustNilSelfArmTernaryKind(rhs: any, declaration: any): string | undefined;
     rustNilScalarHandOff(declaration: any, scope: any, kind: string, boxed: any[]): boolean;
     private rustNilStrLentLocals;
+    rustBaseValueReturnHandOff(scope: any): boolean;
     /** ral-ld: `m[k] = x` / `m.k = x` as a statement on a plain identifier receiver (not `x` itself), one level deep. */
     rustNilStrStoreBox(n: any): boolean;
     private rustNilAliasMoves;
@@ -666,6 +667,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLentStrKeyLocals: Set<any>;
     /** Some insert-key (`key`) use of the local is not its last use, so a `String` key would be cloned there. */
     rustStrKeyInsertCopies(declaration: any): boolean;
+    rustHeldKeyReadInInsertValue(declaration: any): boolean;
     /** The key reads a local declared with a non-null initializer (nil-declared locals and slots keep their own rules). */
     rustInitKeyLocal(n: any): boolean;
     /** Some use of the local is a native map-key read (`okey`) or `in` test (`kin`). */
@@ -1072,7 +1074,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustOwnedOtherArmLastUse(node: any, declaration: any): boolean;
     rustOwnedThrownErrorArg(node: any, declaration: any): boolean;
     rustOwnedDeadBeforeWrite(node: any, declaration: any): boolean;
-    rustLocalLastUse(node: any, declaration: any): boolean;
+    rustLocalLastUse(node: any, declaration: any, skipOtherBranch?: boolean): boolean;
+    rustInOtherIfBranch(node: any, other: any): boolean;
     rustWsSettleCall(call: any): boolean;
     rust73cRejectOnlyError(declaration: any): boolean;
     /** The class-name shape `printNewExpression` routes to the runtime error constructors. */
@@ -1890,6 +1893,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printTypedMarketFlagLocalCondition(node: any): string | undefined;
     /** A whole-value hand-off of a struct local: the `Value` the untyped local held. */
     printTypedMarketValueUse(node: any): string | undefined;
+    rustMarketFieldMoves(receiver: any, declaration: any, node: any): boolean;
     private static rustTypedLiteralArg;
     printRustFunctionType(node: any): string;
     printMethodDeclaration(node: any, identation: any): string;
@@ -2389,6 +2393,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     private rustOwnContainerBare;
     rustOwnContainerReturn(node: any): 'dict' | 'list' | 'odict' | undefined;
     private static readonly RUST_OWN_RECORD_RETURNS;
+    rustSuperOwnDictCall(call: any): boolean;
     rustOwnContainerReturnUncached(node: any): 'dict' | 'list' | 'odict' | undefined;
     rustOwnOptDictReturn(node: any): 'odict' | undefined;
     /** The `Option<Dict>` text of a return operand of an `rustOwnOptDictReturn` method, else undefined. */
@@ -2583,6 +2588,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     keyTextIsValuePlace(key: any, text: string): boolean;
     bearerInOp(key: any, obj: any): string | undefined;
     rustBearerOptKeyIn(recv: any, keyNode: any): boolean;
+    rustInIfCondition(n: any): boolean;
     rustUntilRequestLocal(declaration: any): boolean;
     rustBearerLiteralInKey(key: any): string | undefined;
     bearerInOpKeyText(key: any): string | undefined;
@@ -2630,6 +2636,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** `'dict' | 'list'` for a local that holds the shared container and lends it to every read, else undefined. */
     rustBorrowedLocalKind(declaration: any): 'dict' | 'list' | undefined;
     private rustBorrowedKinds;
+    private rustBorrowedOpen;
     rustBorrowedLocalKindUncached(declaration: any): 'dict' | 'list' | undefined;
     private rustOptContainerLocals;
     /** ral-61n: optional map locals whose key-set uses (`Object.keys`, `in`) print off `x.as_deref()`. */
@@ -2666,6 +2673,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustJsonMapProducer(init: any): boolean;
     rustValueKeyType(key: any): boolean;
     rustBorrowedIndexReadUse(n: any): boolean;
+    rustHeldContainerKeyUse(key: any): boolean;
     rust73eStrKeyRead(n: any): boolean;
     private rustExtendReuseLocals;
     rustExtendReuseLiteral(declaration: any, init: any): boolean;
@@ -3101,6 +3109,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printLentListJoin(node: any): string | undefined;
     /** `Value::Arr(x.clone())` (the shared handle) or `Value::Arr(x)` at a hand-off of a lent list. */
     printRustLentListBox(node: any, text: string): string | undefined;
+    rustSortBy2RowsArg(node: any): boolean;
     rustWatchHashListSlot(call: any, n: any): 'clone' | 'lend' | undefined;
     private rustWsUrlLocals;
     rustWsUrlLocal(declaration: any): boolean;
@@ -3176,6 +3185,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     printWsCacheNullTest(left: any, right: any, op: any): string | undefined;
     /** `x.hashmap` on a cache handle is the handle's own `hashmap()` snapshot. */
     printWsCacheHashmapRead(node: any): string | undefined;
+    rustReadOnlyCacheBucket(declaration: any): boolean;
+    rustWsCacheHashmapText(node: any): string | undefined;
     /** A read of a typed field: the slot itself for a cache method or a write, else boxed once. */
     printWsCacheFieldRead(node: any): string | undefined;
     /** Writes of a typed field (`Some(ctor)`, `None`, a cache local) and of a cache local (a constructor). */

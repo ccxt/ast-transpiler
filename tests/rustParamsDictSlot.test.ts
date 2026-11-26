@@ -140,3 +140,28 @@ describe ('the params head of a base handleOption*AndParams helper takes the map
         expect (out).not.toContain ('get_arg_dict');
     });
 });
+
+describe ('a venue request helper params slot that every caller proves a map takes the map', () => {
+    const helper = (body: string) => "    createThingRequest (symbol: string, params: Dict = {}): Dict {\n" + body + "        return {};\n    }\n";
+    const runR = (dir: string, helperBody: string, caller: string) => {
+        fs.mkdirSync (path.join (root, dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, dir, 'ts/src/base/Exchange.ts'), base);
+        fs.writeFileSync (path.join (root, dir, 'ts/src/venue.ts'), venue (caller).replace (/\}\n$/, helper (helperBody) + '}\n'));
+        return new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': [ 'fetchTrades' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (root, dir, 'ts/src/venue.ts')).content;
+    };
+    const aliasBody = "        let paramsTif: Dict = params;\n        if (this.safeString (params, 'timeInForce') === 'PO') {\n            paramsTif = this.omit (params, [ 'timeInForce' ]);\n        }\n        const rest = this.omit (paramsTif, [ 'cost' ]);\n        this.hold (rest);\n";
+    test ('a Dict alias of the helper params binds params as Dict and drops the alias into_dict', () => {
+        const out = runR ('req', aliasBody, "        this.hold (this.createThingRequest (symbol, params));\n");
+        expect (out).toContain ('let params: crate::value::Dict = get_arg_dict(optional_args, ');
+        expect (out).toMatch (/let mut paramsTif: crate::value::Dict = params(\.clone\(\))?;/);
+        expect (out).not.toContain ('params.clone().into_dict()');
+    });
+    test ('negative: a caller that passes an untyped value keeps the boxed get_arg', () => {
+        const out = runR ('req-any', aliasBody, "        const p = this.hold (params);\n        this.hold (this.createThingRequest (symbol, p));\n");
+        expect (out).not.toMatch (/createThingRequest[\s\S]*get_arg_dict/);
+    });
+    test ('negative: helper params also handed to an untyped slot keeps the boxed get_arg', () => {
+        const out = runR ('req-hold', aliasBody + "        this.hold (params);\n", "        this.hold (this.createThingRequest (symbol, params));\n");
+        expect (out).not.toMatch (/createThingRequest[\s\S]*get_arg_dict/);
+    });
+});

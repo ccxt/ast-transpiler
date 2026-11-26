@@ -951,6 +951,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
     goMapLocalFreshMapWrite(write: any, name: string): boolean;
+    goInsideReaderPresenceBlock(use: any, name: string): boolean;
+    goDeepExtendWrite(write: any): boolean;
     goSelfNarrowingRead(write: any, name: string, family: string): boolean;
     goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
     goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
@@ -958,7 +960,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goAfterNilExitGuard(use: any, name: string): boolean;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
-    goCommaOkMapRead(container: any, key: any): string | undefined;
+    goCommaOkMapRead(container: any, key: any, unboxed?: boolean, selfNarrowing?: boolean): string | undefined;
     goMapLocalKeyIsString(key: any, printed: string): boolean;
     goIsPointerFreeValue(value: any): boolean;
     goMapWritesArePointerFree(scope: any, name: string): boolean;
@@ -1833,6 +1835,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     asyncTickerMapCallees: Set<string>;
     asyncStringCallees: Set<string>;
     asyncStringPtrCallees: Set<string>;
+    asyncStringListCallees: Set<string>;
     goTickerRowCache: Map<any, {
         key: any;
         keyIsPointer: boolean;

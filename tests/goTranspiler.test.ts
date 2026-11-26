@@ -17664,10 +17664,10 @@ describe('base Str precision / network helpers return *string', () => {
             const t = new Transpiler({ verbose: false, go: { parser: { NUM_LINES_END_FILE: 0 } } });
             installCcxtGoHooks(t.goTranspiler);
             const out = t.transpileGoByPath(file).content;
-            expect(out).toContain('NetworkCodeToId(networkCode any, optionalArgs ...any) *string {');
+            expect(out).toContain('NetworkCodeToId(networkCode *string, optionalArgs ...any) *string {');
             expect(out).toContain('return nil');
             expect(out).toContain('return networkId');
-            expect(out).toContain('return SafeStringPtr(GetValue(this.Options, networkCode))');
+            expect(out).toContain('return SafeStringPtr(this.Options[*networkCode])');
         } finally {
             fs.rmSync(tmp, { recursive: true, force: true });
         }
