@@ -2599,6 +2599,10 @@ export class RustTranspiler extends BaseTranspiler {
         if (kind === 'odict') { const obox = `${bare}.map_or(Value::Null, Value::Dict)`; return text.split(`${obox}.into_dict()`).join(`${bare}.unwrap_or_default()`).split(`${obox}.into_opt_dict()`).join(bare); }
         const box = `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${bare})`;
         const native = kind === 'dict' ? 'crate::value::Dict' : 'crate::value::List';
+        // a whole write into a local the borrowed rule types as that container takes the call itself
+        const up: any = this.rustSkipWrappers(init)?.parent;
+        const target: any = isBinaryExpression(up) && isIdentifier(up.left) ? this.rustDeclarationOfIdentifier(up.left) : undefined;
+        if (target !== undefined && this.rustBorrowedLocalKind(target) === kind && !this.rustOptContainerLocals.has(target) && text.endsWith(` = ${box}`)) return text.slice(0, -box.length) + bare;
         return text.split(`${box}.into_${kind}()`).join(bare).split(`${box}.into_opt_${kind}()`).join(`Some(${bare})`).split(`: ${native} = ${box}`).join(`: ${native} = ${bare}`)
             .split(`${box}.as_array().cloned().unwrap_or_default()`).join(kind === 'list' ? `${bare}.to_vec()` : `${box}.as_array().cloned().unwrap_or_default()`);
     }
@@ -26119,6 +26123,7 @@ export class RustTranspiler extends BaseTranspiler {
         // int53: 45g optional ternary and 45f declaration-initialised alias are one optional-map initializer (43f form)
         const optMapInit = optTernary || optAliasInit;
         let sbMapWrites = 0;
+        let ownCallWrites = 0;
         if (from === undefined && !nilDeclared) return undefined;
         const name = String(declaration.name.text);
         const fn: any = this.rustEnclosingFunction(declaration);
@@ -26235,6 +26240,8 @@ export class RustTranspiler extends BaseTranspiler {
                 // a map rewrite (`extend`, a map literal) answers a map: the optional form holds it as `Some`, its box the same `Dict`
                 if (!nilDeclared && from === 'dict' && this.rustSameKindRewrite(rhs, from)) optDictRewrites++;
                 if (!nilDeclared && (from === 'dict' || from === 'list') && this.rustSameKindRewrite(rhs, from)) return (this.rustSelfExtendWrite(n, declaration) ? ++sameKindWrites : 1) > 0 && String(rhs.getText()).split('\n')[0].length <= 240;
+                // a rewrite from an awaited own venue method of the local's never-null container kind holds that container too
+                if (!nilDeclared && (from === 'dict' || from === 'list') && rhs.kind === SyntaxKind.AwaitExpression && this.rustOwnContainerCallKind(rhs.expression) === from) return ++ownCallWrites > 0 && String(rhs.getText()).split('\n')[0].length <= 240;
                 // ral-43f: `t = s` of a `const s = this.safeDict* (..)` / `safeList*` (nullable default) in the same function:
                 // the alias holds the same optional container (syntactic proof, no decision of `s` is read: fixed point in one pass)
                 // ral-65i: a declaration-initialised optional-map alias (45f / 61i source) rewritten from a declared `Promise<Dict>`
@@ -26511,7 +26518,10 @@ export class RustTranspiler extends BaseTranspiler {
         const omitInitRewrites = writes > 0 && writes === sameKindWrites && from === 'dict' && init !== undefined && !this.rustContainerInitNeverNull(init, 'map') && this.rustOmitOfDict(init);
         if ((selfOmitWrites > 0 || omitInitRewrites) && this.rustHandedDictLocal(declaration)) return undefined;
         const neverNullRewrites = writes > 0 && writes === sameKindWrites && from === 'dict' && init !== undefined && (this.rustContainerInitNeverNull(init, 'map') || omitInitRewrites);
-        const optional = nilDeclared || nullTests > 0 || (writes > 0 && !neverNullRewrites) || lentNullable > 0 || optionalBoxes > 0 || zgRow || aeoRow || elementKeyWrites > 0 || optMapInit;
+        // filled and rewritten only from awaited own venue methods of that container kind: never Null
+        const ownInit: any = this.rustSkipWrappers(declaration.initializer);
+        const ownCallRewrites = writes > 0 && writes === ownCallWrites && ownInit?.kind === SyntaxKind.AwaitExpression && this.rustOwnContainerCallKind(ownInit.expression) === from;
+        const optional = nilDeclared || nullTests > 0 || (writes > 0 && !neverNullRewrites && !ownCallRewrites) || lentNullable > 0 || optionalBoxes > 0 || zgRow || aeoRow || elementKeyWrites > 0 || optMapInit;
         // ral-90rd R2: the native join reads a never-null list only
         if (joinUses.length > 0 && (optional || from !== 'list')) return undefined;
         if (jwtLends > 0 && optional) return undefined;
@@ -31315,7 +31325,17 @@ export class RustTranspiler extends BaseTranspiler {
         const form = this.rustLentListBoxes.get(node);
         if (form === undefined) return undefined;
         if (form === 'lend') return `&${text}`;
+        if (form === 'move' && this.rustSortBy2RowsArg(node)) return `\u0004${text}`;
         return form === 'move' ? `Value::Arr(${text})` : `Value::Arr(${text}.clone())`;
+    }
+
+    /** The rows argument of base `sortBy2`: its slot takes `impl Rows`, so a moved list passes as the list itself. */
+    rustSortBy2RowsArg(node: any): boolean {
+        let at: any = node;
+        while (at.parent !== undefined && (isAsExpression(at.parent) || isParenthesizedExpression(at.parent))) at = at.parent;
+        const call: any = at.parent;
+        return call !== undefined && isCallExpression(call) && call.arguments[0] === at && isPropertyAccessExpression(call.expression)
+            && String(call.expression.name.text) === 'sortBy2' && this.rustListPassthroughCall(call);
     }
 
     // ── watch hash lists (rustWatchHashListSlot) ──
