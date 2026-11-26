@@ -5307,6 +5307,8 @@ function ccxtGoIsUnifiedInt64Parameter (goTranspiler, table, param, goType = 'in
 
 function installCcxtGoUnifiedInt64Params (goTranspiler, table, goType = 'int64') {
     if (table === undefined) { return; }
+    if (goType === 'int64') { goTranspiler.unifiedInt64Params = table; }
+    if (goType === 'float64') { goTranspiler.unifiedFloat64Params = table; }
     const verdicts = new Map ();
     const isTabled = (param) => {
         if (!verdicts.has (param)) {
@@ -13057,6 +13059,7 @@ export class GoTranspiler extends BaseTranspiler {
     unifiedStringParams: { [method: string]: number[] } = {};
     // the slice mirror of the table above — inherited method name -> parameter
     unifiedSliceParams: { [method: string]: { [index: number]: string } } = {};
+    unifiedInt64Params: { [method: string]: number[] } = {};
     // inherited method name -> indexes of required `boolean` params that print `bool` on the base and every override (dynamic callers convert through BoolArg)
     unifiedBoolParams: { [method: string]: number[] } = {};
     // inherited methods whose nullable `Int` parameter prints `*int64` on the base and every override
@@ -13999,6 +14002,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         }
         const widened = this.goNativeIntWideningArithmetic(node, leftType, rightType, leftText, rightText);
         if (widened !== undefined) { return widened; }
+        if ((op === SyntaxKind.PercentToken) && (leftType === 'float64')
+            && (rightType === 'const-int') && this.isNonZeroIntegerLiteral(node.right)
+            && this.goStdlibImportIsPlaceable()) {
+            this.goFileStdlibImports.add('math');
+            return { 'goType': 'float64', 'text': `math.Mod(${this.goUnwrapPrintedParens(leftText.trim())}, ${this.goUnwrapPrintedParens(rightText.trim())})` };
+        }
         const goType = this.goNativeNumericResultType(op, leftType, rightType, node);
         if (goType === undefined) { return undefined; }
         const isIntKind = (kind: string) => (kind === 'int') || (kind === 'int64') || (kind === 'const-int');
@@ -18619,6 +18628,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const goType = entry[fn.parameters.indexOf(param)];
         const h28t05 = this.h28t05ObjectRowSliceParameterType(fn, param, goType); if (h28t05 !== undefined) return h28t05;
         if (goType === '[]any') { return this.goUnifiedAnySliceParameterType(fn, param); }
+        if (goType === '[]int64') { return this.goUnifiedInt64SliceParameterType(fn, param); }
         const h27g22 = this.h27g22NumberRowSliceParameterType(fn, param, goType); if (h27g22 !== undefined) return h27g22;
         if (goType === '[][]any') { return this.goUnifiedRowSliceParameterType(fn, param); }
         const annotation = (goType === '[]string') ? 'string[]' : ((goType === '[][]string') ? 'string[][]' : undefined);
@@ -18646,6 +18656,15 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if ((element === undefined) || (!(element.flags & TypeFlags.Object) && !anyElement)) { return undefined; }
         if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]any')) { throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []any`); }
         return '[]any';
+    }
+
+    // a `[]int64` slot types a required `number[]` / `int[]` parameter whose callers pass integer slices
+    goUnifiedInt64SliceParameterType(fn, param): string | undefined {
+        const text = String(param.type?.getText?.() ?? '').replace(/\s+/g, '');
+        if ((param.initializer !== undefined) || (param.dotDotDotToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier)
+            || (fn.body === undefined) || ((text !== 'number[]') && (text !== 'int[]'))) { return undefined; }
+        if (!this.goLocalIsSafeToType(fn.body, param, param.name.text, '[]int64')) { throw new Error(`unifiedSliceParams: ${fn.name.text} parameter ${param.name.text} is written as something other than []int64`); }
+        return '[]int64';
     }
 
     // a `[][]any` slot types a required `string[][]` row list: every caller hands rows of boxed
@@ -18840,6 +18859,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             // an empty literal opens as whatever slice its slot asks for
             return (depth === 0) ? want : undefined;
         }
+        if ((depth === 0) && (want === '[]int64')) {
+            return elements.every((e) => (e.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(e.text)) ? '[]int64' : undefined;
+        }
         let element: string | undefined;
         for (const node2 of elements) {
             if (node2.kind === SyntaxKind.SpreadElement) { return undefined; }
@@ -18928,7 +18950,56 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         if (marked === 0) { return undefined; }
         const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
-        return args.map((a) => this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim()).join(', ');
+        return args.map((a, i) => {
+            const printed = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+            return this.goFormatUnifiedNumericArg(name, i, a, printed);
+        }).join(', ');
+    }
+
+    goUnifiedNumericSlotType(name: string, index: number): 'int64' | 'float64' | undefined {
+        if ((this.unifiedInt64Params !== undefined) && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name) && this.unifiedInt64Params[name].includes(index)) { return 'int64'; }
+        if ((this.unifiedFloat64Params !== undefined) && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name) && this.unifiedFloat64Params[name].includes(index)) { return 'float64'; }
+        return undefined;
+    }
+
+    goFormatUnifiedNumericArg(name: string, index: number, arg, printed: string): string {
+        const slot = this.goUnifiedNumericSlotType(name, index);
+        if (slot === undefined) { return printed; }
+        const inner = this.goUnwrapParenthesizedNode(arg);
+        const raw = this.goUnwrapPrintedParens(printed.trim());
+        const declType = (inner?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(inner) : undefined;
+        const staticType = this.goOperandStaticType(inner, raw);
+        if (slot === 'float64') {
+            if ((staticType === 'float64') || (staticType === 'const-float') || (staticType === 'const-int')) { return printed; }
+            if ((staticType === 'int64') || (staticType === 'int') || (declType === 'int64') || (declType === 'int')) { return `float64(${raw})`; }
+            if ((declType === '*float64') && this.goPointerNumberIsNonNil(inner)) { return `*${raw}`; }
+            if ((declType === '*int64') && this.goPointerNumberIsNonNil(inner)) { return `float64(*${raw})`; }
+            if (this.goIsAnyBoxExpression(inner, raw) || (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(raw)) >= 0)) { return `Float64Arg(${raw})`; }
+            return printed;
+        }
+        if ((staticType === 'int64') || (staticType === 'const-int')) { return printed; }
+        if ((staticType === 'int') || (declType === 'int')) { return `int64(${raw})`; }
+        if ((declType === '*int64') && this.goPointerNumberIsNonNil(inner)) { return `*${raw}`; }
+        return printed;
+    }
+
+    goUnifiedNumericCallArgs(node, identation): string | undefined {
+        const callee: any = node.expression;
+        const name = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
+        const hasInt = (this.unifiedInt64Params !== undefined) && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name);
+        const hasFloat = (this.unifiedFloat64Params !== undefined) && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name);
+        if ((typeof name !== 'string') || (!hasInt && !hasFloat)) { return undefined; }
+        const args = node.arguments ?? [];
+        if ((args.length === 0) || args.some((a) => a.kind === SyntaxKind.SpreadElement)) { return undefined; }
+        const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
+        let changed = false;
+        const formatted = args.map((a, i) => {
+            const printed = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+            const next = this.goFormatUnifiedNumericArg(name, i, a, printed);
+            if (next !== printed) { changed = true; }
+            return next;
+        });
+        return changed ? formatted.join(', ') : undefined;
     }
 
     // the call arguments of a unified method whose parameter prints `string`: an argument the
@@ -23309,7 +23380,7 @@ ${this.getIden(identation)}${returnStatement}`;
         }).join(", ");
         // a list of calls (promises included) always opens as `[]any{`; getFunctionType is kept for its checker side effect (it caches a signature on the call node)
         const first = node.elements[0];
-        const arrayOpen = ((markedType === '[]string') || (markedType === '[][]any'))
+        const arrayOpen = ((markedType === '[]string') || (markedType === '[]int64') || (markedType === '[][]any'))
             ? `${markedType}{` : ((markedType === '[][]string')
                 ? '[][]string{' : (((first?.kind === SyntaxKind.CallExpression) && (this.getFunctionType(first) || true))
                     ? '[]any{' : this.ARRAY_OPENING_TOKEN));
@@ -23325,6 +23396,8 @@ ${this.getIden(identation)}${returnStatement}`;
         if (unified !== undefined) { return unified; }
         const sliceArgs = this.goSliceCallArgs(node, identation);
         if (sliceArgs !== undefined) { return sliceArgs; }
+        const numericArgs = this.goUnifiedNumericCallArgs(node, identation);
+        if (numericArgs !== undefined) { return numericArgs; }
         const derefStringArg = this.goDerefStringArgCall(node, identation);
         if (derefStringArg !== undefined) { return derefStringArg; }
         const dictArgs = (node.arguments && node.arguments.length > 1)
@@ -24964,7 +25037,7 @@ ${tryBodyBlock}
         if (this.isGoElementAccessAssignmentTarget(node) || containerStr.includes('\n') || keyStr.includes('\n')) { return undefined; }
         let listType = this.goResolvedLocalGoType(baseExpr);
         if (((listType === undefined) || (listType === 'any')) && this.goAwaitedListLocal(baseExpr)) { listType = GO_SAFE_LIST_LOCAL_TYPE; }
-        if ((listType !== GO_STRING_LIST_LOCAL_TYPE)
+        if ((listType !== GO_STRING_LIST_LOCAL_TYPE) && (listType !== '[]int64')
             && !((listType === GO_SAFE_LIST_LOCAL_TYPE) && (this.goListElementsAreObjects(baseExpr) || this.goAwaitedMapRowList(baseExpr)))) { return undefined; }
         return this.goLoopBoundedIndexRead(node, baseExpr, keyNode, containerStr, keyStr);
     }
@@ -25287,8 +25360,9 @@ ${tryBodyBlock}
         const key: any = node.argumentExpression;
         if ((base?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.Identifier)) { return undefined; }
         const index = `${base.text}[${key.text}]`;
-        if (this.goResolvedLocalGoType(base) !== GO_STRING_LIST_LOCAL_TYPE) { return undefined; }
-        return (printedValue.trim() === index) && (this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index) ? 'string' : undefined;
+        const sliceType = this.goResolvedLocalGoType(base);
+        if ((sliceType !== GO_STRING_LIST_LOCAL_TYPE) && (sliceType !== '[]int64')) { return undefined; }
+        return (printedValue.trim() === index) && (this.goLoopBoundedSliceRead(node, base, key, base.text, key.text) === index) ? ((sliceType === '[]int64') ? 'int64' : 'string') : undefined;
     }
 
     // the prediction tier's dead bounds guard: `list[i]` in `for (let i = 0; i < list.length; i++)`, with

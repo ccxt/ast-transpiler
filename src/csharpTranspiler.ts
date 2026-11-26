@@ -1706,6 +1706,14 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (wanted === 'IList<object>') {
             return undefined; // every admitted caller already passes a list, null or nothing
         }
+        if (wanted === 'IList<Int64>') {
+            const listNode = this.csharpCallSiteOperand(argument);
+            if (isArrayLiteralExpression(listNode) && listNode.elements.every((e) => isNumericLiteral(e) && /^\d+$/.test((e as any).text))) {
+                const elements = listNode.elements.map((e) => this.printNode(e, 0).trim()).join(', ');
+                return { text: `new List<Int64>() {${elements}}`, tight: false };
+            }
+            return undefined;
+        }
         if (wanted.endsWith('Dictionary<string, object>')) {
             const typed = this.csharpTypedDictionaryArgument(argument, wanted);
             if (typed !== undefined) { return (typed === text) ? undefined : { text: typed, tight: false }; }
@@ -1775,6 +1783,10 @@ export class CSharpTranspiler extends BaseTranspiler {
     // a numeric argument already declared in the target's box passes bare; `double? x` into `double` is `(x ?? 0d)`, a negated `double` passes as printed. '' = convert
     csharpCallSiteIdentityOperand(argument, wanted: string, text: string): string {
         if ((wanted !== 'Int64?') && (wanted !== 'Int64') && (wanted !== 'double?') && (wanted !== 'double')) { return ''; }
+        const rawOperand = this.csharpCallSiteOperand(argument);
+        if ((wanted === 'double?') && isBinaryExpression(rawOperand) && (rawOperand.operatorToken.kind === SyntaxKind.PercentToken) && /^[(].*%.*[)]$/.test(text) && !text.includes('mod(')) {
+            return text; // native integral/double % widens implicitly to double?
+        }
         const negated = (wanted === 'double') ? /^\(-([A-Za-z_]\w*)\)$/.exec(text) : null;
         const ident = (negated !== null) ? negated[1] : text;
         if (!/^[A-Za-z_]\w*$/.test(ident)) { return ''; }
@@ -1788,6 +1800,11 @@ export class CSharpTranspiler extends BaseTranspiler {
         const intOperand = (declared === 'int') || ((declared === undefined) && (this.csharpExpressionTypeOf(operand) === 'int'));
         if (intOperand && ((wanted === 'Int64') || (wanted === 'Int64?'))) {
             return text; // an `int` widens implicitly to the same Int64 value
+        }
+        if ((wanted === 'Int64') && (declared === 'Int64?')) {
+            if (this.csharpNeverNullInt64Read(operand)) { return text + '.GetValueOrDefault()'; }
+            const nonNull = this.csharpIntegralNonNullText(argument, { kind: 'Int64?', node: operand }, text);
+            if (nonNull !== undefined) { return nonNull; }
         }
         return ((wanted === 'double') && (declared === 'double?')) ? '(' + text + ' ?? 0d)' : '';
     }
@@ -2036,7 +2053,8 @@ export class CSharpTranspiler extends BaseTranspiler {
                 if (!fromThis || !isCallExpression(call) || (call.expression !== reference)) { blocked = true; break; }
                 calls.push(call);
             }
-            if (!blocked && (calls.length > 0)) { eligible.push({ method, calls }); }
+            const syncUncalled = (calls.length === 0) && !overridden.has(method) && !(method.modifiers ?? []).some((m) => m.kind === SyntaxKind.AsyncKeyword);
+            if (!blocked && ((calls.length > 0) || syncUncalled)) { eligible.push({ method, calls }); }
         }
         // repeat until no new decision: a dict row argument may be a parameter decided later in the walk
         for (let before = -1, pass = 0; (before !== decided.size) && (pass < 4); pass++) {
@@ -2046,9 +2064,11 @@ export class CSharpTranspiler extends BaseTranspiler {
                 for (let index = 0; index < params.length; index++) {
                     const parameter = params[index];
                     if (decided.has(parameter)) { continue; }
-                    const kind = this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
-                        ?? this.csharpVenueDictParamsKind(method, parameter, index, calls)
-                        ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls);
+                    const kind = (calls.length === 0)
+                        ? this.csharpVenueNumberParamKind(method, parameter, index, calls)
+                        : (this.csharpVenueNumberParamKind(method, parameter, index, calls) ?? this.csharpVenueStringParamKind(method, parameter, index, calls)
+                            ?? this.csharpVenueDictParamsKind(method, parameter, index, calls)
+                            ?? this.csharpVenueDictRowParamKind(method, parameter, index, calls));
                     if (kind === 'string') {
                         this.csharpTypedLocals.set(parameter, kind); // body reads see the printed string
                     }
@@ -2078,6 +2098,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (nullable && this.csharpVenueOverriddenMethods.has(method)) { return undefined; }
         const proKinds = this.csharpProFileCallKinds(method, index);
         if (proKinds === undefined) { return undefined; }
+        if (calls.length === 0) {
+            if (nullable || (proKinds.length > 0) || hasHostTable || this.csharpVenueOverriddenMethods.has(method)) { return undefined; }
+            return (parameter.type.getText().trim() === 'int') ? 'Int64' : 'double';
+        }
         const kinds = new Set<string>(nullable ? [ 'nullable?', ...proKinds ] : proKinds);
         for (const call of calls) {
             const argument = call.arguments?.[index];
@@ -3358,7 +3382,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (types?.index !== 'int') {
             return undefined; // only an int index binds the List<object> indexer
         }
-        if ((types.receiver !== 'List<object>') && (types.receiver !== 'IList<object>') || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression)) return undefined;
+        if (((types.receiver !== 'List<object>') && (types.receiver !== 'IList<object>') && (types.receiver !== 'IList<Int64>')) || !this.csharpIndexIsLoopBounded(node, expression, argumentExpression)) return undefined;
         return this.printNode(expression, 0) + '[' + this.printNode(argumentExpression, 0) + ']';
     }
     // the read sits in the body of a `for` that re-tests `index < receiver.length`, both resolved to the very symbols the read uses, and nothing in the body can move either
@@ -3384,8 +3408,15 @@ export class CSharpTranspiler extends BaseTranspiler {
         const condition: any = forStatement.condition;
         if (condition?.kind !== SyntaxKind.BinaryExpression || condition.operatorToken?.kind !== SyntaxKind.LessThanToken) { return false; }
         const length: any = condition.right;
-        if (length?.kind !== SyntaxKind.PropertyAccessExpression || length.name?.text !== 'length' || this.csharpIdentifierSymbol(condition.left) !== indexSymbol) return false;
-        if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(length.expression)) !== receiverSymbol) { return false; }
+        if (this.csharpIdentifierSymbol(condition.left) !== indexSymbol) { return false; }
+        let lengthExpr: any = length;
+        if (isIdentifier(length)) {
+            const decl: any = this.csharpIdentifierSymbol(length)?.valueDeclaration?.resolve?.();
+            if ((decl === undefined) || !isVariableDeclaration(decl) || (((decl.parent?.flags ?? 0) & NodeFlags.Const) === 0)) { return false; }
+            lengthExpr = decl.initializer;
+        }
+        if (lengthExpr?.kind !== SyntaxKind.PropertyAccessExpression || lengthExpr.name?.text !== 'length') return false;
+        if (this.csharpIdentifierSymbol(this.csharpLengthReceiverIdentifier(lengthExpr.expression)) !== receiverSymbol) return false;
         return !this.csharpIndexBoundIsVoided(forStatement.statement, receiverSymbol, indexSymbol);
     }
     // The identifier a `.length` receiver reads through wrappers whose C# print is the bare text: parentheses, and `as T` where printAsExpression does not cast (`any`/`string`/`T[]` p...
@@ -4282,8 +4313,12 @@ export class CSharpTranspiler extends BaseTranspiler {
             return (isPropertyAccessExpression(n) && (n.expression?.kind === SyntaxKind.ThisKeyword)
                 && Object.prototype.hasOwnProperty.call(CSHARP_SCALAR_FIELD_KINDS, n.name?.text)) ? CSHARP_SCALAR_FIELD_KINDS[n.name.text] : undefined;
         };
-        let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left) ?? this.csharpNumericParamKind(left);
-        let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right) ?? this.csharpNumericParamKind(right);
+        const localNumeric = (n) => {
+            const t = this.csharpDeclaredLocalValueType(n);
+            return ((t !== undefined) && ([ 'int', 'Int64', 'double', 'Int64?', 'double?' ].indexOf(t) >= 0)) ? t : undefined;
+        };
+        let leftKind = this.csharpExpressionTypeOf(left) ?? fieldKind(left) ?? this.csharpNumericParamKind(left) ?? localNumeric(left);
+        let rightKind = this.csharpExpressionTypeOf(right) ?? fieldKind(right) ?? this.csharpNumericParamKind(right) ?? localNumeric(right);
         // a fractional literal is a C# double constant
         const fraction = (n) => (isNumericLiteral(n) && /^\d*\.\d+$/.test(n.text)) ? 'double' : undefined;
         leftKind = leftKind ?? fraction(left);
@@ -4625,8 +4660,11 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpNativeModExpression(left, right, leftText) {
         if (left?.kind !== SyntaxKind.Identifier) { return undefined; }
         const divisor = csharpLiteralNumericValue(right);
-        if ((divisor === undefined) || !Number.isSafeInteger(divisor) || (divisor === 0) || this.csharpExpressionTypeOf(left) !== 'int') return undefined;
-        return `((Int64)${leftText} % ${divisor}L)`;
+        if ((divisor === undefined) || !Number.isSafeInteger(divisor) || (divisor === 0)) return undefined;
+        const kind = this.csharpExpressionTypeOf(left) ?? this.csharpNumericParamKind(left);
+        if (kind === 'int') { return `((Int64)${leftText} % ${divisor}L)`; }
+        if (kind === 'double?') { return `(${leftText} % ${divisor})`; }
+        return undefined;
     }
     // `-x` prints `prefixUnaryNeg(ref x)`, whose typed overloads negate in place and return the same box (`a = -a; return a;`): a local declared int / Int64 / double binds one, so the...
     csharpNativeNegatedLocal(operand, leftSide) {
@@ -5094,7 +5132,16 @@ export class CSharpTranspiler extends BaseTranspiler {
         const shadows = [];
         const out = printed.map((text, index) => {
             const wanted = rows[0]?.[index] ?? rows[1]?.[index];
-            if ((wanted === undefined) || !text.startsWith('object ')) { return text; }
+            if (wanted === undefined) { return text; }
+            if ((wanted === 'IList<Int64>') && text.startsWith('IList<object> ')) {
+                const param = node.parameters[index];
+                if (param !== undefined) {
+                    this.csharpParamTypes.set(param, wanted);
+                    this.csharpTypedLocals.set(param, wanted);
+                }
+                return wanted + text.slice('IList<object>'.length);
+            }
+            if (!text.startsWith('object ')) { return text; }
             const param = node.parameters[index];
             if ((rows[0]?.[index] !== undefined) && (param !== undefined) && this.csharpCoreArgNeedsShadow(node, param, wanted)) {
                 shadows.push(param);
@@ -5881,7 +5928,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (!Number.isInteger(index) || (index < 0)) {
                 return undefined; // the helper throws on a negative index too, but never prints one itself
             }
-            return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : null)`;
+            const fallback = ((csharpType === 'IList<Int64>') || (csharpType === 'List<Int64>')) ? '(Int64?)null' : 'null';
+            return `(${receiver} != null && ${index} < ${receiver}.Count ? ${receiver}[${index}] : ${fallback})`;
         }
         return undefined;
     }
@@ -6561,6 +6609,15 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (op === SyntaxKind.PlusToken) { return this.csharpPlusChainNonNullStringType(initializer); }
             return undefined;
         }
+        case SyntaxKind.ElementAccessExpression: {
+            const recv = initializer.expression;
+            const arg = initializer.argumentExpression;
+            const recvType = isIdentifier(recv) ? (this.csharpTypedLocalType(recv) ?? this.csharpExpressionTypeOf(recv)) : undefined;
+            if ((recvType === 'IList<Int64>') && isIdentifier(arg) && this.csharpIndexIsLoopBounded(initializer, recv, arg)) {
+                return 'Int64';
+            }
+            return undefined;
+        }
         }
         return this.csharpCallReturnType(initializer) ?? (this.csharpBoolCallTyped(initializer) ? 'bool' : undefined);
     }
@@ -6987,7 +7044,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (keyType !== 'int') {
             return undefined; // Int64/object indices do not bind the List indexer
         }
-        return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : null)`;
+        const fallback = ((csharpType === 'IList<Int64>') || (csharpType === 'List<Int64>')) ? '(Int64?)null' : 'null';
+        return `(${receiver} != null && ${printedKey} < ${receiver}.Count ? ${receiver}[${printedKey}] : ${fallback})`;
     }
     // an `object` key identifier whose `(string)` cast cannot hide a later retype: a parameter the body writes (or defaults) gets a shadow local the embedding build layer retypes afte...
     csharpObjectKeyCastable(key): boolean {
