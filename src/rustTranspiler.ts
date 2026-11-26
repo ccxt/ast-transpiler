@@ -24584,6 +24584,8 @@ export class RustTranspiler extends BaseTranspiler {
                 enumUses++;
                 return true;
             }
+            // a literal-built map (no store tag) answers a plain literal `'k' in x` inside an `if` condition from its own lookup
+            if (!produced && isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword && parent.right === n && this.rustBearerLiteralInKey(parent.left) !== undefined && this.rustInIfCondition(parent)) return true;
             // `k in x` — the map's own lookup behind the helper's `Str` test.
             if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InKeyword
                 && parent.right === n) return this.bearerInOpKeyText(parent.left) !== undefined || this.literalKeyWidened(this.rustLiteralBearerKeyArg(n, parent.left)) || this.rustBearerOptKeyIn(n, parent.left) || (this.rustBearerLiteralInKey(parent.left) !== undefined && this.rustUntilRequestLocal(declaration));
@@ -25650,6 +25652,14 @@ export class RustTranspiler extends BaseTranspiler {
         if (own === undefined || !isVariableDeclaration(own) || own.initializer === undefined || !isObjectLiteralExpression(this.rustSkipWrappers(own.initializer))) return false;
         if (this.rustKeyScalarDecisionOpen(key)) this.rustBearerSawOpenKey = true;
         return this.rustScalarLocalOf(key)?.kind === 'ostr' && this.rustScalarUseForms.get(key) === 'kin';
+    }
+
+    /** `n` sits in the condition of an `if` (through parens, `!` and `&&` / `||`). */
+    rustInIfCondition(n: any): boolean {
+        let cur: any = n;
+        while (cur.parent !== undefined && (cur.parent.kind === SyntaxKind.ParenthesizedExpression || (isPrefixUnaryExpression(cur.parent) && cur.parent.operator === SyntaxKind.ExclamationToken)
+            || (isBinaryExpression(cur.parent) && (cur.parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken || cur.parent.operatorToken.kind === SyntaxKind.BarBarToken)))) cur = cur.parent;
+        return isIfStatement(cur.parent) && cur.parent.expression === cur;
     }
 
     /** 41i: a map-literal local handed as the request of a base `handleUntilOption`-family call (item scope: the request
