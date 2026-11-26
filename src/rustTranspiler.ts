@@ -2640,6 +2640,7 @@ export class RustTranspiler extends BaseTranspiler {
             const untilDecl = this.printRustUntilPairDestructure(declaration, parsedElements, indent); if (untilDecl !== undefined) return untilDecl;
             const syntheticName = parsedElements.join('') + 'Variable';
             const allDicts = this.printPromiseAllDictLocals(declaration, parsedElements, indent); if (allDicts !== undefined) return allDicts;
+            const allLists = this.printPromiseAllListLocals(declaration, parsedElements, indent); if (allLists !== undefined) return allLists;
             const nativeList = this.rustNativeListSource(declaration.initializer);
             // a watch whose every matching resolve passes an array literal settles a list (or Null): read it as one
             const wsTuple = !nativeList && this.rustWsTupleListProof(declaration);
@@ -38027,6 +38028,33 @@ export class RustTranspiler extends BaseTranspiler {
         return elements.map((e: any, i: number) => this.rustHandedDictLocal(e)
             ? `${indent}let mut ${names[i]}: crate::value::Dict = ${operands[i]}`
             : `${indent}let mut ${names[i]}: Value = Value::Dict(${operands[i]})`).join(';\n');
+    }
+
+    /** `const [ a, b ] = await Promise.all ([ x, y ])` where every operand is a once-read local printed as a list: `promise_all`
+     *  hands each operand back as it came, so a list slot takes its operand's list (any other slot boxes it). */
+    printPromiseAllListLocals(declaration: any, names: string[], indent: string): string | undefined {
+        const elements: any[] = Array.from(declaration.name.elements);
+        const awaited: any = this.rustSkipWrappers(declaration.initializer);
+        if (awaited?.kind !== SyntaxKind.AwaitExpression || (declaration.parent as any)?.declarations?.length !== 1) return undefined;
+        const call: any = this.rustSkipWrappers(awaited.expression);
+        if (call === undefined || !isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)
+            || !isIdentifier(call.expression.expression) || call.expression.expression.text !== 'Promise' || String(call.expression.name.text) !== 'all') return undefined;
+        const list: any = this.rustSkipWrappers(call.arguments[0]);
+        if (list === undefined || !isArrayLiteralExpression(list) || list.elements.length !== elements.length) return undefined;
+        const fn: any = this.rustEnclosingFunction(declaration);
+        const operands: string[] = [];
+        for (let i = 0; i < elements.length; i++) {
+            const e: any = elements[i]; const op: any = this.rustSkipWrappers(list.elements[i]);
+            if (names[i] === '' || e.dotDotDotToken !== undefined || e.initializer !== undefined || e.name === undefined || !isIdentifier(e.name) || op === undefined || !isIdentifier(op)) return undefined;
+            const d: any = this.rustDeclarationOfIdentifier(op);
+            if (d === undefined || !isVariableDeclaration(d) || d.name === op || this.rustEnclosingFunction(d) !== fn || this.rustLocalIsReassigned(d, String(op.text))
+                || !this.rustLocalUsesAll(d, String(op.text), false, (n: any) => this.rustIdentifierIsPropertyName(n) || n === op)
+                || this.rustOptContainerLocals.has(d) || this.rustBorrowedLocalKind(d) !== 'list') return undefined;
+            operands.push(this.printNode(d.name, 0));
+        }
+        return elements.map((e: any, i: number) => this.rustPromiseAllListSlotKind(e) === 'list'
+            ? `${indent}let mut ${names[i]}: crate::value::List = ${operands[i]}`
+            : `${indent}let mut ${names[i]}: Value = Value::Arr(${operands[i]})`).join(';\n');
     }
 
     /** `let mut x: crate::value::List = <slot read>.into_list()` for a Promise.all list slot (the producer is always a list). */

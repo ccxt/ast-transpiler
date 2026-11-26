@@ -15167,7 +15167,7 @@ describe('ral-zf: Promise.all slots of list producers are shared lists lent to a
     const markets = "    async fetchSpotMarkets (params: Dict = {}): Promise<Market[]> { return this.hold ([]); }\n    async fetchSwapMarkets (params: Dict = {}): Promise<Market[]> { return this.hold ([]); }\n";
     test('Promise<List> endpoint slots (bound operands or inline): List slots lent to arrayConcat, no copy', () => {
         const out = mk(markets + "    async fetchAll (params: Dict = {}) {\n        const p1 = this.publicGetA (params);\n        const p2 = this.publicGetA (params);\n        const [ spot, swap ] = await Promise.all ([ p1, p2 ]);\n        return this.arrayConcat (spot, swap);\n    }\n    async fetchRows (params: Dict = {}) {\n        const [ a, b ] = await Promise.all ([ this.publicGetA (params), this.publicGetA (params) ]);\n        return this.arrayConcat (a, b);\n    }");
-        expect(out).toMatch(/let mut spot: crate::value::List = spotswapVariable\.get\(0\)\.cloned\(\)\.unwrap_or\(Value::Null\)\.into_list\(\);/);
+        expect(out).toContain('let mut spot: crate::value::List = p1;');
         expect(out).toMatch(/let mut swap: crate::value::List = /);
         expect(out).toContain('self.arrayConcat(&spot, &swap)');
         expect(out).toMatch(/let mut a: crate::value::List = /);
