@@ -22355,6 +22355,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const target = (pointer || nilable) ? this.goGetArgCopyTarget(use, body) : undefined;
             if ((target === undefined) && (goType === '*int64') && h18g01CopyJoinsAsInt64Ptr(this, use, param)) { return true; }
             if ((target !== undefined) && guarded && h22g05NumericDefaultCopy(this, target, use, goType)) { return true; }
+            if ((target !== undefined) && guarded && h54g53StringDefaultCopy(this, target, use, goType)) { return true; }
             if (target !== undefined) {
                 if ((!pointer && guarded) || seen.has(target)) { return true; }
                 return this.goGetArgUsesAreSafe(body, target, target.name.text, goType, nilable, seen, true);
@@ -36572,6 +36573,17 @@ function h22g05NumericDefaultCopy (go, target, use, goType: string): boolean {
         || ((target.parent?.flags & NodeFlags.Const) === 0)) { return false; }
     const arms = [ ccxtGoUnwrapParens(init.whenTrue), ccxtGoUnwrapParens(init.whenFalse) ];
     return arms.some((a) => (a?.kind === SyntaxKind.NumericLiteral) && /^\d+$/.test(a.text)) && arms.some((a) => a?.kind === SyntaxKind.Identifier);
+}
+// `const v: string = (x === undefined) ? 'lit' : x` over a *string parameter prints the string join (the
+// pointee or the literal, never nil), so later reads of v see a plain Go string.
+function h54g53StringDefaultCopy (go, target, use, goType: string): boolean {
+    const init = ccxtGoUnwrapParens(target.initializer);
+    if ((goType !== '*string') || (init !== use) || (init?.kind !== SyntaxKind.ConditionalExpression) || ((target.parent?.flags & NodeFlags.Const) === 0)) { return false; }
+    let declared;
+    try { declared = (target.type === undefined) ? undefined : go.checkerOrUndefined?.()?.getTypeAtLocation (target.type); } catch (e) { return false; }
+    if ((declared === undefined) || ((declared.flags & ts.TypeFlags.String) === 0)) { return false; }
+    const arms = [ ccxtGoUnwrapParens(init.whenTrue), ccxtGoUnwrapParens(init.whenFalse) ];
+    return arms.some((a) => a?.kind === SyntaxKind.StringLiteral) && arms.some((a) => a?.kind === SyntaxKind.Identifier);
 }
 // Both arms are never-nil lists: the list arm is r (IsArray true) through ArrayTyped, the other the safeList
 // read with a `[]` default through ArrayTyped, the forms the IsArray-guarded array-literal rule already prints.
