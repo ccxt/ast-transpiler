@@ -7270,7 +7270,8 @@ export class CSharpTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(node)) {
             node = node.expression;
         }
-        if (!isIdentifier(node) || (this.csharpIntegralOperand(node)?.kind !== 'Int64?')) {
+        // a parameter whose printed signature is `Int64?` (an `Int = <literal>` declaration) is that type in the body
+        if (!isIdentifier(node) || ((this.csharpIntegralOperand(node)?.kind !== 'Int64?') && (this.csharpPrintedParamType(node) !== 'Int64?'))) {
             return false;
         }
         let symbol: any;
