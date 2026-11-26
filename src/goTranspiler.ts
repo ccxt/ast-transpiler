@@ -5535,8 +5535,14 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     {
         goInstAround (goTranspiler, 'printVariableDeclarationList', function (upstream, node, identation) {
             const declaration = node?.declarations?.[0];
+            const narrowKey = (declaration !== undefined) ? this.goStringNarrowedKey (declaration) : '';
+            if ((declaration !== undefined) && this.goStringNarrowedInit?.has (narrowKey)) {
+                this.goDeclaredTypeCache.set (declaration, 'string');
+                return this.getIden (identation) + 'var ' + this.printNode (declaration.name) + ' string = ' + this.goStringNarrowedInit.get (narrowKey);
+            }
             const joinType = ccxtGoNilDeclaredJoinType (this, declaration) ?? goStrNilDeclaredJoinType (this, declaration);
             if (joinType !== undefined) {
+                this.goDeclaredTypeCache.set (declaration, joinType);
                 // the printer's own nil branch, with the proven pointer type named
                 return this.getIden (identation) + 'var ' + this.printNode (declaration.name) + ' ' + joinType + ' = ' + this.NULL_TOKEN;
             }
@@ -9174,14 +9180,23 @@ function goStrNilDeclaredJoinType (goTranspiler, declaration) {
             } else if ((parent?.kind === SyntaxKind.BinaryExpression) && (parent.left === n) && (parent.operatorToken.kind === SyntaxKind.EqualsToken)) {
                 const right = parent.right;
                 if (!isNilLiteralExpression (right)) {
-                    const written = ts.isIdentifier (right) ? goTranspiler.goDeclaredTypeOfIdentifier (right) : goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
-                    // a plain Go string write is stored through a fresh string local's address (goStringPointerStore)
-                    const literal = [ SyntaxKind.StringLiteral, SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.ConditionalExpression ].includes (goUnwrapParens (right)?.kind);
-                    const stored = (written === 'string') && !literal && !ts.isIdentifier (right) && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && !feedsBaseStrPtr;
-                    stringWrites += stored ? 1 : 0;
-                    unsafe = (written !== '*string') && !stored;
-                    pointerWrites += stored ? 0 : 1;
+                    const typeofAssign = goTranspiler.goTypeofStringAssignParent?.(parent);
+                    if (typeofAssign !== undefined) {
+                        pointerWrites += 1;
+                    } else {
+                        const written = ts.isIdentifier (right) ? goTranspiler.goDeclaredTypeOfIdentifier (right) : goTranspiler.goTypeOfInitializer (right, goTranspiler.printNode (right, 0));
+                        // a plain Go string write is stored through a fresh string local's address (goStringPointerStore)
+                        const literal = [ SyntaxKind.StringLiteral, SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.ConditionalExpression ].includes (goUnwrapParens (right)?.kind);
+                        const stored = (written === 'string') && !literal && !ts.isIdentifier (right) && (parent.parent?.kind === SyntaxKind.ExpressionStatement) && !feedsBaseStrPtr;
+                        stringWrites += stored ? 1 : 0;
+                        unsafe = (written !== '*string') && !stored;
+                        pointerWrites += stored ? 0 : 1;
+                    }
                 }
+            } else if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
+                && [ 'replace', 'replaceAll', 'trim', 'toUpperCase', 'toLowerCase', 'split', 'startsWith', 'endsWith', 'indexOf' ].includes (parent.name?.text)
+                && (goTranspiler.goHasEnclosingNilGuard (n) || goTranspiler.goInsideNonReboundNilIf (n))) {
+                // guarded string method on *string dereferences *n natively
             } else if (!goReadRuleAccepts (NIL_DECLARED_READ_RULE, goTranspiler, n)) { unsafe = true; }
         }
     }
@@ -13611,9 +13626,12 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     }
 
     // the concrete Go type of a `var x T = <init>` local, undefined for `any`
+    goStringNarrowedKey(node): string { return `${node?.getSourceFile?.()?.fileName ?? ''}:${node?.pos ?? -1}:${node?.end ?? -1}`; }
+
     goLocalStaticType(node): string | undefined {
         const declaration: any = this.goSymbolValueDecl(node);
         if (declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.initializer === undefined) { return undefined; }
+        if (this.goStringNarrowedInit.has(this.goStringNarrowedKey(declaration))) { return 'string'; }
         if (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement) { return undefined; } // declared with `:=`, where the printer annotates nothing
         if (this.goLocalTypeResolution.has(declaration)) {
             this.goProvCycleHits = (this.goProvCycleHits ?? 0) + 1;
@@ -19702,12 +19720,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // the Go type this identifier is actually *declared* with, or undefined when it
     goDeclaredTypeCache = new Map<any, string | undefined>();
+    goStringNarrowedInit = new Map<string, string>();
     goDeclaredTypeInProgress = new Set<any>();
 
     goDeclaredTypeOfIdentifier(node): string | undefined {
         if (node?.kind !== SyntaxKind.Identifier) { return undefined; }
         const decl: any = this.goValueDecl(node);
         if (decl === undefined) { return undefined; }
+        if ((decl.kind === SyntaxKind.VariableDeclaration) && this.goStringNarrowedInit.has(this.goStringNarrowedKey(decl))) { return 'string'; }
         if (decl.kind === SyntaxKind.Parameter) {
             // a defaulted parameter bound through a pointer GetArg twin is that pointer at every consumer
             const bound = this.goGetArgParameterType(decl);
@@ -21797,7 +21817,100 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return this.printNodeCommentsIfAny(node, identation, `${indent}if ${key.pointer} != nil {\n${this.getIden(identation + 1)}if _, ok := ${field}[${key.index}]; ok${body}\n${indent}}`);
     }
 
+    goTypeofStringCheck(expr, negated: boolean): any {
+        const inner = this.goUnwrapParenthesizedNode(expr);
+        if (inner?.kind !== SyntaxKind.BinaryExpression) { return undefined; }
+        const op = inner.operatorToken?.kind;
+        const okOp = negated
+            ? ((op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken))
+            : ((op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken));
+        if (!okOp) { return undefined; }
+        const isStrLit = (n) => (n?.kind === SyntaxKind.StringLiteral) && (n.text === 'string');
+        const typeofSide = (inner.left?.kind === SyntaxKind.TypeOfExpression && isStrLit(inner.right)) ? inner.left
+            : ((inner.right?.kind === SyntaxKind.TypeOfExpression && isStrLit(inner.left)) ? inner.right : undefined);
+        const operand = this.goUnwrapParenthesizedNode(typeofSide?.expression);
+        return (operand?.kind === SyntaxKind.Identifier) ? operand : undefined;
+    }
+
+    goIsAwaitedAnyLocal(ident): boolean {
+        const decl: any = this.goValueDecl(ident);
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.name?.kind !== SyntaxKind.Identifier)) { return false; }
+        const scope = this.goEnclosingFunction(decl);
+        if (scope === undefined) { return false; }
+        let hasAwait = (decl.initializer?.kind === SyntaxKind.AwaitExpression);
+        if (!hasAwait && (decl.initializer !== undefined) && !goIsNilNode(decl.initializer)) { return false; }
+        for (const n of this.goScopeIdents(scope, decl.name.text)) {
+            if (n === decl.name) { continue; }
+            const p: any = n.parent;
+            if ((p?.kind === SyntaxKind.BinaryExpression) && (p.left === n) && (p.operatorToken?.kind === SyntaxKind.EqualsToken)) {
+                if (p.right?.kind === SyntaxKind.AwaitExpression) { hasAwait = true; } else if (!goIsNilNode(p.right)) { return false; }
+            }
+        }
+        return hasAwait;
+    }
+
+    goTypeofStringAssignMatch(ifStmt): { src: any, target: any } | undefined {
+        if ((ifStmt?.kind !== SyntaxKind.IfStatement) || (ifStmt.elseStatement !== undefined)) { return undefined; }
+        const src = this.goTypeofStringCheck(ifStmt.expression, false);
+        if ((src === undefined) || !this.goIsAwaitedAnyLocal(src)) { return undefined; }
+        const stmts = (ifStmt.thenStatement?.kind === SyntaxKind.Block) ? (ifStmt.thenStatement.statements ?? []) : [ ifStmt.thenStatement ];
+        if (stmts.length !== 1) { return undefined; }
+        const expr = (stmts[0]?.kind === SyntaxKind.ExpressionStatement) ? stmts[0].expression : undefined;
+        if ((expr?.kind !== SyntaxKind.BinaryExpression) || (expr.operatorToken?.kind !== SyntaxKind.EqualsToken)
+            || (expr.left?.kind !== SyntaxKind.Identifier) || (expr.right?.kind !== SyntaxKind.Identifier)
+            || (expr.right.text !== src.text)) { return undefined; }
+        return { src, target: expr.left };
+    }
+
+    goTypeofStringAssignParent(assignExpr): any {
+        const stmt = assignExpr?.parent;
+        const block = stmt?.parent;
+        const ifStmt = (block?.kind === SyntaxKind.Block) ? block.parent : block;
+        const match = this.goTypeofStringAssignMatch(ifStmt);
+        return ((match !== undefined) && (match.target.text === assignExpr.left?.text) && (match.target.pos === assignExpr.left?.pos)) ? ifStmt : undefined;
+    }
+
+    goEarlyExitTypeofStringNextDecl(ifStmt): { src: any, decl: any } | undefined {
+        if ((ifStmt?.kind !== SyntaxKind.IfStatement) || (ifStmt.elseStatement !== undefined) || (ifStmt.parent?.kind !== SyntaxKind.Block)) { return undefined; }
+        const src = this.goTypeofStringCheck(ifStmt.expression, true);
+        if ((src === undefined) || !this.goIsAwaitedAnyLocal(src)) { return undefined; }
+        const bodyStmts = (ifStmt.thenStatement?.kind === SyntaxKind.Block) ? (ifStmt.thenStatement.statements ?? []) : [ ifStmt.thenStatement ];
+        const last = bodyStmts[bodyStmts.length - 1];
+        if ((last?.kind !== SyntaxKind.ReturnStatement) && (last?.kind !== SyntaxKind.ThrowStatement)) { return undefined; }
+        const siblings = Array.from(ifStmt.parent.statements ?? []) as any[];
+        const idx = siblings.findIndex((s) => (s.pos === ifStmt.pos) && (s.end === ifStmt.end));
+        const next = (idx >= 0) ? siblings[idx + 1] : undefined;
+        const decl = (next?.kind === SyntaxKind.VariableStatement && next.declarationList?.declarations?.length === 1) ? next.declarationList.declarations[0] : undefined;
+        if ((decl === undefined) || (decl.name?.kind !== SyntaxKind.Identifier) || (decl.type?.kind !== SyntaxKind.StringKeyword)
+            || (decl.initializer?.kind !== SyntaxKind.Identifier) || (decl.initializer.text !== src.text)) { return undefined; }
+        return { src, decl };
+    }
+
+    goPrintTypeofStringIf(node, identation): string | undefined {
+        const assign = this.goTypeofStringAssignMatch(node);
+        if ((assign !== undefined) && (this.goDeclaredTypeOfIdentifier(assign.target) === '*string')) {
+            const pad = this.getIden(identation);
+            const srcName = this.printNode(assign.src, 0).trim();
+            const targetName = this.printNode(assign.target, 0).trim();
+            const tmp = srcName + 'Str';
+            return `${pad}if ${tmp}, ok := ${srcName}.(string); ok {\n${pad}\t${targetName} = &${tmp}\n${pad}}`;
+        }
+        const early = this.goEarlyExitTypeofStringNextDecl(node);
+        if (early !== undefined) {
+            const pad = this.getIden(identation);
+            const srcName = this.printNode(early.src, 0).trim();
+            const tmp = srcName + 'Str';
+            const okName = 'is' + srcName.charAt(0).toUpperCase() + srcName.slice(1) + 'Str';
+            this.goStringNarrowedInit.set(this.goStringNarrowedKey(early.decl), tmp);
+            const body = this.printNode(node.thenStatement, identation);
+            return `${pad}${tmp}, ${okName} := ${srcName}.(string)\n${pad}if !${okName} ${body.trimStart()}`;
+        }
+        return undefined;
+    }
+
     printIfStatement(node, identation) {
+        const typeofStringIf = this.goPrintTypeofStringIf(node, identation);
+        if (typeofStringIf !== undefined) { return typeofStringIf; }
         const tickersIn = this.goWsTickersPointerInIf(node, identation)
             // a nil-guarded pointer key needs the read inside the guard
             ?? this.goInOpGuardedNestedIf(node, identation)
@@ -22202,15 +22315,25 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 continue;
             }
             const guard = this.goNilGuardFields[kind];
-            if (rebound) { return false; }
             if (guard !== undefined) {
-                if ((child === parent[guard[0]]) && this.goConditionProvesNonNil(parent[guard[1]], ident)) { return true; }
+                if ((child === parent[guard[0]]) && this.goConditionProvesNonNil(parent[guard[1]], ident) && (!rebound || !this.goLocalIsRebound(child, ident))) { return true; }
+                if (rebound) { return false; }
                 child = parent;
                 parent = parent.parent;
                 continue;
             }
+            if (rebound) { return false; }
             // functions, classes and everything else the scan does not model: the guard cannot be carried across
             return false;
+        }
+        return false;
+    }
+
+    goInsideNonReboundNilIf(ident): boolean {
+        if (ident?.kind !== SyntaxKind.Identifier) { return false; }
+        for (let child: any = ident, parent: any = ident.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+            if ((parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement === child)
+                && this.goConditionProvesNonNil(parent.expression, ident) && !this.goLocalIsRebound(child, ident)) { return true; }
         }
         return false;
     }
@@ -23779,7 +23902,7 @@ ${this.getIden(identation)}${returnStatement}`;
         for (let i = 0; i < expected.length; i++) {
             const operand = operands[i];
             if (operand === undefined || operand.kind === SyntaxKind.RegularExpressionLiteral) { return undefined; }
-            if (this.goOperandStaticType(operand, texts[i]) === expected[i]) { result.push(texts[i]); } else if ((expected[i] === 'string') && !texts[i].includes('\n') && (this.goDerefableStringOperand(operand) || this.goLiteralUnionNarrowedStringDeref(operand))) {
+            if (this.goOperandStaticType(operand, texts[i]) === expected[i]) { result.push(texts[i]); } else if ((expected[i] === 'string') && !texts[i].includes('\n') && (this.goDerefableStringOperand(operand) || this.goLiteralUnionNarrowedStringDeref(operand) || ((this.goDeclaredTypeOfIdentifier(operand) === '*string') && this.goInsideNonReboundNilIf(operand)))) {
                 result.push('*' + texts[i].trim());
             } else { return undefined; }
         }
@@ -29218,7 +29341,8 @@ ${tryBodyBlock}
         const parent: any = node.parent;
         const target: any = (parent?.kind === SyntaxKind.VariableDeclaration) && (parent.initializer === node) ? parent.name
             : (((parent?.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.EqualsToken) && (parent.right === node)) ? parent.left : undefined);
-        if ((target?.kind === SyntaxKind.Identifier) && (this.goResolvedLocalGoType(target) !== 'any')) { return undefined; }
+        const targetType = (target?.kind === SyntaxKind.Identifier) ? this.goResolvedLocalGoType(target) : undefined;
+        if ((targetType !== undefined) && (targetType !== 'any') && (targetType !== 'string')) { return undefined; }
         return `${containerStr}[${keyStrs[0]}]`;
     }
     // `const c = this.safeValue (this.clients, client.url); if (c !== client)` with `client: Client`: the registry read
