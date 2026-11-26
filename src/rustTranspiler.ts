@@ -1724,9 +1724,10 @@ export class RustTranspiler extends BaseTranspiler {
         // a condition already prints its logical natively; a value slot takes the typed operand-returning form
         const boolLogical = this.isBooleanPosition(node) ? undefined : this.rustScalarBoolLogicalText(node);
         if (boolLogical !== undefined) return `Value::Bool(${boolLogical})`;
-        // A logical expression with a native-compare operand no longer starts with a bool helper: box it.
+        // A logical expression with a native-compare or native-bool-param operand no longer starts with a bool helper: box it.
         if ((op === SyntaxKind.AmpersandAmpersandToken || op === SyntaxKind.BarBarToken)
-            && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node))) {
+            && (this.hasNativeComparisonOperand(left) || this.hasNativeComparisonOperand(right) || this.rustBoolLiteralLogicalStore(node)
+                || this.rustHasBoolParamOperand(left) || this.rustHasBoolParamOperand(right))) {
             return `Value::Bool(${this.printLogicalInBooleanContext(node)})`;
         }
         // Binary wrapper functions (is_equal, add, etc.) - add & to both sides
@@ -3126,6 +3127,15 @@ export class RustTranspiler extends BaseTranspiler {
         const op = parent.operatorToken.kind;
         if (op !== SyntaxKind.EqualsEqualsEqualsToken && op !== SyntaxKind.ExclamationEqualsEqualsToken) return false;
         return this.literalKindOfNode(this.unwrapParens(parent.right)) === 'boolean' && this.rustIdentifierUseIsCondition(parent);
+    }
+    /** True when a logical/unary operand contains a native-`bool` parameter read (for Value::Bool boxing in value slots). */
+    rustHasBoolParamOperand(node: any): boolean {
+        const inner = this.unwrapParens(node);
+        if (inner === undefined) return false;
+        if (inner.kind === SyntaxKind.PrefixUnaryExpression && inner.operator === SyntaxKind.ExclamationToken) return this.rustHasBoolParamOperand(inner.operand);
+        if (inner.kind === SyntaxKind.BinaryExpression && this.isLogicalOp(inner.operatorToken.kind)) return this.rustHasBoolParamOperand(inner.left) || this.rustHasBoolParamOperand(inner.right);
+        if (isIdentifier(inner)) { const d = this.rustDeclaredNode(inner); return d?.kind === SyntaxKind.Parameter && this.rustParamPrintsBool(d); }
+        return false;
     }
     /** True when `this.<name>` is read as a value (not called) in the method's own file. */
     rustMethodReferencedAsValue(method): boolean {

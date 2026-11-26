@@ -143,6 +143,7 @@ export default class venue extends Exchange {
         const t = new Transpiler ({ verbose: false });
         const rsBase = t.transpileRustByPath (base).content;
         expect (rsBase).toContain ('let tail: bool = get_arg(optional_args, 3, Value::Bool(false)).is_truthy()');
+        expect (rsBase).toContain ('Value::Bool(!tail &&');
         expect (rsBase).not.toContain ('is_true(&tail)');
         expect (rsBase).toContain ('pub fn isPostOnly(&self, isMarketOrder: bool, exchangeSpecificParam: bool)');
         expect (rsBase).not.toContain ('is_true(&exchangeSpecificParam)');
