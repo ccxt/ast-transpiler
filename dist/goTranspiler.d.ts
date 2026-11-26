@@ -1593,6 +1593,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         [kind: number]: [string, string];
     };
     goHasEnclosingNilGuard(ident: any): boolean;
+    goHasEarlyExitNilGuard(ident: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
     goIsPureComparisonOperand(node: any): boolean;
