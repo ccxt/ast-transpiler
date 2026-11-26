@@ -1,10 +1,10 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type ForStatement, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type ParenthesizedExpression, type PropertyAccessExpression, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isForStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isThrowStatement, isTypeReferenceNode, isUnionTypeNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/unstable/ast/is";
-import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
+import { NodeFlags, SyntaxKind, type BinaryExpression, type BindingElement, type Block, type CallExpression, type ClassDeclaration, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type ExpressionWithTypeArguments, type ForStatement, type Identifier, type MethodDeclaration, type Node, type NodeArray, type ParameterDeclaration, type ParenthesizedExpression, type PropertyAccessExpression, type SourceFile, type Statement, type TypeNode, type VariableDeclaration } from "typescript/ast";
+import { isArrayBindingPattern, isArrayLiteralExpression, isArrayTypeNode, isArrowFunction, isAsExpression, isBinaryExpression, isBindingElement, isBlock, isCallExpression, isClassDeclaration, isClassExpression, isConditionalExpression, isDeleteExpression, isElementAccessExpression, isForInStatement, isForOfStatement, isForStatement, isIdentifier, isIfStatement, isMethodDeclaration, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression, isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertyAssignment, isReturnStatement, isShorthandPropertyAssignment, isSourceFile, isStatement, isStringLiteral, isStringLiteralLikeNode, isTypeAssertion, isThrowStatement, isTypeReferenceNode, isUnionTypeNode, isVariableDeclaration, isVariableDeclarationList } from "typescript/ast/is";
+import { IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from "typescript/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike, signatureDeclaration, symbolDeclarations, symbolValueDeclaration, typeParts, typeTarget } from "./tsUtils.js";
 import * as fs from 'fs';
-import * as tsSync from "typescript/unstable/sync";
+import * as tsSync from "typescript/sync";
 // A ts/src index scan reads real `*.ts` sources and this process's own stripped base copy only: no `.d.ts`, no dot-file temp copy, no other process's `*.nooverloads.<pid>.ts` (it ...
 export function isRustTsIndexSource(name: string): boolean {
     const temp = /\.nooverloads\.(\d+)\.ts$/.exec(name);
@@ -344,7 +344,7 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustTsFileInfoCache.set(path, info);
         return info;
     }
-    rustParsedTsSourceFile(api: any, path: string, text: string): any { let sf = this.rustParsedTsFiles.get(path); if (sf === undefined) { sf = api.createSourceFile(path, text); this.rustParsedTsFiles.set(path, sf); } return sf; }
+    rustParsedTsSourceFile(api: any, path: string, text: string): any { let sf = this.rustParsedTsFiles.get(path); if (sf === undefined) { const res = api.createSourceFile(path, text); sf = res?.sourceFile ?? res; res?.dispose?.(); this.rustParsedTsFiles.set(path, sf); } return sf; }
     private rustTsFileTextCache = new Map<string, string | null>();
     rustReadTsFileCached(file: string): string | undefined {
         let hit = this.rustTsFileTextCache.get(file);

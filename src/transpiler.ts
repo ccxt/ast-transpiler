@@ -1,5 +1,5 @@
-import { ScriptTarget, SyntaxKind, type Node, type SourceFile } from "typescript/unstable/ast";
-import { API, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type CompilerOptions, type Program, type Snapshot } from "typescript/unstable/sync";
+import { ScriptTarget, SyntaxKind, type Node, type SourceFile } from "typescript/ast";
+import { API, CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type CompilerOptions, type Program, type Snapshot } from "typescript/sync";
 import currentPath from "./dirname.cjs";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';

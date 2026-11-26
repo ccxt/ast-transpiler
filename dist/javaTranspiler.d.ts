@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type Node } from "typescript/unstable/ast";
-import { type Checker } from "typescript/unstable/sync";
+import { type Node } from "typescript/ast";
+import { type Checker } from "typescript/sync";
 declare const JAVA_MEMO_UNDEFINED: unique symbol;
 export declare function javaLengthMinusZeroOperand(node: any): any;
 export declare class JavaTranspiler extends BaseTranspiler {
@@ -89,7 +89,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printModifiers(node: any): any;
     getMethodOverride(node: Node): Node;
     private javaMethodOverrideFromIndex;
-    javaMethodImplementation(declaration: any): import("typescript/unstable/ast").DeclarationBase;
+    javaMethodImplementation(declaration: any): import("typescript/ast").DeclarationBase;
     javaIsPrintedMethod(method: any): boolean;
     javaAnyReceiverBaseMethod(callee: any): any;
     baseExchangeMethodsByName(): Map<string, any[]>;
@@ -120,7 +120,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaStringListLiteral(node: any): string | undefined;
     javaSpawnCallParameterTypes(node: any): (string | undefined)[] | undefined;
     javaSpawnAsyncDirectCall(node: any, identation: any): string | undefined;
-    javaReferencedDeclaration(reference: any): import("typescript/unstable/ast").DeclarationBase;
+    javaReferencedDeclaration(reference: any): import("typescript/ast").DeclarationBase;
     javaArgumentNativeTypes(node: any, parameters: any, offset: number): (string | undefined)[];
     javaNativeArgumentAlreadyTyped(arg: any, type: string): boolean;
     javaNativeCallParameterTypes(node: any): (string | undefined)[];
@@ -264,7 +264,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     isDictionaryTsType(type: any, checker: any, depth: number): boolean;
     isVarargsArrayReference(node: any, depth?: number): any;
     isJavaListType(type: any): boolean;
-    javaLengthKind(expression: any): "List" | "ListOrNull" | "String" | "StringOrNull";
+    javaLengthKind(expression: any): "String" | "List" | "StringOrNull" | "ListOrNull";
     isJavaListValueType(type: any): any;
     isJavaListBackedClassType(type: any): boolean;
     isJavaNullishUnion(type: any, isMember: any): any;
@@ -377,13 +377,13 @@ export declare class JavaTranspiler extends BaseTranspiler {
     }): string | undefined;
     equalityOperandFamily(type: any): string | undefined;
     isNullishLiteral(node: any): boolean;
-    javaEqualityLiteralKind(node: any): "double" | "int" | "long";
+    javaEqualityLiteralKind(node: any): "int" | "long" | "double";
     javaCrc32Local(node: any): boolean;
     javaWsClientInstance(node: any): boolean;
     printNativeEqualityIfProvable(node: any, leftText: string, rightText: string): string | undefined;
     javaPrimitiveOperandKind(node: any): any;
     javaPrintedIntCounter(node: any): boolean;
-    javaPrintedCallKind(node: any): "double" | "int" | "long";
+    javaPrintedCallKind(node: any): "int" | "long" | "double";
     printJavaArrayDestructuring(left: any, right: any, identation: any): string;
     printJavaElementWrite(node: any, left: any, right: any): string;
     javaTypedViewReceiver(expression: any): boolean;
@@ -432,7 +432,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaCounterHasNoBoxWrite(node: any, symbol: any): boolean;
     javaLengthIntRead(node: any): boolean;
     javaWidenedNumericKind(node: any): string | undefined;
-    javaWidenedAddKind(node: any): "double" | "long";
+    javaWidenedAddKind(node: any): "long" | "double";
     printWidenedNativeAdd(left: any, right: any, leftText: any, rightText: any): string;
     printBoxedLongLiteralAdd(left: any, right: any, leftText: any, rightText: any): string;
     javaPrintWidenedOperand(kind: any, resultKind: any, node: any, text: any): any;
@@ -453,7 +453,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaNativeMathMinMaxResultIsPlainValue(node: any): boolean;
     printJavaPreciseDecimalsWrite(left: any, right: any): string | undefined;
     printNativeMathMinMax(node: any, left: any, right: any, leftText: any, rightText: any, name: any): string;
-    javaNativeArithmeticType(node: any): "Double" | "Long" | "String";
+    javaNativeArithmeticType(node: any): "String" | "Long" | "Double";
     javaEnclosingFunction(node: any): any;
     javaArithmeticWriteIsSafe(right: any, javaType: any): boolean;
     javaScopingBlock(node: any): any;
@@ -461,7 +461,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     javaBindingsAreDisjoint(declaration: any, other: any): boolean;
     javaArithmeticLocalUseIsSafe(node: any, declaration: any, javaType: any): boolean;
     javaArithmeticLocalIsSafeToType(scope: any, declaration: any, javaType: any): boolean;
-    javaArithmeticLocalType(declaration: any): "Double" | "Long" | "String";
+    javaArithmeticLocalType(declaration: any): "String" | "Long" | "Double";
     javaPrintsIntegralNumber(node: any): boolean;
     printPostFixUnaryExpression(node: any, identation: any): string;
     javaPrimitiveCounter(node: any): boolean;
@@ -634,14 +634,14 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h27J06Cache: WeakMap<any, boolean>;
     h27J06FutureList(declaration: any): boolean;
     h27J06FutureListProof(declaration: any): boolean;
-    h27J06Declaration(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h27J06Declaration(identifier: any): import("typescript/ast").DeclarationBase;
     h27J06FutureListDeclaration(declaration: any, indent: string): string | undefined;
     h27J06FutureListPush(node: any, name: any, parsedArg: any): string | undefined;
     h27J06FutureListJoin(node: any): string | undefined;
     h28J06Cache: WeakMap<any, boolean>;
     h28J06SeededList(declaration: any): boolean;
     h28J06SeededListProof(declaration: any): boolean;
-    h28J06Declaration(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h28J06Declaration(identifier: any): import("typescript/ast").DeclarationBase;
     h28J06SeededListDeclaration(declaration: any, indent: string): string | undefined;
     h28J06SeededListPush(node: any, name: any, parsedArg: any): string | undefined;
     h28J06SeededListJoin(node: any): string | undefined;
@@ -657,7 +657,7 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h29J04RowMapDeclaration(declaration: any, indent: string): string | undefined;
     h29J06Lists: WeakMap<any, string>;
     h29J06Busy: boolean;
-    h29J06LiteralCall(declaration: any): import("typescript/unstable/ast").CallExpression;
+    h29J06LiteralCall(declaration: any): import("typescript/ast").CallExpression;
     h29J06LiteralJoinDeclaration(node: any, declaration: any, identation: any, indent: string): string | undefined;
     h29J06LiteralJoin(node: any): string | undefined;
     h30J04FieldStore(statement: any): any;
@@ -669,9 +669,9 @@ export declare class JavaTranspiler extends BaseTranspiler {
     h30J06FutureCall(element: any): boolean;
     h30J06SeedLocal(element: any, list: any): boolean;
     h30J06ListProof(declaration: any): boolean;
-    h30J06ListDeclarationOf(identifier: any): import("typescript/unstable/ast").DeclarationBase;
+    h30J06ListDeclarationOf(identifier: any): import("typescript/ast").DeclarationBase;
     h30J06Declaration(declaration: any, indent: string): string | undefined;
-    h30J06SeedListOf(declaration: any): import("typescript/unstable/ast").VariableDeclaration;
+    h30J06SeedListOf(declaration: any): import("typescript/ast").VariableDeclaration;
     h30J06ListPush(node: any, name: any, parsedArg: any): string | undefined;
     h30J06ListJoin(node: any): string | undefined;
 }

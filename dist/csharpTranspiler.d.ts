@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
-import { type Program, type Symbol as TsSymbol } from 'typescript/unstable/sync';
-import * as csharpTsSync from 'typescript/unstable/sync';
+import { type Node, type ParameterDeclaration } from 'typescript/ast';
+import { type Program, type Symbol as TsSymbol } from 'typescript/sync';
+import * as csharpTsSync from 'typescript/sync';
 export interface CsharpDeclaredMember {
     type: string;
     initializer?: string;
@@ -137,7 +137,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
         declaration?: undefined;
     } | {
         text: string;
-        declaration: import("typescript/unstable/ast").DeclarationBase;
+        declaration: import("typescript/ast").DeclarationBase;
     };
     csharpPromiseAllValueIsPlain(element: any): any;
     csharpPromiseAllTypeIsPlain(checker: any, type: any, depth: any): any;
@@ -296,16 +296,13 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpSliceBoundExpression(value: any, length: any): string;
     csharpSliceBoundOperand(node: any, isEnd?: boolean): {
         kind: string;
-        value: any;
-        text?: undefined;
-    } | {
-        value?: undefined;
-        kind: string;
-        text?: undefined;
-    } | {
-        value?: undefined;
-        kind: string;
         text: string;
+    } | {
+        kind: string;
+        value: any;
+    } | {
+        kind: string;
+        value?: undefined;
     };
     csharpSliceArithmeticBound(node: any): {
         kind: string;
@@ -317,7 +314,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     } | undefined;
     csharpSliceArithmeticOperandsArePure(node: any): boolean;
     csharpSliceClampExpression(bound: any, length: any): string;
-    csharpSliceReceiverKind(expression: any): "list" | "string";
+    csharpSliceReceiverKind(expression: any): "string" | "list";
     csharpSliceReceiverIsSideEffectFree(expression: any): boolean;
     csharpPlusChainNonNullStringType(node: any, self?: any): string | undefined;
     csharpNonNullStringOperandType(node: any, self?: any, guardedConcat?: boolean): string | undefined;
@@ -356,7 +353,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(node: any, identation: any): string;
     csharpLoopIndexListRead(expression: any, argumentExpression: any): string | undefined;
-    csharpCounterRangeLoop(counter: any, receiver: any): import("typescript/unstable/ast").ForStatement;
+    csharpCounterRangeLoop(counter: any, receiver: any): import("typescript/ast").ForStatement;
     csharpForBoundsCounter(loop: any, counter: any, receiver: any): boolean;
     csharpCounterStartsAtZero(loop: any, counter: any): boolean;
     csharpCounterAdvances(loop: any, counter: any): boolean;
@@ -674,7 +671,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpBoolOptionDefault(node: any, target: any): boolean;
     csharpBoolOptionSlotTarget(pattern: any): any;
     csharpBoolOptionSlotWriteIsTyped(pattern: any): boolean;
-    csharpReceiverBinding(receiver: any): import("typescript/unstable/ast").DeclarationBase;
+    csharpReceiverBinding(receiver: any): import("typescript/ast").DeclarationBase;
     transformPropertyAcessExpressionIfNeeded(node: any): any;
     printDeleteExpression(node: any, identation: any): string;
     printNewExpression(node: any, identation: any): string;

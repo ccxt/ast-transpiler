@@ -1,5 +1,5 @@
 import { Transpiler } from '../src/transpiler';
-import { isElementAccessExpression, isIdentifier } from "typescript/unstable/ast/is";
+import { isElementAccessExpression, isIdentifier } from "typescript/ast/is";
 import { RUST_DECLARED_DICT_LOCALS, rustDispatch } from '../src/rustTranspiler';
 import * as os from 'os';
 import * as fs from 'fs';

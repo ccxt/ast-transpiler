@@ -1,6 +1,6 @@
 import { assert } from 'console';
 import { Transpiler, alignGoTrailingComments, goDictParamTypesSelfTest, goDynamicCallParamsCheck, goHandleErrorsCodeSelfTest, goNilJoinTypeSelfTest, goParseFrameParamTypesSelfTest, installCcxtGoDictParams, installCcxtGoHooks, installCcxtGoLocalTypes, installCcxtGoSignTyping, installFmGo5G01, installFmGo5G04, installFmGo5GP08, installFmGo5OG02, installRfGo5OwnedTables } from '../src/transpiler';
-import { SyntaxKind } from 'typescript/unstable/ast';
+import { SyntaxKind } from 'typescript/ast';
 import { ccxtGoWrapUrlsDeclaration } from '../src/goTranspiler';
 import * as fs from 'fs';
 import * as os from 'os';

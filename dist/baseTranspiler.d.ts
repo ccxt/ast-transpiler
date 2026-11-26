@@ -1,5 +1,5 @@
-import { type Node, type SourceFile } from "typescript/unstable/ast";
-import { TypeFlags, type Checker, type Program } from "typescript/unstable/sync";
+import { type Node, type SourceFile } from "typescript/ast";
+import { TypeFlags, type Checker, type Program } from "typescript/sync";
 import { IFileImport, IFileExport, IMethodType, IParameterType, ITranspileContext } from './types.js';
 declare class BaseTranspiler {
     NUM_LINES_BETWEEN_CLASS_MEMBERS: number;

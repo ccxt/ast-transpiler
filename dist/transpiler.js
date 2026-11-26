@@ -13,7 +13,7 @@ import {
   tsUtils_exports,
   typeParts,
   typeTarget
-} from "./chunk-E73R464T.js";
+} from "./chunk-KPY3GE55.js";
 
 // src/dirname.cjs
 var require_dirname = __commonJS({
@@ -26,19 +26,19 @@ var require_dirname = __commonJS({
 // src/transpiler.ts
 init_esm_shims();
 var import_dirname = __toESM(require_dirname(), 1);
-import { ScriptTarget, SyntaxKind as SyntaxKind9 } from "typescript/unstable/ast";
-import { API as API5, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/unstable/sync";
+import { ScriptTarget, SyntaxKind as SyntaxKind9 } from "typescript/ast";
+import { API as API5, CheckFlags, ElementFlags as ElementFlags2, IndexKind as IndexKind5, ObjectFlags as ObjectFlags2, SignatureKind as SignatureKind3, SymbolFlags as SymbolFlags4, TypeFlags as TypeFlags7, TypeFormatFlags } from "typescript/sync";
 
 // src/pythonTranspiler.ts
 init_esm_shims();
 
 // src/baseTranspiler.ts
 init_esm_shims();
-import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges } from "typescript/unstable/ast";
-import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/unstable/ast/is";
-import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/unstable/ast/is";
-import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/unstable/ast/factory";
-import { SignatureKind, TypeFlags } from "typescript/unstable/sync";
+import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges } from "typescript/ast";
+import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/ast/is";
+import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/ast/is";
+import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/ast/factory";
+import { SignatureKind, TypeFlags } from "typescript/sync";
 
 // src/types.ts
 init_esm_shims();
@@ -1402,8 +1402,8 @@ var BaseTranspiler = class {
 };
 
 // src/pythonTranspiler.ts
-import { SyntaxKind as SyntaxKind2 } from "typescript/unstable/ast";
-import { isCallExpression as isCallExpression2, isElementAccessExpression, isIdentifier, isNumericLiteral as isNumericLiteral2, isPropertyAccessExpression } from "typescript/unstable/ast/is";
+import { SyntaxKind as SyntaxKind2 } from "typescript/ast";
+import { isCallExpression as isCallExpression2, isElementAccessExpression, isIdentifier, isNumericLiteral as isNumericLiteral2, isPropertyAccessExpression } from "typescript/ast/is";
 var parserConfig = {
   "STATIC_TOKEN": "",
   // to do static decorator
@@ -1770,9 +1770,9 @@ var PythonTranspiler = class extends BaseTranspiler {
 
 // src/phpTranspiler.ts
 init_esm_shims();
-import { SyntaxKind as SyntaxKind3 } from "typescript/unstable/ast";
-import { isArrowFunction as isArrowFunction2, isCallExpression as isCallExpression3, isFunctionDeclaration as isFunctionDeclaration2, isFunctionExpression as isFunctionExpression2 } from "typescript/unstable/ast/is";
-import { TypeFlags as TypeFlags2 } from "typescript/unstable/sync";
+import { SyntaxKind as SyntaxKind3 } from "typescript/ast";
+import { isArrowFunction as isArrowFunction2, isCallExpression as isCallExpression3, isFunctionDeclaration as isFunctionDeclaration2, isFunctionExpression as isFunctionExpression2 } from "typescript/ast/is";
+import { TypeFlags as TypeFlags2 } from "typescript/sync";
 var parserConfig2 = {
   "ELSEIF_TOKEN": "elseif",
   "THIS_TOKEN": "$this",
@@ -2165,8 +2165,8 @@ var PhpTranspiler = class extends BaseTranspiler {
 
 // src/csharpTranspiler.ts
 init_esm_shims();
-import { SyntaxKind as SyntaxKind4, NodeFlags as NodeFlags2 } from "typescript/unstable/ast";
-import { IndexKind, TypeFlags as TypeFlags3 } from "typescript/unstable/sync";
+import { SyntaxKind as SyntaxKind4, NodeFlags as NodeFlags2 } from "typescript/ast";
+import { IndexKind, TypeFlags as TypeFlags3 } from "typescript/sync";
 import {
   isArrayLiteralExpression as isArrayLiteralExpression2,
   isAsExpression,
@@ -2207,8 +2207,8 @@ import {
   isTypeAssertion,
   isVariableDeclaration,
   isWhileStatement
-} from "typescript/unstable/ast/is";
-import * as csharpTsSync from "typescript/unstable/sync";
+} from "typescript/ast/is";
+import * as csharpTsSync from "typescript/sync";
 import fs from "fs";
 import path from "path";
 var parserConfig3 = {
@@ -5247,7 +5247,9 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     let file;
     try {
-      file = (_CSharpTranspiler.csharpProParseApi ??= new csharpTsSync.API({ cwd: process.cwd() })).createSourceFile(pro, text);
+      const res = (_CSharpTranspiler.csharpProParseApi ??= new csharpTsSync.API({ cwd: process.cwd() })).createSourceFile(pro, text);
+      file = res?.sourceFile ?? res;
+      res?.dispose?.();
     } catch (e) {
       return void 0;
     }
@@ -12524,14 +12526,14 @@ import * as fs4 from "fs";
 init_esm_shims();
 import * as fs2 from "fs";
 import * as path2 from "path";
-import { SyntaxKind as SyntaxKind5, getLeadingCommentRanges as getLeadingCommentRanges2 } from "typescript/unstable/ast";
-import { isArrowFunction as isArrowFunction3, isBinaryExpression as isBinaryExpression3, isBlock as isBlock2, isBooleanLiteral as isBooleanLiteral3, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression as isElementAccessExpression3, isFunctionDeclaration as isFunctionDeclaration3, isFunctionExpression as isFunctionExpression4, isIfStatement as isIfStatement2, isMethodDeclaration as isMethodDeclaration3, isReturnStatement as isReturnStatement2, isSourceFile as isSourceFile3, isStatement as isStatementNode, isThrowStatement as isThrowStatement2, isTryStatement } from "typescript/unstable/ast/is";
-import { IndexKind as IndexKind2, SymbolFlags, TypeFlags as TypeFlags4 } from "typescript/unstable/sync";
+import { SyntaxKind as SyntaxKind5, getLeadingCommentRanges as getLeadingCommentRanges2 } from "typescript/ast";
+import { isArrowFunction as isArrowFunction3, isBinaryExpression as isBinaryExpression3, isBlock as isBlock2, isBooleanLiteral as isBooleanLiteral3, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression as isElementAccessExpression3, isFunctionDeclaration as isFunctionDeclaration3, isFunctionExpression as isFunctionExpression4, isIfStatement as isIfStatement2, isMethodDeclaration as isMethodDeclaration3, isReturnStatement as isReturnStatement2, isSourceFile as isSourceFile3, isStatement as isStatementNode, isThrowStatement as isThrowStatement2, isTryStatement } from "typescript/ast/is";
+import { IndexKind as IndexKind2, SymbolFlags, TypeFlags as TypeFlags4 } from "typescript/sync";
 import os from "os";
-import * as tsAst from "typescript/unstable/ast";
-import * as tsIs from "typescript/unstable/ast/is";
-import * as tsSync from "typescript/unstable/sync";
-import { NodeFlags as NodeFlags3 } from "typescript/unstable/ast";
+import * as tsAst from "typescript/ast";
+import * as tsIs from "typescript/ast/is";
+import * as tsSync from "typescript/sync";
+import { NodeFlags as NodeFlags3 } from "typescript/ast";
 var tsApi;
 var ts = {
   ...tsAst,
@@ -12539,7 +12541,12 @@ var ts = {
   ...tsSync,
   ...tsUtils_exports,
   // standalone parse (no program) over the generator's API process
-  createSourceFile: (fileName, text) => (tsApi ??= new tsSync.API({ cwd: process.cwd() })).createSourceFile(fileName, text)
+  createSourceFile: (fileName, text) => {
+    const res = (tsApi ??= new tsSync.API({ cwd: process.cwd() })).createSourceFile(fileName, text);
+    const sf = res?.sourceFile ?? res;
+    res?.dispose?.();
+    return sf;
+  }
 };
 function goUnwrapParens(n) {
   while (n?.kind === SyntaxKind5.ParenthesizedExpression) {
@@ -63804,9 +63811,9 @@ ${ind}}`;
 
 // src/javaTranspiler.ts
 init_esm_shims();
-import { NodeFlags as NodeFlags4, SyntaxKind as SyntaxKind6 } from "typescript/unstable/ast";
-import { isArrayLiteralExpression as isArrayLiteralExpression3, isArrayTypeNode, isTupleTypeNode, isArrowFunction as isArrowFunction4, isAsExpression as isAsExpression2, isBinaryExpression as isBinaryExpression4, isBlock as isBlock3, isBooleanLiteral as isBooleanLiteral4, isCallExpression as isCallExpression6, isBreakStatement as isBreakStatement2, isClassDeclaration as isClassDeclaration3, isConditionalExpression as isConditionalExpression3, isContinueStatement as isContinueStatement2, isElementAccessExpression as isElementAccessExpression4, isExpressionStatement as isExpressionStatement3, isForInStatement, isForOfStatement, isFunctionDeclaration as isFunctionDeclaration4, isFunctionExpression as isFunctionExpression5, isIdentifier as isIdentifier3, isIfStatement as isIfStatement3, isMethodDeclaration as isMethodDeclaration4, isNonNullExpression, isNumericLiteral as isNumericLiteral4, isObjectLiteralExpression as isObjectLiteralExpression3, isParameterDeclaration as isParameterDeclaration2, isParenthesizedExpression as isParenthesizedExpression2, isPostfixUnaryExpression as isPostfixUnaryExpression2, isPrefixUnaryExpression as isPrefixUnaryExpression2, isPropertyAccessExpression as isPropertyAccessExpression3, isPropertyAssignment, isReturnStatement as isReturnStatement3, isShorthandPropertyAssignment, isSourceFile as isSourceFile4, isSpreadAssignment as isSpreadAssignment2, isSpreadElement as isSpreadElement2, isStringLiteral as isStringLiteral2, isStringLiteralLikeNode as isStringLiteralLikeNode3, isThrowStatement as isThrowStatement3, isTypeAssertion as isTypeAssertion2, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration as isVariableDeclaration2, isVariableDeclarationList } from "typescript/unstable/ast/is";
-import { API as API3, ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/unstable/sync";
+import { NodeFlags as NodeFlags4, SyntaxKind as SyntaxKind6 } from "typescript/ast";
+import { isArrayLiteralExpression as isArrayLiteralExpression3, isArrayTypeNode, isTupleTypeNode, isArrowFunction as isArrowFunction4, isAsExpression as isAsExpression2, isBinaryExpression as isBinaryExpression4, isBlock as isBlock3, isBooleanLiteral as isBooleanLiteral4, isCallExpression as isCallExpression6, isBreakStatement as isBreakStatement2, isClassDeclaration as isClassDeclaration3, isConditionalExpression as isConditionalExpression3, isContinueStatement as isContinueStatement2, isElementAccessExpression as isElementAccessExpression4, isExpressionStatement as isExpressionStatement3, isForInStatement, isForOfStatement, isFunctionDeclaration as isFunctionDeclaration4, isFunctionExpression as isFunctionExpression5, isIdentifier as isIdentifier3, isIfStatement as isIfStatement3, isMethodDeclaration as isMethodDeclaration4, isNonNullExpression, isNumericLiteral as isNumericLiteral4, isObjectLiteralExpression as isObjectLiteralExpression3, isParameterDeclaration as isParameterDeclaration2, isParenthesizedExpression as isParenthesizedExpression2, isPostfixUnaryExpression as isPostfixUnaryExpression2, isPrefixUnaryExpression as isPrefixUnaryExpression2, isPropertyAccessExpression as isPropertyAccessExpression3, isPropertyAssignment, isReturnStatement as isReturnStatement3, isShorthandPropertyAssignment, isSourceFile as isSourceFile4, isSpreadAssignment as isSpreadAssignment2, isSpreadElement as isSpreadElement2, isStringLiteral as isStringLiteral2, isStringLiteralLikeNode as isStringLiteralLikeNode3, isThrowStatement as isThrowStatement3, isTypeAssertion as isTypeAssertion2, isTypeOfExpression, isTypeReferenceNode, isVariableDeclaration as isVariableDeclaration2, isVariableDeclarationList } from "typescript/ast/is";
+import { API as API3, ElementFlags, IndexKind as IndexKind3, SymbolFlags as SymbolFlags2, TypeFlags as TypeFlags5 } from "typescript/sync";
 var parserConfig5 = {
   EXTENDS_TOKEN: "extends",
   PROMISE_TYPE_KEYWORD: "java.util.concurrent.CompletableFuture",
@@ -74305,11 +74312,11 @@ function javaFeeTierLiteral(node) {
 
 // src/rustTranspiler.ts
 init_esm_shims();
-import { NodeFlags as NodeFlags5, SyntaxKind as SyntaxKind7 } from "typescript/unstable/ast";
-import { isArrayBindingPattern, isArrayLiteralExpression as isArrayLiteralExpression4, isArrayTypeNode as isArrayTypeNode2, isArrowFunction as isArrowFunction5, isAsExpression as isAsExpression3, isBinaryExpression as isBinaryExpression5, isBindingElement, isBlock as isBlock4, isCallExpression as isCallExpression7, isClassDeclaration as isClassDeclaration4, isClassExpression as isClassExpression2, isConditionalExpression as isConditionalExpression4, isDeleteExpression as isDeleteExpression2, isElementAccessExpression as isElementAccessExpression5, isForInStatement as isForInStatement2, isForOfStatement as isForOfStatement2, isForStatement as isForStatement2, isIdentifier as isIdentifier4, isIfStatement as isIfStatement4, isMethodDeclaration as isMethodDeclaration5, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression as isNonNullExpression2, isNumericLiteral as isNumericLiteral5, isObjectLiteralExpression as isObjectLiteralExpression4, isParameterDeclaration as isParameterDeclaration3, isParenthesizedExpression as isParenthesizedExpression3, isPostfixUnaryExpression as isPostfixUnaryExpression3, isPrefixUnaryExpression as isPrefixUnaryExpression3, isPropertyAccessExpression as isPropertyAccessExpression4, isPropertyDeclaration as isPropertyDeclaration2, isPropertyAssignment as isPropertyAssignment2, isReturnStatement as isReturnStatement4, isShorthandPropertyAssignment as isShorthandPropertyAssignment2, isSourceFile as isSourceFile5, isStatement, isStringLiteral as isStringLiteral3, isStringLiteralLikeNode as isStringLiteralLikeNode4, isTypeAssertion as isTypeAssertion3, isThrowStatement as isThrowStatement4, isTypeReferenceNode as isTypeReferenceNode2, isUnionTypeNode, isVariableDeclaration as isVariableDeclaration3, isVariableDeclarationList as isVariableDeclarationList2 } from "typescript/unstable/ast/is";
-import { IndexKind as IndexKind4, ObjectFlags, SignatureKind as SignatureKind2, SymbolFlags as SymbolFlags3, TypeFlags as TypeFlags6 } from "typescript/unstable/sync";
+import { NodeFlags as NodeFlags5, SyntaxKind as SyntaxKind7 } from "typescript/ast";
+import { isArrayBindingPattern, isArrayLiteralExpression as isArrayLiteralExpression4, isArrayTypeNode as isArrayTypeNode2, isArrowFunction as isArrowFunction5, isAsExpression as isAsExpression3, isBinaryExpression as isBinaryExpression5, isBindingElement, isBlock as isBlock4, isCallExpression as isCallExpression7, isClassDeclaration as isClassDeclaration4, isClassExpression as isClassExpression2, isConditionalExpression as isConditionalExpression4, isDeleteExpression as isDeleteExpression2, isElementAccessExpression as isElementAccessExpression5, isForInStatement as isForInStatement2, isForOfStatement as isForOfStatement2, isForStatement as isForStatement2, isIdentifier as isIdentifier4, isIfStatement as isIfStatement4, isMethodDeclaration as isMethodDeclaration5, isNewExpression, isNoSubstitutionTemplateLiteral, isNonNullExpression as isNonNullExpression2, isNumericLiteral as isNumericLiteral5, isObjectLiteralExpression as isObjectLiteralExpression4, isParameterDeclaration as isParameterDeclaration3, isParenthesizedExpression as isParenthesizedExpression3, isPostfixUnaryExpression as isPostfixUnaryExpression3, isPrefixUnaryExpression as isPrefixUnaryExpression3, isPropertyAccessExpression as isPropertyAccessExpression4, isPropertyDeclaration as isPropertyDeclaration2, isPropertyAssignment as isPropertyAssignment2, isReturnStatement as isReturnStatement4, isShorthandPropertyAssignment as isShorthandPropertyAssignment2, isSourceFile as isSourceFile5, isStatement, isStringLiteral as isStringLiteral3, isStringLiteralLikeNode as isStringLiteralLikeNode4, isTypeAssertion as isTypeAssertion3, isThrowStatement as isThrowStatement4, isTypeReferenceNode as isTypeReferenceNode2, isUnionTypeNode, isVariableDeclaration as isVariableDeclaration3, isVariableDeclarationList as isVariableDeclarationList2 } from "typescript/ast/is";
+import { IndexKind as IndexKind4, ObjectFlags, SignatureKind as SignatureKind2, SymbolFlags as SymbolFlags3, TypeFlags as TypeFlags6 } from "typescript/sync";
 import * as fs3 from "fs";
-import * as tsSync2 from "typescript/unstable/sync";
+import * as tsSync2 from "typescript/sync";
 function isRustTsIndexSource(name) {
   const temp = /\.nooverloads\.(\d+)\.ts$/.exec(name);
   return name.endsWith(".ts") && !name.endsWith(".d.ts") && !name.startsWith(".") && (temp === null || temp[1] === String(process.pid));
@@ -75177,7 +75184,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
   rustParsedTsSourceFile(api, path4, text) {
     let sf = this.rustParsedTsFiles.get(path4);
     if (sf === void 0) {
-      sf = api.createSourceFile(path4, text);
+      const res = api.createSourceFile(path4, text);
+      sf = res?.sourceFile ?? res;
+      res?.dispose?.();
       this.rustParsedTsFiles.set(path4, sf);
     }
     return sf;
@@ -120373,8 +120382,8 @@ function rustDropUnusedMut(text) {
 
 // src/cppTranspiler.ts
 init_esm_shims();
-import { SyntaxKind as SyntaxKind8 } from "typescript/unstable/ast";
-import { isCallExpression as isCallExpression8, isExpressionStatement as isExpressionStatement4 } from "typescript/unstable/ast/is";
+import { SyntaxKind as SyntaxKind8 } from "typescript/ast";
+import { isCallExpression as isCallExpression8, isExpressionStatement as isExpressionStatement4 } from "typescript/ast/is";
 var parserConfig7 = {
   "ELSEIF_TOKEN": "else if",
   "OBJECT_OPENING": "std::unordered_map<std::string, std::any> {",

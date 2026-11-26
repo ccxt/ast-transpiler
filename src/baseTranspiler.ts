@@ -1,8 +1,8 @@
-import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/unstable/ast";
-import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/unstable/ast/is";
-import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/unstable/ast/is";
-import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/unstable/ast/factory";
-import { SignatureKind, TypeFlags, type Checker, type Program } from "typescript/unstable/sync";
+import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/ast";
+import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/ast/is";
+import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/ast/is";
+import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/ast/factory";
+import { SignatureKind, TypeFlags, type Checker, type Program } from "typescript/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from "./tsUtils.js";
 import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType, ITranspileContext } from './types.js';
 import { unCamelCase } from "./utils.js";

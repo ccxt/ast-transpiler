@@ -1,5 +1,5 @@
-import { SyntaxKind, type Node } from "typescript/unstable/ast";
-import { CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
+import { SyntaxKind, type Node } from "typescript/ast";
+import { CheckFlags, ElementFlags, IndexKind, ObjectFlags, SignatureKind, SymbolFlags, TypeFlags, TypeFormatFlags, type Checker, type Program, type Snapshot } from "typescript/sync";
 import { PythonTranspiler } from './pythonTranspiler.js';
 import { PhpTranspiler } from './phpTranspiler.js';
 import { CSharpTranspiler } from './csharpTranspiler.js';

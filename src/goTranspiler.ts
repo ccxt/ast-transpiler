@@ -1,16 +1,16 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import * as fs from "fs";
 import * as path from "path";
-import { SyntaxKind, getLeadingCommentRanges } from 'typescript/unstable/ast';
-import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression, isExpressionStatement, isFunctionDeclaration, isFunctionExpression, isIfStatement, isMethodDeclaration, isReturnStatement, isSourceFile, isStatement as isStatementNode, isThrowStatement, isTryStatement } from 'typescript/unstable/ast/is';
-import { Checker, IndexKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from 'typescript/unstable/sync';
-import type { BinaryExpression, CallExpression, ClassDeclaration, Node, NodeArray, Statement, VariableDeclaration } from 'typescript/unstable/ast';
+import { SyntaxKind, getLeadingCommentRanges } from 'typescript/ast';
+import { isArrowFunction, isBinaryExpression, isBlock, isBooleanLiteral, isCallExpression, isClassDeclaration as isClassDeclarationNode, isElementAccessExpression, isExpressionStatement, isFunctionDeclaration, isFunctionExpression, isIfStatement, isMethodDeclaration, isReturnStatement, isSourceFile, isStatement as isStatementNode, isThrowStatement, isTryStatement } from 'typescript/ast/is';
+import { Checker, IndexKind, SymbolFlags, TypeFlags, type Symbol as TsSymbol, type Type } from 'typescript/sync';
+import type { BinaryExpression, CallExpression, ClassDeclaration, Node, NodeArray, Statement, VariableDeclaration } from 'typescript/ast';
 import { getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
 import { Transpiler } from './transpiler.js';
 import os from 'os';
-import * as tsAst from 'typescript/unstable/ast';
-import * as tsIs from 'typescript/unstable/ast/is';
-import * as tsSync from 'typescript/unstable/sync';
+import * as tsAst from 'typescript/ast';
+import * as tsIs from 'typescript/ast/is';
+import * as tsSync from 'typescript/sync';
 import * as astTranspilerUtils from './tsUtils.js';
 
 // ---- tsApi ----
@@ -20,7 +20,12 @@ let tsApi: any;
 export const ts: any = {
     ...tsAst, ...tsIs, ...tsSync, ...astTranspilerUtils,
     // standalone parse (no program) over the generator's API process
-    createSourceFile: (fileName: string, text: string) => (tsApi ??= new (tsSync as any).API ({ cwd: process.cwd () })).createSourceFile (fileName, text),
+    createSourceFile: (fileName: string, text: string) => {
+        const res = (tsApi ??= new (tsSync as any).API ({ cwd: process.cwd () })).createSourceFile (fileName, text);
+        const sf = res?.sourceFile ?? res;
+        res?.dispose?. ();
+        return sf;
+    },
 };
 
 function goUnwrapParens (n: any): any {
@@ -12040,7 +12045,7 @@ export function installCcxtGoFeeTierLiterals (goTranspiler: any) {
     goInstAround (goTranspiler, 'printCallExpression', function (this: any, printCall, node: any, ...rest: any[]) { return goFeeTierLiteral (node) ?? printCall.call (this, node, ...rest); });
 }
 
-import { NodeFlags } from 'typescript/unstable/ast';
+import { NodeFlags } from 'typescript/ast';
 
 const GO_ITERATION_STATEMENT_KINDS = new Set<number>([SyntaxKind.ForStatement, SyntaxKind.ForInStatement, SyntaxKind.ForOfStatement, SyntaxKind.DoStatement, SyntaxKind.WhileStatement]);
 

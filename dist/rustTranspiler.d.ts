@@ -1,6 +1,6 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { type BinaryExpression, type BindingElement, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type PropertyAccessExpression, type Statement, type VariableDeclaration } from "typescript/unstable/ast";
-import { type Symbol as TsSymbol, type Type } from "typescript/unstable/sync";
+import { type BinaryExpression, type BindingElement, type CallExpression, type Declaration, type DeleteExpression, type ElementAccessExpression, type Expression, type Identifier, type MethodDeclaration, type Node, type ParameterDeclaration, type PropertyAccessExpression, type Statement, type VariableDeclaration } from "typescript/ast";
+import { type Symbol as TsSymbol, type Type } from "typescript/sync";
 export declare function isRustTsIndexSource(name: string): boolean;
 /** The text of a listed ts/src file; undefined when it vanished between listing and reading, any other error throws. */
 export declare function readRustTsIndexSource(file: string): string | undefined;
@@ -2276,7 +2276,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     nativeEqualityText(node: any): string;
     unwrapParens(node: any): any;
     hasNativeComparisonOperand(node: any): any;
-    printLogicalInBooleanContext(node: any): any;
+    printLogicalInBooleanContext(node: any): string;
     printWhileStatement(node: any, identation: any): string;
     printIfStatement(node: any, identation: any): string;
     printPostFixUnaryExpression(node: any, identation: any): string;

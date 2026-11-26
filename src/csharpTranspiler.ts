@@ -1,15 +1,15 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind, NodeFlags, type Node, type ParameterDeclaration } from 'typescript/unstable/ast';
-import { IndexKind, TypeFlags, type Checker, type Program, type Symbol as TsSymbol, type UnionType } from 'typescript/unstable/sync';
+import { SyntaxKind, NodeFlags, type Node, type ParameterDeclaration } from 'typescript/ast';
+import { IndexKind, TypeFlags, type Checker, type Program, type Symbol as TsSymbol, type UnionType } from 'typescript/sync';
 import {
     isArrayLiteralExpression, isAsExpression, isBinaryExpression, isBlock, isBooleanLiteral, isBreakStatement, isCallExpression, isClassDeclaration, isClassExpression,
     isClassLikeDeclaration, isConditionalExpression, isContinueStatement, isDeleteExpression, isElementAccessExpression, isExpressionStatement, isForStatement, isFunctionExpression,
     isIdentifier, isIfStatement, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isParameterDeclaration, isParenthesizedExpression, isPostfixUnaryExpression,
     isPrefixUnaryExpression, isPropertyAccessExpression, isPropertyDeclaration, isPropertySignatureDeclaration, isReturnStatement, isSourceFile, isSpreadAssignment, isSpreadElement,
     isStringLiteral, isStringLiteralLikeNode, isThrowStatement, isTypeAssertion, isVariableDeclaration, isWhileStatement
-} from 'typescript/unstable/ast/is';
+} from 'typescript/ast/is';
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from './tsUtils.js';
-import * as csharpTsSync from 'typescript/unstable/sync';
+import * as csharpTsSync from 'typescript/sync';
 import fs from 'fs';
 import path from 'path';
 
@@ -3466,7 +3466,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         let file: any;
         try {
-            file = (CSharpTranspiler.csharpProParseApi ??= new (csharpTsSync as any).API({ cwd: process.cwd() })).createSourceFile(pro, text);
+            const res = (CSharpTranspiler.csharpProParseApi ??= new (csharpTsSync as any).API({ cwd: process.cwd() })).createSourceFile(pro, text);
+            file = res?.sourceFile ?? res;
+            res?.dispose?.();
         } catch (e) {
             return undefined;
         }

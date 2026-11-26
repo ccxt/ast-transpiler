@@ -1,7 +1,7 @@
 import { Transpiler } from '../src/transpiler';
 // the test bodies name their TS source snippets `ts`, so the compiler API gets its own name
-import { SyntaxKind } from 'typescript/unstable/ast';
-import { isStringLiteralLikeNode } from 'typescript/unstable/ast/is';
+import { SyntaxKind } from 'typescript/ast';
+import { isStringLiteralLikeNode } from 'typescript/ast/is';
 import { describe, test, expect } from '@jest/globals';
 import * as fs from 'fs';
 import * as path from 'path';

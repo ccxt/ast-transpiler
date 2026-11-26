@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind } from "typescript/unstable/ast";
-import { isCallExpression, isExpressionStatement } from "typescript/unstable/ast/is";
-import { type Checker } from "typescript/unstable/sync";
+import { SyntaxKind } from "typescript/ast";
+import { isCallExpression, isExpressionStatement } from "typescript/ast/is";
+import { type Checker } from "typescript/sync";
 import { isFunctionLike } from "./tsUtils.js";
 
 const parserConfig = {

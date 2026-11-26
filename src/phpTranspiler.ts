@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind } from "typescript/unstable/ast";
-import { isArrowFunction, isCallExpression, isFunctionDeclaration, isFunctionExpression } from "typescript/unstable/ast/is";
-import { TypeFlags, type Checker } from "typescript/unstable/sync";
+import { SyntaxKind } from "typescript/ast";
+import { isArrowFunction, isCallExpression, isFunctionDeclaration, isFunctionExpression } from "typescript/ast/is";
+import { TypeFlags, type Checker } from "typescript/sync";
 import { unCamelCase, regexAll } from "./utils.js";
 import { Logger } from "./logger.js";
 

@@ -31,9 +31,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js
+// node_modules/tsup/assets/cjs_shims.js
 var init_cjs_shims = __esm({
-  "../../ast-transpiler/node_modules/tsup/assets/cjs_shims.js"() {
+  "node_modules/tsup/assets/cjs_shims.js"() {
   }
 });
 
@@ -56,7 +56,7 @@ __export(tsUtils_exports, {
   typeTarget: () => typeTarget
 });
 init_cjs_shims();
-var _ast = require('typescript/unstable/ast');
+var _ast = require('typescript/ast');
 var FUNCTION_LIKE_KINDS = /* @__PURE__ */ new Set([
   _ast.SyntaxKind.FunctionDeclaration,
   _ast.SyntaxKind.MethodDeclaration,
@@ -169,4 +169,4 @@ function typeTarget(type) {
 
 
 exports.__commonJS = __commonJS; exports.__toESM = __toESM; exports.init_cjs_shims = init_cjs_shims; exports.ModifierFlags = _ast.ModifierFlags; exports.isFunctionLike = isFunctionLike; exports.isClassLike = isClassLike; exports.isStringLiteralLike = isStringLiteralLike; exports.findAncestor = findAncestor; exports.getAllSuperTypeNodes = getAllSuperTypeNodes; exports.getCombinedNodeFlags = getCombinedNodeFlags; exports.canHaveModifiers = canHaveModifiers; exports.getModifiers = getModifiers; exports.symbolDeclarations = symbolDeclarations; exports.symbolValueDeclaration = symbolValueDeclaration; exports.signatureDeclaration = signatureDeclaration; exports.typeParts = typeParts; exports.typeTarget = typeTarget; exports.tsUtils_exports = tsUtils_exports;
-//# sourceMappingURL=chunk-QUQI36PO.cjs.map
+//# sourceMappingURL=chunk-SLNKTM7O.cjs.map

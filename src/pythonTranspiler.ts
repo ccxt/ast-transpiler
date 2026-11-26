@@ -1,7 +1,7 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
 import { regexAll } from "./utils.js";
-import { SyntaxKind } from "typescript/unstable/ast";
-import { isCallExpression, isElementAccessExpression, isIdentifier, isNumericLiteral, isPropertyAccessExpression } from "typescript/unstable/ast/is";
+import { SyntaxKind } from "typescript/ast";
+import { isCallExpression, isElementAccessExpression, isIdentifier, isNumericLiteral, isPropertyAccessExpression } from "typescript/ast/is";
 
 const parserConfig = {
     'STATIC_TOKEN': '', // to do static decorator

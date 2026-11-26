@@ -53,7 +53,7 @@
   "dependencies": {
     "colorette": "^2.0.19",
     "piscina": "^3.2.0",
-    "typescript": "7.1.0-dev.20260924.1"
+    "typescript": "7.1.0-dev.20261126.1"
   },
   "author": {
     "name": "Carlos Gonçalves",

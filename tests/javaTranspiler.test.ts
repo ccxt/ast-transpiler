@@ -1,5 +1,5 @@
 import { Transpiler } from '../src/transpiler';
-import { SyntaxKind } from 'typescript/unstable/ast';
+import { SyntaxKind } from 'typescript/ast';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';

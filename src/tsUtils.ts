@@ -1,6 +1,6 @@
-// TS6 compiler helpers that typescript/unstable (TS7) does not export, re-implemented over TS7 nodes
+// TS6 compiler helpers that typescript (TS7) does not export, re-implemented over TS7 nodes
 // with the TS6 names and semantics so the printers keep their call sites.
-import { SyntaxKind, NodeFlags, ModifierFlags, type Node, type NodeArray } from "typescript/unstable/ast";
+import { SyntaxKind, NodeFlags, ModifierFlags, type Node, type NodeArray } from "typescript/ast";
 
 const FUNCTION_LIKE_KINDS = new Set<SyntaxKind>([
     SyntaxKind.FunctionDeclaration, SyntaxKind.MethodDeclaration, SyntaxKind.Constructor, SyntaxKind.GetAccessor,
