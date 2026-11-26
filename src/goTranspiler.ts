@@ -27107,7 +27107,8 @@ ${tryBodyBlock}
         const args = node?.arguments ?? [];
         if ((receiver?.kind !== SyntaxKind.Identifier) || (receiverText !== receiver.text) || (args.length < 1) || (args.length > 2)) { return undefined; }
         const scope = this.goEnclosingFunction(receiver);
-        if (this.goLocalIsRebound(scope, receiver)) { return undefined; }
+        const rebound = this.goLocalIsRebound(scope, receiver);
+        if (rebound && ((goType !== 'string') || (args.length !== 2) || this.h54g42ReboundInGuard(node, receiver))) { return undefined; }
         let value = receiverText;
         if (goType === '*string') {
             if (!this.goDerefableStringOperand(receiver)) { return undefined; }
@@ -27151,6 +27152,22 @@ ${tryBodyBlock}
         }
         if (!proven) { return undefined; }
         return `${value}[${counter}${binary(first, SyntaxKind.PlusToken) ? '+' : '-'}${k}:]`;
+    }
+    // a `string` receiver rebound only outside every enclosing `if`: each guard there reads the value the slice takes
+    h54g42ReboundInGuard(node, receiver) {
+        let child: any = node;
+        for (let current: any = node?.parent; (current !== undefined) && (current.kind !== SyntaxKind.MethodDeclaration) && (current.kind !== SyntaxKind.FunctionDeclaration)
+            && (current.kind !== SyntaxKind.ArrowFunction) && (current.kind !== SyntaxKind.FunctionExpression); child = current, current = current.parent) {
+            if ((current.kind === SyntaxKind.IfStatement) && (current.thenStatement === child) && this.hasNodeWhere(current, (n: any) => (n.kind === SyntaxKind.Identifier)
+                && (n.text === receiver.text) && (n !== receiver) && (this.goRebindingTargetOf(n) !== undefined) && !this.h54g42Contains(this.goRebindingTargetOf(n).right, node))) { return true; }
+            if ((current.kind === SyntaxKind.ForStatement) || (current.kind === SyntaxKind.ForOfStatement) || (current.kind === SyntaxKind.ForInStatement)
+                || (current.kind === SyntaxKind.WhileStatement) || (current.kind === SyntaxKind.DoStatement)) { return true; }
+        }
+        return false;
+    }
+    h54g42Contains(outer, inner) {
+        for (let p: any = inner; p !== undefined; p = p.parent) { if (p === outer) { return true; } }
+        return false;
     }
     // the `&&` conjuncts of every enclosing `if` whose then-branch holds the node (no else-branch reads)
     h26g55GuardConjuncts(node) {
