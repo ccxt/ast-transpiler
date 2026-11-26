@@ -39838,7 +39838,9 @@ ${this.getIden(identation)}PanicOnError(${exprStm.trim()})`;
     }
     const isAsyncFunction = this.isInsideAsyncFunction(node);
     if (!isAsyncFunction) {
-      if (node.expression?.kind === SyntaxKind5.Identifier && this.goDeclaredTypeOfIdentifier(node.expression) === "*int64" && this.goValueDecl(node.expression)?.kind === SyntaxKind5.Parameter && (this.goHasEnclosingNilGuard(node.expression) || this.goHasEarlyExitNilGuard(node.expression))) {
+      const retDecl = node.expression?.kind === SyntaxKind5.Identifier ? this.goValueDecl(node.expression) : void 0;
+      const retFn = retDecl !== void 0 ? this.goEnclosingFunction(node) : void 0;
+      if (retDecl?.kind === SyntaxKind5.Parameter && retDecl.initializer !== void 0 && this.goDeclaredTypeOfIdentifier(node.expression) === "*int64" && (retFn === void 0 || this.printFunctionType(retFn).trim() !== "*int64") && (this.goHasEnclosingNilGuard(node.expression) || this.goHasEarlyExitNilGuard(node.expression))) {
         return this.getIden(identation) + "return *" + this.printNode(node.expression, 0).trim();
       }
       return super.printReturnStatement(node, identation);
