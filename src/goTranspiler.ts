@@ -21658,6 +21658,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         case SyntaxKind.FalseKeyword: return pointee === 'bool';
         }
         if (this.goInt64ArithmeticOperand(pointee, otherNode)) { return true; }
+        // a base string field (`this.walletAddress` prints the Go string field WalletAddress)
+        if ((pointee === 'string') && (GO_STRING_FIELD_NAMES.indexOf(this.goAstFieldGoName(otherNode)) >= 0)) { return true; }
         const otherType = this.goDeclaredTypeOfIdentifier(otherNode);
         return otherType === pointee;
     }
