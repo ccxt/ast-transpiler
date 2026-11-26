@@ -29737,6 +29737,8 @@ export class RustTranspiler extends BaseTranspiler {
             // an unannotated `let q = params` alias that the local solve already binds as a map takes the slot the same way
             if (isVariableDeclaration(up) && up.initializer === n && up.type === undefined && this.rustParamsAliasDecl(up)) { uses++; return true; }
             if (this.rustParamsHelperSlot(up, n)) { uses++; return true; }
+            // the params head of a base `handleOption*AndParams` helper (`impl Into<Value>`: the map converts, no copy)
+            if (isCallExpression(up) && up.arguments[0] === n && isPropertyAccessExpression(up.expression) && RustTranspiler.PARAMS_SLOT_ARG[String(up.expression.name.text)] === 0 && /^handleOption/.test(String(up.expression.name.text)) && this.rustCalleeIsRuntimeBase(up)) { uses++; return true; }
             if (isCallExpression(up) && up.arguments[0] === n) {
                 const callee: any = up.expression;
                 if (!isPropertyAccessExpression(callee) || callee.expression.kind !== SyntaxKind.ThisKeyword) return false;

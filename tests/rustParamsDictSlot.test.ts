@@ -114,3 +114,29 @@ describe ('an unannotated alias of the params slot takes the map', () => {
         expect (out).not.toContain ('get_arg_dict');
     });
 });
+
+describe ('the params head of a base handleOption*AndParams helper takes the map', () => {
+    const helperBase = base.replace ('    hold (x: any): any { return x; }\n', '    hold (x: any): any { return x; }\n    handleOptionStringAndParams (params: Dict, methodName: Str, optionName: string, defaultValue: Str = undefined): [Str, Dict] { return [ undefined, params ]; }\n');
+    const runH = (dir: string, body: string) => {
+        fs.mkdirSync (path.join (root, dir, 'ts/src/base'), { recursive: true });
+        fs.writeFileSync (path.join (root, dir, 'ts/src/base/Exchange.ts'), helperBase);
+        fs.writeFileSync (path.join (root, dir, 'ts/src/venue.ts'), venue (body));
+        return new Transpiler ({ 'verbose': false, 'rust': { 'typedUnified': [ 'fetchTrades' ], 'parser': { 'NUM_LINES_END_FILE': 0 } } }).transpileRustByPath (path.join (root, dir, 'ts/src/venue.ts')).content;
+    };
+    const body = "        let paramsAccount: Dict = params;\n        if (symbol === 'x') {\n            const [ accountId, paramsAccountId ] = this.handleOptionStringAndParams (params, 'fetchTrades', 'accountId');\n            this.hold (accountId);\n            paramsAccount = paramsAccountId;\n        }\n        const request: Dict = { 'a': 1 };\n        this.hold (this.extend (request, paramsAccount));\n";
+    test ('`handleOptionStringAndParams (params, ..)` binds params as Dict and drops the alias into_dict', () => {
+        const out = runH ('hopt', body);
+        expect (out).toContain ('let params: crate::value::Dict = get_arg_dict(optional_args, ');
+        expect (out).toMatch (/let mut paramsAccount: crate::value::Dict = params(\.clone\(\))?;/);
+        expect (out).not.toContain ('params.clone().into_dict()');
+    });
+    test ('params read after the helper call is lent, not moved', () => {
+        const out = runH ('hopt-after', body + "        const t = this.safeString (params, 'type');\n        this.hold (t);\n");
+        expect (out).toContain ('get_arg_dict(optional_args, ');
+        expect (out).toMatch (/handle(_option_string_and_params|OptionStringAndParams)\((&params|params\.clone\(\)), /);
+    });
+    test ('negative: params also handed to an untyped slot keeps the boxed get_arg', () => {
+        const out = runH ('hopt-hold', body + "        this.hold (params);\n");
+        expect (out).not.toContain ('get_arg_dict');
+    });
+});
