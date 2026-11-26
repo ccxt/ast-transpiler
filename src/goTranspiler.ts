@@ -5113,6 +5113,9 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
     // a core whose channel carries `[]map[string]any` (the host's async table) is received as a list of maps
     const mapRows = (endpoint === undefined) && goTranspiler.asyncMapRowListCallees?.has (exported) ? '[]any' : undefined;
     const goType = (endpoint !== undefined) ? endpoint : (CCXT_GO_ASYNC_ELEM_TYPES[printed[1]] ?? mapRows);
+    // the host's table types this channel `[]string`: the shadow `[]any` row of the async table does not apply
+    const stringList = (endpoint === undefined) ? h55g63StringListReceive (goTranspiler, awaitNode, callee, exported) : undefined;
+    if (stringList !== undefined) { return stringList; }
     if (goType === undefined) { return (endpoint === undefined) ? ccxtGoAsyncScalarReceive (goTranspiler, awaitNode, call) : undefined; }
     const declaration = ccxtGoAsyncReceiveDeclaration (awaitNode);
     if ((endpoint !== undefined) && (declaration === undefined)) { return undefined; } // a statement or a forwarded endpoint value stays boxed
@@ -5140,6 +5143,29 @@ export function ccxtGoAwaitReceiveUnbox (goTranspiler, awaitNode, printedInitial
             && (ccxtGoEndpointListReceive (goTranspiler, awaitNode, goType, printedInitializer) !== undefined),
         wrap: (recv) => ccxtGoEndpointCheckedRead (goTranspiler, awaitNode, goType, recv) ?? (conv + '(PanicOnError(' + recv.trim () + '))'),
     };
+}
+
+// `const x = await this.m (..)` of a `Promise<string[]>` method whose channel the host's table types `[]string`:
+// x is that slice (nil stays nil), read only by `.length` or handed to a `string[]` parameter that prints `[]string`
+function h55g63StringListReceive (goTranspiler, awaitNode, callee, exported) {
+    const declaration = ccxtGoAsyncReceiveLocal (awaitNode);
+    const cls = String (goTranspiler.goEnclosingClassName (awaitNode) ?? '');
+    const callees: Set<string> = goTranspiler.asyncStringListCallees;
+    if ((declaration === undefined) || (((declaration.parent?.flags ?? 0) & NodeFlags.Const) === 0) || (callees === undefined)
+        || !(callees.has (exported) || callees.has (cls.charAt (0).toUpperCase () + cls.slice (1) + '.' + exported))) { return undefined; }
+    let text = undefined;
+    try { text = goTranspiler.getChecker ().getSymbolAtLocation (callee.name)?.valueDeclaration?.resolve ()?.type?.getText?. (); } catch (e) { return undefined; }
+    if (String (text ?? '').replace (/\s+/g, '') !== 'Promise<string[]>') { return undefined; }
+    const reads = (n) => {
+        const parent = n.parent;
+        if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n) && (parent.name?.text === 'length')) { return true; }
+        if ((parent?.kind !== SyntaxKind.CallExpression) || !(parent.arguments ?? []).includes (n)) { return false; }
+        // the annotation alone: a []string in an `any` slot reads the same through every helper
+        const param: any = goTranspiler.goResolvedCallParameter (parent, parent.arguments.indexOf (n));
+        return (param?.parent !== undefined) && goTranspiler.goAnnotatedStringSliceSlot (param.parent, parent.arguments.indexOf (n), '[]string');
+    };
+    if (goTranspiler.goDeclaredLocalTypeIfSafe (declaration, '[]string', reads) === undefined) { return undefined; }
+    return { goType: '[]string', wrap: (recv) => 'NewStringArray(PanicOnError(' + recv.trim () + '))' };
 }
 
 // an unannotated local takes the declared `Promise<Dict>` / `Promise<List>` of the venue's own `this.m (..)`;
@@ -10580,6 +10606,16 @@ function goAwaitedListLocalArgType (go: any, arg: any): string | undefined {
     return (listChannel && !stringList && ccxtGoAsyncDeclaredShapeAgrees (go, callee, GO_SAFE_LIST_LOCAL_TYPE)) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
 }
 
+// a const local the string-list receive declares `[]string` hands that slice to its callee
+function h55g63StringListLocalArgType (go: any, arg: any): string | undefined {
+    const decl: any = go.goSymbolValueDecl (arg);
+    const init: any = (decl?.kind === SK.VariableDeclaration) ? decl.initializer : undefined;
+    const callee: any = (init?.kind === SK.AwaitExpression) ? init.expression?.expression : undefined;
+    if ((callee?.kind !== SK.PropertyAccessExpression) || (callee.expression?.kind !== SK.ThisKeyword)) { return undefined; }
+    const name = String (callee.name?.text ?? '');
+    return (h55g63StringListReceive (go, init, callee, name.charAt (0).toUpperCase () + name.slice (1)) !== undefined) ? '[]string' : undefined;
+}
+
 // a nil-declared local the container join prints `var x []any = nil` hands that slice to its callee
 function goNilJoinListLocalArgType (go: any, arg: any): string | undefined {
     return (ccxtGoNilJoinDeclarationType (go, arg) === GO_SAFE_LIST_LOCAL_TYPE) ? GO_SAFE_LIST_LOCAL_TYPE : undefined;
@@ -13112,6 +13148,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.asyncTickerMapCallees = new Set<string>(config['asyncTickerMapCallees'] ?? []);
         this.asyncStringCallees = new Set<string>(config['asyncStringCallees'] ?? []);
         this.asyncStringPtrCallees = new Set<string>(config['asyncStringPtrCallees'] ?? []);
+        this.asyncStringListCallees = new Set<string>(config['asyncStringListCallees'] ?? []);
         (this as any).h27g08Config = config;
         this.goTupleSlotTypes = config['goTupleSlotTypes'] ?? {};
         this.goTupleValueDefaultArg = config['goTupleValueDefaultArg'] ?? {};
@@ -19147,7 +19184,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
 
     // the printed Go type of a call-site argument, or undefined when the printer cannot name it (then the call site does not prove anything)
     goPrintedArgType(arg): string | undefined {
-        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg) ?? goAwaitedListLocalArgType(this, arg) ?? goNilJoinListLocalArgType(this, arg); }
+        if (arg.kind === SyntaxKind.Identifier) { return this.goDeclaredTypeOfIdentifier(arg) ?? this.goBoundIdentifierType(arg) ?? this.goSafeDictMapArgType(arg) ?? goAwaitedListLocalArgType(this, arg) ?? goNilJoinListLocalArgType(this, arg) ?? h55g63StringListLocalArgType(this, arg); }
         if (this.goIsClientUrl(arg)) { return 'string'; } // Client.url prints the string GetUrl()
         if ((arg?.kind === SyntaxKind.PropertyAccessExpression) && (arg.expression?.kind === SyntaxKind.ThisKeyword)
             && (arg.name?.text === 'privateKey')) { return 'string'; } // go/v4/exchange.go declares PrivateKey `string`
@@ -24955,6 +24992,7 @@ ${tryBodyBlock}
     // `<Class>.<Method>` / `<Method>` rows whose channel carries a plain Go `string` (the host's async table)
     asyncStringCallees: Set<string> = new Set<string>();
     asyncStringPtrCallees: Set<string> = new Set<string>();
+    asyncStringListCallees: Set<string> = new Set<string>();
     goTickerRowCache: Map<any, { key: any, keyIsPointer: boolean, ret: any } | null> = new Map();
 
     // `const tickers = await this.watchTickers ([ k ], params); return tickers[k];` in an async method that
