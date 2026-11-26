@@ -6905,6 +6905,7 @@ export class RustTranspiler extends BaseTranspiler {
         const kind = this.rustBaseTypedReturnKindAll(node);
         if (kind === undefined) return undefined;
         const text = this.rustBaseTypedBareText(node);
+        if (this.rustDiscardedResult(node)) return text;
         if (kind === 'odict') return `${text}.map_or(Value::Null, Value::Dict)`;
         if (kind === 'olist') return `${text}.map_or(Value::Null, Value::Arr)`;
         if (kind === 'dict') return `Value::Dict(${text})`;
@@ -22566,6 +22567,7 @@ export class RustTranspiler extends BaseTranspiler {
         const typedCall = isCallExpression(node.expression) ? this.printTypedUnifiedCall(node.expression) : undefined;
         if (typedCall !== undefined) return typedCall;
         const containerKind = this.rustOwnContainerCallKind(node.expression);
+        if (containerKind !== undefined && !this.rustOwnContainerBare.has(node) && this.rustDiscardedResult(node)) return `${this.rustOwnContainerBareText(node.expression)}.await`;
         if (containerKind === 'odict' && !this.rustOwnContainerBare.has(node)) return `${this.rustOwnContainerBareText(node.expression)}.await.map_or(Value::Null, Value::Dict)`;
         if (containerKind !== undefined && !this.rustOwnContainerBare.has(node)) return `${containerKind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node.expression)}.await)`;
         const outcomeBox = this.printOptOutcomeAwaitBox(node, identation); if (outcomeBox !== undefined) return outcomeBox;
@@ -23469,6 +23471,13 @@ export class RustTranspiler extends BaseTranspiler {
         }
     }
 
+    /** The expression is a statement of its own: its result is thrown away and needs no box. */
+    rustDiscardedResult(node: any): boolean {
+        let up: any = node;
+        while (isParenthesizedExpression(up.parent)) up = up.parent;
+        return up.parent?.kind === SyntaxKind.ExpressionStatement;
+    }
+
     /** A value position boxes the native result once; an awaited call boxes after its `.await`. */
     printOwnContainerCallBox(node: any): string | undefined {
         if (this.rustOwnContainerBare.has(node)) return undefined;
@@ -23476,6 +23485,7 @@ export class RustTranspiler extends BaseTranspiler {
         while (isParenthesizedExpression(up.parent)) up = up.parent;
         if (up.parent?.kind === SyntaxKind.AwaitExpression) return undefined;
         const kind = this.rustOwnContainerCallKind(node);
+        if (kind !== undefined && this.rustDiscardedResult(node)) return this.rustOwnContainerBareText(node);
         if (kind === 'odict') return `${this.rustOwnContainerBareText(node)}.map_or(Value::Null, Value::Dict)`;
         return kind === undefined ? undefined : `${kind === 'dict' ? 'Value::Dict' : 'Value::Arr'}(${this.rustOwnContainerBareText(node)})`;
     }
