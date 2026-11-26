@@ -78,6 +78,10 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalTypes: WeakMap<Node, string>;
     csharpMethodOverrides: WeakMap<Node, Node>;
     csharpClassMethodsByName: WeakMap<Node, Map<string, Node>>;
+    csharpClassLineages: WeakMap<Node, string>;
+    csharpSuperClasses: WeakMap<Node, any>;
+    csharpReboundNamesCache: WeakMap<Node, Set<string>>;
+    csharpDictParamsReboundCache: WeakMap<Node, boolean>;
     csharpDeclaredDictMemberReads: WeakSet<Node>;
     csharpDeclaredBaseFields: {
         [name: string]: string;
@@ -176,10 +180,6 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpListSpellingOfType(type: any, unionArms?: number, anyCell?: boolean, stringCell?: boolean): string | undefined;
     csharpListParamCensus(): Map<string, boolean>;
     csharpListParamLineage(node: any): string;
-    csharpParamCensus(rule: {
-        walks: ((node: any) => void)[];
-        settle: () => void;
-    }): void;
     csharpListParamBodyReadsAsList(parameter: any): boolean;
     csharpArgumentMayBeList(type: any): boolean;
     csharpClassExtendsArray(type: any, depth: number): boolean;
