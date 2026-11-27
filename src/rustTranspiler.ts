@@ -9844,14 +9844,31 @@ export class RustTranspiler extends BaseTranspiler {
         const name = String(node.expression.name.text);
         const kinds = Array.from(node.arguments).map((a: any) => this.rustScalarNumericKind(a));
         if (kinds.some((k) => k === undefined) || name === 'abs' && kinds[0] !== 'num' && kinds[0] !== 'onum') return undefined;
-        if (name === 'pow') return kinds.every((k) => k === 'int' || k === 'num') ? 'num' : undefined;
+        if (name === 'pow') return kinds.every((k) => k === 'int' || k === 'num') ? 'num' : 'onum';
         return kinds[0] === 'int' || kinds[0] === 'num' ? 'num' : 'onum';
     }
     rustMathFloatText(node): string {
         const name = String(node.expression.name.text);
         const args: any[] = Array.from(node.arguments);
         // path calls (`f64::powf(a, b)`): a float literal receiver would be an ambiguous `{float}` for method syntax
-        if (name === 'pow') return `f64::powf(${this.rustScalarOperandText('num', args[0])}, ${this.rustScalarOperandText('num', args[1])})`;
+        if (name === 'pow') {
+            const k0 = this.rustScalarNumericKind(args[0]);
+            const k1 = this.rustScalarNumericKind(args[1]);
+            const opt0 = k0 === 'oint' || k0 === 'onum';
+            const opt1 = k1 === 'oint' || k1 === 'onum';
+            if (!opt0 && !opt1) return `f64::powf(${this.rustScalarOperandText('num', args[0])}, ${this.rustScalarOperandText('num', args[1])})`;
+            if (!opt0 && opt1) {
+                const neg1 = this.rust65pNegatedIntLocal(this.unwrapParens(args[1]));
+                if (neg1 !== undefined && neg1.kind === 'oint') {
+                    return `(if let Some(__y) = ${neg1.name} { Some(f64::powf(${this.rustScalarOperandText('num', args[0])}, (-__y) as f64)) } else { None })`;
+                }
+                return `(if let Some(__y) = ${this.rustScalarOperandText(k1, args[1])} { Some(f64::powf(${this.rustScalarOperandText('num', args[0])}, ${k1 === 'oint' ? '__y as f64' : '__y'})) } else { None })`;
+            }
+            if (opt0 && !opt1) {
+                return `(if let Some(__x) = ${this.rustScalarOperandText(k0, args[0])} { Some(f64::powf(${k0 === 'oint' ? '__x as f64' : '__x'}, ${this.rustScalarOperandText('num', args[1])})) } else { None })`;
+            }
+            return `(if let (Some(__x), Some(__y)) = (${this.rustScalarOperandText(k0, args[0])}, ${this.rustScalarOperandText(k1, args[1])}) { Some(f64::powf(${k0 === 'oint' ? '__x as f64' : '__x'}, ${k1 === 'oint' ? '__y as f64' : '__y'})) } else { None })`;
+        }
         const k = this.rustScalarNumericKind(args[0]);
         if (k === 'int' || k === 'num') return `f64::${name}(${this.rustScalarOperandText('num', args[0])})`;
         const opt = this.rustScalarOperandText(k, args[0]);

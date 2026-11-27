@@ -4859,7 +4859,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? ((op === SyntaxKind.PlusToken)
                 ? (this.csharpNativeStringConcat(left, right, leftText, rightText)
                     ?? this.csharpPrinterStringConcat(left, right, leftText, rightText)
-                    ?? ((spine === undefined) ? undefined : this.csharpObjectStringConcat(spine.base, spine.rights)))
+                    ?? ((spine === undefined) ? undefined : (this.csharpObjectStringConcat(spine.base, spine.rights) ?? this.csharpTypeofStringParamConcat(spine.base, spine.rights))))
                 : (op === SyntaxKind.AsteriskToken) ? (this.csharpNativeLiteralProduct(left, right) ?? this.csharpNativeFloorProduct(node, left, right))
                     : (op === SyntaxKind.PercentToken) ? (this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText))
                         : undefined);
@@ -5077,6 +5077,45 @@ export class CSharpTranspiler extends BaseTranspiler {
         }
         const name = this.printNode(local, 0);
         return `((object)(${name} == null ? null : ${name} + ${texts.join(' + ')}))`;
+    }
+    // `x + r1 + r2` over an `object`-typed parameter narrowed by an enclosing `if (typeof x === 'string')`
+    csharpTypeofStringParamConcat(base, rights: any[]): string | undefined {
+        let ident = base;
+        while (ident?.kind === SyntaxKind.ParenthesizedExpression) { ident = ident.expression; }
+        if (!isIdentifier(ident)) { return undefined; }
+        const decl: any = this.csharpReceiverBinding(ident);
+        if (decl?.kind !== SyntaxKind.Parameter) { return undefined; }
+        let guarded = false;
+        const isTypeofString = (expr: any): boolean => {
+            const inner = this.csharpUnparenthesized(expr);
+            if (!isBinaryExpression(inner)) { return false; }
+            const tok = inner.operatorToken?.kind;
+            if (tok === SyntaxKind.AmpersandAmpersandToken) { return isTypeofString(inner.left) || isTypeofString(inner.right); }
+            if ((tok !== SyntaxKind.EqualsEqualsEqualsToken) && (tok !== SyntaxKind.EqualsEqualsToken)) { return false; }
+            const check = (a: any, b: any) => {
+                if (a?.kind !== SyntaxKind.TypeOfExpression) { return false; }
+                const target = this.csharpUnparenthesized(a.expression);
+                const tDecl: any = isIdentifier(target) ? this.csharpReceiverBinding(target) : undefined;
+                return (tDecl !== undefined) && (tDecl.pos === decl.pos) && (tDecl.end === decl.end)
+                    && (b?.kind === SyntaxKind.StringLiteral) && (b.text === 'string');
+            };
+            return check(this.csharpUnparenthesized(inner.left), this.csharpUnparenthesized(inner.right))
+                || check(this.csharpUnparenthesized(inner.right), this.csharpUnparenthesized(inner.left));
+        };
+        for (let child: any = ident, parent: any = ident?.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+            if ((parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement !== undefined)
+                && (parent.thenStatement.pos === child.pos) && (parent.thenStatement.end === child.end)
+                && isTypeofString(parent.expression)) { guarded = true; break; }
+        }
+        if (!guarded) { return undefined; }
+        const texts: string[] = [];
+        for (const right of rights) {
+            if (this.csharpEvaluationHasEffects(right)) { return undefined; }
+            if (!this.csharpConcatOperandPrintsString(right, 0, true) && !this.csharpIsStringValued(right)) { return undefined; }
+            texts.push(this.printNode(right, 0));
+        }
+        const name = this.printNode(ident, 0);
+        return `(((string)${name}) + ${texts.join(' + ')})`;
     }
     // ral-84c8: a read the build layer declares `string?` (a string or null box, exactly what the untyped local held) whose `+` it leaves to this guarded form: the null test plus the ...
     csharpGuardedStringConcatLocal(identifier): boolean { return false; }

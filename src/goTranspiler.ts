@@ -22827,8 +22827,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             if ((goType === '*string') && (parent?.kind === SyntaxKind.ReturnStatement) && strPtrFamilyOwnParamReturn(param, parent)) { return true; }
             if ((goType === '*int64') && (this.goHasEnclosingNilGuard(n) || this.goHasEarlyExitNilGuard(n))) {
                 if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
-                    && (this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n)) === 'int64')) { return true; }
+                    && (this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n), parent) === 'int64')) { return true; }
                 if ((parent?.kind === SyntaxKind.ReturnStatement) && (parent.expression === n) && !this.isInsideAsyncFunction(parent)) { return true; }
+            }
+            if ((goType === '*float64') && (this.goHasEnclosingNilGuard(n) || this.goHasEarlyExitNilGuard(n))) {
+                if ((parent?.kind === SyntaxKind.CallExpression) && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression)
+                    && (this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n), parent) === 'float64')) { return true; }
             }
             if (parent === param) { return true; } // the parameter's own name is not a use
             if (nilable && (goType === 'map[string]any')) {
@@ -36687,6 +36691,10 @@ function h18g01WriteIsInt64Ptr(goTranspiler, right, assumed): boolean {
             // a parameter whose binding is being decided answers as the candidate under test
             return (target === assumed) || (goTranspiler.goGetArgTypeComputing?.has(target) === true) || (goTranspiler.goGetArgParameterType(target) === '*int64');
         }
+        if ((target?.kind === SyntaxKind.VariableDeclaration) && !h18g01Visiting.has(target)
+            && (goTranspiler.goDeclaredTypeOfIdentifier(value) === '*int64')) {
+            return true;
+        }
         return false;
     }
     if (!ral90g5ReaderCall(value) || !['safeInteger', 'safeInteger2'].includes(value.expression.name.text)) { return false; }
@@ -36750,7 +36758,8 @@ function h18g01NilJoinInt64(goTranspiler, declaration, assumed = undefined, writ
             const summed = (parent?.kind === SyntaxKind.CallExpression) && parent.arguments.some((a) => a === current)
                 && (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression.expression?.kind === SyntaxKind.ThisKeyword)
                 && (parent.expression.name?.text === 'sum');
-            if (!arithmetic && !summed && !h18g01IsDynamicDispatchArgument(parent, current) && !h19g01OptionalIntArgument(goTranspiler, parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
+            const minMaxSelf = (parent?.kind === SyntaxKind.CallExpression) && (h28g03SumTexts(goTranspiler, parent) !== undefined);
+            if (!arithmetic && !summed && !minMaxSelf && !h18g01IsDynamicDispatchArgument(parent, current) && !h19g01OptionalIntArgument(goTranspiler, parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
                 return true;
             }
         });
@@ -40201,11 +40210,42 @@ function h28g03TargetDeclaration(goTranspiler, call): any {
         || (declaration.type.typeName?.text !== 'Int') || !goTranspiler.goNilInitInitializer(declaration.initializer)) { return undefined; }
     return declaration;
 }
+// true when `ident` sits inside the `else` branch of `if ((ident === undefined) || ...)`
+function h56kInElseOfUndefinedOr(goTranspiler, ident): boolean {
+    for (let child: any = ident, parent: any = ident?.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+        if ((parent.kind !== SyntaxKind.IfStatement) || (parent.elseStatement === undefined)
+            || (parent.elseStatement.pos !== child.pos) || (parent.elseStatement.end !== child.end)) { continue; }
+        const hasUndef = (expr: any): boolean => {
+            const inner = goTranspiler.goUnwrapParenthesizedNode(expr);
+            if (inner === undefined) { return false; }
+            if (goTranspiler.goNilComparisonOf(inner, ident, SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken)) { return true; }
+            if ((inner.kind === SyntaxKind.BinaryExpression) && (inner.operatorToken?.kind === SyntaxKind.BarBarToken)) {
+                return hasUndef(inner.left) || hasUndef(inner.right);
+            }
+            return false;
+        };
+        if (hasUndef(parent.expression)) { return true; }
+    }
+    return false;
+}
 function h28g03SumTexts(goTranspiler, call): string[] | undefined {
     if ((call?.kind !== SyntaxKind.CallExpression) || (h28g03TargetDeclaration(goTranspiler, call) === undefined)) { return undefined; }
     const declaration = h28g03TargetDeclaration(goTranspiler, call);
-    // the written local's own read would be the pointer under decision: refused
-    if (call.arguments.some((a) => goIntSeedRefersTo(goTranspiler, a, declaration))) { return undefined; }
+    const minMax = goTranspiler.go92g7MinMaxName(call);
+    // allow a self-referencing `Math.min|max(x, y)` only when `x` is proven non-nil by an enclosing `else` of `x === undefined || ...`
+    if (call.arguments.some((a) => goIntSeedRefersTo(goTranspiler, a, declaration))) {
+        if ((minMax === undefined) || (call.arguments.length !== 2)) { return undefined; }
+        const texts = call.arguments.map((operand) => {
+            if (operand.kind !== SyntaxKind.Identifier) { return undefined; }
+            const printed = goTranspiler.printNode(operand, 0).trim();
+            if (goIntSeedRefersTo(goTranspiler, operand, declaration)) {
+                return h56kInElseOfUndefinedOr(goTranspiler, operand) ? ('*' + printed) : undefined;
+            }
+            const declared = goTranspiler.goDeclaredTypeOfIdentifier(operand);
+            return (declared === 'int64') ? printed : (((declared === '*int64') && (goTranspiler.goPointerNumberIsNonNil(operand) || h56kInElseOfUndefinedOr(goTranspiler, operand))) ? ('*' + printed) : undefined);
+        });
+        return texts.every((t) => t !== undefined) ? texts : undefined;
+    }
     return goTranspiler.go93g4PointerOperands(call) ?? h29g03Int64TreeTexts(goTranspiler, call);
 }
 goChainPre('goOperandStaticType', function (node, printedText: string) { return ((h28g03SumTexts(this, node) !== undefined)) ? ('int64') : undefined; });

@@ -8794,7 +8794,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
           return guardedChain;
         }
       }
-      const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? (op === SyntaxKind4.PlusToken ? this.csharpNativeStringConcat(left, right, leftText, rightText) ?? this.csharpPrinterStringConcat(left, right, leftText, rightText) ?? (spine === void 0 ? void 0 : this.csharpObjectStringConcat(spine.base, spine.rights)) : op === SyntaxKind4.AsteriskToken ? this.csharpNativeLiteralProduct(left, right) ?? this.csharpNativeFloorProduct(node, left, right) : op === SyntaxKind4.PercentToken ? this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText) : void 0);
+      const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? (op === SyntaxKind4.PlusToken ? this.csharpNativeStringConcat(left, right, leftText, rightText) ?? this.csharpPrinterStringConcat(left, right, leftText, rightText) ?? (spine === void 0 ? void 0 : this.csharpObjectStringConcat(spine.base, spine.rights) ?? this.csharpTypeofStringParamConcat(spine.base, spine.rights)) : op === SyntaxKind4.AsteriskToken ? this.csharpNativeLiteralProduct(left, right) ?? this.csharpNativeFloorProduct(node, left, right) : op === SyntaxKind4.PercentToken ? this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText) : void 0);
       if (nativeOperator !== void 0) {
         return nativeOperator;
       }
@@ -9106,6 +9106,64 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     const name = this.printNode(local, 0);
     return `((object)(${name} == null ? null : ${name} + ${texts.join(" + ")}))`;
+  }
+  // `x + r1 + r2` over an `object`-typed parameter narrowed by an enclosing `if (typeof x === 'string')`
+  csharpTypeofStringParamConcat(base, rights) {
+    let ident = base;
+    while (ident?.kind === SyntaxKind4.ParenthesizedExpression) {
+      ident = ident.expression;
+    }
+    if (!isIdentifier2(ident)) {
+      return void 0;
+    }
+    const decl = this.csharpReceiverBinding(ident);
+    if (decl?.kind !== SyntaxKind4.Parameter) {
+      return void 0;
+    }
+    let guarded = false;
+    const isTypeofString = (expr) => {
+      const inner = this.csharpUnparenthesized(expr);
+      if (!isBinaryExpression2(inner)) {
+        return false;
+      }
+      const tok = inner.operatorToken?.kind;
+      if (tok === SyntaxKind4.AmpersandAmpersandToken) {
+        return isTypeofString(inner.left) || isTypeofString(inner.right);
+      }
+      if (tok !== SyntaxKind4.EqualsEqualsEqualsToken && tok !== SyntaxKind4.EqualsEqualsToken) {
+        return false;
+      }
+      const check = (a, b) => {
+        if (a?.kind !== SyntaxKind4.TypeOfExpression) {
+          return false;
+        }
+        const target = this.csharpUnparenthesized(a.expression);
+        const tDecl = isIdentifier2(target) ? this.csharpReceiverBinding(target) : void 0;
+        return tDecl !== void 0 && tDecl.pos === decl.pos && tDecl.end === decl.end && b?.kind === SyntaxKind4.StringLiteral && b.text === "string";
+      };
+      return check(this.csharpUnparenthesized(inner.left), this.csharpUnparenthesized(inner.right)) || check(this.csharpUnparenthesized(inner.right), this.csharpUnparenthesized(inner.left));
+    };
+    for (let child = ident, parent = ident?.parent; parent !== void 0 && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+      if (parent.kind === SyntaxKind4.IfStatement && parent.thenStatement !== void 0 && parent.thenStatement.pos === child.pos && parent.thenStatement.end === child.end && isTypeofString(parent.expression)) {
+        guarded = true;
+        break;
+      }
+    }
+    if (!guarded) {
+      return void 0;
+    }
+    const texts = [];
+    for (const right of rights) {
+      if (this.csharpEvaluationHasEffects(right)) {
+        return void 0;
+      }
+      if (!this.csharpConcatOperandPrintsString(right, 0, true) && !this.csharpIsStringValued(right)) {
+        return void 0;
+      }
+      texts.push(this.printNode(right, 0));
+    }
+    const name = this.printNode(ident, 0);
+    return `(((string)${name}) + ${texts.join(" + ")})`;
   }
   // ral-84c8: a read the build layer declares `string?` (a string or null box, exactly what the untyped local held) whose `+` it leaves to this guarded form: the null test plus the ...
   csharpGuardedStringConcatLocal(identifier) {
@@ -39499,10 +39557,15 @@ ${pad}if !${okName} ${body.trimStart()}`;
         return true;
       }
       if (goType === "*int64" && (this.goHasEnclosingNilGuard(n) || this.goHasEarlyExitNilGuard(n))) {
-        if (parent?.kind === SyntaxKind5.CallExpression && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n)) === "int64") {
+        if (parent?.kind === SyntaxKind5.CallExpression && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n), parent) === "int64") {
           return true;
         }
         if (parent?.kind === SyntaxKind5.ReturnStatement && parent.expression === n && !this.isInsideAsyncFunction(parent)) {
+          return true;
+        }
+      }
+      if (goType === "*float64" && (this.goHasEnclosingNilGuard(n) || this.goHasEarlyExitNilGuard(n))) {
+        if (parent?.kind === SyntaxKind5.CallExpression && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && this.goUnifiedNumericSlotType(parent.expression.name?.text, (parent.arguments ?? []).indexOf(n), parent) === "float64") {
           return true;
         }
       }
@@ -56000,6 +56063,9 @@ function h18g01WriteIsInt64Ptr(goTranspiler, right, assumed) {
     if (target?.kind === SyntaxKind5.Parameter) {
       return target === assumed || goTranspiler.goGetArgTypeComputing?.has(target) === true || goTranspiler.goGetArgParameterType(target) === "*int64";
     }
+    if (target?.kind === SyntaxKind5.VariableDeclaration && !h18g01Visiting.has(target) && goTranspiler.goDeclaredTypeOfIdentifier(value) === "*int64") {
+      return true;
+    }
     return false;
   }
   if (!ral90g5ReaderCall(value) || !["safeInteger", "safeInteger2"].includes(value.expression.name.text)) {
@@ -56081,7 +56147,8 @@ function h18g01NilJoinInt64(goTranspiler, declaration, assumed = void 0, writesO
       }
       const arithmetic = parent?.kind === SyntaxKind5.BinaryExpression && (op === SyntaxKind5.MinusToken || op === SyntaxKind5.PlusToken || op === SyntaxKind5.SlashToken || op === SyntaxKind5.AsteriskToken) && [parent.left, parent.right].every((side) => side === current || goUnwrapTypeExpr(side)?.kind === SyntaxKind5.NumericLiteral);
       const summed = parent?.kind === SyntaxKind5.CallExpression && parent.arguments.some((a) => a === current) && parent.expression?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression.expression?.kind === SyntaxKind5.ThisKeyword && parent.expression.name?.text === "sum";
-      if (!arithmetic && !summed && !h18g01IsDynamicDispatchArgument(parent, current) && !h19g01OptionalIntArgument(goTranspiler, parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
+      const minMaxSelf = parent?.kind === SyntaxKind5.CallExpression && h28g03SumTexts(goTranspiler, parent) !== void 0;
+      if (!arithmetic && !summed && !minMaxSelf && !h18g01IsDynamicDispatchArgument(parent, current) && !h19g01OptionalIntArgument(goTranspiler, parent, current) && !goReadRuleAccepts(GO_NIL_INIT_POINTER_READ_RULE, goTranspiler, n)) {
         return true;
       }
     });
@@ -60196,13 +60263,52 @@ function h28g03TargetDeclaration(goTranspiler, call) {
   }
   return declaration;
 }
+function h56kInElseOfUndefinedOr(goTranspiler, ident) {
+  for (let child = ident, parent = ident?.parent; parent !== void 0 && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+    if (parent.kind !== SyntaxKind5.IfStatement || parent.elseStatement === void 0 || parent.elseStatement.pos !== child.pos || parent.elseStatement.end !== child.end) {
+      continue;
+    }
+    const hasUndef = (expr) => {
+      const inner = goTranspiler.goUnwrapParenthesizedNode(expr);
+      if (inner === void 0) {
+        return false;
+      }
+      if (goTranspiler.goNilComparisonOf(inner, ident, SyntaxKind5.EqualsEqualsToken, SyntaxKind5.EqualsEqualsEqualsToken)) {
+        return true;
+      }
+      if (inner.kind === SyntaxKind5.BinaryExpression && inner.operatorToken?.kind === SyntaxKind5.BarBarToken) {
+        return hasUndef(inner.left) || hasUndef(inner.right);
+      }
+      return false;
+    };
+    if (hasUndef(parent.expression)) {
+      return true;
+    }
+  }
+  return false;
+}
 function h28g03SumTexts(goTranspiler, call) {
   if (call?.kind !== SyntaxKind5.CallExpression || h28g03TargetDeclaration(goTranspiler, call) === void 0) {
     return void 0;
   }
   const declaration = h28g03TargetDeclaration(goTranspiler, call);
+  const minMax = goTranspiler.go92g7MinMaxName(call);
   if (call.arguments.some((a) => goIntSeedRefersTo(goTranspiler, a, declaration))) {
-    return void 0;
+    if (minMax === void 0 || call.arguments.length !== 2) {
+      return void 0;
+    }
+    const texts = call.arguments.map((operand) => {
+      if (operand.kind !== SyntaxKind5.Identifier) {
+        return void 0;
+      }
+      const printed = goTranspiler.printNode(operand, 0).trim();
+      if (goIntSeedRefersTo(goTranspiler, operand, declaration)) {
+        return h56kInElseOfUndefinedOr(goTranspiler, operand) ? "*" + printed : void 0;
+      }
+      const declared = goTranspiler.goDeclaredTypeOfIdentifier(operand);
+      return declared === "int64" ? printed : declared === "*int64" && (goTranspiler.goPointerNumberIsNonNil(operand) || h56kInElseOfUndefinedOr(goTranspiler, operand)) ? "*" + printed : void 0;
+    });
+    return texts.every((t) => t !== void 0) ? texts : void 0;
   }
   return goTranspiler.go93g4PointerOperands(call) ?? h29g03Int64TreeTexts(goTranspiler, call);
 }
@@ -86747,14 +86853,31 @@ ${indent}let mut ${varName}: ${_RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${spli
     if (kinds.some((k) => k === void 0) || name === "abs" && kinds[0] !== "num" && kinds[0] !== "onum")
       return void 0;
     if (name === "pow")
-      return kinds.every((k) => k === "int" || k === "num") ? "num" : void 0;
+      return kinds.every((k) => k === "int" || k === "num") ? "num" : "onum";
     return kinds[0] === "int" || kinds[0] === "num" ? "num" : "onum";
   }
   rustMathFloatText(node) {
     const name = String(node.expression.name.text);
     const args = Array.from(node.arguments);
-    if (name === "pow")
-      return `f64::powf(${this.rustScalarOperandText("num", args[0])}, ${this.rustScalarOperandText("num", args[1])})`;
+    if (name === "pow") {
+      const k0 = this.rustScalarNumericKind(args[0]);
+      const k1 = this.rustScalarNumericKind(args[1]);
+      const opt0 = k0 === "oint" || k0 === "onum";
+      const opt1 = k1 === "oint" || k1 === "onum";
+      if (!opt0 && !opt1)
+        return `f64::powf(${this.rustScalarOperandText("num", args[0])}, ${this.rustScalarOperandText("num", args[1])})`;
+      if (!opt0 && opt1) {
+        const neg1 = this.rust65pNegatedIntLocal(this.unwrapParens(args[1]));
+        if (neg1 !== void 0 && neg1.kind === "oint") {
+          return `(if let Some(__y) = ${neg1.name} { Some(f64::powf(${this.rustScalarOperandText("num", args[0])}, (-__y) as f64)) } else { None })`;
+        }
+        return `(if let Some(__y) = ${this.rustScalarOperandText(k1, args[1])} { Some(f64::powf(${this.rustScalarOperandText("num", args[0])}, ${k1 === "oint" ? "__y as f64" : "__y"})) } else { None })`;
+      }
+      if (opt0 && !opt1) {
+        return `(if let Some(__x) = ${this.rustScalarOperandText(k0, args[0])} { Some(f64::powf(${k0 === "oint" ? "__x as f64" : "__x"}, ${this.rustScalarOperandText("num", args[1])})) } else { None })`;
+      }
+      return `(if let (Some(__x), Some(__y)) = (${this.rustScalarOperandText(k0, args[0])}, ${this.rustScalarOperandText(k1, args[1])}) { Some(f64::powf(${k0 === "oint" ? "__x as f64" : "__x"}, ${k1 === "oint" ? "__y as f64" : "__y"})) } else { None })`;
+    }
     const k = this.rustScalarNumericKind(args[0]);
     if (k === "int" || k === "num")
       return `f64::${name}(${this.rustScalarOperandText("num", args[0])})`;
