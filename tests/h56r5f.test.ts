@@ -122,7 +122,8 @@ export class Demo {
         const prevLow = this.safeNumber (prevCandle, 3);
         const h = Math.max ((prevHigh === undefined) ? price : prevHigh, price);
         const l = Math.min ((prevLow === undefined) ? price : prevLow, price);
-        return [ openingTime, h, l ];
+        const neg = -since;
+        return [ openingTime, h, l, neg ];
     }
 }
 `);
@@ -142,5 +143,7 @@ export class Demo {
         expect (out).not.toContain ('mathMin(');
         expect (out).toContain ('Math.Max(((prevHigh == null) ? price.Value : prevHigh.Value), price.Value)');
         expect (out).toContain ('Math.Min(((prevLow == null) ? price.Value : prevLow.Value), price.Value)');
+        expect (out).not.toContain ('prefixUnaryNeg(');
+        expect (out).toContain ('(-since)');
     });
 });

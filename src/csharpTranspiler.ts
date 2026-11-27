@@ -4898,6 +4898,9 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (!isIdentifier(operand)) { return undefined; }
         // the prefix the declaration printed (`double? x = ...`): the printer's own decision, or the embedding build layer's wrapped one; a declaration list of several bindings prints `ob...
         const declaration: any = this.getChecker().getSymbolAtLocation(operand)?.valueDeclaration?.resolve();
+        if (declaration && (declaration.kind === SyntaxKind.Parameter) && (this.csharpPrintedParamType(operand) === 'Int64?')) {
+            return `(-${leftSide})`;
+        }
         if (!declaration || !isVariableDeclaration(declaration) || ((declaration.parent as any)?.declarations?.length !== 1)) { return undefined; }
         const declared = this.csharpFinalDeclaredLocalType(declaration);
         if (!this.csharpGuardedNullableNegation(node, declared) && !this.csharpDeclaredIntNegation(node, declaration, declared)) { return undefined; }

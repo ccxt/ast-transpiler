@@ -8858,6 +8858,9 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return void 0;
     }
     const declaration = this.getChecker().getSymbolAtLocation(operand)?.valueDeclaration?.resolve();
+    if (declaration && declaration.kind === SyntaxKind4.Parameter && this.csharpPrintedParamType(operand) === "Int64?") {
+      return `(-${leftSide})`;
+    }
     if (!declaration || !isVariableDeclaration(declaration) || declaration.parent?.declarations?.length !== 1) {
       return void 0;
     }

@@ -8857,6 +8857,9 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return void 0;
     }
     const declaration = _optionalChain([this, 'access', _1074 => _1074.getChecker, 'call', _1075 => _1075(), 'access', _1076 => _1076.getSymbolAtLocation, 'call', _1077 => _1077(operand), 'optionalAccess', _1078 => _1078.valueDeclaration, 'optionalAccess', _1079 => _1079.resolve, 'call', _1080 => _1080()]);
+    if (declaration && declaration.kind === _ast.SyntaxKind.Parameter && this.csharpPrintedParamType(operand) === "Int64?") {
+      return `(-${leftSide})`;
+    }
     if (!declaration || !_is.isVariableDeclaration.call(void 0, declaration) || _optionalChain([declaration, 'access', _1081 => _1081.parent, 'optionalAccess', _1082 => _1082.declarations, 'optionalAccess', _1083 => _1083.length]) !== 1) {
       return void 0;
     }
