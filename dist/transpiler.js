@@ -9813,6 +9813,10 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (whenAllSlots !== void 0) {
       return whenAllSlots;
     }
+    if (declaration !== void 0 && node.declarations.length === 1 && this.csharpStringListLocalDecl(declaration)) {
+      this.csharpTypedLocals.set(declaration, "List<string>");
+      return declare("List<string>", "new List<string>() {}");
+    }
     if (this.removeVariableDeclarationForFunctionExpression && declaration?.initializer && isFunctionExpression3(declaration.initializer)) {
       return this.printNode(declaration.initializer, identation).trimEnd();
     }
@@ -10184,10 +10188,73 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (this.csharpPromiseAllTypedListRead(node?.expression?.expression) !== void 0) {
       return `${name}.Add(${parsedArg})`;
     }
-    if (this.csharpReceiverIsDeclaredList(node?.expression?.expression)) {
+    const pushReceiver = node?.expression?.expression;
+    if (pushReceiver?.kind === SyntaxKind4.Identifier) {
+      const binding = this.csharpReceiverBinding(pushReceiver);
+      if (binding !== void 0 && (this.csharpTypedLocals.get(binding) === "List<string>" || this.csharpStringListLocalDecl(binding))) {
+        return `${name}.Add(${parsedArg})`;
+      }
+    }
+    if (this.csharpReceiverIsDeclaredList(pushReceiver)) {
       return `${name}.Add(${parsedArg})`;
     }
     return `((IList<object>)${name}).Add(${parsedArg})`;
+  }
+  // `const xs: string[] = []` inside a `Promise<string[]>` / `string[]` method whose only uses are `xs.push(<string>)` and `return xs`: emit `List<string>` directly
+  csharpStringListLocalDecl(declaration) {
+    if (declaration?.kind !== SyntaxKind4.VariableDeclaration || declaration.name?.kind !== SyntaxKind4.Identifier || ((declaration.parent?.flags ?? 0) & NodeFlags2.Const) === 0 || declaration.type?.getText?.().replace(/\s+/g, "") !== "string[]") {
+      return false;
+    }
+    const init = this.csharpUnwrapAssertion(declaration.initializer);
+    if (!isArrayLiteralExpression2(init) || init.elements.length !== 0) {
+      return false;
+    }
+    const fn = this.csharpEnclosingFunction(declaration);
+    if (fn?.kind !== SyntaxKind4.MethodDeclaration || fn.body === void 0) {
+      return false;
+    }
+    const retType = fn.type?.getText?.().replace(/\s+/g, "");
+    if (retType !== "Promise<string[]>" && retType !== "string[]") {
+      return false;
+    }
+    const varName = declaration.name.text;
+    let sawReturn = false;
+    const bad = this.hasNodeWhere(fn.body, (n) => {
+      if (n.kind !== SyntaxKind4.Identifier || n.text !== varName) {
+        return false;
+      }
+      if (n === declaration.name || n.pos === declaration.name.pos && n.end === declaration.name.end) {
+        return false;
+      }
+      const parent = n.parent;
+      if (parent?.kind === SyntaxKind4.VariableDeclaration && parent.name === n) {
+        return false;
+      }
+      if (parent?.kind === SyntaxKind4.PropertyAccessExpression && parent.name === n) {
+        return false;
+      }
+      const bound = this.csharpReceiverBinding(n);
+      if (bound !== void 0 && bound !== declaration && (bound.pos !== declaration.pos || bound.end !== declaration.end)) {
+        return false;
+      }
+      if (parent?.kind === SyntaxKind4.ReturnStatement && parent.expression === n) {
+        sawReturn = true;
+        return false;
+      }
+      if (parent?.kind === SyntaxKind4.PropertyAccessExpression && parent.expression === n && parent.name?.text === "push" && parent.parent?.kind === SyntaxKind4.CallExpression && parent.parent.expression === parent && parent.parent.arguments?.length === 1) {
+        const arg = parent.parent.arguments[0];
+        if (isStringLiteralLikeNode2(arg)) {
+          return false;
+        }
+        const exprType = this.csharpExpressionTypeOf(arg) ?? this.csharpSourceLocalType(arg);
+        if (exprType === "string" || exprType === "string?") {
+          return false;
+        }
+        return true;
+      }
+      return true;
+    });
+    return !bad && sawReturn;
   }
   // The C# type the emitted declaration gives a local / operand read (`string`, `List<object>`, `Dictionary<string, object>`, ...), or undefined. Installed by build/csharp-local-typ...
   csharpLocalTypeOf(node) {

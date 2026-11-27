@@ -583,6 +583,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpDeclaredLocalDictType(node: any): string | undefined;
     csharpDeclaredDictToArray(node: any): string | undefined;
     printArrayPushCall(node: any, identation: any, name?: any, parsedArg?: any): string;
+    csharpStringListLocalDecl(declaration: any): boolean;
     csharpLocalTypeOf(node: any): string | undefined;
     csharpDeclaredDictReceiverType(node: any): string | undefined;
     csharpReceiverIsDeclaredList(receiver: any): boolean;
