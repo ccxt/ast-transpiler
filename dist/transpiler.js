@@ -33733,6 +33733,13 @@ ${iden}}`;
     }
     return void 0;
   }
+  goIsPureTypeOfOperand(expr) {
+    let cur = this.goUnwrapPrintedAssertions(expr);
+    while (cur?.kind === SyntaxKind5.PropertyAccessExpression) {
+      cur = this.goUnwrapPrintedAssertions(cur.expression);
+    }
+    return cur !== void 0 && (cur.kind === SyntaxKind5.Identifier || cur.kind === SyntaxKind5.ThisKeyword);
+  }
   handleTypeOfInsideBinaryExpression(node, identation) {
     const left = node.left;
     const right = node.right.text;
@@ -33741,6 +33748,11 @@ ${iden}}`;
     const isDifferentOperator = op === SyntaxKind5.ExclamationEqualsEqualsToken || op === SyntaxKind5.ExclamationEqualsToken;
     const notOperator = isDifferentOperator ? this.NOT_TOKEN : "";
     const target = this.printNode(expression, 0);
+    if (right === "function" && this.goStdlibImportIsPlaceable() && !target.includes("\n") && this.goIsPureTypeOfOperand(expression)) {
+      this.goFileStdlibImports.add("reflect");
+      const expr = isDifferentOperator ? `reflect.TypeOf(${target}) == nil || reflect.TypeOf(${target}).Kind() != reflect.Func` : `reflect.TypeOf(${target}) != nil && reflect.TypeOf(${target}).Kind() == reflect.Func`;
+      return node.parent?.kind === SyntaxKind5.IfStatement && node.parent.expression === node ? expr : `(${expr})`;
+    }
     const helper = this.goTypeOfHelpers.get(right);
     return helper === void 0 ? void 0 : notOperator + `${helper}(${target})`;
   }
@@ -76064,6 +76076,9 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     return current;
   }
   nativeValuePredicateText(kind, operandNode, printedOperand) {
+    if (kind === "function" && operandNode !== void 0 && this.isDeclaredValuePlace(operandNode)) {
+      return "false";
+    }
     const pattern = _RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS[kind];
     if (pattern === void 0 || operandNode === void 0 || printedOperand === void 0 || !this.isDeclaredValuePlace(operandNode)) {
       return void 0;
@@ -76949,7 +76964,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       const isDiff = op === SyntaxKind7.ExclamationEqualsEqualsToken || op === SyntaxKind7.ExclamationEqualsToken;
       const native = this.nativeValuePredicateText(rightText, left.expression, target);
       if (native !== void 0) {
-        const negated = isDiff ? `!${native}` : native;
+        const negated = isDiff ? native === "false" ? "true" : `!${native}` : native;
         return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
       }
       const helper = _RustTranspiler.RUST_TYPEOF_HELPERS.get(rightText);
@@ -95994,7 +96009,7 @@ ${idn}}`;
       native = this.nativeValuePredicateText(inner.right.text, inner.left.expression, this.printNode(inner.left.expression, 0));
       const isDiff = op === SyntaxKind7.ExclamationEqualsEqualsToken || op === SyntaxKind7.ExclamationEqualsToken;
       if (native !== void 0 && isDiff)
-        native = "!" + native;
+        native = native === "false" ? "true" : "!" + native;
     } else {
       native = this.isEqualityOp(op) ? this.nativeEqualityText(inner) : this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
     }
@@ -99005,7 +99020,7 @@ ${iden}} }`;
     const tail = isStringLiteralLikeNode4(key) ? "" : " }";
     return `${head}.or_insert_with(|| Value::Array(Vec::new())) { std::sync::Arc::make_mut(__a).push(${valueText}); }${tail}`;
   }
-  /** ral-xf: the local is an argument of a `this.` / `super.` call somewhere in its function. */
+  /** ral-xf: the local is an argument of a `this.` / `super.` call that would box a copy (not a final-use move outside any loop). */
   rustMapHandedToSelfCall(declaration, name) {
     const fn = this.rustEnclosingFunction(declaration);
     if (fn === void 0)
@@ -99016,7 +99031,11 @@ ${iden}} }`;
         return;
       if (isCallExpression7(n) && isPropertyAccessExpression4(n.expression) && (n.expression.expression.kind === SyntaxKind7.ThisKeyword || n.expression.expression.kind === SyntaxKind7.SuperKeyword) && n.arguments.some((a) => {
         const s = this.rustSkipWrappers(a);
-        return isIdentifier4(s) && String(s.text) === name;
+        if (!isIdentifier4(s) || String(s.text) !== name)
+          return false;
+        if (this.rustVecIsFinalUse(s, name) && !this.loopBetween(s))
+          return false;
+        return true;
       })) {
         found = true;
         return;

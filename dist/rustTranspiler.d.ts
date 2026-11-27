@@ -2576,7 +2576,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** ral-xf: the `m[k]` receiver of a statement `m[k].push (v)` (one argument, no spread), else undefined. */
     rustBearerElementPushCall(call: any): any;
     rustBearerElementPushText(call: any, valueText: string): string | undefined;
-    /** ral-xf: the local is an argument of a `this.` / `super.` call somewhere in its function. */
+    /** ral-xf: the local is an argument of a `this.` / `super.` call that would box a copy (not a final-use move outside any loop). */
     rustMapHandedToSelfCall(declaration: any, name: string): boolean;
     /** Every value the literal stores is a list or a scalar by its checker type (never `any`, never an object). */
     rustBearerValuesNeverMap(declaration: any, literal: any, name: string): boolean;

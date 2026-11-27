@@ -1065,6 +1065,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
     valuePlaceRoot(node): any { let current: any = node; while (isPropertyAccessExpression(current) || isElementAccessExpression(current)) { current = current.expression; } return current; }
     nativeValuePredicateText(kind: string, operandNode, printedOperand: string): string | undefined {
+        if (kind === 'function' && operandNode !== undefined && this.isDeclaredValuePlace(operandNode)) { return 'false'; }
         const pattern = RustTranspiler.RUST_TYPE_PREDICATE_PATTERNS[kind];
         if (pattern === undefined || operandNode === undefined || printedOperand === undefined || !this.isDeclaredValuePlace(operandNode)) { return undefined; }
         return `matches!(${this.ensureRef(printedOperand)}, ${pattern})`;
@@ -1692,7 +1693,7 @@ export class RustTranspiler extends BaseTranspiler {
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
             const native = this.nativeValuePredicateText(rightText, left.expression, target);
             if (native !== undefined) {
-                const negated = isDiff ? `!${native}` : native;
+                const negated = isDiff ? (native === 'false' ? 'true' : `!${native}`) : native;
                 // Conditions/logical operands expect a bool; other positions store a boxed `Value`.
                 return this.isBooleanPosition(node) ? negated : `Value::Bool(${negated})`;
             }
@@ -17143,7 +17144,7 @@ export class RustTranspiler extends BaseTranspiler {
             // `typeof x === 'string'` prints the same native predicate as `x in obj`.
             native = this.nativeValuePredicateText(inner.right.text, inner.left.expression, this.printNode(inner.left.expression, 0));
             const isDiff = op === SyntaxKind.ExclamationEqualsEqualsToken || op === SyntaxKind.ExclamationEqualsToken;
-            if (native !== undefined && isDiff) native = '!' + native;
+            if (native !== undefined && isDiff) native = native === 'false' ? 'true' : ('!' + native);
         } else {
             native = this.isEqualityOp(op) ? this.nativeEqualityText(inner) : this.printNativeOrderedComparison(inner, op, inner.left, inner.right);
         }
@@ -19403,7 +19404,7 @@ export class RustTranspiler extends BaseTranspiler {
         const tail = isStringLiteralLikeNode(key) ? '' : ' }';
         return `${head}.or_insert_with(|| Value::Array(Vec::new())) { std::sync::Arc::make_mut(__a).push(${valueText}); }${tail}`;
     }
-    /** ral-xf: the local is an argument of a `this.` / `super.` call somewhere in its function. */
+    /** ral-xf: the local is an argument of a `this.` / `super.` call that would box a copy (not a final-use move outside any loop). */
     rustMapHandedToSelfCall(declaration: any, name: string): boolean {
         const fn: any = this.rustEnclosingFunction(declaration);
         if (fn === undefined) return true;
@@ -19412,7 +19413,12 @@ export class RustTranspiler extends BaseTranspiler {
             if (found) return;
             if (isCallExpression(n) && isPropertyAccessExpression(n.expression)
                 && (n.expression.expression.kind === SyntaxKind.ThisKeyword || n.expression.expression.kind === SyntaxKind.SuperKeyword)
-                && n.arguments.some((a: any) => { const s: any = this.rustSkipWrappers(a); return isIdentifier(s) && String(s.text) === name; })) { found = true; return; }
+                && n.arguments.some((a: any) => {
+                    const s: any = this.rustSkipWrappers(a);
+                    if (!isIdentifier(s) || String(s.text) !== name) return false;
+                    if (this.rustVecIsFinalUse(s, name) && !this.loopBetween(s)) return false;
+                    return true;
+                })) { found = true; return; }
             n.forEachChild(visit);
         };
         fn.forEachChild(visit);

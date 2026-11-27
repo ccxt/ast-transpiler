@@ -17777,6 +17777,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goTypeOfHelpers = new Map<string, string>([
         ['string', 'IsString'], ['number', 'IsNumber'], ['boolean', 'IsBool'], ['object', 'IsObject'], ['function', 'IsFunction'],
     ]);
+    goIsPureTypeOfOperand(expr): boolean {
+        let cur: any = this.goUnwrapPrintedAssertions(expr);
+        while (cur?.kind === SyntaxKind.PropertyAccessExpression) {
+            cur = this.goUnwrapPrintedAssertions(cur.expression);
+        }
+        return (cur !== undefined) && ((cur.kind === SyntaxKind.Identifier) || (cur.kind === SyntaxKind.ThisKeyword));
+    }
     handleTypeOfInsideBinaryExpression(node, identation) {
         const left = node.left;
         const right = node.right.text;
@@ -17787,6 +17794,14 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const notOperator = isDifferentOperator ? this.NOT_TOKEN : "";
 
         const target = this.printNode(expression, 0);
+        if ((right === 'function') && this.goStdlibImportIsPlaceable()
+            && !target.includes('\n') && this.goIsPureTypeOfOperand(expression)) {
+            this.goFileStdlibImports.add('reflect');
+            const expr = isDifferentOperator
+                ? `reflect.TypeOf(${target}) == nil || reflect.TypeOf(${target}).Kind() != reflect.Func`
+                : `reflect.TypeOf(${target}) != nil && reflect.TypeOf(${target}).Kind() == reflect.Func`;
+            return ((node.parent?.kind === SyntaxKind.IfStatement) && (node.parent.expression === node)) ? expr : `(${expr})`;
+        }
         const helper = this.goTypeOfHelpers.get(right);
         return (helper === undefined) ? undefined : notOperator + `${helper}(${target})`;
 

@@ -1201,6 +1201,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsCacheParameterType(fn: any, param: any, index: number): string | undefined;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     goTypeOfHelpers: Map<string, string>;
+    goIsPureTypeOfOperand(expr: any): boolean;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): any;
     goDestructuringAssignment(node: any, identation: any): string | undefined;
