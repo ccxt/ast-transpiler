@@ -9784,6 +9784,11 @@ function goIntValueParamProven (go, param) {
         if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
         return false;
     }
+    // avoid typing an int param used as an unguarded slice index (which emits a bounds-guard IIFE)
+    const usedAsIndex = go.goScopeIdents (fn.body, param.name.text).some ((n) => (n !== param.name)
+        && (go.goSymbolValueDecl (n) === param)
+        && (n.parent?.kind === SyntaxKind.ElementAccessExpression) && (n.parent.argumentExpression === n));
+    if (usedAsIndex) { return false; }
     return go.goParameterBodyTakes (fn, param, 'int');
 }
 

@@ -23529,6 +23529,10 @@ function goIntValueParamProven(go, param) {
     }
     return false;
   }
+  const usedAsIndex = go.goScopeIdents(fn.body, param.name.text).some((n) => n !== param.name && go.goSymbolValueDecl(n) === param && n.parent?.kind === SyntaxKind5.ElementAccessExpression && n.parent.argumentExpression === n);
+  if (usedAsIndex) {
+    return false;
+  }
   return go.goParameterBodyTakes(fn, param, "int");
 }
 function goStringPtrCastOperand(arg) {

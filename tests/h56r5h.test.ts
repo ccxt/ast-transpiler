@@ -99,6 +99,15 @@ export class Demo extends Exchange {
     callKeepAny (channels: string[], x: any) {
         return this.keepAny (channels, x, x);
     }
+    keepIndex (channels: string[], idx: int): any {
+        return channels[idx];
+    }
+    callKeepIndex () {
+        const channels: string[] = [ 'a', 'b' ];
+        for (let i = 0; i < channels.length; i++) {
+            this.keepIndex (channels, i);
+        }
+    }
 }
 `);
         const t = new Transpiler ({ go: { useTypeScriptChecker: true } });
@@ -108,6 +117,7 @@ export class Demo extends Exchange {
         expect (out).toContain ('if i >= start');
         expect (out).not.toContain ('IsGreaterThanOrEqual(i, start)');
         expect (out).toContain ('KeepAny(channels []string, start any, x any)');
+        expect (out).toContain ('KeepIndex(channels []string, idx any)');
     });
 
     test ('C#: assignment of Math.max to Int64? local with one unguarded Int64? operand emits null-guarded Math.Max', () => {
