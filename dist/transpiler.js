@@ -8089,7 +8089,93 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
   }
   // `Math.min/max (a, b)`: mathMin/mathMax read both boxes via Convert.ToDouble, return an ORIGINAL one (null if either is null); Math.Min/Max returns one numeric kind. Native only ...
   csharpNativeMathMinMax(node, name, parsedArg1, parsedArg2) {
-    return this.csharpNativeSameKindMinMax(node, name, parsedArg1, parsedArg2) ?? this.csharpNativeIntegralMinMax(node, name, parsedArg1, parsedArg2);
+    return this.csharpNativeSameKindMinMax(node, name, parsedArg1, parsedArg2) ?? this.csharpNativeIntegralMinMax(node, name, parsedArg1, parsedArg2) ?? this.csharpNativeDoubleMinMax(node, name);
+  }
+  // Non-null double operand text: guarded `double?` local from safeNumber/safeFloat (finite, never NaN), or `(x == null) ? y : x` over such locals
+  csharpIsSafeFiniteDoubleLocal(ident) {
+    const decl = this.csharpReceiverBinding(ident);
+    if (decl?.kind !== SyntaxKind4.VariableDeclaration || decl.initializer === void 0) {
+      return false;
+    }
+    let init = decl.initializer;
+    while (init !== void 0 && isParenthesizedExpression(init)) {
+      init = init.expression;
+    }
+    if (!isCallExpression4(init) || !isPropertyAccessExpression2(init.expression) || init.expression.expression?.kind !== SyntaxKind4.ThisKeyword) {
+      return false;
+    }
+    const m = init.expression.name?.text;
+    return ["safeNumber", "safeNumber2", "safeNumberN", "safeFloat", "safeFloat2", "safeFloatN"].includes(m);
+  }
+  csharpDoubleNonNullText(call, expr) {
+    let n = expr;
+    while (n !== void 0 && isParenthesizedExpression(n)) {
+      n = n.expression;
+    }
+    if (n === void 0) {
+      return void 0;
+    }
+    if (isIdentifier2(n)) {
+      const kind = this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n) ?? this.csharpPrintedParamType(n);
+      if (kind === "double?" && this.csharpIsSafeFiniteDoubleLocal(n) && this.csharpNullGuardAdmitsRead(call, n)) {
+        return `${this.printNode(n, 0).trim()}.Value`;
+      }
+      return void 0;
+    }
+    if (isConditionalExpression2(n)) {
+      let cond = n.condition;
+      while (cond !== void 0 && isParenthesizedExpression(cond)) {
+        cond = cond.expression;
+      }
+      if (!isBinaryExpression2(cond)) {
+        return void 0;
+      }
+      const op = cond.operatorToken.kind;
+      const isEq = op === SyntaxKind4.EqualsEqualsToken || op === SyntaxKind4.EqualsEqualsEqualsToken;
+      const isNe = op === SyntaxKind4.ExclamationEqualsToken || op === SyntaxKind4.ExclamationEqualsEqualsToken;
+      if (!isEq && !isNe) {
+        return void 0;
+      }
+      const isNullLit = (e) => e?.kind === SyntaxKind4.NullKeyword || isIdentifier2(e) && e.text === "undefined";
+      const tested = isIdentifier2(cond.left) && isNullLit(cond.right) ? cond.left : isIdentifier2(cond.right) && isNullLit(cond.left) ? cond.right : void 0;
+      if (tested === void 0) {
+        return void 0;
+      }
+      const testedKind = this.csharpExpressionTypeOf(tested) ?? this.csharpDeclaredLocalValueType(tested) ?? this.csharpPrintedParamType(tested);
+      if (testedKind !== "double?" || !this.csharpIsSafeFiniteDoubleLocal(tested)) {
+        return void 0;
+      }
+      const sameTested = (e) => {
+        let u = e;
+        while (u !== void 0 && isParenthesizedExpression(u)) {
+          u = u.expression;
+        }
+        if (!isIdentifier2(u) || u.text !== tested.text) {
+          return false;
+        }
+        const sym = this.checkerOrUndefined()?.getSymbolAtLocation(tested);
+        return sym !== void 0 ? this.csharpSameBinding(u, sym) : true;
+      };
+      const xText = this.printNode(tested, 0).trim();
+      if (isEq && sameTested(n.whenFalse)) {
+        const fallback = this.csharpDoubleNonNullText(call, n.whenTrue);
+        return fallback !== void 0 ? `((${xText} == null) ? ${fallback} : ${xText}.Value)` : void 0;
+      }
+      if (isNe && sameTested(n.whenTrue)) {
+        const fallback = this.csharpDoubleNonNullText(call, n.whenFalse);
+        return fallback !== void 0 ? `((${xText} != null) ? ${xText}.Value : ${fallback})` : void 0;
+      }
+    }
+    return void 0;
+  }
+  csharpNativeDoubleMinMax(node, name) {
+    const args = node.arguments;
+    if (args?.length !== 2 || !this.csharpMinMaxResultIsPlainValue(node)) {
+      return void 0;
+    }
+    const l = this.csharpDoubleNonNullText(node, args[0]);
+    const r = this.csharpDoubleNonNullText(node, args[1]);
+    return l !== void 0 && r !== void 0 ? `Math.${name}(${l}, ${r})` : void 0;
   }
   csharpNativeSameKindMinMax(node, name, parsedArg1, parsedArg2) {
     const args = node.arguments;
@@ -8691,7 +8777,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
           return guardedChain;
         }
       }
-      const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? (op === SyntaxKind4.PlusToken ? this.csharpNativeStringConcat(left, right, leftText, rightText) ?? this.csharpPrinterStringConcat(left, right, leftText, rightText) ?? (spine === void 0 ? void 0 : this.csharpObjectStringConcat(spine.base, spine.rights)) : op === SyntaxKind4.AsteriskToken ? this.csharpNativeLiteralProduct(left, right) : op === SyntaxKind4.PercentToken ? this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText) : void 0);
+      const nativeOperator = this.csharpNeverNullIntegralArithmetic(node, op) ?? (op === SyntaxKind4.PlusToken ? this.csharpNativeStringConcat(left, right, leftText, rightText) ?? this.csharpPrinterStringConcat(left, right, leftText, rightText) ?? (spine === void 0 ? void 0 : this.csharpObjectStringConcat(spine.base, spine.rights)) : op === SyntaxKind4.AsteriskToken ? this.csharpNativeLiteralProduct(left, right) ?? this.csharpNativeFloorProduct(node, left, right) : op === SyntaxKind4.PercentToken ? this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText) : void 0);
       if (nativeOperator !== void 0) {
         return nativeOperator;
       }
@@ -8699,6 +8785,39 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return `${open}${leftText}, ${rightText}${close}`;
     }
     return void 0;
+  }
+  // `Math.floor (a / b) * c` over proven integral operands -> `((Int64)Math.Floor(((double)a / b)) * c)`
+  csharpNativeFloorProduct(node, left, right) {
+    if (!this.csharpMinMaxResultIsPlainValue(node)) {
+      return void 0;
+    }
+    let floorCall = left;
+    while (floorCall !== void 0 && isParenthesizedExpression(floorCall)) {
+      floorCall = floorCall.expression;
+    }
+    if (!isCallExpression4(floorCall) || floorCall.arguments?.length !== 1 || !isPropertyAccessExpression2(floorCall.expression) || !isIdentifier2(floorCall.expression.expression) || floorCall.expression.expression.text !== "Math" || floorCall.expression.name?.text !== "floor") {
+      return void 0;
+    }
+    let div = floorCall.arguments[0];
+    while (div !== void 0 && isParenthesizedExpression(div)) {
+      div = div.expression;
+    }
+    if (!isBinaryExpression2(div) || div.operatorToken.kind !== SyntaxKind4.SlashToken) {
+      return void 0;
+    }
+    const num = this.csharpIntegralOperand(div.left);
+    const den = this.csharpIntegralOperand(div.right);
+    const mul = this.csharpIntegralOperand(right);
+    if (num === void 0 || den === void 0 || mul === void 0 || den.zero) {
+      return void 0;
+    }
+    const numText = this.csharpIntegralNonNullText(node, num, this.printNode(div.left, 0).trim());
+    const denText = this.csharpIntegralNonNullText(node, den, this.printNode(div.right, 0).trim());
+    const mulText = this.csharpIntegralNonNullText(node, mul, this.printNode(right, 0).trim());
+    if (numText === void 0 || denText === void 0 || mulText === void 0) {
+      return void 0;
+    }
+    return `((Int64)Math.Floor(((double)${numText} / ${denText})) * ${mulText})`;
   }
   printMathFloorCall(node, identation, parsedArg = void 0) {
     return `(Math.Floor(Double.Parse((${parsedArg}).ToString())))`;
@@ -32017,6 +32136,7 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
       return h28g16;
     }
     const shapedDeclaration = this.goFirstDefinedArm([
+      () => this.goJsonParseMapLocalDeclaration(node, declaration, identation),
       () => this.goMapRangeLocalDeclaration(node, declaration, identation),
       () => this.goWsCacheDefaultDeclaration(node, declaration, identation),
       () => this.goOhlcvsReadDeclaration(node, declaration, identation),
@@ -35653,6 +35773,9 @@ ${iden}}`;
     if (decl.kind === SyntaxKind5.VariableDeclaration && this.goStringNarrowedInit.has(this.goStringNarrowedKey(decl))) {
       return "string";
     }
+    if (decl.kind === SyntaxKind5.VariableDeclaration && this.goIsJsonParseMapDecl(decl)) {
+      return "map[string]any";
+    }
     if (decl.kind === SyntaxKind5.Parameter) {
       const bound = this.goGetArgParameterType(decl);
       if (bound !== void 0 && bound.startsWith("*")) {
@@ -38726,8 +38849,8 @@ ${pad}if !${okName} ${body.trimStart()}`;
     if (kind === "float64" && (operator === "<" || operator === "<=")) {
       return void 0;
     }
-    const leftNil = leftPointee !== void 0 && !this.goHasEnclosingNilGuard(left);
-    const rightNil = rightPointee !== void 0 && !this.goHasEnclosingNilGuard(right);
+    const leftNil = leftPointee !== void 0 && !this.goHasEnclosingNilGuard(left) && !this.goHasExitingNilGuard(left);
+    const rightNil = rightPointee !== void 0 && !this.goHasEnclosingNilGuard(right) && !this.goHasExitingNilGuard(right);
     if (leftNil && rightPointee === void 0 && !this.goIsPureComparisonOperand(right)) {
       return void 0;
     }
@@ -39305,6 +39428,9 @@ ${pad}if !${okName} ${body.trimStart()}`;
         if (equality && goType === "*string" && h55g42SafeStringCall(other)) {
           return true;
         }
+        if (goType === "*int64" && ORDERED_COMPARISON_OPERATORS[op] !== void 0) {
+          return true;
+        }
       }
       let use = n;
       let guarded = false;
@@ -39349,6 +39475,9 @@ ${pad}if !${okName} ${body.trimStart()}`;
           calleeName = "math" + calleeName.charAt(0).toUpperCase() + calleeName.slice(1);
         }
         if (calleeName === void 0) {
+          if (goType === "*int64" && callee?.kind === SyntaxKind5.ElementAccessExpression && callee.expression?.kind === SyntaxKind5.ThisKeyword) {
+            return true;
+          }
           return !pointer && !nilable;
         }
         if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && this.goIsUnifiedStringParameter(calleeName, argIndex, n) && this.goHasExitingNilGuard(n)) {
@@ -40376,6 +40505,47 @@ ${this.getIden(identation)}${returnStatement}`;
   }
   printObjectValuesCall(node, identation, parsedArg = void 0) {
     return `ObjectValues(${parsedArg})`;
+  }
+  // `const x = JSON.parse (s)` whose every use is Object.keys(x) / Object.values(x): unbox as map[string]any once
+  goIsJsonParseMapDecl(declaration) {
+    if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || declaration.parent?.declarations?.length !== 1 || declaration.parent?.parent?.kind !== SyntaxKind5.FirstStatement) {
+      return false;
+    }
+    const init = this.goUnwrapParenthesizedNode(declaration.initializer);
+    const callee = init?.expression;
+    if (init?.kind !== SyntaxKind5.CallExpression || init.arguments?.length !== 1 || callee?.kind !== SyntaxKind5.PropertyAccessExpression || callee.expression?.kind !== SyntaxKind5.Identifier || callee.expression.text !== "JSON" || callee.name?.text !== "parse") {
+      return false;
+    }
+    const scope = this.goEnclosingFunction(declaration);
+    if (scope === void 0 || this.goLocalIsRebound(scope, declaration.name)) {
+      return false;
+    }
+    const name = declaration.name.text;
+    let uses = 0;
+    for (const n of this.goScopeIdents(scope, name)) {
+      if (n === declaration.name || this.goSymbolValueDecl(n) !== declaration) {
+        continue;
+      }
+      let use = n;
+      while (use.parent?.kind === SyntaxKind5.ParenthesizedExpression) {
+        use = use.parent;
+      }
+      const p = use.parent;
+      const isObjectCall = p?.kind === SyntaxKind5.CallExpression && p.arguments?.length === 1 && p.arguments[0] === use && p.expression?.kind === SyntaxKind5.PropertyAccessExpression && p.expression.expression?.kind === SyntaxKind5.Identifier && p.expression.expression.text === "Object" && (p.expression.name?.text === "values" || p.expression.name?.text === "keys");
+      if (!isObjectCall) {
+        return false;
+      }
+      uses++;
+    }
+    return uses > 0;
+  }
+  goJsonParseMapLocalDeclaration(statement, declaration, identation) {
+    if (statement?.parent?.kind !== SyntaxKind5.FirstStatement || !this.goIsJsonParseMapDecl(declaration)) {
+      return void 0;
+    }
+    const varName = this.printNode(declaration.name, 0);
+    const parsedInit = this.printNode(declaration.initializer, identation).trim();
+    return `${this.getIden(identation)}var ${varName}, _ = ${parsedInit}.(map[string]any)`;
   }
   // ---- `Object.keys(m)` / `Object.values(m)` on a declared map[string]any ------------------
   // the Go slice type of the local an `Object.keys/values(m)` declaration collects into, with the
@@ -71653,7 +71823,13 @@ var JavaTranspiler = class extends BaseTranspiler {
     const declaration = single ? this.javaDeclarationOfIdentifier(argument) : void 0;
     if (declaration === void 0 || !isVariableDeclaration2(declaration) || !declaration.initializer || !this.javaDeclaredMapReceiver(argument) || this.javaLocalHasWriteAtAll(declaration.name))
       return `Helpers.objectValues(${parsedArg})`;
-    return this.javaArrayListCopy(this.printNode(argument, 0), "values");
+    const receiver = this.printNode(argument, 0);
+    const init = this.unwrapParenthesized(declaration.initializer);
+    const isJsonParse = isCallExpression6(init) && isPropertyAccessExpression3(init.expression) && isIdentifier3(init.expression.expression) && init.expression.expression.text === "JSON" && init.expression.name?.text === "parse";
+    if (isJsonParse) {
+      return `(${receiver} == null ? new java.util.ArrayList<Object>() : ${this.javaArrayListCopy(receiver, "values")})`;
+    }
+    return this.javaArrayListCopy(receiver, "values");
   }
   printJsonParseCall(_node, _identation, parsedArg = void 0) {
     return `Helpers.parseJson(${parsedArg})`;

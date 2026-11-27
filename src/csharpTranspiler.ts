@@ -4359,7 +4359,67 @@ export class CSharpTranspiler extends BaseTranspiler {
     }
     // `Math.min/max (a, b)`: mathMin/mathMax read both boxes via Convert.ToDouble, return an ORIGINAL one (null if either is null); Math.Min/Max returns one numeric kind. Native only ...
     csharpNativeMathMinMax(node, name: string, parsedArg1: string, parsedArg2: string): string | undefined {
-        return this.csharpNativeSameKindMinMax(node, name, parsedArg1, parsedArg2) ?? this.csharpNativeIntegralMinMax(node, name, parsedArg1, parsedArg2);
+        return this.csharpNativeSameKindMinMax(node, name, parsedArg1, parsedArg2)
+            ?? this.csharpNativeIntegralMinMax(node, name, parsedArg1, parsedArg2)
+            ?? this.csharpNativeDoubleMinMax(node, name);
+    }
+    // Non-null double operand text: guarded `double?` local from safeNumber/safeFloat (finite, never NaN), or `(x == null) ? y : x` over such locals
+    csharpIsSafeFiniteDoubleLocal(ident): boolean {
+        const decl: any = this.csharpReceiverBinding(ident);
+        if ((decl?.kind !== SyntaxKind.VariableDeclaration) || (decl.initializer === undefined)) { return false; }
+        let init: any = decl.initializer;
+        while (init !== undefined && isParenthesizedExpression(init)) { init = init.expression; }
+        if (!isCallExpression(init) || !isPropertyAccessExpression(init.expression) || (init.expression.expression?.kind !== SyntaxKind.ThisKeyword)) { return false; }
+        const m = init.expression.name?.text;
+        return [ 'safeNumber', 'safeNumber2', 'safeNumberN', 'safeFloat', 'safeFloat2', 'safeFloatN' ].includes(m);
+    }
+    csharpDoubleNonNullText(call, expr): string | undefined {
+        let n: any = expr;
+        while (n !== undefined && isParenthesizedExpression(n)) { n = n.expression; }
+        if (n === undefined) { return undefined; }
+        if (isIdentifier(n)) {
+            const kind = this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n) ?? this.csharpPrintedParamType(n);
+            if ((kind === 'double?') && this.csharpIsSafeFiniteDoubleLocal(n) && this.csharpNullGuardAdmitsRead(call, n)) { return `${this.printNode(n, 0).trim()}.Value`; }
+            return undefined;
+        }
+        if (isConditionalExpression(n)) {
+            let cond: any = n.condition;
+            while (cond !== undefined && isParenthesizedExpression(cond)) { cond = cond.expression; }
+            if (!isBinaryExpression(cond)) { return undefined; }
+            const op = cond.operatorToken.kind;
+            const isEq = (op === SyntaxKind.EqualsEqualsToken) || (op === SyntaxKind.EqualsEqualsEqualsToken);
+            const isNe = (op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken);
+            if (!isEq && !isNe) { return undefined; }
+            const isNullLit = (e: any) => (e?.kind === SyntaxKind.NullKeyword) || (isIdentifier(e) && (e.text === 'undefined'));
+            const tested = isIdentifier(cond.left) && isNullLit(cond.right) ? cond.left : (isIdentifier(cond.right) && isNullLit(cond.left) ? cond.right : undefined);
+            if (tested === undefined) { return undefined; }
+            const testedKind = this.csharpExpressionTypeOf(tested) ?? this.csharpDeclaredLocalValueType(tested) ?? this.csharpPrintedParamType(tested);
+            if ((testedKind !== 'double?') || !this.csharpIsSafeFiniteDoubleLocal(tested)) { return undefined; }
+            const sameTested = (e: any) => {
+                let u: any = e;
+                while (u !== undefined && isParenthesizedExpression(u)) { u = u.expression; }
+                if (!isIdentifier(u) || (u.text !== tested.text)) { return false; }
+                const sym = this.checkerOrUndefined()?.getSymbolAtLocation(tested);
+                return (sym !== undefined) ? this.csharpSameBinding(u, sym) : true;
+            };
+            const xText = this.printNode(tested, 0).trim();
+            if (isEq && sameTested(n.whenFalse)) {
+                const fallback = this.csharpDoubleNonNullText(call, n.whenTrue);
+                return (fallback !== undefined) ? `((${xText} == null) ? ${fallback} : ${xText}.Value)` : undefined;
+            }
+            if (isNe && sameTested(n.whenTrue)) {
+                const fallback = this.csharpDoubleNonNullText(call, n.whenFalse);
+                return (fallback !== undefined) ? `((${xText} != null) ? ${xText}.Value : ${fallback})` : undefined;
+            }
+        }
+        return undefined;
+    }
+    csharpNativeDoubleMinMax(node, name: string): string | undefined {
+        const args = node.arguments;
+        if ((args?.length !== 2) || !this.csharpMinMaxResultIsPlainValue(node)) { return undefined; }
+        const l = this.csharpDoubleNonNullText(node, args[0]);
+        const r = this.csharpDoubleNonNullText(node, args[1]);
+        return ((l !== undefined) && (r !== undefined)) ? `Math.${name}(${l}, ${r})` : undefined;
     }
     csharpNativeSameKindMinMax(node, name: string, parsedArg1: string, parsedArg2: string): string | undefined {
         const args = node.arguments;
@@ -4785,7 +4845,7 @@ export class CSharpTranspiler extends BaseTranspiler {
                 ? (this.csharpNativeStringConcat(left, right, leftText, rightText)
                     ?? this.csharpPrinterStringConcat(left, right, leftText, rightText)
                     ?? ((spine === undefined) ? undefined : this.csharpObjectStringConcat(spine.base, spine.rights)))
-                : (op === SyntaxKind.AsteriskToken) ? this.csharpNativeLiteralProduct(left, right)
+                : (op === SyntaxKind.AsteriskToken) ? (this.csharpNativeLiteralProduct(left, right) ?? this.csharpNativeFloorProduct(node, left, right))
                     : (op === SyntaxKind.PercentToken) ? (this.csharpNativeIntegralMod(node, leftText, rightText) ?? this.csharpNativeModExpression(left, right, leftText))
                         : undefined);
             if (nativeOperator !== undefined) { return nativeOperator; }
@@ -4793,6 +4853,27 @@ export class CSharpTranspiler extends BaseTranspiler {
             return `${open}${leftText}, ${rightText}${close}`;
         }
         return undefined;
+    }
+    // `Math.floor (a / b) * c` over proven integral operands -> `((Int64)Math.Floor(((double)a / b)) * c)`
+    csharpNativeFloorProduct(node, left, right): string | undefined {
+        if (!this.csharpMinMaxResultIsPlainValue(node)) { return undefined; }
+        let floorCall: any = left;
+        while (floorCall !== undefined && isParenthesizedExpression(floorCall)) { floorCall = floorCall.expression; }
+        if (!isCallExpression(floorCall) || (floorCall.arguments?.length !== 1)
+            || !isPropertyAccessExpression(floorCall.expression) || !isIdentifier(floorCall.expression.expression)
+            || (floorCall.expression.expression.text !== 'Math') || (floorCall.expression.name?.text !== 'floor')) { return undefined; }
+        let div: any = floorCall.arguments[0];
+        while (div !== undefined && isParenthesizedExpression(div)) { div = div.expression; }
+        if (!isBinaryExpression(div) || (div.operatorToken.kind !== SyntaxKind.SlashToken)) { return undefined; }
+        const num = this.csharpIntegralOperand(div.left);
+        const den = this.csharpIntegralOperand(div.right);
+        const mul = this.csharpIntegralOperand(right);
+        if ((num === undefined) || (den === undefined) || (mul === undefined) || den.zero) { return undefined; }
+        const numText = this.csharpIntegralNonNullText(node, num, this.printNode(div.left, 0).trim());
+        const denText = this.csharpIntegralNonNullText(node, den, this.printNode(div.right, 0).trim());
+        const mulText = this.csharpIntegralNonNullText(node, mul, this.printNode(right, 0).trim());
+        if ((numText === undefined) || (denText === undefined) || (mulText === undefined)) { return undefined; }
+        return `((Int64)Math.Floor(((double)${numText} / ${denText})) * ${mulText})`;
     }
     printMathFloorCall(node, identation, parsedArg = undefined) { return `(Math.Floor(Double.Parse((${parsedArg}).ToString())))`; }
     printMathRoundCall(node, identation, parsedArg = undefined) { return `Math.Round(Convert.ToDouble(${parsedArg}))`; }

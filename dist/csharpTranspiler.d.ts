@@ -462,6 +462,9 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpComparisonOperandKinds(left: any, right: any): [string | undefined, string | undefined];
     csharpNumericParamKind(node: any): string | undefined;
     csharpNativeMathMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
+    csharpIsSafeFiniteDoubleLocal(ident: any): boolean;
+    csharpDoubleNonNullText(call: any, expr: any): string | undefined;
+    csharpNativeDoubleMinMax(node: any, name: string): string | undefined;
     csharpNativeSameKindMinMax(node: any, name: string, parsedArg1: string, parsedArg2: string): string | undefined;
     csharpMinMaxResultIsPlainValue(node: any): boolean;
     csharpIntegralOperand(node: any): {
@@ -498,6 +501,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpLiteralEquality(left: any, right: any, leftText: string, rightText: string, isEquality: boolean): string | undefined;
     csharpArrayDestructuringAssignment(left: any, right: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): string;
+    csharpNativeFloorProduct(node: any, left: any, right: any): string | undefined;
     printMathFloorCall(node: any, identation: any, parsedArg?: any): string;
     printMathRoundCall(node: any, identation: any, parsedArg?: any): string;
     printMathCeilCall(node: any, identation: any, parsedArg?: any): string;

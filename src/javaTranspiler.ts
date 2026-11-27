@@ -5901,7 +5901,15 @@ export class JavaTranspiler extends BaseTranspiler {
         const single = argument !== undefined && node.arguments.length === 1 && isIdentifier(argument);
         const declaration: any = single ? this.javaDeclarationOfIdentifier(argument) : undefined;
         if (declaration === undefined || !isVariableDeclaration(declaration) || !declaration.initializer || !this.javaDeclaredMapReceiver(argument) || this.javaLocalHasWriteAtAll(declaration.name)) return `Helpers.objectValues(${parsedArg})`;
-        return this.javaArrayListCopy(this.printNode(argument, 0), 'values');
+        const receiver = this.printNode(argument, 0);
+        const init: any = this.unwrapParenthesized(declaration.initializer);
+        const isJsonParse = isCallExpression(init) && isPropertyAccessExpression(init.expression)
+            && isIdentifier(init.expression.expression) && init.expression.expression.text === 'JSON'
+            && init.expression.name?.text === 'parse';
+        if (isJsonParse) {
+            return `(${receiver} == null ? new java.util.ArrayList<Object>() : ${this.javaArrayListCopy(receiver, 'values')})`;
+        }
+        return this.javaArrayListCopy(receiver, 'values');
     }
     printJsonParseCall(_node, _identation, parsedArg = undefined) { return `Helpers.parseJson(${parsedArg})`; }
     // `await Promise.all ([e1, ..., en])` with every element checker-typed `Promise<...>`: CompletableFuture.allOf waits for exactly those, so Helpers.promiseAll's reflective loop add...

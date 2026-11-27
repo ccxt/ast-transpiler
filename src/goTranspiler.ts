@@ -16787,7 +16787,8 @@ ${this.getIden(identation)}PanicOnError(${parsedName})`;
         const h27a11 = this.h27a11FrameReadDeclaration(node, declaration, identation); if (h27a11 !== undefined) { return h27a11; }
         const h28a11 = this.h28a11DefaultedFrameList(node, declaration, identation); if (h28a11 !== undefined) { return h28a11; }
         const h28g16 = this.h28g16RowAccumulatorRead(declaration, identation); if (h28g16 !== undefined) { return h28g16; }
-        const shapedDeclaration = this.goFirstDefinedArm([() => this.goMapRangeLocalDeclaration(node, declaration, identation),
+        const shapedDeclaration = this.goFirstDefinedArm([() => this.goJsonParseMapLocalDeclaration(node, declaration, identation),
+            () => this.goMapRangeLocalDeclaration(node, declaration, identation),
             () => this.goWsCacheDefaultDeclaration(node, declaration, identation), () => this.goOhlcvsReadDeclaration(node, declaration, identation),
             () => this.goTypedRowBinderDeclaration(declaration, identation)]);
         if (shapedDeclaration !== undefined) { return shapedDeclaration; }
@@ -19799,6 +19800,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const decl: any = this.goValueDecl(node);
         if (decl === undefined) { return undefined; }
         if ((decl.kind === SyntaxKind.VariableDeclaration) && this.goStringNarrowedInit.has(this.goStringNarrowedKey(decl))) { return 'string'; }
+        if ((decl.kind === SyntaxKind.VariableDeclaration) && this.goIsJsonParseMapDecl(decl)) { return 'map[string]any'; }
         if (decl.kind === SyntaxKind.Parameter) {
             // a defaulted parameter bound through a pointer GetArg twin is that pointer at every consumer
             const bound = this.goGetArgParameterType(decl);
@@ -22309,8 +22311,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         if (kind === undefined) { return undefined; }
         // NaN is a float64 to the helper too: `<` / `<=` answer true for it while Go answers false, so those two operators keep the call exactly as phase-1 does
         if ((kind === 'float64') && ((operator === '<') || (operator === '<='))) { return undefined; }
-        const leftNil = (leftPointee !== undefined) && !this.goHasEnclosingNilGuard(left);
-        const rightNil = (rightPointee !== undefined) && !this.goHasEnclosingNilGuard(right);
+        const leftNil = (leftPointee !== undefined) && !this.goHasEnclosingNilGuard(left) && !this.goHasExitingNilGuard(left);
+        const rightNil = (rightPointee !== undefined) && !this.goHasEnclosingNilGuard(right) && !this.goHasExitingNilGuard(right);
         // a nil test short-circuits the operand on the other side, so that side has to be free of calls for the helper's single evaluation to stay unobservable
         if (leftNil && (rightPointee === undefined) && !this.goIsPureComparisonOperand(right)) { return undefined; }
         if (rightNil && (leftPointee === undefined) && !this.goIsPureComparisonOperand(left)) { return undefined; }
@@ -22777,6 +22779,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 if (equality && ((other?.kind === SyntaxKind.StringLiteral) || (other?.kind === SyntaxKind.NumericLiteral))) { return true; }
                 // `x === this.safeString (..)`: both sides are *string, compared through IsEqual (derefs both)
                 if (equality && (goType === '*string') && h55g42SafeStringCall(other)) { return true; }
+                // ordered comparison on `*int64`: printPointerOrderedComparison emits nil-safe or guarded deref
+                if ((goType === '*int64') && (ORDERED_COMPARISON_OPERATORS[op] !== undefined)) { return true; }
             }
             // a copy (ternary arm, `let r = x`, `r = x`) hands the value to a body local whose
             let use: any = n;
@@ -22811,7 +22815,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
                 let calleeName = (callee?.name !== undefined) ? callee.name.text : ((callee?.text !== undefined) ? callee.text : undefined);
                 // Math.min / Math.max print as the deref-aware mathMin / mathMax
                 if ((callee?.expression?.text === 'Math') && ((calleeName === 'min') || (calleeName === 'max'))) { calleeName = 'math' + calleeName.charAt(0).toUpperCase() + calleeName.slice(1); }
-                if (calleeName === undefined) { return !pointer && !nilable; }
+                if (calleeName === undefined) {
+                    // `this[method](..., since, ...)` prints CallDynamically, which derefs `*int64` and normalizes typed nil
+                    if ((goType === '*int64') && (callee?.kind === SyntaxKind.ElementAccessExpression) && (callee.expression?.kind === SyntaxKind.ThisKeyword)) { return true; }
+                    return !pointer && !nilable;
+                }
                 // a unified string slot past an exiting `=== undefined` guard: printed `*x`, never nil there
                 if ((goType === '*string') && (callee?.kind === SyntaxKind.PropertyAccessExpression)
                     && this.goIsUnifiedStringParameter(calleeName, argIndex, n) && this.goHasExitingNilGuard(n)) { return true; }
@@ -23769,6 +23777,40 @@ ${this.getIden(identation)}${returnStatement}`;
     }
 
     printObjectValuesCall(node, identation, parsedArg = undefined) { return `ObjectValues(${parsedArg})`; }
+
+    // `const x = JSON.parse (s)` whose every use is Object.keys(x) / Object.values(x): unbox as map[string]any once
+    goIsJsonParseMapDecl(declaration): boolean {
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.parent?.declarations?.length !== 1) || (declaration.parent?.parent?.kind !== SyntaxKind.FirstStatement)) { return false; }
+        const init: any = this.goUnwrapParenthesizedNode(declaration.initializer);
+        const callee: any = init?.expression;
+        if ((init?.kind !== SyntaxKind.CallExpression) || (init.arguments?.length !== 1)
+            || (callee?.kind !== SyntaxKind.PropertyAccessExpression) || (callee.expression?.kind !== SyntaxKind.Identifier)
+            || (callee.expression.text !== 'JSON') || (callee.name?.text !== 'parse')) { return false; }
+        const scope: any = this.goEnclosingFunction(declaration);
+        if ((scope === undefined) || this.goLocalIsRebound(scope, declaration.name)) { return false; }
+        const name = declaration.name.text;
+        let uses = 0;
+        for (const n of this.goScopeIdents(scope, name)) {
+            if ((n === declaration.name) || (this.goSymbolValueDecl(n) !== declaration)) { continue; }
+            let use: any = n;
+            while (use.parent?.kind === SyntaxKind.ParenthesizedExpression) { use = use.parent; }
+            const p: any = use.parent;
+            const isObjectCall = (p?.kind === SyntaxKind.CallExpression) && (p.arguments?.length === 1) && (p.arguments[0] === use)
+                && (p.expression?.kind === SyntaxKind.PropertyAccessExpression) && (p.expression.expression?.kind === SyntaxKind.Identifier)
+                && (p.expression.expression.text === 'Object') && ((p.expression.name?.text === 'values') || (p.expression.name?.text === 'keys'));
+            if (!isObjectCall) { return false; }
+            uses++;
+        }
+        return uses > 0;
+    }
+
+    goJsonParseMapLocalDeclaration(statement, declaration, identation: number): string | undefined {
+        if ((statement?.parent?.kind !== SyntaxKind.FirstStatement) || !this.goIsJsonParseMapDecl(declaration)) { return undefined; }
+        const varName = this.printNode(declaration.name, 0);
+        const parsedInit = this.printNode(declaration.initializer, identation).trim();
+        return `${this.getIden(identation)}var ${varName}, _ = ${parsedInit}.(map[string]any)`;
+    }
 
     // ---- `Object.keys(m)` / `Object.values(m)` on a declared map[string]any ------------------
 

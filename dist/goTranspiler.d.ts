@@ -1710,6 +1710,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    goIsJsonParseMapDecl(declaration: any): boolean;
+    goJsonParseMapLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
     goMapRangeLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
     goDefaultedEntryKeysRead(receiver: any): {
         container: string;
