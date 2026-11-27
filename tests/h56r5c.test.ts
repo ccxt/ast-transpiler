@@ -35,11 +35,12 @@ export class Demo {
     dynamicCompare (x: any): boolean {
         return x < '80';
     }
-    caller (d: any, name: string): string {
+    caller (d: any, name: string, optSlug: Str = undefined): string {
         const ptr = this.safeString (d, 'slug');
         const a = this.shortenSlug (ptr);
         const b = this.shortenSlug (name);
-        return a + b;
+        const c = this.shortenSlug (optSlug);
+        return a + b + c;
     }
 }
 `);
@@ -61,6 +62,8 @@ export class Demo {
         expect (out).not.toContain ('ToLower(slug)');
         expect (out).toContain ('this.ShortenSlug(ptr)');
         expect (out).toContain ('this.ShortenSlug(&name)');
+        expect (out).toContain ('GetArgStringPtr(optionalArgs, 0, nil)');
+        expect (out).toContain ('this.ShortenSlug(optSlug)');
         expect (out).not.toContain ('SafeStringPtr(');
         expect (out).toContain ('if hex < "80"');
         expect (out).not.toContain ('IsLessThan(hex');
