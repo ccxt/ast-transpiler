@@ -7953,6 +7953,19 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (token === void 0) {
       return void 0;
     }
+    const nonNullString = (n) => {
+      while (n?.kind === SyntaxKind4.ParenthesizedExpression) {
+        n = n.expression;
+      }
+      if (n?.kind === SyntaxKind4.StringLiteral || n?.kind === SyntaxKind4.NoSubstitutionTemplateLiteral) {
+        return true;
+      }
+      const t = this.csharpPrintedParamType(n) ?? this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
+      return t === "string";
+    };
+    if (nonNullString(node.left) && nonNullString(node.right)) {
+      return `(string.CompareOrdinal(${this.printNode(node.left, 0).trim()}, ${this.printNode(node.right, 0).trim()}) ${token} 0)`;
+    }
     const [leftKind, rightKind] = this.csharpComparisonOperandKinds(node.left, node.right);
     if (leftKind === void 0 || rightKind === void 0) {
       return void 0;
@@ -22986,6 +22999,18 @@ function installStringPtrParams(goTranspiler) {
     if (typeof calleeName === "string" && Object.prototype.hasOwnProperty.call(this.unifiedStringParams ?? {}, calleeName)) {
       return printed;
     }
+    const unifiedNullableStr = typeof calleeName === "string" && Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams ?? {}, calleeName) ? this.unifiedNullableStringParams[calleeName] : void 0;
+    if (Array.isArray(unifiedNullableStr)) {
+      const wrapUnified = args.map((a, i) => unifiedNullableStr.includes(i) && upstreamArgType.call(this, a) === "string");
+      if (!wrapUnified.some((w) => w)) {
+        return printed;
+      }
+      const depth2 = this.goExprDepth + (args.length > 1 ? 1 : 0);
+      return args.map((a, i) => {
+        const text = this.goWithExprDepth(depth2, () => this.printNode(a, identation)).trim();
+        return wrapUnified[i] ? goStringAddressArg(this, a, text) ?? ccxtGoStringParamAddress(this, a) ?? goStringListElementAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")" : text;
+      }).join(", ");
+    }
     const decl = stringPtrParamCallDeclaration(this, node);
     if (decl === void 0) {
       return printed;
@@ -27176,6 +27201,8 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedBoolParams = {};
     // inherited methods whose nullable `Int` parameter prints `*int64` on the base and every override
     this.unifiedNullableInt64Params = {};
+    // inherited methods whose nullable `Str` parameter prints `*string` on the base and every override
+    this.unifiedNullableStringParams = {};
     this.unifiedFloat64Params = void 0;
     // `<class>.<method>` -> indexes of required `string` params of an exchange-local method that
     this.uncalledStringParams = {};
@@ -27448,6 +27475,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedSliceParams = config["unifiedSliceParams"] ?? {};
     this.unifiedBoolParams = config["unifiedBoolParams"] ?? {};
     this.unifiedNullableInt64Params = config["unifiedNullableInt64Params"] ?? {};
+    this.unifiedNullableStringParams = config["unifiedNullableStringParams"] ?? {};
     this.unifiedFloat64Params = config["unifiedFloat64Params"];
     this.uncalledStringParams = config["uncalledStringParams"] ?? {};
     this.goHandWrittenBaseMethods = config["handWrittenBaseMethods"] ?? [];
@@ -33997,6 +34025,13 @@ ${iden}}`;
       }
       return "*int64";
     }
+    const nullableStrIndexes = Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams, fn.name.text) ? this.unifiedNullableStringParams[fn.name.text] : void 0;
+    if (Array.isArray(nullableStrIndexes) && nullableStrIndexes.includes(fn.parameters.indexOf(param))) {
+      if (param.type?.getText() !== "Str" || !this.goLocalIsSafeToType(fn.body, param, param.name.text, "*string")) {
+        throw new Error(`unifiedNullableStringParams: ${fn.name.text} parameter ${param.name.text} is not a Str written only as *string`);
+      }
+      return "*string";
+    }
     const clientType = this.goWsClientParameterType(fn, param) ?? this.goWsFrameParameterType(fn, param);
     if (clientType !== void 0) {
       return clientType;
@@ -38548,6 +38583,9 @@ ${pad}if !${okName} ${body.trimStart()}`;
     const operator = ORDERED_COMPARISON_OPERATORS[op];
     if (operator === void 0) {
       return void 0;
+    }
+    if (this.goPrintedArgType(left) === "string" && this.goPrintedArgType(right) === "string") {
+      return `(${leftText} ${operator} ${rightText})`;
     }
     const leftPointee = this.goOrderedComparisonPointerKind(left);
     const rightPointee = this.goOrderedComparisonPointerKind(right);

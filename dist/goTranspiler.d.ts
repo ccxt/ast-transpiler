@@ -745,6 +745,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     unifiedNullableInt64Params: {
         [method: string]: number[];
     };
+    unifiedNullableStringParams: {
+        [method: string]: number[];
+    };
     unifiedFloat64Params: {
         [method: string]: number[];
     } | undefined;
