@@ -1137,7 +1137,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustClientHandleIsInTest(node: any): boolean;
     /** `client.subscriptions|futures[k]` read with a plain local key: the handle's keyed read. */
     printClientHandleKeyedRead(node: any): string | undefined;
-    /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
+    /** `Object.keys(client.subscriptions|futures)` or `Object.values(client.subscriptions)` bound to a list: the handle's live key/value list. */
     printClientHandleKeys(init: any): string | undefined;
     rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined;
     rustClientHandleKeysAliasPrintsKeys(declaration: any): boolean;

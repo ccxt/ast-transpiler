@@ -5471,7 +5471,10 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
     // A venue-local `Str`/`string` parameter prints `*string` when no name-based dispatch reaches the method
     // venue string params every caller hands a *string, a never-rebound string or nil
     goInstAround (goTranspiler, 'goNativeParameterTypeOf', function (upstreamOf, param) {
-        return upstreamOf.call (this, param) ?? (goStringPtrParamProven (this, param) ? '*string' : undefined) ?? (goStringValueParamProven (this, param) ? 'string' : undefined);
+        return upstreamOf.call (this, param)
+            ?? (goStringPtrParamProven (this, param) ? '*string' : undefined)
+            ?? (goStringValueParamProven (this, param) ? 'string' : undefined)
+            ?? (goFloat64PtrParamProven (this, param) ? '*float64' : undefined);
     });
     goInstAround (goTranspiler, 'goTypeOfInitializer', function (upstream, initializer, printedValue) {
         const known = upstream.call (this, initializer, printedValue);
@@ -9519,15 +9522,18 @@ function installStringPtrParams (goTranspiler) {
         // a probe made while another parameter proof is in flight can see that proof's re-entry
         const wrap = args.map ((a, i) => {
             const param = decl.parameters?.[i];
-            return (param !== undefined) && (param.dotDotDotToken === undefined) && (param.initializer === undefined)
-                && nullableStringParam (this, param)
-                && (upstreamArgType.call (this, a) === 'string') && (probeParam (this, param) === '*string');
+            if ((param === undefined) || (param.dotDotDotToken !== undefined) || (param.initializer !== undefined)) { return undefined; }
+            if (nullableStringParam (this, param) && (upstreamArgType.call (this, a) === 'string') && (probeParam (this, param) === '*string')) { return '*string'; }
+            if ((param.type?.getText?.().trim () === 'Num') && (upstreamArgType.call (this, a) === 'float64') && (probeParam (this, param) === '*float64')) { return '*float64'; }
+            return undefined;
         });
-        if (!wrap.some ((w) => w)) { return printed; }
+        if (!wrap.some ((w) => w !== undefined)) { return printed; }
         const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
         return args.map ((a, i) => {
             const text = this.goWithExprDepth (depth, () => this.printNode (a, identation)).trim ();
-            return wrap[i] ? (goStringAddressArg (this, a, text) ?? ccxtGoStringParamAddress (this, a) ?? goStringListElementAddressArg (this, a, text) ?? ('SafeStringPtr(' + text + ')')) : text;
+            if (wrap[i] === '*string') { return goStringAddressArg (this, a, text) ?? ccxtGoStringParamAddress (this, a) ?? goStringListElementAddressArg (this, a, text) ?? ('SafeStringPtr(' + text + ')'); }
+            if (wrap[i] === '*float64') { return (a.kind === SyntaxKind.Identifier) ? ('&' + text) : ('Float64PtrTyped(' + text + ')'); }
+            return text;
         }).join (', ');
     };
 }
@@ -9721,6 +9727,34 @@ function goStringPtrParamProven (go, param) {
             && !h26g05SiblingStrTupleSlot (arg, fileText, site.at)) { return false; }
     }
     return go.goParameterBodyTakes (fn, param, '*string');
+}
+
+// Venue-local required `Num` parameter whose every direct caller passes `*float64`, an addressable `float64`, or `undefined`.
+function goFloat64PtrParamProven (go, param) {
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.questionToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier) || (param.type?.getText?.().trim () !== 'Num')) { return false; }
+    const fn = param.parent;
+    if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    const name = fn.name.text;
+    const index = fn.parameters.indexOf (param);
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if ((tree === undefined) || go.goMethodKeepsBaseSignature (fn) || go.goIsProHandlerMethod (fn) || !go.goHasTreeCallSite (fn)
+        || !goStringPtrParamOnlyDirectCalls (go, tree, name, go.goEnclosingClassName (fn))) { return false; }
+    const isUndefined = (a) => (a?.kind === SyntaxKind.Identifier) && (a.text === 'undefined');
+    for (const call of go.goSameFileCallsOf (fn, name)) {
+        const arg = call.arguments?.[index];
+        if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === SyntaxKind.SpreadElement)) { return false; }
+        if (isUndefined (arg)) { continue; }
+        const t = go.goPrintedArgType (arg);
+        if ((t !== '*float64') && !((t === 'float64') && (arg.kind === SyntaxKind.Identifier))) { return false; }
+    }
+    const myClass = go.goEnclosingClassName (fn);
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    for (const site of tree.callIndex.get (name) ?? []) {
+        if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
+        return false;
+    }
+    return go.goParameterBodyTakes (fn, param, '*float64');
 }
 
 // `x as OrderType` (a string-literal union) prints bare `x`: the argument has the type of the identifier

@@ -7722,16 +7722,20 @@ export class RustTranspiler extends BaseTranspiler {
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return undefined;
         return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`);
     }
-    /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
+    /** `Object.keys(client.subscriptions|futures)` or `Object.values(client.subscriptions)` bound to a list: the handle's live key/value list. */
     printClientHandleKeys(init: any): string | undefined {
         const call: any = this.unwrapParens(init);
-        if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression) || call.expression.getText().replace(/\s+/g, '') !== 'Object.keys') return undefined;
+        if (!isCallExpression(call) || call.arguments.length !== 1 || !isPropertyAccessExpression(call.expression)) return undefined;
+        const fnText = call.expression.getText().replace(/\s+/g, '');
+        if (fnText !== 'Object.keys' && fnText !== 'Object.values') return undefined;
         const alias: any = this.rustClientHandleKeysAlias(this.unwrapParens(call.arguments[0]));
         const access = this.rustClientHandleAccess(alias === undefined ? call.arguments[0] : this.unwrapParens(alias.initializer), true);
         const name = access === undefined || access.write ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
-        return name === undefined ? undefined : `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
+        if (name === undefined) return undefined;
+        if (fnText === 'Object.values') return name === 'subscription' ? `${this.rustClientHandleReceiver(access.plan, false)}.subscription_values()` : undefined;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
     }
-    // `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)`: the alias is the live field, so its key list is the handle's ...
+    // `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)` or `Object.values (s)`: the alias is the live field.
     rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined {
         const declaration: any = node !== undefined && isIdentifier(node) ? this.rustDeclarationOfIdentifier(node) : undefined;
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || declaration.type !== undefined) return undefined;
@@ -7745,7 +7749,8 @@ export class RustTranspiler extends BaseTranspiler {
             while (isParenthesizedExpression(up.parent)) up = up.parent;
             const call: any = up.parent;
             uses++;
-            return isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === up && isPropertyAccessExpression(call.expression) && call.expression.getText().replace(/\s+/g, '') === 'Object.keys';
+            const fnText = isCallExpression(call) && isPropertyAccessExpression(call.expression) ? call.expression.getText().replace(/\s+/g, '') : '';
+            return isCallExpression(call) && call.arguments.length === 1 && call.arguments[0] === up && (fnText === 'Object.keys' || fnText === 'Object.values');
         });
         return ok && uses > 0 ? declaration : undefined;
     }

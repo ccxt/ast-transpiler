@@ -18481,7 +18481,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
   installCcxtGoUnifiedInt64Params(goTranspiler, unifiedFloat64Params ?? goTranspiler.unifiedFloat64Params, "float64");
   installStringPtrParams(goTranspiler);
   goInstAround(goTranspiler, "goNativeParameterTypeOf", function(upstreamOf, param) {
-    return upstreamOf.call(this, param) ?? (goStringPtrParamProven(this, param) ? "*string" : void 0) ?? (goStringValueParamProven(this, param) ? "string" : void 0);
+    return upstreamOf.call(this, param) ?? (goStringPtrParamProven(this, param) ? "*string" : void 0) ?? (goStringValueParamProven(this, param) ? "string" : void 0) ?? (goFloat64PtrParamProven(this, param) ? "*float64" : void 0);
   });
   goInstAround(goTranspiler, "goTypeOfInitializer", function(upstream, initializer, printedValue) {
     const known = upstream.call(this, initializer, printedValue);
@@ -23047,15 +23047,30 @@ function installStringPtrParams(goTranspiler) {
     }
     const wrap = args.map((a, i) => {
       const param = decl.parameters?.[i];
-      return param !== void 0 && param.dotDotDotToken === void 0 && param.initializer === void 0 && nullableStringParam(this, param) && upstreamArgType.call(this, a) === "string" && probeParam(this, param) === "*string";
+      if (param === void 0 || param.dotDotDotToken !== void 0 || param.initializer !== void 0) {
+        return void 0;
+      }
+      if (nullableStringParam(this, param) && upstreamArgType.call(this, a) === "string" && probeParam(this, param) === "*string") {
+        return "*string";
+      }
+      if (param.type?.getText?.().trim() === "Num" && upstreamArgType.call(this, a) === "float64" && probeParam(this, param) === "*float64") {
+        return "*float64";
+      }
+      return void 0;
     });
-    if (!wrap.some((w) => w)) {
+    if (!wrap.some((w) => w !== void 0)) {
       return printed;
     }
     const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
     return args.map((a, i) => {
       const text = this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
-      return wrap[i] ? goStringAddressArg(this, a, text) ?? ccxtGoStringParamAddress(this, a) ?? goStringListElementAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")" : text;
+      if (wrap[i] === "*string") {
+        return goStringAddressArg(this, a, text) ?? ccxtGoStringParamAddress(this, a) ?? goStringListElementAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")";
+      }
+      if (wrap[i] === "*float64") {
+        return a.kind === SyntaxKind5.Identifier ? "&" + text : "Float64PtrTyped(" + text + ")";
+      }
+      return text;
     }).join(", ");
   };
 }
@@ -23300,6 +23315,44 @@ function goStringPtrParamProven(go, param) {
     }
   }
   return go.goParameterBodyTakes(fn, param, "*string");
+}
+function goFloat64PtrParamProven(go, param) {
+  if (param?.kind !== SyntaxKind5.Parameter || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || param.questionToken !== void 0 || param.name?.kind !== SyntaxKind5.Identifier || param.type?.getText?.().trim() !== "Num") {
+    return false;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== SyntaxKind5.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SyntaxKind5.Identifier) {
+    return false;
+  }
+  const name = fn.name.text;
+  const index = fn.parameters.indexOf(param);
+  const tree = go.goTsSrcTree(fn.getSourceFile());
+  if (tree === void 0 || go.goMethodKeepsBaseSignature(fn) || go.goIsProHandlerMethod(fn) || !go.goHasTreeCallSite(fn) || !goStringPtrParamOnlyDirectCalls(go, tree, name, go.goEnclosingClassName(fn))) {
+    return false;
+  }
+  const isUndefined = (a) => a?.kind === SyntaxKind5.Identifier && a.text === "undefined";
+  for (const call of go.goSameFileCallsOf(fn, name)) {
+    const arg = call.arguments?.[index];
+    if (call.runner !== void 0 || arg === void 0 || arg.kind === SyntaxKind5.SpreadElement) {
+      return false;
+    }
+    if (isUndefined(arg)) {
+      continue;
+    }
+    const t = go.goPrintedArgType(arg);
+    if (t !== "*float64" && !(t === "float64" && arg.kind === SyntaxKind5.Identifier)) {
+      return false;
+    }
+  }
+  const myClass = go.goEnclosingClassName(fn);
+  const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+  for (const site of tree.callIndex.get(name) ?? []) {
+    if (site.file === myFile || !go.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+      continue;
+    }
+    return false;
+  }
+  return go.goParameterBodyTakes(fn, param, "*float64");
 }
 function goStringPtrCastOperand(arg) {
   return arg?.kind === SyntaxKind5.AsExpression && arg.expression?.kind === SyntaxKind5.Identifier ? arg.expression : arg;
@@ -83762,17 +83815,24 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
       return void 0;
     return box(`${this.rustClientHandleReceiver(access.plan, false)}.get_${name}(&${key})`);
   }
-  /** `Object.keys(client.subscriptions|futures)` bound to a key list: the handle's key list. */
+  /** `Object.keys(client.subscriptions|futures)` or `Object.values(client.subscriptions)` bound to a list: the handle's live key/value list. */
   printClientHandleKeys(init) {
     const call = this.unwrapParens(init);
-    if (!isCallExpression7(call) || call.arguments.length !== 1 || !isPropertyAccessExpression4(call.expression) || call.expression.getText().replace(/\s+/g, "") !== "Object.keys")
+    if (!isCallExpression7(call) || call.arguments.length !== 1 || !isPropertyAccessExpression4(call.expression))
+      return void 0;
+    const fnText = call.expression.getText().replace(/\s+/g, "");
+    if (fnText !== "Object.keys" && fnText !== "Object.values")
       return void 0;
     const alias = this.rustClientHandleKeysAlias(this.unwrapParens(call.arguments[0]));
     const access = this.rustClientHandleAccess(alias === void 0 ? call.arguments[0] : this.unwrapParens(alias.initializer), true);
     const name = access === void 0 || access.write ? void 0 : _RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
-    return name === void 0 ? void 0 : `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
+    if (name === void 0)
+      return void 0;
+    if (fnText === "Object.values")
+      return name === "subscription" ? `${this.rustClientHandleReceiver(access.plan, false)}.subscription_values()` : void 0;
+    return `${this.rustClientHandleReceiver(access.plan, false)}.${name}_keys()`;
   }
-  // `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)`: the alias is the live field, so its key list is the handle's ...
+  // `const s = client.subscriptions` (one binding, never written) whose every use is the argument of `Object.keys (s)` or `Object.values (s)`: the alias is the live field.
   rustClientHandleKeysAlias(node) {
     const declaration = node !== void 0 && isIdentifier4(node) ? this.rustDeclarationOfIdentifier(node) : void 0;
     if (declaration === void 0 || !isVariableDeclaration3(declaration) || !isIdentifier4(declaration.name) || declaration.type !== void 0)
@@ -83790,7 +83850,8 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
         up = up.parent;
       const call = up.parent;
       uses++;
-      return isCallExpression7(call) && call.arguments.length === 1 && call.arguments[0] === up && isPropertyAccessExpression4(call.expression) && call.expression.getText().replace(/\s+/g, "") === "Object.keys";
+      const fnText = isCallExpression7(call) && isPropertyAccessExpression4(call.expression) ? call.expression.getText().replace(/\s+/g, "") : "";
+      return isCallExpression7(call) && call.arguments.length === 1 && call.arguments[0] === up && (fnText === "Object.keys" || fnText === "Object.values");
     });
     return ok && uses > 0 ? declaration : void 0;
   }
