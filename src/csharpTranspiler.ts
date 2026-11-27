@@ -4253,6 +4253,15 @@ export class CSharpTranspiler extends BaseTranspiler {
     csharpNativeNumericComparison(node, identation): string | undefined {
         const token = CSHARP_NATIVE_COMPARISON_TOKENS[node.operatorToken.kind];
         if (token === undefined) { return undefined; }
+        const nonNullString = (n) => {
+            while (n?.kind === SyntaxKind.ParenthesizedExpression) { n = n.expression; }
+            if ((n?.kind === SyntaxKind.StringLiteral) || (n?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) { return true; }
+            const t = this.csharpPrintedParamType(n) ?? this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
+            return t === 'string';
+        };
+        if (nonNullString(node.left) && nonNullString(node.right)) {
+            return `(string.CompareOrdinal(${this.printNode(node.left, 0).trim()}, ${this.printNode(node.right, 0).trim()}) ${token} 0)`;
+        }
         const [ leftKind, rightKind ] = this.csharpComparisonOperandKinds(node.left, node.right);
         if ((leftKind === undefined) || (rightKind === undefined)) { return undefined; }
         const integerPair = (CSHARP_INTEGER_KINDS.indexOf(leftKind) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(rightKind) >= 0);

@@ -9502,6 +9502,16 @@ function installStringPtrParams (goTranspiler) {
         const callee = node.expression;
         const calleeName = (callee?.kind === SyntaxKind.PropertyAccessExpression) ? callee.name?.text : undefined;
         if ((typeof calleeName === 'string') && Object.prototype.hasOwnProperty.call (this.unifiedStringParams ?? {}, calleeName)) { return printed; } // unified string args keep their StringArg/deref printing
+        const unifiedNullableStr = (typeof calleeName === 'string') && Object.prototype.hasOwnProperty.call (this.unifiedNullableStringParams ?? {}, calleeName) ? this.unifiedNullableStringParams[calleeName] : undefined;
+        if (Array.isArray (unifiedNullableStr)) {
+            const wrapUnified = args.map ((a, i) => unifiedNullableStr.includes (i) && (upstreamArgType.call (this, a) === 'string'));
+            if (!wrapUnified.some ((w) => w)) { return printed; }
+            const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
+            return args.map ((a, i) => {
+                const text = this.goWithExprDepth (depth, () => this.printNode (a, identation)).trim ();
+                return wrapUnified[i] ? (goStringAddressArg (this, a, text) ?? ccxtGoStringParamAddress (this, a) ?? goStringListElementAddressArg (this, a, text) ?? ('SafeStringPtr(' + text + ')')) : text;
+            }).join (', ');
+        }
         const decl = stringPtrParamCallDeclaration (this, node);
         if (decl === undefined) { return printed; }
         // a probe made while another parameter proof is in flight can see that proof's re-entry
@@ -13079,6 +13089,8 @@ export class GoTranspiler extends BaseTranspiler {
     unifiedBoolParams: { [method: string]: number[] } = {};
     // inherited methods whose nullable `Int` parameter prints `*int64` on the base and every override
     unifiedNullableInt64Params: { [method: string]: number[] } = {};
+    // inherited methods whose nullable `Str` parameter prints `*string` on the base and every override
+    unifiedNullableStringParams: { [method: string]: number[] } = {};
     unifiedFloat64Params: { [method: string]: number[] } | undefined = undefined;
     // `<class>.<method>` -> indexes of required `string` params of an exchange-local method that
     uncalledStringParams: { [method: string]: number[] } = {};
@@ -13156,6 +13168,7 @@ export class GoTranspiler extends BaseTranspiler {
         this.unifiedSliceParams = config['unifiedSliceParams'] ?? {};
         this.unifiedBoolParams = config['unifiedBoolParams'] ?? {};
         this.unifiedNullableInt64Params = config['unifiedNullableInt64Params'] ?? {};
+        this.unifiedNullableStringParams = config['unifiedNullableStringParams'] ?? {};
         this.unifiedFloat64Params = config['unifiedFloat64Params'];
         this.uncalledStringParams = config['uncalledStringParams'] ?? {};
         this.goHandWrittenBaseMethods = config['handWrittenBaseMethods'] ?? [];
@@ -18535,6 +18548,13 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             }
             return '*int64';
         }
+        const nullableStrIndexes = Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams, fn.name.text) ? this.unifiedNullableStringParams[fn.name.text] : undefined;
+        if (Array.isArray(nullableStrIndexes) && nullableStrIndexes.includes(fn.parameters.indexOf(param))) {
+            if ((param.type?.getText() !== 'Str') || !this.goLocalIsSafeToType(fn.body, param, param.name.text, '*string')) {
+                throw new Error(`unifiedNullableStringParams: ${fn.name.text} parameter ${param.name.text} is not a Str written only as *string`);
+            }
+            return '*string';
+        }
         const clientType = this.goWsClientParameterType(fn, param)
             // the ws frame. `override handleMessage (client, message: Dict)` is the one
             // inherited signature the Go dispatch can type: WsDispatch asserts the decoded object once.
@@ -22206,6 +22226,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     printInlineOrderedComparison(left, right, leftText: string, rightText: string, op): string | undefined {
         const operator = ORDERED_COMPARISON_OPERATORS[op];
         if (operator === undefined) { return undefined; }
+        if ((this.goPrintedArgType(left) === 'string') && (this.goPrintedArgType(right) === 'string')) {
+            return `(${leftText} ${operator} ${rightText})`;
+        }
         const leftPointee = this.goOrderedComparisonPointerKind(left);
         const rightPointee = this.goOrderedComparisonPointerKind(right);
         if ((leftPointee !== undefined) || (rightPointee !== undefined)) { return this.printPointerOrderedComparison(left, right, leftText, rightText, operator, leftPointee, rightPointee); }
