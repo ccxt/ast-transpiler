@@ -27209,7 +27209,7 @@ var GO_DEFAULTED_POINTER_ACCESSORS = { "safeString": 3, "safeStringLower": 3, "s
 var GO_STRUCT_BOX_TYPES = { "Trade": "TradeToMap", "TransferEntry": "TransferEntryToMap" };
 var GO_SAFE_DICT_READ_HELPERS = ["GetValue", "InOp", "ObjectKeys", "IsDictionary"];
 var GO_MARKET_LOCAL_TYPE = "map[string]any";
-var GO_MARKET_PRODUCER_METHODS = ["parseMarket", "getMarketFromSymbols", "getMarketFromClientAndMessage"];
+var GO_MARKET_PRODUCER_METHODS = ["parseMarket", "getMarketFromSymbols", "getMarketFromClientAndMessage", "createExpiredOptionMarket"];
 var GO_MARKET_MAP_CALLS = ["Market", "SafeMarket", "SafeMarketStructure", "Extend", "DeepExtend", "MapTyped", "MarketTyped"];
 var GO_ROW_MINMAX = { "min": ["Min", "*float64"], "max": ["Max", "*float64"] };
 var GO_TYPED_ROW_BINDER_CALLS = { "market": "MarketInterface", "safeMarket": "MarketInterface", "currency": "Currency", "safeCurrency": "Currency" };
@@ -29759,7 +29759,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
             if (goType === GO_STRING_LIST_LOCAL_TYPE && this.h28G05GetArgSliceCopy(parent.right, goType) !== void 0) {
               return false;
             }
-            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(declaration.kind === SyntaxKind5.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0) && !(goType === GO_WS_CACHE_TYPE && this.goWsCacheTypeOfNode(parent.right) !== void 0) && !this.goOrderBookWriteKeepsType(goType, parent.right)) {
+            if (this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType && !(goType === "int" && go90g8OtherIntLocal(this, parent.right, declaration)) && !(declaration.kind === SyntaxKind5.VariableDeclaration && this.goPointerWriteConversion(parent.right, goType) !== void 0) && !(goType === GO_WS_CACHE_TYPE && this.goWsCacheTypeOfNode(parent.right) !== void 0) && !this.goOrderBookWriteKeepsType(goType, parent.right)) {
               return true;
             }
           } else if (op === SyntaxKind5.PlusEqualsToken && goType === "string" && (this.goOperandStaticType(parent.right, this.printNode(parent.right, 0)) === "string" || stringWriteProven || this.goH20g12GuardedPointerAppend(parent.right) || h49g32SelfStringCall(this, parent.right))) {
@@ -35809,6 +35809,9 @@ ${iden}}`;
     const holder = isSlot0 ? decl.parent.parent : void 0;
     const init = holder?.initializer;
     const constant = ((holder?.parent?.flags ?? 0) & NodeFlags3.Const) !== 0;
+    if (constant && init?.kind === SyntaxKind5.CallExpression && init.expression?.name?.text === "encodeDydxTxForSigning") {
+      return "string";
+    }
     return constant && init?.kind === SyntaxKind5.CallExpression && this.stringPointerTupleCalls.includes(init.expression?.name?.text) ? "*string" : void 0;
   }
   // a required `string` parameter of a venue-private method that no ts/src file calls (async: table-listed only)
@@ -41705,12 +41708,26 @@ ${this.getIden(level)}}()`;
     if (node.parent?.kind !== SyntaxKind5.ExpressionStatement || access?.kind !== SyntaxKind5.ElementAccessExpression) {
       return void 0;
     }
-    const receiver = this.goDeleteReceiverText(access.expression);
     const key = this.goDeleteKeyText(access.argumentExpression);
-    if (receiver === void 0 || key === void 0) {
+    if (key === void 0) {
       return void 0;
     }
-    return `delete(${receiver}, ${key})`;
+    const receiver = this.goDeleteReceiverText(access.expression);
+    if (receiver !== void 0) {
+      return `delete(${receiver}, ${key})`;
+    }
+    const cache = this.goDeleteWsArrayCacheText(access.expression);
+    if (cache !== void 0) {
+      return `${cache}.Remove(${key})`;
+    }
+    return void 0;
+  }
+  goDeleteWsArrayCacheText(node) {
+    if (node?.kind !== SyntaxKind5.Identifier) {
+      return void 0;
+    }
+    const declared = this.goDeclaredTypeOfIdentifier(node) ?? this.goPrintedLocalDeclarationType(node);
+    return declared === GO_WS_CACHE_TYPE ? this.printNode(node, 0) : void 0;
   }
   goDeleteReceiverText(node) {
     if (node?.kind === SyntaxKind5.Identifier) {

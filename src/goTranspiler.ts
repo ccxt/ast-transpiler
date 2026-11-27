@@ -12469,7 +12469,7 @@ const GO_SAFE_DICT_READ_HELPERS = [ 'GetValue', 'InOp', 'ObjectKeys', 'IsDiction
 const GO_MARKET_LOCAL_TYPE = 'map[string]any';
 
 // the market producers whose TS return type names no Go type (see goMarketProducerReturnType)
-const GO_MARKET_PRODUCER_METHODS = [ 'parseMarket', 'getMarketFromSymbols', 'getMarketFromClientAndMessage' ];
+const GO_MARKET_PRODUCER_METHODS = [ 'parseMarket', 'getMarketFromSymbols', 'getMarketFromClientAndMessage', 'createExpiredOptionMarket' ];
 
 // base accessors/builders whose generated Go result is already the market dictionary
 const GO_MARKET_MAP_CALLS = [ 'Market', 'SafeMarket', 'SafeMarketStructure', 'Extend', 'DeepExtend', 'MapTyped', 'MarketTyped' ];
@@ -14478,6 +14478,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
                         if (stringWriteProven && (goType === 'string')) { return false; }
                         if ((goType === GO_STRING_LIST_LOCAL_TYPE) && (this.h28G05GetArgSliceCopy(parent.right, goType) !== undefined)) { return false; }
                         if ((this.goTypeOfInitializer(parent.right, this.printNode(parent.right, 0)) !== goType)
+                            && !((goType === 'int') && go90g8OtherIntLocal(this, parent.right, declaration))
                             && !((declaration.kind === SyntaxKind.VariableDeclaration) && this.goPointerWriteConversion(parent.right, goType) !== undefined)
                             && !((goType === GO_WS_CACHE_TYPE) && (this.goWsCacheTypeOfNode(parent.right) !== undefined))
                             && !this.goOrderBookWriteKeepsType(goType, parent.right)) { return true; }
@@ -19496,6 +19497,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const holder = isSlot0 ? decl.parent.parent : undefined;
         const init = holder?.initializer;
         const constant = ((holder?.parent?.flags ?? 0) & NodeFlags.Const) !== 0;
+        if (constant && (init?.kind === SyntaxKind.CallExpression) && (init.expression?.name?.text === 'encodeDydxTxForSigning')) { return 'string'; }
         return (constant && (init?.kind === SyntaxKind.CallExpression) && this.stringPointerTupleCalls.includes(init.expression?.name?.text)) ? '*string' : undefined;
     }
 
@@ -24437,10 +24439,19 @@ ${this.getIden(identation)}${returnStatement}`;
     goNativeDelete(node): string | undefined {
         const access: any = node.expression;
         if ((node.parent?.kind !== SyntaxKind.ExpressionStatement) || (access?.kind !== SyntaxKind.ElementAccessExpression)) { return undefined; }
-        const receiver = this.goDeleteReceiverText(access.expression);
         const key = this.goDeleteKeyText(access.argumentExpression);
-        if ((receiver === undefined) || (key === undefined)) { return undefined; }
-        return `delete(${receiver}, ${key})`;
+        if (key === undefined) { return undefined; }
+        const receiver = this.goDeleteReceiverText(access.expression);
+        if (receiver !== undefined) { return `delete(${receiver}, ${key})`; }
+        const cache = this.goDeleteWsArrayCacheText(access.expression);
+        if (cache !== undefined) { return `${cache}.Remove(${key})`; }
+        return undefined;
+    }
+
+    goDeleteWsArrayCacheText(node): string | undefined {
+        if (node?.kind !== SyntaxKind.Identifier) { return undefined; }
+        const declared = this.goDeclaredTypeOfIdentifier(node) ?? this.goPrintedLocalDeclarationType(node);
+        return (declared === GO_WS_CACHE_TYPE) ? this.printNode(node, 0) : undefined;
     }
 
     goDeleteReceiverText(node): string | undefined {

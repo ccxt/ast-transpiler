@@ -1786,6 +1786,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printDeleteExpression(node: any, identation: any): string;
     goClientsDeleteText(node: any): string | undefined;
     goNativeDelete(node: any): string | undefined;
+    goDeleteWsArrayCacheText(node: any): string | undefined;
     goDeleteReceiverText(node: any): string | undefined;
     goDeletableMapField(node: any): string | undefined;
     goDeleteKeyText(keyNode: any): string | undefined;
