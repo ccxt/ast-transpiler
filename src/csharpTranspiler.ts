@@ -4516,7 +4516,22 @@ export class CSharpTranspiler extends BaseTranspiler {
         };
         const l = text(left, parsedArg1);
         const r = text(right, parsedArg2);
-        return ((l === undefined) || (r === undefined)) ? undefined : `Math.${name}(${l}, ${r})`;
+        if ((l !== undefined) && (r !== undefined)) { return `Math.${name}(${l}, ${r})`; }
+        // assignment into a declared Int64? local with one unguarded Int64? identifier operand: preserve null result natively
+        let up = node.parent;
+        while ((up !== undefined) && isParenthesizedExpression(up)) { up = up.parent; }
+        const isInt64NullableAssign = isBinaryExpression(up) && (up.operatorToken.kind === SyntaxKind.EqualsToken)
+            && isIdentifier(up.left) && ((this.csharpExpressionTypeOf(up.left) ?? this.csharpDeclaredLocalValueType(up.left)) === 'Int64?');
+        if (isInt64NullableAssign && ((l === undefined) !== (r === undefined))) {
+            const nullSide = (l === undefined) ? left : right;
+            const nullPrinted = (l === undefined) ? parsedArg1.trim() : parsedArg2.trim();
+            if (!nullSide.shifted && (nullSide.kind === 'Int64?') && isIdentifier(nullSide.node)) {
+                const lExpr = (l === undefined) ? `${nullPrinted}.Value` : l;
+                const rExpr = (r === undefined) ? `${nullPrinted}.Value` : r;
+                return `((${nullPrinted} != null) ? (Int64?)Math.${name}(${lExpr}, ${rExpr}) : null)`;
+            }
+        }
+        return undefined;
     }
     // a min/max operand: an integral operand, or `x + lit` / `x - lit` whose identifier is integral (its null proof is the identifier's); the shifted value keeps the identifier's kind
     csharpIntegralMinMaxOperand(node): any {

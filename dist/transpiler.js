@@ -8318,7 +8318,24 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     };
     const l = text(left, parsedArg1);
     const r = text(right, parsedArg2);
-    return l === void 0 || r === void 0 ? void 0 : `Math.${name}(${l}, ${r})`;
+    if (l !== void 0 && r !== void 0) {
+      return `Math.${name}(${l}, ${r})`;
+    }
+    let up = node.parent;
+    while (up !== void 0 && isParenthesizedExpression(up)) {
+      up = up.parent;
+    }
+    const isInt64NullableAssign = isBinaryExpression2(up) && up.operatorToken.kind === SyntaxKind4.EqualsToken && isIdentifier2(up.left) && (this.csharpExpressionTypeOf(up.left) ?? this.csharpDeclaredLocalValueType(up.left)) === "Int64?";
+    if (isInt64NullableAssign && l === void 0 !== (r === void 0)) {
+      const nullSide = l === void 0 ? left : right;
+      const nullPrinted = l === void 0 ? parsedArg1.trim() : parsedArg2.trim();
+      if (!nullSide.shifted && nullSide.kind === "Int64?" && isIdentifier2(nullSide.node)) {
+        const lExpr = l === void 0 ? `${nullPrinted}.Value` : l;
+        const rExpr = r === void 0 ? `${nullPrinted}.Value` : r;
+        return `((${nullPrinted} != null) ? (Int64?)Math.${name}(${lExpr}, ${rExpr}) : null)`;
+      }
+    }
+    return void 0;
   }
   // a min/max operand: an integral operand, or `x + lit` / `x - lit` whose identifier is integral (its null proof is the identifier's); the shifted value keeps the identifier's kind
   csharpIntegralMinMaxOperand(node) {
@@ -18607,7 +18624,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
   installCcxtGoUnifiedInt64Params(goTranspiler, goTranspiler.predictionUnifiedFloat64Params, "float64", true);
   installStringPtrParams(goTranspiler);
   goInstAround(goTranspiler, "goNativeParameterTypeOf", function(upstreamOf, param) {
-    return upstreamOf.call(this, param) ?? (goStringPtrParamProven(this, param) ? "*string" : void 0) ?? (goStringValueParamProven(this, param) ? "string" : void 0) ?? (goFloat64PtrParamProven(this, param) ? "*float64" : void 0);
+    return upstreamOf.call(this, param) ?? (goStringPtrParamProven(this, param) ? "*string" : void 0) ?? (goStringValueParamProven(this, param) ? "string" : void 0) ?? (goFloat64PtrParamProven(this, param) ? "*float64" : void 0) ?? (goIntValueParamProven(this, param) ? "int" : void 0);
   });
   goInstAround(goTranspiler, "goTypeOfInitializer", function(upstream, initializer, printedValue) {
     const known = upstream.call(this, initializer, printedValue);
@@ -23479,6 +23496,40 @@ function goFloat64PtrParamProven(go, param) {
     return false;
   }
   return go.goParameterBodyTakes(fn, param, "*float64");
+}
+function goIntValueParamProven(go, param) {
+  if (param?.kind !== SyntaxKind5.Parameter || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || param.questionToken !== void 0 || param.name?.kind !== SyntaxKind5.Identifier || param.type?.getText?.().trim() !== "int") {
+    return false;
+  }
+  const fn = param.parent;
+  if (fn?.kind !== SyntaxKind5.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SyntaxKind5.Identifier) {
+    return false;
+  }
+  const name = fn.name.text;
+  const index = fn.parameters.indexOf(param);
+  const tree = go.goTsSrcTree(fn.getSourceFile());
+  if (tree === void 0 || go.goMethodKeepsBaseSignature(fn) || go.goIsProHandlerMethod(fn) || !go.goHasTreeCallSite(fn) || !goStringPtrParamOnlyDirectCalls(go, tree, name, go.goEnclosingClassName(fn))) {
+    return false;
+  }
+  for (const call of go.goSameFileCallsOf(fn, name)) {
+    const arg = call.arguments?.[index];
+    if (call.runner !== void 0 || arg === void 0 || arg.kind === SyntaxKind5.SpreadElement) {
+      return false;
+    }
+    const t = go.goPrintedArgType(arg) ?? go.goOperandStaticType(arg, go.printNode(arg, 0));
+    if (t !== "int") {
+      return false;
+    }
+  }
+  const myClass = go.goEnclosingClassName(fn);
+  const myFile = tree.relativeOf.get(path2.resolve(fn.getSourceFile().fileName));
+  for (const site of tree.callIndex.get(name) ?? []) {
+    if (site.file === myFile || !go.goTsSrcFileDerivesFrom(tree, site.file, myClass)) {
+      continue;
+    }
+    return false;
+  }
+  return go.goParameterBodyTakes(fn, param, "int");
 }
 function goStringPtrCastOperand(arg) {
   return arg?.kind === SyntaxKind5.AsExpression && arg.expression?.kind === SyntaxKind5.Identifier ? arg.expression : arg;
@@ -28380,7 +28431,7 @@ func New${this.capitalize(this.className)}() *${this.className} {
       this.goProvCycleHits = (this.goProvCycleHits ?? 0) + 1;
       return void 0;
     }
-    const topLevel = this.goLocalTypeResolution.size === 0;
+    const topLevel = this.goLocalTypeResolution.size === 0 && (this.goGetArgTypeComputing?.size ?? 0) === 0;
     if (topLevel && this.goLocalStaticTypeCache.has(declaration)) {
       return this.goLocalStaticTypeCache.get(declaration);
     }
@@ -28646,6 +28697,9 @@ func New${this.capitalize(this.className)}() *${this.className} {
   goStringCallStaticType(node, printedText) {
     if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) {
       return void 0;
+    }
+    if (node?.kind === SyntaxKind5.CallExpression && !(printedText ?? "").trim().startsWith("this.Sum(") && this.go92g7IsBaseSum(node) && (this.goInt64SumOperands(node) !== void 0 || this.go93g4PointerOperands(node) !== void 0)) {
+      return "int64";
     }
     const goType = this.goTypeOfInitializer(node, printedText);
     return "string" === goType || "int" === goType || "int64" === goType || "float64" === goType ? goType : void 0;
@@ -38744,7 +38798,7 @@ ${pad}if !${okName} ${body.trimStart()}`;
     if (node.kind === SyntaxKind5.ParenthesizedExpression) {
       return this.goOperandNumericKind(node.expression, this.printNode(node.expression, 0));
     }
-    const goType = this.goTypeOfInitializer(node, printedText);
+    const goType = this.goTypeOfInitializer(node, printedText) ?? this.goStringCallStaticType(node, printedText);
     return goType !== void 0 && GO_NUMERIC_KINDS.indexOf(goType) >= 0 ? goType : void 0;
   }
   // a local bound by `:=` takes its Go type from the initializer: an untyped
@@ -44313,7 +44367,7 @@ ${iden}}
       return void 0;
     }
     const kinds = call.arguments.map((operand) => {
-      if (operand.kind === SyntaxKind5.SpreadElement || operand.kind === SyntaxKind5.NumericLiteral && !this.goLiteralFitsKind(operand, "int")) {
+      if (operand.kind === SyntaxKind5.SpreadElement || operand.kind === SyntaxKind5.NumericLiteral && !Number.isSafeInteger(this.goNumericConstantValue(operand))) {
         return void 0;
       }
       return this.goOperandStaticType(operand, this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)));
@@ -54754,7 +54808,13 @@ function goIntSeedSumOfInts(goTranspiler, call, declaration) {
   if (call.arguments?.length !== 2 || !goTranspiler.go92g7IsBaseSum(call) && goTranspiler.go92g7MinMaxName(call) === void 0) {
     return false;
   }
-  if (goTranspiler.go92g7Int64Operands(call) === void 0 && goTranspiler.go93g4PointerOperands(call, declaration) === void 0 && !h38p09SelfStepMinMax(goTranspiler, call, declaration)) {
+  const selfPair = (() => {
+    const [a, b] = call.arguments.map(goUnwrapTypeExpr);
+    const isSelf = (n) => n?.kind === SyntaxKind5.Identifier && goTranspiler.goDeclarationOfIdentifier(n) === declaration;
+    const isInt64Partner = (n) => n?.kind === SyntaxKind5.Identifier && goTranspiler.goDeclarationOfIdentifier(n) !== declaration && (goTranspiler.goDeclaredTypeOfIdentifier(n) === "int64" || goTranspiler.goDeclaredParamStaticType(n) === "int64") || goTranspiler.goIsNumericConstant(n) && goTranspiler.goNumericLiteralKind(n) === "int" && Number.isSafeInteger(goTranspiler.goNumericConstantValue(n));
+    return isSelf(a) && isInt64Partner(b) || isSelf(b) && isInt64Partner(a);
+  })();
+  if (goTranspiler.go92g7Int64Operands(call) === void 0 && goTranspiler.go93g4PointerOperands(call, declaration) === void 0 && !h38p09SelfStepMinMax(goTranspiler, call, declaration) && !selfPair) {
     return false;
   }
   return call.arguments.every((operand) => {
@@ -54832,6 +54892,10 @@ function goIntSeedInt64Local(goTranspiler, declaration) {
     }
   }
   goIntSeedVerdicts.set(declaration, ok);
+  if (ok) {
+    goTranspiler.goDeclaredTypeCache.delete(declaration);
+    goTranspiler.goLocalStaticTypeCache.delete(declaration);
+  }
   h26g02ForgetDeferredVerdict(declaration, ok);
   return ok;
 }

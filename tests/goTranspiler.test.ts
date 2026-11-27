@@ -17743,7 +17743,7 @@ describe('ral-92g7 native sum / min / max over int64 operands', () => {
             + '        return this.sum (x, 1) * 2;\n'
             + '    }\n'
             + '}\n');
-        expect(out).toContain('Multiply((x + 1), 2)');
+        expect(out).toContain('(x + 1) * 2');
     });
 });
 

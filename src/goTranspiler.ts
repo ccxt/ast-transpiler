@@ -5477,7 +5477,8 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
         return upstreamOf.call (this, param)
             ?? (goStringPtrParamProven (this, param) ? '*string' : undefined)
             ?? (goStringValueParamProven (this, param) ? 'string' : undefined)
-            ?? (goFloat64PtrParamProven (this, param) ? '*float64' : undefined);
+            ?? (goFloat64PtrParamProven (this, param) ? '*float64' : undefined)
+            ?? (goIntValueParamProven (this, param) ? 'int' : undefined);
     });
     goInstAround (goTranspiler, 'goTypeOfInitializer', function (upstream, initializer, printedValue) {
         const known = upstream.call (this, initializer, printedValue);
@@ -9760,6 +9761,32 @@ function goFloat64PtrParamProven (go, param) {
     return go.goParameterBodyTakes (fn, param, '*float64');
 }
 
+// Venue-local required `int` parameter whose every direct caller passes a Go `int` expression.
+function goIntValueParamProven (go, param) {
+    if ((param?.kind !== SyntaxKind.Parameter) || (param.initializer !== undefined) || (param.dotDotDotToken !== undefined)
+        || (param.questionToken !== undefined) || (param.name?.kind !== SyntaxKind.Identifier) || (param.type?.getText?.().trim () !== 'int')) { return false; }
+    const fn = param.parent;
+    if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier)) { return false; }
+    const name = fn.name.text;
+    const index = fn.parameters.indexOf (param);
+    const tree = go.goTsSrcTree (fn.getSourceFile ());
+    if ((tree === undefined) || go.goMethodKeepsBaseSignature (fn) || go.goIsProHandlerMethod (fn) || !go.goHasTreeCallSite (fn)
+        || !goStringPtrParamOnlyDirectCalls (go, tree, name, go.goEnclosingClassName (fn))) { return false; }
+    for (const call of go.goSameFileCallsOf (fn, name)) {
+        const arg = call.arguments?.[index];
+        if ((call.runner !== undefined) || (arg === undefined) || (arg.kind === SyntaxKind.SpreadElement)) { return false; }
+        const t = go.goPrintedArgType (arg) ?? go.goOperandStaticType (arg, go.printNode (arg, 0));
+        if (t !== 'int') { return false; }
+    }
+    const myClass = go.goEnclosingClassName (fn);
+    const myFile = tree.relativeOf.get (path.resolve (fn.getSourceFile ().fileName));
+    for (const site of tree.callIndex.get (name) ?? []) {
+        if ((site.file === myFile) || !go.goTsSrcFileDerivesFrom (tree, site.file, myClass)) { continue; }
+        return false;
+    }
+    return go.goParameterBodyTakes (fn, param, 'int');
+}
+
 // `x as OrderType` (a string-literal union) prints bare `x`: the argument has the type of the identifier
 function goStringPtrCastOperand (arg) { return ((arg?.kind === SyntaxKind.AsExpression) && (arg.expression?.kind === SyntaxKind.Identifier)) ? arg.expression : arg; }
 
@@ -13694,8 +13721,8 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
             this.goProvCycleHits = (this.goProvCycleHits ?? 0) + 1;
             return undefined; // the safety scan below prints an expression using this same local
         }
-        // only a top-level answer is stable: nested ones see the recursion guard above
-        const topLevel = this.goLocalTypeResolution.size === 0;
+        // only a top-level answer is stable: nested ones see the recursion guard above (or an open GetArg binding)
+        const topLevel = (this.goLocalTypeResolution.size === 0) && ((this.goGetArgTypeComputing?.size ?? 0) === 0);
         if (topLevel && this.goLocalStaticTypeCache.has(declaration)) { return this.goLocalStaticTypeCache.get(declaration); }
         this.goLocalTypeResolution.add(declaration);
         try {
@@ -13910,6 +13937,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
     goStringCallStaticType(node, printedText: string): string | undefined {
         // the operator needs the printed expression's *static* Go type. A helper whose
         if (GO_ANY_BOX_CALLS.indexOf(this.goPrintedCallee(printedText)) >= 0) { return undefined; }
+        // `this.sum (a, b)` lowered natively to `(a + b)` over int64 / non-nil *int64 operands has Go type int64
+        if ((node?.kind === SyntaxKind.CallExpression) && !(printedText ?? '').trim().startsWith('this.Sum(')
+            && this.go92g7IsBaseSum(node) && ((this.goInt64SumOperands(node) !== undefined) || (this.go93g4PointerOperands(node) !== undefined))) { return 'int64'; }
         const goType = this.goTypeOfInitializer(node, printedText);
         return ('string' === goType || 'int' === goType || 'int64' === goType || 'float64' === goType) ? goType : undefined;
     }
@@ -22232,7 +22262,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         if (this.goIsNumericConstant(node)) { return this.goNumericLiteralKind(node); }
         if (node.kind === SyntaxKind.ParenthesizedExpression) { return this.goOperandNumericKind(node.expression, this.printNode(node.expression, 0)); }
-        const goType = this.goTypeOfInitializer(node, printedText);
+        const goType = this.goTypeOfInitializer(node, printedText) ?? this.goStringCallStaticType(node, printedText);
         return (goType !== undefined && GO_NUMERIC_KINDS.indexOf(goType) >= 0) ? goType : undefined;
     }
 
@@ -26913,7 +26943,7 @@ ${tryBodyBlock}
     go92g7Int64Operands(call): Node[] | undefined {
         if ((call?.kind !== SyntaxKind.CallExpression) || (call.arguments?.length !== 2)) { return undefined; }
         const kinds = call.arguments.map((operand) => {
-            if ((operand.kind === SyntaxKind.SpreadElement) || ((operand.kind === SyntaxKind.NumericLiteral) && !this.goLiteralFitsKind(operand, 'int'))) { return undefined; }
+            if ((operand.kind === SyntaxKind.SpreadElement) || ((operand.kind === SyntaxKind.NumericLiteral) && !Number.isSafeInteger(this.goNumericConstantValue(operand)))) { return undefined; }
             return this.goOperandStaticType(operand, this.goWithExprDepth(this.goExprDepth + 1, () => this.printNode(operand, 0)));
         });
         const ok = kinds.every((k) => (k === 'int64') || (k === 'const-int')) && kinds.includes('int64');
@@ -35562,9 +35592,19 @@ function goIntSeedIntValue (goTranspiler, node, declaration): boolean {
 // the 92g7 / 93g4 printers print it native once the written local is declared int64
 function goIntSeedSumOfInts (goTranspiler, call, declaration): boolean {
     if ((call.arguments?.length !== 2) || (!goTranspiler.go92g7IsBaseSum (call) && (goTranspiler.go92g7MinMaxName (call) === undefined))) { return false; }
+    // `Math.min/max (x, int64|safeLit)` or `this.sum (x, int64|safeLit)` on the int64 local x being decided:
+    // go92g7Int64Operands prints it native once x settles to int64
+    const selfPair = (() => {
+        const [ a, b ] = call.arguments.map (goUnwrapTypeExpr);
+        const isSelf = (n) => (n?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclarationOfIdentifier (n) === declaration);
+        const isInt64Partner = (n) => ((n?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclarationOfIdentifier (n) !== declaration)
+            && ((goTranspiler.goDeclaredTypeOfIdentifier (n) === 'int64') || (goTranspiler.goDeclaredParamStaticType (n) === 'int64')))
+            || (goTranspiler.goIsNumericConstant (n) && (goTranspiler.goNumericLiteralKind (n) === 'int') && Number.isSafeInteger (goTranspiler.goNumericConstantValue (n)));
+        return (isSelf (a) && isInt64Partner (b)) || (isSelf (b) && isInt64Partner (a));
+    })();
     // only the operand shapes the 92g7 / 93g4 printers print native
     if ((goTranspiler.go92g7Int64Operands (call) === undefined) && (goTranspiler.go93g4PointerOperands (call, declaration) === undefined)
-        && !h38p09SelfStepMinMax (goTranspiler, call, declaration)) { return false; }
+        && !h38p09SelfStepMinMax (goTranspiler, call, declaration) && !selfPair) { return false; }
     return call.arguments.every ((operand) => {
         const inner = goUnwrapTypeExpr (operand);
         if ((inner?.kind === SyntaxKind.Identifier) && (goTranspiler.goDeclarationOfIdentifier (inner) !== declaration)
@@ -35630,6 +35670,10 @@ function goIntSeedInt64Local (goTranspiler, declaration): boolean {
         }
     }
     goIntSeedVerdicts.set (declaration, ok);
+    if (ok) {
+        goTranspiler.goDeclaredTypeCache.delete (declaration);
+        goTranspiler.goLocalStaticTypeCache.delete (declaration);
+    }
     h26g02ForgetDeferredVerdict (declaration, ok);
     return ok;
 }
