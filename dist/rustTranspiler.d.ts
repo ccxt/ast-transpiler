@@ -2165,6 +2165,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustDictInOp(key: Node, obj: Node): string | undefined;
     /** True when `expr` is a plain Dict local (boxed or typed IndexMap) whose every top-level `expr[k] = rhs` assigns `{}` (never an array). */
     rustPlainDictValuesAreDicts(expr: any): boolean;
+    /** True when `expr` is statically typed as an array (`T[]`, `Array<T>`, `List`), where `'k' in expr` must not assume a dict. */
+    rustExprIsArrayType(expr: any): boolean;
     /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
     rustDictParamProof(ident: any): boolean;
     /** True when `ident` is proven not an array at `atNode` via `!Array.isArray(x)` in an enclosing `if`/left `&&`, or a preceding early-exit `if (... || Array.isArray(x)) { return/throw }`. */

@@ -16146,7 +16146,8 @@ export class RustTranspiler extends BaseTranspiler {
                     // a dict-callee local keeps `in_op` for a computed key (content unproven); literal keys only
                     if (proof !== 'plain' && !isStringLiteral(key)) return undefined;
                     guarded = true;
-                } else if (!this.isTestSource(obj) && isStringLiteral(key) && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj))) {
+                } else if (!this.isTestSource(obj) && isStringLiteral(key) && !/^\d+$/.test(String(key.text)) && !RustTranspiler.RUST_DICT_MARKER_KEYS.test(String(key.text))
+                    && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj) || ((this as any).rustNonNumericInIsDict && !this.rustExprIsArrayType(recv)))) {
                     guarded = false;
                 } else {
                     return undefined;
@@ -16191,6 +16192,20 @@ export class RustTranspiler extends BaseTranspiler {
             }
         }
         return sawEntryWrite;
+    }
+    /** True when `expr` is statically typed as an array (`T[]`, `Array<T>`, `List`), where `'k' in expr` must not assume a dict. */
+    rustExprIsArrayType(expr: any): boolean {
+        try {
+            const checker = this.getChecker();
+            if (checker === undefined) return false;
+            const t = checker.getTypeAtLocation(expr);
+            if (t === undefined) return false;
+            if (typeof checker.isArrayType === 'function' && checker.isArrayType(t)) return true;
+            const s = checker.typeToString(t);
+            return s.endsWith('[]') || s.startsWith('Array<') || s === 'List';
+        } catch (e) {
+            return false;
+        }
     }
     /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
     rustDictParamProof(ident: any): boolean {

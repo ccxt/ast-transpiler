@@ -8232,8 +8232,13 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         literalKind: this.csharpIntegerLiteralKind(negative ? signed : inner)
       };
     }
-    if (!negative && isCallExpression4(inner) && inner.expression?.expression?.kind === SyntaxKind4.ThisKeyword && inner.expression?.name?.text === "parseToInt" && this.csharpCalleeResolves(inner) && this.csharpParseToIntBindsTypedTwin(inner)) {
-      return { kind: "Int64", node: inner, literal: false, zero: false, small: false };
+    if (!negative && isCallExpression4(inner) && inner.expression?.expression?.kind === SyntaxKind4.ThisKeyword && inner.expression?.name?.text === "parseToInt" && this.csharpCalleeResolves(inner)) {
+      if (this.csharpParseToIntBindsTypedTwin(inner)) {
+        return { kind: "Int64", node: inner, literal: false, zero: false, small: false };
+      }
+      if (this.csharpParseToIntDivNeverNull(inner)) {
+        return { kind: "Int64?", node: inner, literal: false, zero: false, small: false, nonNullCall: true };
+      }
     }
     if (!negative && this.csharpIsPreciseDecimalsRead(inner) && this.csharpOperandIsPlainNumber(inner)) {
       return { kind: "Int64", node: inner, literal: false, zero: false, small: false };
@@ -8326,14 +8331,29 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     while (up !== void 0 && isParenthesizedExpression(up)) {
       up = up.parent;
     }
+    if (isCallExpression4(up) && isPropertyAccessExpression2(up.expression) && up.expression.expression.kind === SyntaxKind4.ThisKeyword && up.expression.name.text === "parseToInt" && up.arguments.length === 1) {
+      up = up.parent;
+      while (up !== void 0 && isParenthesizedExpression(up)) {
+        up = up.parent;
+      }
+    }
+    if (isConditionalExpression2(up) && up.condition !== node) {
+      up = up.parent;
+      while (up !== void 0 && isParenthesizedExpression(up)) {
+        up = up.parent;
+      }
+    }
     const isInt64NullableAssign = isBinaryExpression2(up) && up.operatorToken.kind === SyntaxKind4.EqualsToken && isIdentifier2(up.left) && (this.csharpExpressionTypeOf(up.left) ?? this.csharpDeclaredLocalValueType(up.left)) === "Int64?";
-    if (isInt64NullableAssign && l === void 0 !== (r === void 0)) {
-      const nullSide = l === void 0 ? left : right;
-      const nullPrinted = l === void 0 ? parsedArg1.trim() : parsedArg2.trim();
-      if (!nullSide.shifted && nullSide.kind === "Int64?" && isIdentifier2(nullSide.node)) {
-        const lExpr = l === void 0 ? `${nullPrinted}.Value` : l;
-        const rExpr = r === void 0 ? `${nullPrinted}.Value` : r;
-        return `((${nullPrinted} != null) ? (Int64?)Math.${name}(${lExpr}, ${rExpr}) : null)`;
+    if (isInt64NullableAssign) {
+      const nullLeft = l === void 0 && !left.shifted && left.kind === "Int64?" && isIdentifier2(left.node);
+      const nullRight = r === void 0 && !right.shifted && right.kind === "Int64?" && isIdentifier2(right.node);
+      if ((l !== void 0 || nullLeft) && (r !== void 0 || nullRight) && (nullLeft || nullRight)) {
+        const lp = parsedArg1.trim();
+        const rp = parsedArg2.trim();
+        const cond = nullLeft && nullRight ? `(${lp} != null) && (${rp} != null)` : nullLeft ? `${lp} != null` : `${rp} != null`;
+        const lExpr = nullLeft ? `${lp}.Value` : l;
+        const rExpr = nullRight ? `${rp}.Value` : r;
+        return `((${cond}) ? (Int64?)Math.${name}(${lExpr}, ${rExpr}) : null)`;
       }
     }
     return void 0;
@@ -8376,17 +8396,40 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (operand.kind !== "Int64?") {
       return printed;
     }
+    if (operand.nonNullCall) {
+      return `${printed}.GetValueOrDefault()`;
+    }
     let symbol;
     try {
       symbol = this.getChecker().getSymbolAtLocation(operand.node);
     } catch (e) {
       return void 0;
     }
-    const guardedClean = symbol !== void 0 && (this.csharpIntegralTestedInExpression(call, symbol) || !this.csharpIntegralBindingIsRewritten(symbol) && this.csharpNullGuardAdmitsRead(call, operand.node) || this.csharpRewrittenIntegralGuardAdmitsRead(call, operand.node, symbol));
+    const guardedClean = symbol !== void 0 && (this.csharpIntegralTestedInExpression(call, symbol) || this.csharpTernaryNullGuardAdmitsRead(call, symbol) || !this.csharpIntegralBindingIsRewritten(symbol) && this.csharpNullGuardAdmitsRead(call, operand.node) || this.csharpRewrittenIntegralGuardAdmitsRead(call, operand.node, symbol));
     if (!guardedClean) {
       return symbol !== void 0 && this.csharpInt64BindingNeverNull(symbol) ? `${printed}.GetValueOrDefault()` : void 0;
     }
     return `${printed}.Value`;
+  }
+  // `x` is non-null inside the false arm of `(x == null) ? a : b` or the true arm of `(x != null) ? a : b`
+  csharpTernaryNullGuardAdmitsRead(node, symbol) {
+    let cur = node;
+    while (cur !== void 0) {
+      const p = cur.parent;
+      if (p === void 0 || this.csharpIsFunctionLike(p)) {
+        return false;
+      }
+      if (isConditionalExpression2(p)) {
+        if (cur === p.whenFalse && this.csharpTestIsNonNullCheck(p.condition, symbol, false)) {
+          return true;
+        }
+        if (cur === p.whenTrue && this.csharpTestIsNonNullCheck(p.condition, symbol, true)) {
+          return true;
+        }
+      }
+      cur = p;
+    }
+    return false;
   }
   // rewritten `Int64?` local read inside an enclosing `if (x != null)` / `else` of `if (x == null)` with no write to `x` between the guard and this statement
   csharpRewrittenIntegralGuardAdmitsRead(call, operandNode, symbol) {
@@ -8428,7 +8471,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     let init = declaration?.initializer;
-    if (declaration?.kind === SyntaxKind4.VariableDeclaration && this.csharpIsIntegerLiteral(init) && this.csharpInt64WritesNeverNull(symbol, declaration)) {
+    if (declaration?.kind === SyntaxKind4.VariableDeclaration && (this.csharpIsIntegerLiteral(init) || this.csharpParseToIntLiteral(init)) && this.csharpInt64WritesNeverNull(symbol, declaration)) {
       return true;
     }
     if (declaration?.kind === SyntaxKind4.Parameter && declaration.dotDotDotToken === void 0 && init !== void 0 && isNumericLiteral3(init) && this.csharpIsIntegerLiteral(init) && this.csharpInt64WritesNeverNull(symbol, declaration))
@@ -8442,6 +8485,51 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (this.csharpParseToIntNeverNull(init)) {
       return true;
     }
+    if (isIdentifier2(init) && this.csharpIntegralOperand(init)?.kind === "Int64?" && this.csharpNullGuardAdmitsRead(declaration, init)) {
+      return true;
+    }
+    if (isConditionalExpression2(init)) {
+      const armNeverNull = (arm, isFalseArm) => {
+        while (arm !== void 0 && isParenthesizedExpression(arm)) {
+          arm = arm.expression;
+        }
+        if (this.csharpIsIntegerLiteral(arm) || this.csharpParseToIntNeverNull(arm)) {
+          return true;
+        }
+        if (isIdentifier2(arm)) {
+          let armSym;
+          try {
+            armSym = this.getChecker().getSymbolAtLocation(arm);
+          } catch (e) {
+            return false;
+          }
+          if (armSym !== void 0 && armSym !== symbol && this.csharpInt64BindingNeverNull(armSym)) {
+            return true;
+          }
+        }
+        if (isCallExpression4(arm) && isPropertyAccessExpression2(arm.expression) && arm.expression.expression.kind === SyntaxKind4.ThisKeyword && arm.expression.name.text === "parseToInt" && arm.arguments.length === 1) {
+          let a0 = arm.arguments[0];
+          while (a0 !== void 0 && isParenthesizedExpression(a0)) {
+            a0 = a0.expression;
+          }
+          if (isIdentifier2(a0)) {
+            let aSym;
+            try {
+              aSym = this.getChecker().getSymbolAtLocation(a0);
+            } catch (e) {
+              return false;
+            }
+            if (aSym !== void 0 && this.csharpTestIsNonNullCheck(init.condition, aSym, !isFalseArm)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+      if (armNeverNull(init.whenTrue, false) && armNeverNull(init.whenFalse, true)) {
+        return true;
+      }
+    }
     const callee = isCallExpression4(init) ? init.expression : void 0;
     const position = callee !== void 0 && isPropertyAccessExpression2(callee) && callee.expression.kind === SyntaxKind4.ThisKeyword ? { "safeInteger": 2, "safeInteger2": 3, "safeIntegerN": 2 }[callee.name.text] : void 0;
     if (position === void 0 || init.arguments.length !== position + 1) {
@@ -8453,7 +8541,60 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     return isNumericLiteral3(fallback) && /^\d{1,15}$/.test(fallback.text);
   }
-  // `this.parseToInt (x)` that binds the non-null Int64 twin: x a typed number, or a ternary whose arms are each an integer literal, a typed number or a Math.min/max the printer pri...
+  csharpParseToIntLiteral(node) {
+    while (node !== void 0 && isParenthesizedExpression(node)) {
+      node = node.expression;
+    }
+    if (!isCallExpression4(node) || !isPropertyAccessExpression2(node.expression) || node.expression.expression.kind !== SyntaxKind4.ThisKeyword || node.expression.name.text !== "parseToInt" || node.arguments.length !== 1) {
+      return false;
+    }
+    return this.csharpIsIntegerLiteral(node.arguments[0]);
+  }
+  // `this.parseToInt (a / <non-zero int lit>)` where `a` is non-null integral (e.g. `(months + 11) / 12` after `if (months <= 12) return`)
+  csharpParseToIntDivNeverNull(call) {
+    const callee = isCallExpression4(call) ? call.expression : void 0;
+    if (callee === void 0 || !isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind4.ThisKeyword || callee.name.text !== "parseToInt" || call.arguments.length !== 1 || !this.csharpCalleeResolves(call))
+      return false;
+    let arg = call.arguments[0];
+    while (isParenthesizedExpression(arg)) {
+      arg = arg.expression;
+    }
+    if (!isBinaryExpression2(arg) || arg.operatorToken.kind !== SyntaxKind4.SlashToken) {
+      return false;
+    }
+    let rhs = arg.right;
+    while (isParenthesizedExpression(rhs)) {
+      rhs = rhs.expression;
+    }
+    if (!this.csharpIsIntegerLiteral(rhs) || Number(rhs.getText()) === 0) {
+      return false;
+    }
+    return this.csharpExprIsNonNullIntegral(call, arg.left);
+  }
+  // true when `expr` evaluates to a non-null integer at `atNode` (literal, int/Int64, guarded/never-null Int64?, or `+ - *` over those)
+  csharpExprIsNonNullIntegral(atNode, expr) {
+    while (expr !== void 0 && isParenthesizedExpression(expr)) {
+      expr = expr.expression;
+    }
+    if (expr === void 0) {
+      return false;
+    }
+    if (this.csharpIsIntegerLiteral(expr)) {
+      return true;
+    }
+    if (isBinaryExpression2(expr) && [SyntaxKind4.PlusToken, SyntaxKind4.MinusToken, SyntaxKind4.AsteriskToken].includes(expr.operatorToken.kind)) {
+      return this.csharpExprIsNonNullIntegral(atNode, expr.left) && this.csharpExprIsNonNullIntegral(atNode, expr.right);
+    }
+    const op = this.csharpIntegralOperand(expr);
+    if (op === void 0) {
+      return false;
+    }
+    if (op.kind === "int" || op.kind === "Int64") {
+      return true;
+    }
+    return this.csharpIntegralNonNullText(atNode, op, "v") !== void 0;
+  }
+  // `this.parseToInt (x)` that binds the non-null Int64 twin: x a typed number, `this.sum(...)` of non-null integrals, `this.handleOption(..., <int lit>)`, or a ternary of longs
   csharpParseToIntNeverNull(init) {
     const callee = isCallExpression4(init) ? init.expression : void 0;
     if (callee === void 0 || !isPropertyAccessExpression2(callee) || callee.expression.kind !== SyntaxKind4.ThisKeyword || callee.name.text !== "parseToInt" || init.arguments.length !== 1 || !this.csharpCalleeResolves(init))
@@ -8464,6 +8605,18 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     let arg = init.arguments[0];
     while (isParenthesizedExpression(arg)) {
       arg = arg.expression;
+    }
+    if (this.csharpIsIntegerLiteral(arg)) {
+      return true;
+    }
+    if (isCallExpression4(arg) && isPropertyAccessExpression2(arg.expression) && arg.expression.expression.kind === SyntaxKind4.ThisKeyword) {
+      const m = arg.expression.name.text;
+      if (m === "handleOption" && arg.arguments.length === 3 && this.csharpIsIntegerLiteral(arg.arguments[2])) {
+        return true;
+      }
+      if (m === "sum" && arg.arguments.length >= 2 && arg.arguments.every((a) => this.csharpExprIsNonNullIntegral(init, a))) {
+        return true;
+      }
     }
     if (!isConditionalExpression2(arg)) {
       return false;
@@ -8512,7 +8665,43 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
           while (value !== void 0 && isParenthesizedExpression(value)) {
             value = value.expression;
           }
-          sound = value !== void 0 && (this.csharpIsIntegerLiteral(value) || isIdentifier2(value) && this.csharpIntegralOperand(value)?.kind === "Int64?" && this.csharpNullGuardAdmitsRead(write, value));
+          const isNonNullWriteVal = (v) => {
+            if (v === void 0) {
+              return false;
+            }
+            if (this.csharpIsIntegerLiteral(v)) {
+              return true;
+            }
+            if (isIdentifier2(v) && this.csharpIntegralOperand(v)?.kind === "Int64?" && this.csharpNullGuardAdmitsRead(write, v)) {
+              return true;
+            }
+            if (isCallExpression4(v) && isPropertyAccessExpression2(v.expression) && v.expression.expression.kind === SyntaxKind4.ThisKeyword && v.expression.name.text === "parseToInt" && v.arguments.length === 1) {
+              let a0 = v.arguments[0];
+              while (a0 !== void 0 && isParenthesizedExpression(a0)) {
+                a0 = a0.expression;
+              }
+              if (this.csharpIsIntegerLiteral(a0)) {
+                return true;
+              }
+              if (isIdentifier2(a0) && this.csharpIntegralOperand(a0)?.kind === "Int64?" && this.csharpNullGuardAdmitsRead(write, a0)) {
+                return true;
+              }
+              if (isCallExpression4(a0) && isPropertyAccessExpression2(a0.expression) && a0.expression.expression?.getText?.() === "Math" && ["min", "max"].includes(a0.expression.name?.text) && a0.arguments.length === 2) {
+                return a0.arguments.every((mArg) => {
+                  let ma = mArg;
+                  while (ma !== void 0 && isParenthesizedExpression(ma)) {
+                    ma = ma.expression;
+                  }
+                  if (isIdentifier2(ma) && this.csharpSameBinding(ma, symbol)) {
+                    return true;
+                  }
+                  return this.csharpExprIsNonNullIntegral(a0, ma);
+                });
+              }
+            }
+            return false;
+          };
+          sound = isNonNullWriteVal(value);
         } else if (target.parent !== void 0 && (isArrayLiteralExpression2(target.parent) || isObjectLiteralExpression2(target.parent))) {
           sound = !this.csharpIsWriteTarget(target.parent);
         }
@@ -8638,7 +8827,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     return symbol !== void 0 && this.csharpInt64BindingNeverNull(symbol);
   }
-  // `x = Math.min/max (a, b)` on an `Int64?` local where every operand (including `x` itself while being resolved) is an integer literal or a guarded non-null `int`/`Int64`/`Int64?`
+  // `x = Math.min/max (a, b)` on an `Int64?` local where every operand (including `x` itself while being resolved) is an integer literal or an `int`/`Int64`/`Int64?` identifier (nullable operands emit `(cond ? (Int64?)Math.Min(...) : null)`)
   csharpGuardedMinMaxWriteIsNative(right) {
     let call = right;
     while (call !== void 0 && isParenthesizedExpression(call)) {
@@ -8649,6 +8838,13 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     }
     const assign = right?.parent;
     const lhsSym = isBinaryExpression2(assign) && assign.operatorToken.kind === SyntaxKind4.EqualsToken && isIdentifier2(assign.left) ? this.checkerOrUndefined()?.getSymbolAtLocation(assign.left) : void 0;
+    let lhsInit;
+    try {
+      lhsInit = lhsSym?.valueDeclaration?.resolve()?.initializer;
+    } catch (e) {
+      lhsInit = void 0;
+    }
+    const lhsNeverNullInit = this.csharpIsIntegerLiteral(lhsInit) || this.csharpParseToIntLiteral(lhsInit);
     return call.arguments.every((arg) => {
       let inner = arg;
       while (inner !== void 0 && isParenthesizedExpression(inner)) {
@@ -8658,10 +8854,13 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
         return true;
       }
       if (lhsSym !== void 0 && isIdentifier2(inner) && this.csharpSameBinding(inner, lhsSym)) {
-        return this.csharpRewrittenIntegralGuardAdmitsRead(call, inner, lhsSym);
+        return lhsNeverNullInit || this.csharpRewrittenIntegralGuardAdmitsRead(call, inner, lhsSym);
       }
       const op = this.csharpIntegralMinMaxOperand(arg);
-      return op !== void 0 && this.csharpIntegralNonNullText(call, op, "v") !== void 0;
+      if (op === void 0) {
+        return false;
+      }
+      return this.csharpIntegralNonNullText(call, op, "v") !== void 0 || !op.shifted && op.kind === "Int64?" && isIdentifier2(op.node);
     });
   }
   // any write to the binding in its function (destructuring targets included) voids a dominance proof
@@ -94531,7 +94730,7 @@ ${ind}let ${view}: &${map} = &${arc};
           if (proof !== "plain" && !isStringLiteral3(key))
             return void 0;
           guarded = true;
-        } else if (!this.isTestSource(obj) && isStringLiteral3(key) && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj))) {
+        } else if (!this.isTestSource(obj) && isStringLiteral3(key) && !/^\d+$/.test(String(key.text)) && !_RustTranspiler.RUST_DICT_MARKER_KEYS.test(String(key.text)) && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj) || this.rustNonNumericInIsDict && !this.rustExprIsArrayType(recv))) {
           guarded = false;
         } else {
           return void 0;
@@ -94588,6 +94787,23 @@ ${ind}let ${view}: &${map} = &${arc};
       }
     }
     return sawEntryWrite;
+  }
+  /** True when `expr` is statically typed as an array (`T[]`, `Array<T>`, `List`), where `'k' in expr` must not assume a dict. */
+  rustExprIsArrayType(expr) {
+    try {
+      const checker = this.getChecker();
+      if (checker === void 0)
+        return false;
+      const t = checker.getTypeAtLocation(expr);
+      if (t === void 0)
+        return false;
+      if (typeof checker.isArrayType === "function" && checker.isArrayType(t))
+        return true;
+      const s = checker.typeToString(t);
+      return s.endsWith("[]") || s.startsWith("Array<") || s === "List";
+    } catch (e) {
+      return false;
+    }
   }
   /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
   rustDictParamProof(ident) {
