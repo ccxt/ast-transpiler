@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Transpiler } from '../src/transpiler';
 
 test('h56r5l: C# const string[] accumulator in Promise<string[]> method prints List<string>', () => {
@@ -57,4 +60,34 @@ class Exchange {
     expect(nonStrRet).not.toContain('List<string>');
     const indexed = out.slice(out.indexOf('indexedLocal'));
     expect(indexed).not.toContain('List<string>');
+});
+
+test('h56r5l: C# Int64? local passed to required Int64 call-site prints (x ?? 0L)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'h56r5l-'));
+    try {
+        const file = path.join(dir, 'ts', 'src', 'polymarket.ts');
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, `
+class Exchange {
+    safeInteger (a: any, b: any): number | undefined { return undefined; }
+    async setLeverage (leverage: number): Promise<any> { return leverage; }
+    async run (v: any): Promise<any> {
+        const leverageInt = this.safeInteger (v, 'leverage');
+        return await this.setLeverage (leverageInt);
+    }
+}
+`);
+        const transpiler = new Transpiler({
+            verbose: false,
+            csharp: {
+                callSiteArgTypes: { setLeverage: { 0: 'Int64' } },
+                parser: { NUM_LINES_END_FILE: 0 },
+            },
+        } as any);
+        const out = transpiler.transpileCSharpByPath(file).content;
+        expect(out).toContain('this.setLeverage((leverageInt ?? 0L))');
+        expect(out).not.toContain('ToInt64ArgRequired');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
 });

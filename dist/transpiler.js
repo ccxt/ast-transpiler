@@ -4576,6 +4576,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (nonNull !== void 0) {
         return nonNull;
       }
+      return "(" + text + " ?? 0L)";
     }
     return wanted === "double" && declared === "double?" ? "(" + text + " ?? 0d)" : "";
   }
@@ -10210,11 +10211,14 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     const fn = this.csharpEnclosingFunction(declaration);
-    if (fn?.kind !== SyntaxKind4.MethodDeclaration || fn.body === void 0) {
+    if (fn?.kind !== SyntaxKind4.MethodDeclaration || fn.body === void 0 || fn.name?.kind !== SyntaxKind4.Identifier) {
       return false;
     }
     const retType = fn.type?.getText?.().replace(/\s+/g, "");
     if (retType !== "Promise<string[]>" && retType !== "string[]") {
+      return false;
+    }
+    if (this.csharpTypedCores !== void 0 && this.csharpTypedCoreType(fn, fn.name.text) !== "List<string>") {
       return false;
     }
     const varName = declaration.name.text;

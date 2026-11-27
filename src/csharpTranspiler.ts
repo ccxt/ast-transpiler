@@ -1805,6 +1805,7 @@ export class CSharpTranspiler extends BaseTranspiler {
             if (this.csharpNeverNullInt64Read(operand)) { return text + '.GetValueOrDefault()'; }
             const nonNull = this.csharpIntegralNonNullText(argument, { kind: 'Int64?', node: operand }, text);
             if (nonNull !== undefined) { return nonNull; }
+            return '(' + text + ' ?? 0L)';
         }
         return ((wanted === 'double') && (declared === 'double?')) ? '(' + text + ' ?? 0d)' : '';
     }
@@ -5918,9 +5919,10 @@ export class CSharpTranspiler extends BaseTranspiler {
         const init = this.csharpUnwrapAssertion(declaration.initializer);
         if (!isArrayLiteralExpression(init) || (init.elements.length !== 0)) { return false; }
         const fn = this.csharpEnclosingFunction(declaration);
-        if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined)) { return false; }
+        if ((fn?.kind !== SyntaxKind.MethodDeclaration) || (fn.body === undefined) || (fn.name?.kind !== SyntaxKind.Identifier)) { return false; }
         const retType = fn.type?.getText?.().replace(/\s+/g, '');
         if ((retType !== 'Promise<string[]>') && (retType !== 'string[]')) { return false; }
+        if ((this.csharpTypedCores !== undefined) && (this.csharpTypedCoreType(fn, fn.name.text) !== 'List<string>')) { return false; }
         const varName = declaration.name.text;
         let sawReturn = false;
         const bad = this.hasNodeWhere(fn.body, (n: any) => {
