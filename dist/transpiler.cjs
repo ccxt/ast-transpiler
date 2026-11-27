@@ -18394,9 +18394,9 @@ function ccxtGoNilComparesAreThrowGuards(body, param) {
   _optionalChain([body, 'optionalAccess', _2960 => _2960.forEachChild, 'call', _2961 => _2961(visit)]);
   return ok;
 }
-function ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType = "int64") {
+function ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType = "int64", predictionOnly = false) {
   const fn = _optionalChain([param, 'optionalAccess', _2962 => _2962.parent]);
-  if (_optionalChain([param, 'optionalAccess', _2963 => _2963.kind]) !== _ast.SyntaxKind.Parameter || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || _optionalChain([param, 'access', _2964 => _2964.name, 'optionalAccess', _2965 => _2965.kind]) !== _ast.SyntaxKind.Identifier || _optionalChain([fn, 'optionalAccess', _2966 => _2966.kind]) !== _ast.SyntaxKind.MethodDeclaration || fn.body === void 0 || _optionalChain([fn, 'access', _2967 => _2967.name, 'optionalAccess', _2968 => _2968.kind]) !== _ast.SyntaxKind.Identifier || !Object.prototype.hasOwnProperty.call(table, fn.name.text) || !table[fn.name.text].includes(fn.parameters.indexOf(param))) {
+  if (_optionalChain([param, 'optionalAccess', _2963 => _2963.kind]) !== _ast.SyntaxKind.Parameter || param.initializer !== void 0 || param.dotDotDotToken !== void 0 || _optionalChain([param, 'access', _2964 => _2964.name, 'optionalAccess', _2965 => _2965.kind]) !== _ast.SyntaxKind.Identifier || _optionalChain([fn, 'optionalAccess', _2966 => _2966.kind]) !== _ast.SyntaxKind.MethodDeclaration || fn.body === void 0 || _optionalChain([fn, 'access', _2967 => _2967.name, 'optionalAccess', _2968 => _2968.kind]) !== _ast.SyntaxKind.Identifier || predictionOnly && !goTranspiler.goIsPredictionFile(param) || !Object.prototype.hasOwnProperty.call(table, fn.name.text) || !table[fn.name.text].includes(fn.parameters.indexOf(param))) {
     return false;
   }
   const type = _optionalChain([goTranspiler, 'access', _2969 => _2969.checkerOrUndefined, 'optionalCall', _2970 => _2970(), 'optionalAccess', _2971 => _2971.getTypeAtLocation, 'call', _2972 => _2972(param)]);
@@ -18411,21 +18411,24 @@ function ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType = "int
   }
   return true;
 }
-function installCcxtGoUnifiedInt64Params(goTranspiler, table, goType = "int64") {
-  if (table === void 0) {
+function installCcxtGoUnifiedInt64Params(goTranspiler, table, goType = "int64", predictionOnly = false) {
+  if (table === void 0 || Object.keys(table).length === 0) {
     return;
   }
-  if (goType === "int64") {
+  if (!predictionOnly && goType === "int64") {
     goTranspiler.unifiedInt64Params = table;
   }
-  if (goType === "float64") {
+  if (!predictionOnly && goType === "float64") {
     goTranspiler.unifiedFloat64Params = table;
+  }
+  if (predictionOnly && goType === "float64") {
+    goTranspiler.predictionUnifiedFloat64Params = table;
   }
   const verdicts = /* @__PURE__ */ new Map();
   const isTabled = (param) => {
     if (!verdicts.has(param)) {
       verdicts.set(param, false);
-      verdicts.set(param, ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType));
+      verdicts.set(param, ccxtGoIsUnifiedInt64Parameter(goTranspiler, table, param, goType, predictionOnly));
     }
     return verdicts.get(param);
   };
@@ -18600,6 +18603,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
   }
   installCcxtGoUnifiedInt64Params(goTranspiler, unifiedInt64Params);
   installCcxtGoUnifiedInt64Params(goTranspiler, _nullishCoalesce(unifiedFloat64Params, () => ( goTranspiler.unifiedFloat64Params)), "float64");
+  installCcxtGoUnifiedInt64Params(goTranspiler, goTranspiler.predictionUnifiedFloat64Params, "float64", true);
   installStringPtrParams(goTranspiler);
   goInstAround(goTranspiler, "goNativeParameterTypeOf", function(upstreamOf, param) {
     return _nullishCoalesce(_nullishCoalesce(_nullishCoalesce(upstreamOf.call(this, param), () => ( (goStringPtrParamProven(this, param) ? "*string" : void 0))), () => ( (goStringValueParamProven(this, param) ? "string" : void 0))), () => ( (goFloat64PtrParamProven(this, param) ? "*float64" : void 0)));
@@ -27409,6 +27413,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedNullableStringParams = {};
     // prediction-tier only mirror of unifiedStringParams (PredictionExchange and ts/src/prediction/*.ts)
     this.predictionUnifiedStringParams = {};
+    this.predictionUnifiedFloat64Params = {};
     this.unifiedFloat64Params = void 0;
     // `<class>.<method>` -> indexes of required `string` params of an exchange-local method that
     this.uncalledStringParams = {};
@@ -27683,6 +27688,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedNullableInt64Params = _nullishCoalesce(config["unifiedNullableInt64Params"], () => ( {}));
     this.unifiedNullableStringParams = _nullishCoalesce(config["unifiedNullableStringParams"], () => ( {}));
     this.predictionUnifiedStringParams = _nullishCoalesce(config["predictionUnifiedStringParams"], () => ( {}));
+    this.predictionUnifiedFloat64Params = _nullishCoalesce(config["predictionUnifiedFloat64Params"], () => ( {}));
     this.unifiedFloat64Params = config["unifiedFloat64Params"];
     this.uncalledStringParams = _nullishCoalesce(config["uncalledStringParams"], () => ( {}));
     this.goHandWrittenBaseMethods = _nullishCoalesce(config["handWrittenBaseMethods"], () => ( []));
@@ -34842,17 +34848,20 @@ ${iden}}`;
       return this.goFormatUnifiedNumericArg(name, i, a, printed);
     }).join(", ");
   }
-  goUnifiedNumericSlotType(name, index) {
+  goUnifiedNumericSlotType(name, index, node) {
     if (this.unifiedInt64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name) && this.unifiedInt64Params[name].includes(index)) {
       return "int64";
     }
     if (this.unifiedFloat64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name) && this.unifiedFloat64Params[name].includes(index)) {
       return "float64";
     }
+    if (node !== void 0 && this.goIsPredictionFile(node) && Object.prototype.hasOwnProperty.call(_nullishCoalesce(this.predictionUnifiedFloat64Params, () => ( {})), name) && this.predictionUnifiedFloat64Params[name].includes(index)) {
+      return "float64";
+    }
     return void 0;
   }
   goFormatUnifiedNumericArg(name, index, arg, printed) {
-    const slot = this.goUnifiedNumericSlotType(name, index);
+    const slot = this.goUnifiedNumericSlotType(name, index, arg);
     if (slot === void 0) {
       return printed;
     }
@@ -34900,7 +34909,8 @@ ${iden}}`;
     const name = _optionalChain([callee, 'optionalAccess', _6682 => _6682.kind]) === _ast.SyntaxKind.PropertyAccessExpression ? _optionalChain([callee, 'access', _6683 => _6683.name, 'optionalAccess', _6684 => _6684.text]) : void 0;
     const hasInt = this.unifiedInt64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedInt64Params, name);
     const hasFloat = this.unifiedFloat64Params !== void 0 && Object.prototype.hasOwnProperty.call(this.unifiedFloat64Params, name);
-    if (typeof name !== "string" || !hasInt && !hasFloat) {
+    const hasPredFloat = this.goIsPredictionFile(node) && Object.prototype.hasOwnProperty.call(_nullishCoalesce(this.predictionUnifiedFloat64Params, () => ( {})), name);
+    if (typeof name !== "string" || !hasInt && !hasFloat && !hasPredFloat) {
       return void 0;
     }
     const args = _nullishCoalesce(node.arguments, () => ( []));

@@ -751,6 +751,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     predictionUnifiedStringParams: {
         [method: string]: number[];
     };
+    predictionUnifiedFloat64Params: {
+        [method: string]: number[];
+    };
     unifiedFloat64Params: {
         [method: string]: number[];
     } | undefined;
@@ -1336,7 +1339,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
     goSliceCallArgs(node: any, identation: any): string | undefined;
-    goUnifiedNumericSlotType(name: string, index: number): 'int64' | 'float64' | undefined;
+    goUnifiedNumericSlotType(name: string, index: number, node?: any): 'int64' | 'float64' | undefined;
     goFormatUnifiedNumericArg(name: string, index: number, arg: any, printed: string): string;
     goUnifiedNumericCallArgs(node: any, identation: any): string | undefined;
     goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
