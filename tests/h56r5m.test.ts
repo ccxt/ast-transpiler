@@ -38,19 +38,20 @@ class Exchange extends Base {
         return undefined;
     }
     testDivAndNullableAssign (a: any) {
-        const months = this.safeInteger (a, 'm');
-        if ((months === undefined) || (months <= 12)) {
+        const total = this.safeInteger (a, 't');
+        const months = this.parseToInt (total / 2592000);
+        if (months <= 12) {
             return 1;
         }
         const years = Math.min (this.parseToInt ((months + 11) / 12), 15);
         let p = this.parseToInt (0);
         const dec = this.safeInteger (a, 'd');
         p = Math.min (dec, p);
-        return years;
+        return this.parseToInt (Math.min (dec, p));
     }
 }
 `;
-    const int64Names = new Set(['maxSpotLimit', 'maxLimit', 'limitResolved', 'capped', 'endByLimit', 'p']);
+    const int64Names = new Set(['maxSpotLimit', 'maxLimit', 'limitResolved', 'capped', 'endByLimit', 'months', 'p']);
     const transpiler = new Transpiler({ verbose: false });
     transpiler.csharpTranspiler.csharpExpressionTypeResolver = (node: any) => {
         if (node?.expression?.name?.text === 'safeInteger') return 'Int64?';
