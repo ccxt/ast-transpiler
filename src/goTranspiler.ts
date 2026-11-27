@@ -5459,7 +5459,7 @@ export function installCcxtGoLocalTypes (goTranspiler, unifiedInt64Params = unde
             const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
             return args.map ((a, i) => {
                 const printed = flat ? this.printNode (a, 0) : this.goWithExprDepth (depth, () => this.printNode (a, identation)).trim ();
-                if (!this.goIsUnifiedStringParameter (name, i, node) || (this.goPrintedArgType (a) === 'string')) { return printed; }
+                if (!this.goIsUnifiedStringParameter (name, i, node) || (this.goPrintedArgType (a) === 'string')) { return this.goFormatUnifiedNumericArg (name, i, a, printed); }
                 return (this.goDerefableStringOperand (a) || ccxtGoEnclosingGuardedStringPointer (this, a)) ? ('*' + printed) : `StringArg(${printed})`;
             }).join (', ');
         };
@@ -19053,7 +19053,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     goFormatUnifiedNumericArg(name: string, index: number, arg, printed: string): string {
         const slot = this.goUnifiedNumericSlotType(name, index);
         if (slot === undefined) { return printed; }
-        const inner = this.goUnwrapParenthesizedNode(arg);
+        let inner = this.goUnwrapParenthesizedNode(arg);
+        while (inner?.kind === SyntaxKind.AsExpression) { inner = this.goUnwrapParenthesizedNode(inner.expression); }
         const raw = this.goUnwrapPrintedParens(printed.trim());
         const declType = (inner?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(inner) : undefined;
         const staticType = this.goOperandStaticType(inner, raw);
@@ -19107,7 +19108,7 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const depth = this.goExprDepth + ((args.length > 1) ? 1 : 0);
         return args.map((a, i) => {
             const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
-            if (!this.goIsUnifiedStringParameter(name, i, node) || (this.goPrintedArgType(a) === 'string')) { return printed; }
+            if (!this.goIsUnifiedStringParameter(name, i, node) || (this.goPrintedArgType(a) === 'string')) { return this.goFormatUnifiedNumericArg(name, i, a, printed); }
             return `StringArg(${printed})`;
         }).join(', ');
     }

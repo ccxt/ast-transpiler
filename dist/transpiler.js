@@ -18593,7 +18593,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
       return args.map((a, i) => {
         const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
         if (!this.goIsUnifiedStringParameter(name, i, node) || this.goPrintedArgType(a) === "string") {
-          return printed;
+          return this.goFormatUnifiedNumericArg(name, i, a, printed);
         }
         return this.goDerefableStringOperand(a) || ccxtGoEnclosingGuardedStringPointer(this, a) ? "*" + printed : `StringArg(${printed})`;
       }).join(", ");
@@ -34857,7 +34857,10 @@ ${iden}}`;
     if (slot === void 0) {
       return printed;
     }
-    const inner = this.goUnwrapParenthesizedNode(arg);
+    let inner = this.goUnwrapParenthesizedNode(arg);
+    while (inner?.kind === SyntaxKind5.AsExpression) {
+      inner = this.goUnwrapParenthesizedNode(inner.expression);
+    }
     const raw = this.goUnwrapPrintedParens(printed.trim());
     const declType = inner?.kind === SyntaxKind5.Identifier ? this.goDeclaredTypeOfIdentifier(inner) : void 0;
     const staticType = this.goOperandStaticType(inner, raw);
@@ -34934,7 +34937,7 @@ ${iden}}`;
     return args.map((a, i) => {
       const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
       if (!this.goIsUnifiedStringParameter(name, i, node) || this.goPrintedArgType(a) === "string") {
-        return printed;
+        return this.goFormatUnifiedNumericArg(name, i, a, printed);
       }
       return `StringArg(${printed})`;
     }).join(", ");

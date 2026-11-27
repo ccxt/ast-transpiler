@@ -46,9 +46,12 @@ export class Demo extends Exchange {
     callNeg (): Dict {
         return this.createOrder ('BTC/USDT', 'market', 'buy', -1);
     }
+    callEdit (symbol: string, type: string, side: string, amount: any = undefined): Dict {
+        return this.createOrder (symbol, type, side, amount as number);
+    }
 }
 `);
-        const t = new Transpiler ({ go: { useTypeScriptChecker: true, unifiedFloat64Params: { createOrder: [ 3 ] } } });
+        const t = new Transpiler ({ go: { useTypeScriptChecker: true, unifiedStringParams: { createOrder: [ 0, 1, 2 ] }, unifiedFloat64Params: { createOrder: [ 3 ] } } });
         installCcxtGoLocalTypes (t.goTranspiler, undefined, { createOrder: [ 3 ] });
         const out = t.transpileGoByPath (file).content;
         expect (out).toContain ('var marketId *string = nil');
@@ -57,6 +60,7 @@ export class Demo extends Exchange {
         expect (out).toContain ('strings.ToUpper(*marketId)');
         expect (out).not.toMatch (/(?<![.\w])ToUpper\(/);
         expect (out).toContain ('this.CreateOrder("BTC/USDT", "market", "buy", float64(-1))');
+        expect (out).toContain ('this.CreateOrder(StringArg(symbol), StringArg(typeVar), StringArg(side), Float64Arg(amount))');
         expect (out).not.toContain ('OpNeg(1)');
     });
 });
