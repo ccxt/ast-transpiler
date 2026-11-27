@@ -9200,7 +9200,7 @@ function goStrNilDeclaredJoinType (goTranspiler, declaration) {
                 }
             } else if ((parent?.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === n)
                 && [ 'replace', 'replaceAll', 'trim', 'toUpperCase', 'toLowerCase', 'split', 'startsWith', 'endsWith', 'indexOf' ].includes (parent.name?.text)
-                && (goTranspiler.goHasEnclosingNilGuard (n) || goTranspiler.goInsideNonReboundNilIf (n))) {
+                && (goTranspiler.goHasEnclosingNilGuard (n) || goTranspiler.goHasExitingNilGuard (n) || goTranspiler.goInsideNonReboundNilIf (n))) {
                 // guarded string method on *string dereferences *n natively
             } else if (!goReadRuleAccepts (NIL_DECLARED_READ_RULE, goTranspiler, n)) { unsafe = true; }
         }
@@ -19058,6 +19058,9 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         const declType = (inner?.kind === SyntaxKind.Identifier) ? this.goDeclaredTypeOfIdentifier(inner) : undefined;
         const staticType = this.goOperandStaticType(inner, raw);
         if (slot === 'float64') {
+            if ((inner?.kind === SyntaxKind.PrefixUnaryExpression) && (inner.operator === SyntaxKind.MinusToken) && (inner.operand?.kind === SyntaxKind.NumericLiteral)) {
+                return `float64(-${inner.operand.text})`;
+            }
             if ((staticType === 'float64') || (staticType === 'const-float') || (staticType === 'const-int')) { return printed; }
             if ((staticType === 'int64') || (staticType === 'int') || (declType === 'int64') || (declType === 'int')
                 || ((inner?.kind === SyntaxKind.BinaryExpression) && (inner.operatorToken?.kind === SyntaxKind.PercentToken) && !raw.startsWith('Mod('))) { return `float64(${raw})`; }
@@ -21923,9 +21926,12 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
     }
 
     goTypeofStringAssignMatch(ifStmt): { src: any, target: any } | undefined {
-        if ((ifStmt?.kind !== SyntaxKind.IfStatement) || (ifStmt.elseStatement !== undefined)) { return undefined; }
+        if (ifStmt?.kind !== SyntaxKind.IfStatement) { return undefined; }
         const src = this.goTypeofStringCheck(ifStmt.expression, false);
-        if ((src === undefined) || !this.goIsAwaitedAnyLocal(src)) { return undefined; }
+        if (src === undefined) { return undefined; }
+        const srcDecl: any = this.goValueDecl(src);
+        const isAnyParam = (srcDecl?.kind === SyntaxKind.Parameter) && (this.goDeclaredTypeOfIdentifier(src) === undefined);
+        if (!this.goIsAwaitedAnyLocal(src) && !isAnyParam) { return undefined; }
         const stmts = (ifStmt.thenStatement?.kind === SyntaxKind.Block) ? (ifStmt.thenStatement.statements ?? []) : [ ifStmt.thenStatement ];
         if (stmts.length !== 1) { return undefined; }
         const expr = (stmts[0]?.kind === SyntaxKind.ExpressionStatement) ? stmts[0].expression : undefined;
@@ -21966,7 +21972,11 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
             const srcName = this.printNode(assign.src, 0).trim();
             const targetName = this.printNode(assign.target, 0).trim();
             const tmp = srcName + 'Str';
-            return `${pad}if ${tmp}, ok := ${srcName}.(string); ok {\n${pad}\t${targetName} = &${tmp}\n${pad}}`;
+            const head = `${pad}if ${tmp}, ok := ${srcName}.(string); ok {\n${pad}\t${targetName} = &${tmp}\n${pad}}`;
+            if (node.elseStatement !== undefined) {
+                return `${head} else ${this.printNode(node.elseStatement, identation).trimStart()}`;
+            }
+            return head;
         }
         const early = this.goEarlyExitTypeofStringNextDecl(node);
         if (early !== undefined) {
@@ -22410,6 +22420,23 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         for (let child: any = ident, parent: any = ident.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
             if ((parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement === child)
                 && this.goConditionProvesNonNil(parent.expression, ident) && !this.goLocalIsRebound(child, ident)) { return true; }
+            if (parent.kind === SyntaxKind.Block) {
+                const stmts = Array.from(parent.statements ?? []) as any[];
+                const idx = stmts.findIndex((s) => (s.pos === child.pos) && (s.end === child.end));
+                for (let k = idx - 1; k >= 0; k--) {
+                    const s = stmts[k];
+                    if ((s.kind === SyntaxKind.IfStatement) && (s.elseStatement === undefined)
+                        && this.goNilComparisonOf(this.goUnwrapParenthesizedNode(s.expression), ident, SyntaxKind.EqualsEqualsToken, SyntaxKind.EqualsEqualsEqualsToken)) {
+                        const bodyStmts = (s.thenStatement?.kind === SyntaxKind.Block) ? (s.thenStatement.statements ?? []) : [ s.thenStatement ];
+                        const last = bodyStmts[bodyStmts.length - 1];
+                        if ((last?.kind === SyntaxKind.ReturnStatement) || (last?.kind === SyntaxKind.ThrowStatement)) {
+                            const betweenRebound = stmts.slice(k + 1, idx).some((b) => this.goLocalIsRebound(b, ident));
+                            if (!betweenRebound) { return true; }
+                        }
+                    }
+                    if (this.goLocalIsRebound(s, ident)) { break; }
+                }
+            }
         }
         return false;
     }

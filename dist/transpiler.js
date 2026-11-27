@@ -22762,7 +22762,7 @@ function goStrNilDeclaredJoinType(goTranspiler, declaration) {
             pointerWrites += stored ? 0 : 1;
           }
         }
-      } else if (parent?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === n && ["replace", "replaceAll", "trim", "toUpperCase", "toLowerCase", "split", "startsWith", "endsWith", "indexOf"].includes(parent.name?.text) && (goTranspiler.goHasEnclosingNilGuard(n) || goTranspiler.goInsideNonReboundNilIf(n))) {
+      } else if (parent?.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === n && ["replace", "replaceAll", "trim", "toUpperCase", "toLowerCase", "split", "startsWith", "endsWith", "indexOf"].includes(parent.name?.text) && (goTranspiler.goHasEnclosingNilGuard(n) || goTranspiler.goHasExitingNilGuard(n) || goTranspiler.goInsideNonReboundNilIf(n))) {
       } else if (!goReadRuleAccepts(NIL_DECLARED_READ_RULE, goTranspiler, n)) {
         unsafe = true;
       }
@@ -34862,6 +34862,9 @@ ${iden}}`;
     const declType = inner?.kind === SyntaxKind5.Identifier ? this.goDeclaredTypeOfIdentifier(inner) : void 0;
     const staticType = this.goOperandStaticType(inner, raw);
     if (slot === "float64") {
+      if (inner?.kind === SyntaxKind5.PrefixUnaryExpression && inner.operator === SyntaxKind5.MinusToken && inner.operand?.kind === SyntaxKind5.NumericLiteral) {
+        return `float64(-${inner.operand.text})`;
+      }
       if (staticType === "float64" || staticType === "const-float" || staticType === "const-int") {
         return printed;
       }
@@ -38366,11 +38369,16 @@ ${indent}}`);
     return hasAwait;
   }
   goTypeofStringAssignMatch(ifStmt) {
-    if (ifStmt?.kind !== SyntaxKind5.IfStatement || ifStmt.elseStatement !== void 0) {
+    if (ifStmt?.kind !== SyntaxKind5.IfStatement) {
       return void 0;
     }
     const src = this.goTypeofStringCheck(ifStmt.expression, false);
-    if (src === void 0 || !this.goIsAwaitedAnyLocal(src)) {
+    if (src === void 0) {
+      return void 0;
+    }
+    const srcDecl = this.goValueDecl(src);
+    const isAnyParam = srcDecl?.kind === SyntaxKind5.Parameter && this.goDeclaredTypeOfIdentifier(src) === void 0;
+    if (!this.goIsAwaitedAnyLocal(src) && !isAnyParam) {
       return void 0;
     }
     const stmts = ifStmt.thenStatement?.kind === SyntaxKind5.Block ? ifStmt.thenStatement.statements ?? [] : [ifStmt.thenStatement];
@@ -38419,9 +38427,13 @@ ${indent}}`);
       const srcName = this.printNode(assign.src, 0).trim();
       const targetName = this.printNode(assign.target, 0).trim();
       const tmp = srcName + "Str";
-      return `${pad}if ${tmp}, ok := ${srcName}.(string); ok {
+      const head = `${pad}if ${tmp}, ok := ${srcName}.(string); ok {
 ${pad}	${targetName} = &${tmp}
 ${pad}}`;
+      if (node.elseStatement !== void 0) {
+        return `${head} else ${this.printNode(node.elseStatement, identation).trimStart()}`;
+      }
+      return head;
     }
     const early = this.goEarlyExitTypeofStringNextDecl(node);
     if (early !== void 0) {
@@ -38957,6 +38969,26 @@ ${pad}if !${okName} ${body.trimStart()}`;
     for (let child = ident, parent = ident.parent; parent !== void 0 && !isFunctionLike(parent); child = parent, parent = parent.parent) {
       if (parent.kind === SyntaxKind5.IfStatement && parent.thenStatement === child && this.goConditionProvesNonNil(parent.expression, ident) && !this.goLocalIsRebound(child, ident)) {
         return true;
+      }
+      if (parent.kind === SyntaxKind5.Block) {
+        const stmts = Array.from(parent.statements ?? []);
+        const idx = stmts.findIndex((s) => s.pos === child.pos && s.end === child.end);
+        for (let k = idx - 1; k >= 0; k--) {
+          const s = stmts[k];
+          if (s.kind === SyntaxKind5.IfStatement && s.elseStatement === void 0 && this.goNilComparisonOf(this.goUnwrapParenthesizedNode(s.expression), ident, SyntaxKind5.EqualsEqualsToken, SyntaxKind5.EqualsEqualsEqualsToken)) {
+            const bodyStmts = s.thenStatement?.kind === SyntaxKind5.Block ? s.thenStatement.statements ?? [] : [s.thenStatement];
+            const last = bodyStmts[bodyStmts.length - 1];
+            if (last?.kind === SyntaxKind5.ReturnStatement || last?.kind === SyntaxKind5.ThrowStatement) {
+              const betweenRebound = stmts.slice(k + 1, idx).some((b) => this.goLocalIsRebound(b, ident));
+              if (!betweenRebound) {
+                return true;
+              }
+            }
+          }
+          if (this.goLocalIsRebound(s, ident)) {
+            break;
+          }
+        }
       }
     }
     return false;
