@@ -102,10 +102,12 @@ export class Demo {
     minFundingAddressLength: number = 1;
     safeInteger (d: any, k: any, def?: number): Int { return def; }
     stream (k: string, numSubscriptions: Int = 1): boolean {
+        const prev = this.safeInteger (this.options, 'prev', -1);
+        const idx = prev + 1;
         const subscriptionsByStream = this.safeInteger (this.options, k, 0);
         const newNumSubscriptions = subscriptionsByStream + numSubscriptions;
         const limit = this.safeInteger (this.options, 'limit', 200);
-        return newNumSubscriptions > limit;
+        return (idx !== undefined) && (newNumSubscriptions > limit);
     }
     checkLen (address: string): boolean {
         return address.length < this.minFundingAddressLength;
@@ -121,6 +123,7 @@ export class Demo {
         const t = new Transpiler ({ csharp: { useTypeScriptChecker: true } });
         const out = t.transpileCSharpByPath (file).content;
         expect (out).toContain ('Int64 newNumSubscriptions =');
+        expect (out).not.toContain ('Int64 idx = (prev + 1)');
         expect (out).not.toContain ('isGreaterThan(newNumSubscriptions');
         expect (out).toContain ('< this.minFundingAddressLength');
         expect (out).not.toContain ('isLessThan(');

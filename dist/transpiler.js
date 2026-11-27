@@ -11176,13 +11176,18 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
           if (strType !== void 0) {
             return strType;
           }
-          const nonNullInt = (n) => {
-            const t = this.csharpArithmeticOperandType(n) ?? this.csharpPrintedParamType(n);
-            return t === "int" || t === "Int64" || t === "Int64?" && this.csharpNeverNullInt64Read(n);
-          };
-          if (nonNullInt(initializer.left) && nonNullInt(initializer.right)) {
-            const printed = this.printNode(initializer, 0);
-            if (!CSHARP_HELPER_ARITHMETIC_OPENERS.some((opener) => csharpStripOuterParens(printed).startsWith(opener))) {
+          const printed = this.printNode(initializer, 0);
+          if (!CSHARP_HELPER_ARITHMETIC_OPENERS.some((opener) => csharpStripOuterParens(printed).startsWith(opener))) {
+            const printedLeft = this.printNode(initializer.left, 0).trim();
+            const printedRight = this.printNode(initializer.right, 0).trim();
+            const unwrapped = (n, side) => {
+              const t = this.csharpArithmeticOperandType(n) ?? this.csharpPrintedParamType(n);
+              if (t === "int" || t === "Int64") {
+                return true;
+              }
+              return t === "Int64?" && this.csharpNeverNullInt64Read(n) && (printed.includes(side + ".GetValueOrDefault()") || printed.includes(side + ".Value"));
+            };
+            if (unwrapped(initializer.left, printedLeft) && unwrapped(initializer.right, printedRight)) {
               return "Int64";
             }
           }
