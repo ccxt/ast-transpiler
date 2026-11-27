@@ -312,7 +312,7 @@ const CSHARP_REFERENCE_FIELDS_NATIVE = [
 // hand-written BaseExchange fields declared `bool` (cs/ccxt/base/Exchange.Options.cs, e.g. `public bool newUpdates;` / `public bool verbose { get; set; }`): a `this.<name>` read i...
 const CSHARP_NATIVE_BOOL_FIELDS = [ 'alias', 'certified', 'enableRateLimit', 'isSandboxModeEnabled', 'newUpdates', 'pro', 'reduceFees', 'reloadingMarkets', 'returnResponseHeaders', 'substituteCommonCurrencyCodes', 'verbose', ];
 // hand-written BaseExchange fields declared a non-nullable C# number (Exchange.Options.cs): `public double rateLimit = 2000;` / `public double rollingWindowSize = 0.0;`. A read of...
-const CSHARP_SCALAR_FIELD_KINDS: { [name: string]: string } = { 'rateLimit': 'double', 'rollingWindowSize': 'double', 'fetchHistoryCacheSize': 'int', };
+const CSHARP_SCALAR_FIELD_KINDS: { [name: string]: string } = { 'rateLimit': 'double', 'rollingWindowSize': 'double', 'fetchHistoryCacheSize': 'int', 'minFundingAddressLength': 'int', };
 // arithmetic prints that still call a runtime helper: such an operand is not native arithmetic, so an isEqual around it keeps its own helper too
 const CSHARP_HELPER_ARITHMETIC_OPENERS = [ 'mod(', 'add(', 'subtract(', 'multiply(', 'divide(', 'callDynamically(' ];
 // a printed expression with the parentheses that wrap the WHOLE text removed (`((a % b))` -> `a % b`)
@@ -4256,7 +4256,13 @@ export class CSharpTranspiler extends BaseTranspiler {
         const nonNullString = (n) => {
             while (n?.kind === SyntaxKind.ParenthesizedExpression) { n = n.expression; }
             if ((n?.kind === SyntaxKind.StringLiteral) || (n?.kind === SyntaxKind.NoSubstitutionTemplateLiteral)) { return true; }
-            const t = this.csharpPrintedParamType(n) ?? this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
+            const paramType = this.csharpPrintedParamType(n);
+            if (paramType === 'string') { return true; }
+            if (paramType === 'string?') {
+                const decl: any = this.csharpReceiverBinding(n);
+                if (decl?.kind === SyntaxKind.Parameter && decl.type?.kind === SyntaxKind.StringKeyword && !decl.questionToken && !decl.initializer) { return true; }
+            }
+            const t = this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
             return t === 'string';
         };
         if (nonNullString(node.left) && nonNullString(node.right)) {
@@ -4282,7 +4288,7 @@ export class CSharpTranspiler extends BaseTranspiler {
         const integer = (CSHARP_INTEGER_KINDS.indexOf(base(leftKind)) >= 0) && (CSHARP_INTEGER_KINDS.indexOf(base(rightKind)) >= 0);
         const double = (base(leftKind) === 'double') && (base(rightKind) === 'double');
         if ((!leftNullable && !rightNullable) || (!integer && !double) || (double && ((token === '<') || (token === '<=')))) { return undefined; }
-        const typed = (n) => (this.csharpExpressionTypeOf(n) ?? this.csharpNumericParamKind(n) ?? (isNumericLiteral(n) ? 'double' : undefined)) !== undefined;
+        const typed = (n) => (this.csharpExpressionTypeOf(n) ?? this.csharpNumericParamKind(n) ?? this.csharpDeclaredLocalValueType(n) ?? (isNumericLiteral(n) ? 'double' : undefined)) !== undefined;
         if (!typed(node.left) || !typed(node.right)) { return undefined; }
         let leftText = this.printNode(node.left, 0).trim();
         let rightText = this.printNode(node.right, 0).trim();
@@ -6620,7 +6626,21 @@ export class CSharpTranspiler extends BaseTranspiler {
             case SyntaxKind.LessThanEqualsToken:
             case SyntaxKind.InKeyword: return 'bool';
             }
-            if (op === SyntaxKind.PlusToken) { return this.csharpPlusChainNonNullStringType(initializer); }
+            if (op === SyntaxKind.PlusToken) {
+                const strType = this.csharpPlusChainNonNullStringType(initializer);
+                if (strType !== undefined) { return strType; }
+                const nonNullInt = (n) => {
+                    const t = this.csharpArithmeticOperandType(n) ?? this.csharpPrintedParamType(n);
+                    return (t === 'int') || (t === 'Int64') || ((t === 'Int64?') && this.csharpNeverNullInt64Read(n));
+                };
+                if (nonNullInt(initializer.left) && nonNullInt(initializer.right)) {
+                    const printed = this.printNode(initializer, 0);
+                    if (!CSHARP_HELPER_ARITHMETIC_OPENERS.some((opener) => csharpStripOuterParens(printed).startsWith(opener))) {
+                        return 'Int64';
+                    }
+                }
+                return undefined;
+            }
             return undefined;
         }
         case SyntaxKind.ElementAccessExpression: {

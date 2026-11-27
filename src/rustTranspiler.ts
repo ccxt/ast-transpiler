@@ -7425,7 +7425,7 @@ export class RustTranspiler extends BaseTranspiler {
         // ral-51s: the key of a `client.subscriptions[k] = v` statement (printed by printClientHandleSubscriptionWrite)
         const up: any = parent.parent;
         if (isBinaryExpression(up) && up.left === parent && up.operatorToken.kind === SyntaxKind.EqualsToken && up.parent?.kind === SyntaxKind.ExpressionStatement) return access?.key === 'subscriptions' && access.write;
-        if (isDeleteExpression(parent.parent)) return access?.key === 'subscriptions' && parent.parent.parent?.kind === SyntaxKind.ExpressionStatement;
+        if (isDeleteExpression(parent.parent)) return access !== undefined && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined && parent.parent.parent?.kind === SyntaxKind.ExpressionStatement;
         return !this.isNativeWriteTargetBase(parent) && access !== undefined && !access.write && RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== undefined;
     }
     rustWsStrKey(node): boolean {
@@ -7477,7 +7477,7 @@ export class RustTranspiler extends BaseTranspiler {
     // ── ws client handle (rustClientHandlePlan / printClientHandle*) ────────── A method's `client` (its `client` parameter, or its one `client` local) reads the four handle fields t...
     private static readonly RUST_CLIENT_HANDLE_TYPE = 'crate::pro::ws_client::ClientHandle';
     private static readonly RUST_CLIENT_HANDLE_KEYS = new Set([ 'subscriptions', 'futures', 'rejections', 'url' ]);
-    private static readonly RUST_CLIENT_HANDLE_NAMES: { [k: string]: string } = { subscriptions: 'subscription', futures: 'future' };
+    private static readonly RUST_CLIENT_HANDLE_NAMES: { [k: string]: string } = { subscriptions: 'subscription', futures: 'future', rejections: 'rejection' };
     private static readonly RUST_CLIENT_HANDLE_METHODS = new Set([ 'resolve', 'reject', 'send', 'future', 'reusableFuture' ]);
     private static readonly RUST_CLIENT_HANDLE_MARK = '\u0006client-handle\u0006';
     private rustClientHandlePlans = new WeakMap<Node, any>();
@@ -7755,13 +7755,14 @@ export class RustTranspiler extends BaseTranspiler {
         this.rustLocalUsesAll(declaration, String(declaration.name.text), true, (n: any) => { let up: any = n; while (isParenthesizedExpression(up.parent)) up = up.parent; if (this.printClientHandleKeys(up.parent) === undefined) all = false; return true; });
         return all;
     }
-    /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
+    /** `delete client.subscriptions|futures|rejections[k]`: the handle drops the live entry and its snapshot entry. */
     printClientHandleDelete(node: any): string | undefined {
         const target: any = node.expression;
         if (!isElementAccessExpression(target)) return undefined;
         const access = this.rustClientHandleAccess(target.expression);
-        if (access === undefined || access.key !== 'subscriptions') return undefined;
-        return `${this.rustClientHandleReceiver(access.plan, false)}.remove_subscription(${this.rustWsKeyText(target.argumentExpression)})`;
+        const name = access === undefined ? undefined : RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
+        if (name === undefined) return undefined;
+        return `${this.rustClientHandleReceiver(access.plan, false)}.remove_${name}(${this.rustWsKeyText(target.argumentExpression)})`;
     }
     /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
     printClientHandleSubscriptionWrite(left: any, right: any): string | undefined {
@@ -9450,7 +9451,7 @@ export class RustTranspiler extends BaseTranspiler {
             let up: any = n;
             while (isParenthesizedExpression(up.parent) || isAsExpression(up.parent) || isNonNullExpression(up.parent)) up = up.parent;
             const p: any = up.parent;
-            if (this.rustWsKeyUse(up) || this.rustWsCacheMapKeyUse(n) || this.rustWsSubscriptionWriteValue(n)) hit = true;
+            if ((this.rustWsKeyUse(up) && !(p !== undefined && isElementAccessExpression(p) && isDeleteExpression(p.parent))) || this.rustWsCacheMapKeyUse(n) || this.rustWsSubscriptionWriteValue(n)) hit = true;
             else if (p !== undefined && isCallExpression(p) && p.expression !== up && (this.rustWsClientCallArg(p, 'str') || this.rustWsWatchSlot(p, p.arguments.indexOf(up)))) hit = true;
             // a key of any `this.<field>[k]` element in the ws tier (cache stores such as `this.tickers[symbol] = ..`)
             // ral-60p: with `localElemOk`, a read of a function-local map (`methods[key]`, the receiver rooted in a local of
@@ -29777,6 +29778,36 @@ export class RustTranspiler extends BaseTranspiler {
         }
         return `Value::Bool(matches!((&${objExpr}, &${keyExpr}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
     }
+    // `Dict`-annotated parameter of a non-override method whose same-file callers never pass a tagged `client.subscriptions|futures|rejections` snapshot.
+    rustUntaggedDictDeleteParam(base: any): boolean {
+        const decl: any = isIdentifier(base) ? this.rustSingleLocalDeclaration(base) : undefined;
+        if (decl === undefined || !isParameterDeclaration(decl) || decl.type?.getText?.().trim() !== 'Dict') return false;
+        const method: any = decl.parent;
+        if (method === undefined || !isMethodDeclaration(method) || !isIdentifier(method.name) || !isClassDeclaration(method.parent)) return false;
+        if ((method.modifiers ?? []).some((m: any) => m.kind === SyntaxKind.OverrideKeyword)) return false;
+        const idx = Array.from(method.parameters).indexOf(decl);
+        if (idx < 0) return false;
+        const name = String(method.name.text);
+        let sawCall = false;
+        let tagged = false;
+        const isTaggedArg = (expr: any): boolean => {
+            const e: any = this.unwrapParens(expr);
+            if (isPropertyAccessExpression(e) && RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(String(e.name.text))) return true;
+            return isIdentifier(e) && this.rustLocalInitReadsTaggedContainer(e);
+        };
+        const visit = (n: any) => {
+            if (tagged || n === undefined) return;
+            if (isCallExpression(n) && isPropertyAccessExpression(n.expression)
+                && n.expression.expression.kind === SyntaxKind.ThisKeyword && String(n.expression.name.text) === name) {
+                sawCall = true;
+                const arg = n.arguments?.[idx];
+                if (arg === undefined || isTaggedArg(arg)) { tagged = true; return; }
+            }
+            n.forEachChild?.(visit);
+        };
+        visit(method.parent);
+        return sawCall && !tagged;
+    }
     // `delete X[k]` on a receiver the native-insert proof admits (never a ws subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`.
     provenDictFieldDelete(node): string | undefined {
         const target: any = node?.expression;
@@ -29785,10 +29816,11 @@ export class RustTranspiler extends BaseTranspiler {
         const callLocal = this.rustRestCallLocalDelete(node, base, target.argumentExpression);
         if (callLocal !== undefined) return callLocal;
         const receiver = this.rustNativeInsertReceiver(base);
-        // ws-capable tiers: a local/param may alias a `client.subscriptions` snapshot (live-store route in the helper); admit only fields, literal-built locals and declared-Dict table loc...
+        // ws-capable tiers: a local/param may alias a `client.subscriptions` snapshot (live-store route in the helper); admit only fields, literal-built locals, declared-Dict table locals, and proven untagged Dict params
         const restTier = /\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(node));
         const declaredLocal = !receiver?.isField && this.rustDeclaredLocalEntry(base) !== undefined && !this.rustLocalInitReadsTaggedContainer(base);
-        if (receiver !== undefined && !receiver.isField && !restTier && receiver.plain !== true && !declaredLocal) { return undefined; }
+        const dictParam = !receiver?.isField && this.rustUntaggedDictDeleteParam(base);
+        if (receiver !== undefined && !receiver.isField && !restTier && receiver.plain !== true && !declaredLocal && !dictParam) { return undefined; }
         if (receiver === undefined || this.rustParamShadowOf(base) !== undefined
             || !this.rustReceiverStaysDict(base, receiver)
             || (receiver.isField && RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(receiver.nameNode.text)))
@@ -33980,16 +34012,31 @@ export class RustTranspiler extends BaseTranspiler {
         try { const checker: any = this.getChecker(); const signature = checker.getResolvedSignature(n); return signature !== undefined && this.isProvenMapType(checker.getReturnTypeOfSignature(signature)); } catch (e) { return false; }
     }
     // The base ws helpers `findMessageHashes` / `cleanUnsubscription` take `client: any`, the live ws client the drive loop hands them. Plan their `client` param like a venue's, so it...
-    private static readonly H27R07_BASE_HANDLE_METHODS = new Set([ 'findMessageHashes', 'cleanUnsubscription' ]);
+    private static readonly H27R07_BASE_HANDLE_METHODS = new Set([ 'findMessageHashes', 'cleanUnsubscription', 'cleanCache' ]);
     h27r07BaseHandlePlan(method: any, file: string): any {
         if (!/ts\/src\/base\/(?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(file) || !isIdentifier(method.name) || !RustTranspiler.H27R07_BASE_HANDLE_METHODS.has(String(method.name.text))) return undefined;
         const params = Array.from(method.parameters).filter((p: any) => isIdentifier(p.name) && p.name.text === 'client');
-        if (params.length !== 1) return undefined;
-        const decl: any = params[0];
-        const type: any = this.getCheckedTypeOf(decl.name);
-        if (type === undefined || (type.flags & TypeFlags.Any) === 0) return undefined;
-        const bindPos = method.body.pos;
-        const refs = this.rustScopeNameNodes(method, 'client').filter((n: any) => n.kind === SyntaxKind.Identifier && n.parent !== decl);
+        const nodes: any[] = this.rustScopeNameNodes(method, 'client');
+        const decls = nodes.filter((n: any) => isVariableDeclaration(n) && isIdentifier(n.name));
+        let kind: string;
+        let decl: any;
+        let bindPos: number;
+        let typed = false;
+        if (params.length === 1 && decls.length === 0) {
+            decl = params[0];
+            const type: any = this.getCheckedTypeOf(decl.name);
+            if (type === undefined || (type.flags & TypeFlags.Any) === 0) return undefined;
+            kind = 'param';
+            bindPos = method.body.pos;
+        } else if (params.length === 0 && decls.length === 1) {
+            decl = decls[0];
+            kind = 'local';
+            bindPos = decl.end;
+            typed = true;
+        } else {
+            return undefined;
+        }
+        const refs = nodes.filter((n: any) => n.kind === SyntaxKind.Identifier && n.parent !== decl);
         if (refs.some((r: any) => isVariableDeclaration(r.parent) || (isBinaryExpression(r.parent) && r.parent.left === r && rustIsAssignmentOperator(r.parent.operatorToken.kind)))) return undefined;
         const firstWrite = new Map<string, number>();
         let mut = false;
@@ -34001,11 +34048,12 @@ export class RustTranspiler extends BaseTranspiler {
             const key = String(p.name.text);
             if (!firstWrite.has(key) || line < firstWrite.get(key)) firstWrite.set(key, line);
         }
-        return { kind: 'param', decl, bindPos, firstWrite, mut, typed: false, touched: false, declOk: true, h27r07: true };
+        return { kind, decl, bindPos, firstWrite, mut, typed, touched: false, declOk: true, h27r07: true };
     }
-    // On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`) keeps the helper: a handle key use would leave `k` a `Value` ...
+    // On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`) keeps the helper unless it is a delete statement (handle remove_* takes `Option<&str>`).
     h27r07KeepBoxedKey(node: any, plan: any): boolean {
         if (plan?.h27r07 !== true || !isElementAccessExpression(node.parent) || node.parent.expression !== node) return false;
+        if (isDeleteExpression(node.parent.parent) && node.parent.parent.parent?.kind === SyntaxKind.ExpressionStatement) return false;
         const key: any = this.unwrapParens(node.parent.argumentExpression);
         const declaration: any = isIdentifier(key) ? this.rustDeclaredNode(key) : undefined;
         if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name)) return false;

@@ -76,7 +76,7 @@ describe('rust base ws helpers read their any-typed client through the typed han
         const out = run(base(FIND.replace('const result: string[] = [];', 'const result: string[] = []; client.futures = {};')));
         expect(out).not.toContain('future_keys()');
     });
-    test('negative: a delete keyed by a local that is also a string-method receiver keeps the helper', () => {
+    test('a delete keyed by a local that is also a string-method receiver uses remove_subscription and keeps Option<String>', () => {
         const body = [
             '    cleanUnsubscription (client: any, subHash: Str, unsubHash: Str, subHashIsPrefix = false) {',
             '        const keys = Object.keys (client.subscriptions);',
@@ -90,7 +90,7 @@ describe('rust base ws helpers read their any-typed client through the typed han
         ].join('\n');
         const out = run(base(body));
         expect(out).toContain('__ch.subscription_keys()');
-        expect(out).not.toContain('remove_subscription(');
+        expect(out).toContain('__ch.remove_subscription(sub.as_deref())');
         expect(out).toContain('let mut sub: Option<String>');
     });
 });
