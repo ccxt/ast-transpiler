@@ -1141,7 +1141,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     printClientHandleKeys(init: any): string | undefined;
     rustClientHandleKeysAlias(node: any): VariableDeclaration | undefined;
     rustClientHandleKeysAliasPrintsKeys(declaration: any): boolean;
-    /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
+    /** `delete client.subscriptions|futures|rejections[k]`: the handle drops the live entry and its snapshot entry. */
     printClientHandleDelete(node: any): string | undefined;
     /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
     printClientHandleSubscriptionWrite(left: any, right: any): string | undefined;
@@ -3815,6 +3815,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** Test sources keep the helpers: tests-pipeline post-passes match `in_op(` text. */
     isTestSource(node: Node): boolean;
     provenDictFieldInOp(key: any, obj: any): string | undefined;
+    rustUntaggedDictDeleteParam(base: any): boolean;
     provenDictFieldDelete(node: any): string | undefined;
     /** ral-59p: the borrowed `Option<&str>` text of a `dkey` string local key, else undefined. */
     rust59pDeleteKeyText(keyNode: any): string | undefined;

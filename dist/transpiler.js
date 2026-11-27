@@ -2594,7 +2594,7 @@ var CSHARP_REFERENCE_FIELDS_NATIVE = [
   "tokenBucket"
 ];
 var CSHARP_NATIVE_BOOL_FIELDS = ["alias", "certified", "enableRateLimit", "isSandboxModeEnabled", "newUpdates", "pro", "reduceFees", "reloadingMarkets", "returnResponseHeaders", "substituteCommonCurrencyCodes", "verbose"];
-var CSHARP_SCALAR_FIELD_KINDS = { "rateLimit": "double", "rollingWindowSize": "double", "fetchHistoryCacheSize": "int" };
+var CSHARP_SCALAR_FIELD_KINDS = { "rateLimit": "double", "rollingWindowSize": "double", "fetchHistoryCacheSize": "int", "minFundingAddressLength": "int" };
 var CSHARP_HELPER_ARITHMETIC_OPENERS = ["mod(", "add(", "subtract(", "multiply(", "divide(", "callDynamically("];
 function csharpStripOuterParens(text) {
   let stripped = text.trim();
@@ -7960,7 +7960,17 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       if (n?.kind === SyntaxKind4.StringLiteral || n?.kind === SyntaxKind4.NoSubstitutionTemplateLiteral) {
         return true;
       }
-      const t = this.csharpPrintedParamType(n) ?? this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
+      const paramType = this.csharpPrintedParamType(n);
+      if (paramType === "string") {
+        return true;
+      }
+      if (paramType === "string?") {
+        const decl = this.csharpReceiverBinding(n);
+        if (decl?.kind === SyntaxKind4.Parameter && decl.type?.kind === SyntaxKind4.StringKeyword && !decl.questionToken && !decl.initializer) {
+          return true;
+        }
+      }
+      const t = this.csharpExpressionTypeOf(n) ?? this.csharpDeclaredLocalValueType(n);
       return t === "string";
     };
     if (nonNullString(node.left) && nonNullString(node.right)) {
@@ -7994,7 +8004,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (!leftNullable && !rightNullable || !integer && !double || double && (token === "<" || token === "<=")) {
       return void 0;
     }
-    const typed = (n) => (this.csharpExpressionTypeOf(n) ?? this.csharpNumericParamKind(n) ?? (isNumericLiteral3(n) ? "double" : void 0)) !== void 0;
+    const typed = (n) => (this.csharpExpressionTypeOf(n) ?? this.csharpNumericParamKind(n) ?? this.csharpDeclaredLocalValueType(n) ?? (isNumericLiteral3(n) ? "double" : void 0)) !== void 0;
     if (!typed(node.left) || !typed(node.right)) {
       return void 0;
     }
@@ -11162,7 +11172,21 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
             return "bool";
         }
         if (op === SyntaxKind4.PlusToken) {
-          return this.csharpPlusChainNonNullStringType(initializer);
+          const strType = this.csharpPlusChainNonNullStringType(initializer);
+          if (strType !== void 0) {
+            return strType;
+          }
+          const nonNullInt = (n) => {
+            const t = this.csharpArithmeticOperandType(n) ?? this.csharpPrintedParamType(n);
+            return t === "int" || t === "Int64" || t === "Int64?" && this.csharpNeverNullInt64Read(n);
+          };
+          if (nonNullInt(initializer.left) && nonNullInt(initializer.right)) {
+            const printed = this.printNode(initializer, 0);
+            if (!CSHARP_HELPER_ARITHMETIC_OPENERS.some((opener) => csharpStripOuterParens(printed).startsWith(opener))) {
+              return "Int64";
+            }
+          }
+          return void 0;
         }
         return void 0;
       }
@@ -83354,7 +83378,7 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     if (isBinaryExpression5(up) && up.left === parent && up.operatorToken.kind === SyntaxKind7.EqualsToken && up.parent?.kind === SyntaxKind7.ExpressionStatement)
       return access?.key === "subscriptions" && access.write;
     if (isDeleteExpression2(parent.parent))
-      return access?.key === "subscriptions" && parent.parent.parent?.kind === SyntaxKind7.ExpressionStatement;
+      return access !== void 0 && _RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== void 0 && parent.parent.parent?.kind === SyntaxKind7.ExpressionStatement;
     return !this.isNativeWriteTargetBase(parent) && access !== void 0 && !access.write && _RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key] !== void 0;
   }
   rustWsStrKey(node) {
@@ -83779,15 +83803,16 @@ var _RustTranspiler = class _RustTranspiler extends BaseTranspiler {
     });
     return all;
   }
-  /** `delete client.subscriptions[k]`: the handle drops the live entry and its snapshot entry. */
+  /** `delete client.subscriptions|futures|rejections[k]`: the handle drops the live entry and its snapshot entry. */
   printClientHandleDelete(node) {
     const target = node.expression;
     if (!isElementAccessExpression5(target))
       return void 0;
     const access = this.rustClientHandleAccess(target.expression);
-    if (access === void 0 || access.key !== "subscriptions")
+    const name = access === void 0 ? void 0 : _RustTranspiler.RUST_CLIENT_HANDLE_NAMES[access.key];
+    if (name === void 0)
       return void 0;
-    return `${this.rustClientHandleReceiver(access.plan, false)}.remove_subscription(${this.rustWsKeyText(target.argumentExpression)})`;
+    return `${this.rustClientHandleReceiver(access.plan, false)}.remove_${name}(${this.rustWsKeyText(target.argumentExpression)})`;
   }
   /** `client.subscriptions[k] = v`: the handle writes the live client and its snapshot. */
   printClientHandleSubscriptionWrite(left, right) {
@@ -85891,7 +85916,7 @@ ${indent}let mut ${varName}: ${_RustTranspiler.RUST_SCALAR_TYPES[kind]} = ${spli
       while (isParenthesizedExpression3(up.parent) || isAsExpression3(up.parent) || isNonNullExpression2(up.parent))
         up = up.parent;
       const p = up.parent;
-      if (this.rustWsKeyUse(up) || this.rustWsCacheMapKeyUse(n) || this.rustWsSubscriptionWriteValue(n))
+      if (this.rustWsKeyUse(up) && !(p !== void 0 && isElementAccessExpression5(p) && isDeleteExpression2(p.parent)) || this.rustWsCacheMapKeyUse(n) || this.rustWsSubscriptionWriteValue(n))
         hit = true;
       else if (p !== void 0 && isCallExpression7(p) && p.expression !== up && (this.rustWsClientCallArg(p, "str") || this.rustWsWatchSlot(p, p.arguments.indexOf(up))))
         hit = true;
@@ -111125,6 +111150,44 @@ ${this.getIden(identation)}}`;
     }
     return `Value::Bool(matches!((&${objExpr}, &${keyExpr}), (Value::Dict(__d), Value::Str(__k)) if __d.contains_key(__k.as_ref())))`;
   }
+  // `Dict`-annotated parameter of a non-override method whose same-file callers never pass a tagged `client.subscriptions|futures|rejections` snapshot.
+  rustUntaggedDictDeleteParam(base) {
+    const decl = isIdentifier4(base) ? this.rustSingleLocalDeclaration(base) : void 0;
+    if (decl === void 0 || !isParameterDeclaration3(decl) || decl.type?.getText?.().trim() !== "Dict")
+      return false;
+    const method = decl.parent;
+    if (method === void 0 || !isMethodDeclaration5(method) || !isIdentifier4(method.name) || !isClassDeclaration4(method.parent))
+      return false;
+    if ((method.modifiers ?? []).some((m) => m.kind === SyntaxKind7.OverrideKeyword))
+      return false;
+    const idx = Array.from(method.parameters).indexOf(decl);
+    if (idx < 0)
+      return false;
+    const name = String(method.name.text);
+    let sawCall = false;
+    let tagged = false;
+    const isTaggedArg = (expr) => {
+      const e = this.unwrapParens(expr);
+      if (isPropertyAccessExpression4(e) && _RustTranspiler.RUST_CLIENT_HANDLE_KEYS.has(String(e.name.text)))
+        return true;
+      return isIdentifier4(e) && this.rustLocalInitReadsTaggedContainer(e);
+    };
+    const visit = (n) => {
+      if (tagged || n === void 0)
+        return;
+      if (isCallExpression7(n) && isPropertyAccessExpression4(n.expression) && n.expression.expression.kind === SyntaxKind7.ThisKeyword && String(n.expression.name.text) === name) {
+        sawCall = true;
+        const arg = n.arguments?.[idx];
+        if (arg === void 0 || isTaggedArg(arg)) {
+          tagged = true;
+          return;
+        }
+      }
+      n.forEachChild?.(visit);
+    };
+    visit(method.parent);
+    return sawCall && !tagged;
+  }
   // `delete X[k]` on a receiver the native-insert proof admits (never a ws subscriptions snapshot, so `try_ws_subs_remove` is dead): `shift_remove`.
   provenDictFieldDelete(node) {
     const target = node?.expression;
@@ -111138,7 +111201,8 @@ ${this.getIden(identation)}}`;
     const receiver = this.rustNativeInsertReceiver(base);
     const restTier = /\/ts\/src\/[^/]+\.ts$/.test(this.provenDictFieldPath(node));
     const declaredLocal = !receiver?.isField && this.rustDeclaredLocalEntry(base) !== void 0 && !this.rustLocalInitReadsTaggedContainer(base);
-    if (receiver !== void 0 && !receiver.isField && !restTier && receiver.plain !== true && !declaredLocal) {
+    const dictParam = !receiver?.isField && this.rustUntaggedDictDeleteParam(base);
+    if (receiver !== void 0 && !receiver.isField && !restTier && receiver.plain !== true && !declaredLocal && !dictParam) {
       return void 0;
     }
     if (receiver === void 0 || this.rustParamShadowOf(base) !== void 0 || !this.rustReceiverStaysDict(base, receiver) || receiver.isField && _RustTranspiler.RUST_TAGGED_CONTAINER_FIELDS.has(String(receiver.nameNode.text)) || !receiver.isField && this.rustLocalInitReadsTaggedContainer(base)) {
@@ -116407,14 +116471,28 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
     if (!/ts\/src\/base\/(?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(file) || !isIdentifier4(method.name) || !_RustTranspiler.H27R07_BASE_HANDLE_METHODS.has(String(method.name.text)))
       return void 0;
     const params = Array.from(method.parameters).filter((p) => isIdentifier4(p.name) && p.name.text === "client");
-    if (params.length !== 1)
+    const nodes = this.rustScopeNameNodes(method, "client");
+    const decls = nodes.filter((n) => isVariableDeclaration3(n) && isIdentifier4(n.name));
+    let kind;
+    let decl;
+    let bindPos;
+    let typed = false;
+    if (params.length === 1 && decls.length === 0) {
+      decl = params[0];
+      const type = this.getCheckedTypeOf(decl.name);
+      if (type === void 0 || (type.flags & TypeFlags6.Any) === 0)
+        return void 0;
+      kind = "param";
+      bindPos = method.body.pos;
+    } else if (params.length === 0 && decls.length === 1) {
+      decl = decls[0];
+      kind = "local";
+      bindPos = decl.end;
+      typed = true;
+    } else {
       return void 0;
-    const decl = params[0];
-    const type = this.getCheckedTypeOf(decl.name);
-    if (type === void 0 || (type.flags & TypeFlags6.Any) === 0)
-      return void 0;
-    const bindPos = method.body.pos;
-    const refs = this.rustScopeNameNodes(method, "client").filter((n) => n.kind === SyntaxKind7.Identifier && n.parent !== decl);
+    }
+    const refs = nodes.filter((n) => n.kind === SyntaxKind7.Identifier && n.parent !== decl);
     if (refs.some((r) => isVariableDeclaration3(r.parent) || isBinaryExpression5(r.parent) && r.parent.left === r && rustIsAssignmentOperator(r.parent.operatorToken.kind)))
       return void 0;
     const firstWrite = /* @__PURE__ */ new Map();
@@ -116429,11 +116507,13 @@ ${indent}let mut ${varName}: &[crate::types::Market] = __marketsById.records_by_
       if (!firstWrite.has(key) || line < firstWrite.get(key))
         firstWrite.set(key, line);
     }
-    return { kind: "param", decl, bindPos, firstWrite, mut, typed: false, touched: false, declOk: true, h27r07: true };
+    return { kind, decl, bindPos, firstWrite, mut, typed, touched: false, declOk: true, h27r07: true };
   }
-  // On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`) keeps the helper: a handle key use would leave `k` a `Value` ...
+  // On a base handle plan, `client.<f>[k]` keyed by a local that is also a string-method receiver (`k.startsWith (..)`) keeps the helper unless it is a delete statement (handle remove_* takes `Option<&str>`).
   h27r07KeepBoxedKey(node, plan) {
     if (plan?.h27r07 !== true || !isElementAccessExpression5(node.parent) || node.parent.expression !== node)
+      return false;
+    if (isDeleteExpression2(node.parent.parent) && node.parent.parent.parent?.kind === SyntaxKind7.ExpressionStatement)
       return false;
     const key = this.unwrapParens(node.parent.argumentExpression);
     const declaration = isIdentifier4(key) ? this.rustDeclaredNode(key) : void 0;
@@ -118428,7 +118508,7 @@ _RustTranspiler.RUST_ERROR_CLASS_NAME = /^(?:[A-Z][a-zA-Z]*(?:Error|Required|Fou
 // ── ws client handle (rustClientHandlePlan / printClientHandle*) ────────── A method's `client` (its `client` parameter, or its one `client` local) reads the four handle fields t...
 _RustTranspiler.RUST_CLIENT_HANDLE_TYPE = "crate::pro::ws_client::ClientHandle";
 _RustTranspiler.RUST_CLIENT_HANDLE_KEYS = /* @__PURE__ */ new Set(["subscriptions", "futures", "rejections", "url"]);
-_RustTranspiler.RUST_CLIENT_HANDLE_NAMES = { subscriptions: "subscription", futures: "future" };
+_RustTranspiler.RUST_CLIENT_HANDLE_NAMES = { subscriptions: "subscription", futures: "future", rejections: "rejection" };
 _RustTranspiler.RUST_CLIENT_HANDLE_METHODS = /* @__PURE__ */ new Set(["resolve", "reject", "send", "future", "reusableFuture"]);
 _RustTranspiler.RUST_CLIENT_HANDLE_MARK = "client-handle";
 /** ExchangeOps methods (rust/tests/src/test_helpers.rs) whose argument is not a plain `Value`. */
@@ -119328,7 +119408,7 @@ _RustTranspiler.RUST_LIST_MARKET_METHODS = /* @__PURE__ */ new Set([
 _RustTranspiler.RUST_VENUE_NUM_PRECISION = /* @__PURE__ */ new Set(["amountToPrecision", "priceToPrecision", "costToPrecision"]);
 _RustTranspiler.RUST_H26R14_RECORD_FNS = /* @__PURE__ */ new Set(["parseOrder", "parseTrade", "parseTicker", "safeOrder", "safeTrade", "safeTicker"]);
 // The base ws helpers `findMessageHashes` / `cleanUnsubscription` take `client: any`, the live ws client the drive loop hands them. Plan their `client` param like a venue's, so it...
-_RustTranspiler.H27R07_BASE_HANDLE_METHODS = /* @__PURE__ */ new Set(["findMessageHashes", "cleanUnsubscription"]);
+_RustTranspiler.H27R07_BASE_HANDLE_METHODS = /* @__PURE__ */ new Set(["findMessageHashes", "cleanUnsubscription", "cleanCache"]);
 // ===== h27-H27-R08
 _RustTranspiler.RUST_H27R08_WS_FNS = /^parseWs(?:Trade|Order|Ticker|UpdatedTicker|BidAsk)$/;
 _RustTranspiler.RUST_H27R08_RECORD_RETURN = /^(?:safeOrder|safeTrade|safeTicker|parseOrder|parseTrade|parseTicker)$/;
