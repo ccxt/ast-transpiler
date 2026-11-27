@@ -4562,12 +4562,40 @@ export class CSharpTranspiler extends BaseTranspiler {
         if (operand.kind !== 'Int64?') { return printed; }
         let symbol: any;
         try { symbol = this.getChecker().getSymbolAtLocation(operand.node); } catch (e) { return undefined; }
-        if ((symbol === undefined) || (!this.csharpIntegralTestedInExpression(call, symbol)
-            && (this.csharpIntegralBindingIsRewritten(symbol) || !this.csharpNullGuardAdmitsRead(call, operand.node)))) {
+        const guardedClean = (symbol !== undefined) && (this.csharpIntegralTestedInExpression(call, symbol)
+            || (!this.csharpIntegralBindingIsRewritten(symbol) && this.csharpNullGuardAdmitsRead(call, operand.node))
+            || this.csharpRewrittenIntegralGuardAdmitsRead(call, operand.node, symbol));
+        if (!guardedClean) {
             // the compiler cannot follow this proof (CS8629 on `.Value`); GetValueOrDefault gives the same value
             return ((symbol !== undefined) && this.csharpInt64BindingNeverNull(symbol)) ? `${printed}.GetValueOrDefault()` : undefined;
         }
         return `${printed}.Value`;
+    }
+    // rewritten `Int64?` local read inside an enclosing `if (x != null)` / `else` of `if (x == null)` with no write to `x` between the guard and this statement
+    csharpRewrittenIntegralGuardAdmitsRead(call, operandNode, symbol): boolean {
+        const scope = this.csharpEnclosingFunction(call);
+        if (scope === undefined) { return false; }
+        let stmt: any = call;
+        while ((stmt.parent !== undefined) && !isBlock(stmt.parent) && !isIfStatement(stmt.parent) && !isSourceFile(stmt.parent)) { stmt = stmt.parent; }
+        const stmtStart = stmt.getStart();
+        let current: any = call;
+        while (current !== undefined) {
+            const parent: any = current.parent;
+            if ((parent === undefined) || this.csharpIsFunctionLike(parent)) { return false; }
+            if (parent.kind === SyntaxKind.IfStatement) {
+                const inThen = this.csharpContains(parent.thenStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, true);
+                const inElse = this.csharpContains(parent.elseStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, false);
+                if ((inThen || inElse) && !this.csharpReceiverWrittenBetween(scope, parent.expression.getEnd(), stmtStart, symbol)) {
+                    // also ensure no write inside the same statement precedes the operand read (e.g. `x = Math.min(a, x)` writes `x` on the LHS AFTER evaluating the RHS)
+                    const lhsAssignOnly = (stmt.kind === SyntaxKind.ExpressionStatement) && isBinaryExpression(stmt.expression)
+                        && (stmt.expression.operatorToken.kind === SyntaxKind.EqualsToken) && this.csharpContains(stmt.expression.right, operandNode)
+                        && !this.csharpReceiverWrittenBetween(scope, stmt.expression.right.getStart(), operandNode.getStart(), symbol);
+                    if (lhsAssignOnly || !this.csharpReceiverWrittenBetween(scope, stmtStart, operandNode.getStart(), symbol)) { return true; }
+                }
+            }
+            current = parent;
+        }
+        return false;
     }
     // a local never written after `x = this.safeInteger (o, k, <int literal>)` (safeInteger2 / safeIntegerN alike): SafeIntegerN answers the converted default on a missing key, null a...
     csharpInt64BindingNeverNull(symbol): boolean {
@@ -4710,6 +4738,26 @@ export class CSharpTranspiler extends BaseTranspiler {
         let symbol: any;
         try { symbol = this.getChecker().getSymbolAtLocation(self); } catch (e) { return false; }
         return (symbol !== undefined) && this.csharpInt64BindingNeverNull(symbol);
+    }
+    // `x = Math.min/max (a, b)` on an `Int64?` local where every operand (including `x` itself while being resolved) is an integer literal or a guarded non-null `int`/`Int64`/`Int64?`
+    csharpGuardedMinMaxWriteIsNative(right): boolean {
+        let call: any = right;
+        while ((call !== undefined) && isParenthesizedExpression(call)) { call = call.expression; }
+        if (!isCallExpression(call) || (call.arguments?.length !== 2) || !isPropertyAccessExpression(call.expression)
+            || (call.expression.expression?.getText?.() !== 'Math') || ![ 'min', 'max' ].includes(call.expression.name?.text)) { return false; }
+        const assign = right?.parent;
+        const lhsSym = (isBinaryExpression(assign) && (assign.operatorToken.kind === SyntaxKind.EqualsToken) && isIdentifier(assign.left))
+            ? this.checkerOrUndefined()?.getSymbolAtLocation(assign.left) : undefined;
+        return call.arguments.every((arg: any) => {
+            let inner: any = arg;
+            while ((inner !== undefined) && isParenthesizedExpression(inner)) { inner = inner.expression; }
+            if (this.csharpIsIntegerLiteral(inner)) { return true; }
+            if ((lhsSym !== undefined) && isIdentifier(inner) && this.csharpSameBinding(inner, lhsSym)) {
+                return this.csharpRewrittenIntegralGuardAdmitsRead(call, inner, lhsSym);
+            }
+            const op = this.csharpIntegralMinMaxOperand(arg);
+            return (op !== undefined) && (this.csharpIntegralNonNullText(call, op, 'v') !== undefined);
+        });
     }
     // any write to the binding in its function (destructuring targets included) voids a dominance proof
     csharpIntegralBindingIsRewritten(symbol, allowSelfMinMax = false): boolean {
@@ -5565,8 +5613,8 @@ export class CSharpTranspiler extends BaseTranspiler {
             // a null write belongs to a nullable spelling only: a non-nullable `string` declaration has its own promotion retry (`string?`), and answering true here would print the local as a...
             return csharpType.endsWith('?');
         }
-        if ((csharpType === 'Int64?') && this.csharpSelfMinMaxWriteIsNative(right)) {
-            return true; // `x = Math.min/max (x, <int literal>)` on a never-null x prints Math.Min/Max: an Int64
+        if ((csharpType === 'Int64?') && (this.csharpSelfMinMaxWriteIsNative(right) || this.csharpGuardedMinMaxWriteIsNative(right))) {
+            return true; // `x = Math.min/max (a, b)` over guarded integral operands prints Math.Min/Max: an Int64
         }
         let valueType = this.csharpTypeOfInitializer(right) ?? this.csharpSourceLocalType(right);
         if ((valueType === undefined) && (right?.kind === SyntaxKind.NumericLiteral)) {

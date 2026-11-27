@@ -482,6 +482,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegralMinMaxOperand(node: any): any;
     csharpMinMaxSinkIsNarrowInt(call: any): boolean;
     csharpIntegralNonNullText(call: any, operand: any, printed: string): string | undefined;
+    csharpRewrittenIntegralGuardAdmitsRead(call: any, operandNode: any, symbol: any): boolean;
     csharpInt64BindingNeverNull(symbol: any): boolean;
     csharpParseToIntNeverNull(init: any): boolean;
     csharpIsIntegerLiteral(node: any): boolean;
@@ -492,6 +493,7 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpIntegralTestedInExpression(call: any, symbol: any): boolean;
     csharpSelfMinMaxLiteralWrite(right: any): any;
     csharpSelfMinMaxWriteIsNative(right: any): boolean;
+    csharpGuardedMinMaxWriteIsNative(right: any): boolean;
     csharpIntegralBindingIsRewritten(symbol: any, allowSelfMinMax?: boolean): boolean;
     csharpNativeParseCall(node: any): string;
     csharpNativeLiteralProduct(left: any, right: any): string | undefined;

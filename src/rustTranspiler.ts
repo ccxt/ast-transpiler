@@ -16129,20 +16129,28 @@ export class RustTranspiler extends BaseTranspiler {
         const literal = `"${this.escapeRustStringLiteral(keyText)}"`;
         return this.rustDictSite({ guarded: true, helper: `get_value(&${receiverText}, &Value::Str(${literal}.into()))`, closure: `${receiverText}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`, });
     }
-    /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+    /** `k in D` on a base-field / field-container map, proven local, Dict param, or non-array Value: `in_op`'s Dict arm. */
     rustDictInOp(key: Node, obj: Node): string | undefined {
         const recv: any = this.rustSkipWrappers(obj);
         if (recv === undefined) return undefined;
         let guarded = false;
         if (this.rustDictField(recv) === undefined) {
-            const nested = isElementAccessExpression(recv) && recv.argumentExpression !== undefined
+            const nestedField = isElementAccessExpression(recv) && recv.argumentExpression !== undefined
                 && RustTranspiler.RUST_DICT_VALUE_FIELDS.has(String(this.rustDictField(recv.expression)))
                 && !isStringLiteralLikeNode(recv.argumentExpression);
-            if (!nested) {
+            const nestedDictLocal = !nestedField && !this.isTestSource(obj) && isElementAccessExpression(recv) && recv.argumentExpression !== undefined
+                && this.rustPlainDictValuesAreDicts(recv.expression);
+            if (!nestedField && !nestedDictLocal) {
                 const proof = this.rustDictLocalProof(recv);
-                // a dict-callee local keeps `in_op` for a computed key (content unproven); literal keys only
-                if (proof === undefined || (proof !== 'plain' && !isStringLiteral(key))) return undefined;
-                guarded = true;
+                if (proof !== undefined) {
+                    // a dict-callee local keeps `in_op` for a computed key (content unproven); literal keys only
+                    if (proof !== 'plain' && !isStringLiteral(key)) return undefined;
+                    guarded = true;
+                } else if (!this.isTestSource(obj) && isStringLiteral(key) && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj))) {
+                    guarded = false;
+                } else {
+                    return undefined;
+                }
             } else if (this.isTestSource(obj)) { return undefined; }
         } else if (this.isTestSource(obj)) { return undefined; }
         const recvText = this.printNode(recv, 0).trim();
@@ -16159,6 +16167,112 @@ export class RustTranspiler extends BaseTranspiler {
         // eslint-disable-next-line prefer-const
         keyText = printed;
         return `Value::Bool(${this.rustDictSite({ guarded, helper: `in_op(&${recvText}, &${keyText})`, closure: `${recvText}.as_map().is_some_and(|__m| ${keyText}.as_str().is_some_and(|__k| __m.contains_key(__k)))`, })})`;
+    }
+    /** True when `expr` is a plain Dict local (boxed or typed IndexMap) whose every top-level `expr[k] = rhs` assigns `{}` (never an array). */
+    rustPlainDictValuesAreDicts(expr: any): boolean {
+        const inner = this.rustSkipWrappers(expr);
+        if (!isIdentifier(inner)) return false;
+        const decl: any = this.rustSingleLocalDeclaration(inner);
+        if (decl === undefined || ((this.rustDictLocalProof(inner) !== 'plain') && !this.rustDictLocalIsTyped(decl))) return false;
+        const scope = this.rustEnclosingFunction(decl);
+        const sym = this.rustSymbolOf(decl.name);
+        if (scope === undefined || sym === undefined) return false;
+        const init = this.rustSkipWrappers(decl.initializer);
+        if (!isObjectLiteralExpression(init) || (init as any).properties.length !== 0) return false;
+        const name = String(inner.text);
+        let sawEntryWrite = false;
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n.kind !== SyntaxKind.Identifier || n === decl.name || this.rustSymbolOf(n) !== sym) continue;
+            const parent = n.parent;
+            if (isElementAccessExpression(parent) && parent.expression === n && isBinaryExpression(parent.parent) && parent.parent.left === parent && parent.parent.operatorToken.kind === SyntaxKind.EqualsToken) {
+                const rhs = this.rustSkipWrappers(parent.parent.right);
+                if (!isObjectLiteralExpression(rhs)) return false;
+                sawEntryWrite = true;
+            }
+        }
+        return sawEntryWrite;
+    }
+    /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
+    rustDictParamProof(ident: any): boolean {
+        if (!isIdentifier(ident)) return false;
+        const sym = this.rustSymbolOf(ident);
+        const decl: any = sym?.valueDeclaration?.resolve?.();
+        if (decl === undefined || !isParameterDeclaration(decl)) return false;
+        const typeText = decl.type?.getText?.().trim();
+        if (typeText !== 'Dict' && typeText !== 'NullableDict') return false;
+        const scope = this.rustEnclosingFunction(decl);
+        if (scope === undefined || scope !== this.rustEnclosingFunction(ident)) return false;
+        const name = String(ident.text);
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n.kind !== SyntaxKind.Identifier || n === decl.name || this.rustSymbolOf(n) !== sym) continue;
+            const p = n.parent;
+            if (isBinaryExpression(p) && p.left === n && rustIsAssignmentOperator(p.operatorToken.kind)) return false;
+        }
+        return true;
+    }
+    /** True when `ident` is proven not an array at `atNode` via `!Array.isArray(x)` in an enclosing `if`/left `&&`, or a preceding early-exit `if (... || Array.isArray(x)) { return/throw }`. */
+    rustProvenNotArray(ident: any, atNode: any): boolean {
+        if (!isIdentifier(ident)) return false;
+        const sym = this.rustSymbolOf(ident);
+        const scope = this.rustEnclosingFunction(atNode);
+        if (sym === undefined || scope === undefined) return false;
+        const isArrayCallOf = (e: any): boolean => {
+            const u = this.rustSkipWrappers(e);
+            if (!isCallExpression(u) || !isPropertyAccessExpression(u.expression) || u.arguments.length !== 1) return false;
+            if (!isIdentifier(u.expression.expression) || u.expression.expression.text !== 'Array' || u.expression.name.text !== 'isArray') return false;
+            const arg = this.rustSkipWrappers(u.arguments[0]);
+            return isIdentifier(arg) && arg.text === ident.text && this.rustSymbolOf(arg) === sym;
+        };
+        const isNotArrayConjunct = (e: any): boolean => {
+            const u = this.rustSkipWrappers(e);
+            if (u.kind === SyntaxKind.PrefixUnaryExpression && u.operator === SyntaxKind.ExclamationToken) return isArrayCallOf(u.operand);
+            if (isBinaryExpression(u) && u.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken) return isNotArrayConjunct(u.left) || isNotArrayConjunct(u.right);
+            return false;
+        };
+        const isArrayDisjunct = (e: any): boolean => {
+            const u = this.rustSkipWrappers(e);
+            if (isArrayCallOf(u)) return true;
+            if (isBinaryExpression(u) && u.operatorToken.kind === SyntaxKind.BarBarToken) return isArrayDisjunct(u.left) || isArrayDisjunct(u.right);
+            return false;
+        };
+        const alwaysExits = (st: any): boolean => {
+            if (st === undefined) return false;
+            if (st.kind === SyntaxKind.ReturnStatement || st.kind === SyntaxKind.ThrowStatement || st.kind === SyntaxKind.ContinueStatement || st.kind === SyntaxKind.BreakStatement) return true;
+            if (isBlock(st) && st.statements.length > 0) return alwaysExits(st.statements[st.statements.length - 1]);
+            return false;
+        };
+        const name = String(ident.text);
+        const writtenBetween = (fromPos: number, toPos: number): boolean => {
+            for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+                if (n.kind !== SyntaxKind.Identifier || this.rustSymbolOf(n) !== sym) continue;
+                const pos = n.getStart();
+                if (pos < fromPos || pos >= toPos) continue;
+                const p = n.parent;
+                if (isBinaryExpression(p) && p.left === n && rustIsAssignmentOperator(p.operatorToken.kind)) return true;
+            }
+            return false;
+        };
+        let cur: any = atNode;
+        while (cur !== undefined && cur !== scope) {
+            const parent: any = cur.parent;
+            if (parent === undefined) break;
+            if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken && parent.right === cur && isNotArrayConjunct(parent.left)) {
+                return true;
+            }
+            if (isIfStatement(parent) && parent.thenStatement === cur && isNotArrayConjunct(parent.expression) && !writtenBetween(parent.expression.getEnd(), atNode.getStart())) {
+                return true;
+            }
+            if (isBlock(parent)) {
+                for (const st of parent.statements) {
+                    if (st.getStart() >= cur.getStart()) break;
+                    if (isIfStatement(st) && isArrayDisjunct(st.expression) && alwaysExits(st.thenStatement) && !writtenBetween(st.getEnd(), atNode.getStart())) {
+                        return true;
+                    }
+                }
+            }
+            cur = parent;
+        }
+        return false;
     }
     // `this.F['k1']['k2'] = v` as a statement on a base runtime-state field: the first hop is the map's own `entry`, the write below it an `insert`; a value that reads `self` keeps th...
     rustFieldNestedInsert(node: Node, baseExpr: any, keys: any[], keyStrs: string[], rhs: string): string | undefined {

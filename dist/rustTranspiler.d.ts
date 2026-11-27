@@ -2161,8 +2161,14 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustLocalDictRead(receiverText: string, receiverNode: Node, keyNode: Node): string | undefined;
     /** `X['k']` on a proven local, for a key the runtime does not route to a marker store. */
     rustLocalDictLiteralRead(receiverText: string, receiverNode: Node, keyText: string): string | undefined;
-    /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+    /** `k in D` on a base-field / field-container map, proven local, Dict param, or non-array Value: `in_op`'s Dict arm. */
     rustDictInOp(key: Node, obj: Node): string | undefined;
+    /** True when `expr` is a plain Dict local (boxed or typed IndexMap) whose every top-level `expr[k] = rhs` assigns `{}` (never an array). */
+    rustPlainDictValuesAreDicts(expr: any): boolean;
+    /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
+    rustDictParamProof(ident: any): boolean;
+    /** True when `ident` is proven not an array at `atNode` via `!Array.isArray(x)` in an enclosing `if`/left `&&`, or a preceding early-exit `if (... || Array.isArray(x)) { return/throw }`. */
+    rustProvenNotArray(ident: any, atNode: any): boolean;
     rustFieldNestedInsert(node: Node, baseExpr: any, keys: any[], keyStrs: string[], rhs: string): string | undefined;
     rustDictReadInNativeInsert(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
     rustDictCloneGrowth(line: string): number;

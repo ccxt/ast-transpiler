@@ -8382,10 +8382,42 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     } catch (e) {
       return void 0;
     }
-    if (symbol === void 0 || !this.csharpIntegralTestedInExpression(call, symbol) && (this.csharpIntegralBindingIsRewritten(symbol) || !this.csharpNullGuardAdmitsRead(call, operand.node))) {
+    const guardedClean = symbol !== void 0 && (this.csharpIntegralTestedInExpression(call, symbol) || !this.csharpIntegralBindingIsRewritten(symbol) && this.csharpNullGuardAdmitsRead(call, operand.node) || this.csharpRewrittenIntegralGuardAdmitsRead(call, operand.node, symbol));
+    if (!guardedClean) {
       return symbol !== void 0 && this.csharpInt64BindingNeverNull(symbol) ? `${printed}.GetValueOrDefault()` : void 0;
     }
     return `${printed}.Value`;
+  }
+  // rewritten `Int64?` local read inside an enclosing `if (x != null)` / `else` of `if (x == null)` with no write to `x` between the guard and this statement
+  csharpRewrittenIntegralGuardAdmitsRead(call, operandNode, symbol) {
+    const scope = this.csharpEnclosingFunction(call);
+    if (scope === void 0) {
+      return false;
+    }
+    let stmt = call;
+    while (stmt.parent !== void 0 && !isBlock(stmt.parent) && !isIfStatement(stmt.parent) && !isSourceFile2(stmt.parent)) {
+      stmt = stmt.parent;
+    }
+    const stmtStart = stmt.getStart();
+    let current = call;
+    while (current !== void 0) {
+      const parent = current.parent;
+      if (parent === void 0 || this.csharpIsFunctionLike(parent)) {
+        return false;
+      }
+      if (parent.kind === SyntaxKind4.IfStatement) {
+        const inThen = this.csharpContains(parent.thenStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, true);
+        const inElse = this.csharpContains(parent.elseStatement, current) && this.csharpTestIsNonNullCheck(parent.expression, symbol, false);
+        if ((inThen || inElse) && !this.csharpReceiverWrittenBetween(scope, parent.expression.getEnd(), stmtStart, symbol)) {
+          const lhsAssignOnly = stmt.kind === SyntaxKind4.ExpressionStatement && isBinaryExpression2(stmt.expression) && stmt.expression.operatorToken.kind === SyntaxKind4.EqualsToken && this.csharpContains(stmt.expression.right, operandNode) && !this.csharpReceiverWrittenBetween(scope, stmt.expression.right.getStart(), operandNode.getStart(), symbol);
+          if (lhsAssignOnly || !this.csharpReceiverWrittenBetween(scope, stmtStart, operandNode.getStart(), symbol)) {
+            return true;
+          }
+        }
+      }
+      current = parent;
+    }
+    return false;
   }
   // a local never written after `x = this.safeInteger (o, k, <int literal>)` (safeInteger2 / safeIntegerN alike): SafeIntegerN answers the converted default on a missing key, null a...
   csharpInt64BindingNeverNull(symbol) {
@@ -8605,6 +8637,32 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
       return false;
     }
     return symbol !== void 0 && this.csharpInt64BindingNeverNull(symbol);
+  }
+  // `x = Math.min/max (a, b)` on an `Int64?` local where every operand (including `x` itself while being resolved) is an integer literal or a guarded non-null `int`/`Int64`/`Int64?`
+  csharpGuardedMinMaxWriteIsNative(right) {
+    let call = right;
+    while (call !== void 0 && isParenthesizedExpression(call)) {
+      call = call.expression;
+    }
+    if (!isCallExpression4(call) || call.arguments?.length !== 2 || !isPropertyAccessExpression2(call.expression) || call.expression.expression?.getText?.() !== "Math" || !["min", "max"].includes(call.expression.name?.text)) {
+      return false;
+    }
+    const assign = right?.parent;
+    const lhsSym = isBinaryExpression2(assign) && assign.operatorToken.kind === SyntaxKind4.EqualsToken && isIdentifier2(assign.left) ? this.checkerOrUndefined()?.getSymbolAtLocation(assign.left) : void 0;
+    return call.arguments.every((arg) => {
+      let inner = arg;
+      while (inner !== void 0 && isParenthesizedExpression(inner)) {
+        inner = inner.expression;
+      }
+      if (this.csharpIsIntegerLiteral(inner)) {
+        return true;
+      }
+      if (lhsSym !== void 0 && isIdentifier2(inner) && this.csharpSameBinding(inner, lhsSym)) {
+        return this.csharpRewrittenIntegralGuardAdmitsRead(call, inner, lhsSym);
+      }
+      const op = this.csharpIntegralMinMaxOperand(arg);
+      return op !== void 0 && this.csharpIntegralNonNullText(call, op, "v") !== void 0;
+    });
   }
   // any write to the binding in its function (destructuring targets included) voids a dominance proof
   csharpIntegralBindingIsRewritten(symbol, allowSelfMinMax = false) {
@@ -9764,7 +9822,7 @@ var CSharpTranspiler = class _CSharpTranspiler extends BaseTranspiler {
     if (right?.kind === SyntaxKind4.NullKeyword || right?.kind === SyntaxKind4.Identifier && right.text === "undefined") {
       return csharpType.endsWith("?");
     }
-    if (csharpType === "Int64?" && this.csharpSelfMinMaxWriteIsNative(right)) {
+    if (csharpType === "Int64?" && (this.csharpSelfMinMaxWriteIsNative(right) || this.csharpGuardedMinMaxWriteIsNative(right))) {
       return true;
     }
     let valueType = this.csharpTypeOfInitializer(right) ?? this.csharpSourceLocalType(right);
@@ -94458,19 +94516,26 @@ ${ind}let ${view}: &${map} = &${arc};
     const literal2 = `"${this.escapeRustStringLiteral(keyText)}"`;
     return this.rustDictSite({ guarded: true, helper: `get_value(&${receiverText}, &Value::Str(${literal2}.into()))`, closure: `${receiverText}.as_map().and_then(|__m| __m.get(${literal2})).cloned().unwrap_or(Value::Null)` });
   }
-  /** `k in D` on a base-field / field-container map or a proven local: `in_op`'s Dict arm. */
+  /** `k in D` on a base-field / field-container map, proven local, Dict param, or non-array Value: `in_op`'s Dict arm. */
   rustDictInOp(key, obj) {
     const recv = this.rustSkipWrappers(obj);
     if (recv === void 0)
       return void 0;
     let guarded = false;
     if (this.rustDictField(recv) === void 0) {
-      const nested = isElementAccessExpression5(recv) && recv.argumentExpression !== void 0 && _RustTranspiler.RUST_DICT_VALUE_FIELDS.has(String(this.rustDictField(recv.expression))) && !isStringLiteralLikeNode4(recv.argumentExpression);
-      if (!nested) {
+      const nestedField = isElementAccessExpression5(recv) && recv.argumentExpression !== void 0 && _RustTranspiler.RUST_DICT_VALUE_FIELDS.has(String(this.rustDictField(recv.expression))) && !isStringLiteralLikeNode4(recv.argumentExpression);
+      const nestedDictLocal = !nestedField && !this.isTestSource(obj) && isElementAccessExpression5(recv) && recv.argumentExpression !== void 0 && this.rustPlainDictValuesAreDicts(recv.expression);
+      if (!nestedField && !nestedDictLocal) {
         const proof = this.rustDictLocalProof(recv);
-        if (proof === void 0 || proof !== "plain" && !isStringLiteral3(key))
+        if (proof !== void 0) {
+          if (proof !== "plain" && !isStringLiteral3(key))
+            return void 0;
+          guarded = true;
+        } else if (!this.isTestSource(obj) && isStringLiteral3(key) && (this.rustDictParamProof(recv) || this.rustProvenNotArray(recv, obj))) {
+          guarded = false;
+        } else {
           return void 0;
-        guarded = true;
+        }
       } else if (this.isTestSource(obj)) {
         return void 0;
       }
@@ -94493,6 +94558,140 @@ ${ind}let ${view}: &${map} = &${arc};
       return void 0;
     keyText = printed;
     return `Value::Bool(${this.rustDictSite({ guarded, helper: `in_op(&${recvText}, &${keyText})`, closure: `${recvText}.as_map().is_some_and(|__m| ${keyText}.as_str().is_some_and(|__k| __m.contains_key(__k)))` })})`;
+  }
+  /** True when `expr` is a plain Dict local (boxed or typed IndexMap) whose every top-level `expr[k] = rhs` assigns `{}` (never an array). */
+  rustPlainDictValuesAreDicts(expr) {
+    const inner = this.rustSkipWrappers(expr);
+    if (!isIdentifier4(inner))
+      return false;
+    const decl = this.rustSingleLocalDeclaration(inner);
+    if (decl === void 0 || this.rustDictLocalProof(inner) !== "plain" && !this.rustDictLocalIsTyped(decl))
+      return false;
+    const scope = this.rustEnclosingFunction(decl);
+    const sym = this.rustSymbolOf(decl.name);
+    if (scope === void 0 || sym === void 0)
+      return false;
+    const init = this.rustSkipWrappers(decl.initializer);
+    if (!isObjectLiteralExpression4(init) || init.properties.length !== 0)
+      return false;
+    const name = String(inner.text);
+    let sawEntryWrite = false;
+    for (const n of this.rustScopeNameNodes(scope, name)) {
+      if (n.kind !== SyntaxKind7.Identifier || n === decl.name || this.rustSymbolOf(n) !== sym)
+        continue;
+      const parent = n.parent;
+      if (isElementAccessExpression5(parent) && parent.expression === n && isBinaryExpression5(parent.parent) && parent.parent.left === parent && parent.parent.operatorToken.kind === SyntaxKind7.EqualsToken) {
+        const rhs = this.rustSkipWrappers(parent.parent.right);
+        if (!isObjectLiteralExpression4(rhs))
+          return false;
+        sawEntryWrite = true;
+      }
+    }
+    return sawEntryWrite;
+  }
+  /** True when `ident` is a parameter annotated `Dict` or `NullableDict` and never reassigned in the enclosing function. */
+  rustDictParamProof(ident) {
+    if (!isIdentifier4(ident))
+      return false;
+    const sym = this.rustSymbolOf(ident);
+    const decl = sym?.valueDeclaration?.resolve?.();
+    if (decl === void 0 || !isParameterDeclaration3(decl))
+      return false;
+    const typeText = decl.type?.getText?.().trim();
+    if (typeText !== "Dict" && typeText !== "NullableDict")
+      return false;
+    const scope = this.rustEnclosingFunction(decl);
+    if (scope === void 0 || scope !== this.rustEnclosingFunction(ident))
+      return false;
+    const name = String(ident.text);
+    for (const n of this.rustScopeNameNodes(scope, name)) {
+      if (n.kind !== SyntaxKind7.Identifier || n === decl.name || this.rustSymbolOf(n) !== sym)
+        continue;
+      const p = n.parent;
+      if (isBinaryExpression5(p) && p.left === n && rustIsAssignmentOperator(p.operatorToken.kind))
+        return false;
+    }
+    return true;
+  }
+  /** True when `ident` is proven not an array at `atNode` via `!Array.isArray(x)` in an enclosing `if`/left `&&`, or a preceding early-exit `if (... || Array.isArray(x)) { return/throw }`. */
+  rustProvenNotArray(ident, atNode) {
+    if (!isIdentifier4(ident))
+      return false;
+    const sym = this.rustSymbolOf(ident);
+    const scope = this.rustEnclosingFunction(atNode);
+    if (sym === void 0 || scope === void 0)
+      return false;
+    const isArrayCallOf = (e) => {
+      const u = this.rustSkipWrappers(e);
+      if (!isCallExpression7(u) || !isPropertyAccessExpression4(u.expression) || u.arguments.length !== 1)
+        return false;
+      if (!isIdentifier4(u.expression.expression) || u.expression.expression.text !== "Array" || u.expression.name.text !== "isArray")
+        return false;
+      const arg = this.rustSkipWrappers(u.arguments[0]);
+      return isIdentifier4(arg) && arg.text === ident.text && this.rustSymbolOf(arg) === sym;
+    };
+    const isNotArrayConjunct = (e) => {
+      const u = this.rustSkipWrappers(e);
+      if (u.kind === SyntaxKind7.PrefixUnaryExpression && u.operator === SyntaxKind7.ExclamationToken)
+        return isArrayCallOf(u.operand);
+      if (isBinaryExpression5(u) && u.operatorToken.kind === SyntaxKind7.AmpersandAmpersandToken)
+        return isNotArrayConjunct(u.left) || isNotArrayConjunct(u.right);
+      return false;
+    };
+    const isArrayDisjunct = (e) => {
+      const u = this.rustSkipWrappers(e);
+      if (isArrayCallOf(u))
+        return true;
+      if (isBinaryExpression5(u) && u.operatorToken.kind === SyntaxKind7.BarBarToken)
+        return isArrayDisjunct(u.left) || isArrayDisjunct(u.right);
+      return false;
+    };
+    const alwaysExits = (st) => {
+      if (st === void 0)
+        return false;
+      if (st.kind === SyntaxKind7.ReturnStatement || st.kind === SyntaxKind7.ThrowStatement || st.kind === SyntaxKind7.ContinueStatement || st.kind === SyntaxKind7.BreakStatement)
+        return true;
+      if (isBlock4(st) && st.statements.length > 0)
+        return alwaysExits(st.statements[st.statements.length - 1]);
+      return false;
+    };
+    const name = String(ident.text);
+    const writtenBetween = (fromPos, toPos) => {
+      for (const n of this.rustScopeNameNodes(scope, name)) {
+        if (n.kind !== SyntaxKind7.Identifier || this.rustSymbolOf(n) !== sym)
+          continue;
+        const pos = n.getStart();
+        if (pos < fromPos || pos >= toPos)
+          continue;
+        const p = n.parent;
+        if (isBinaryExpression5(p) && p.left === n && rustIsAssignmentOperator(p.operatorToken.kind))
+          return true;
+      }
+      return false;
+    };
+    let cur = atNode;
+    while (cur !== void 0 && cur !== scope) {
+      const parent = cur.parent;
+      if (parent === void 0)
+        break;
+      if (isBinaryExpression5(parent) && parent.operatorToken.kind === SyntaxKind7.AmpersandAmpersandToken && parent.right === cur && isNotArrayConjunct(parent.left)) {
+        return true;
+      }
+      if (isIfStatement4(parent) && parent.thenStatement === cur && isNotArrayConjunct(parent.expression) && !writtenBetween(parent.expression.getEnd(), atNode.getStart())) {
+        return true;
+      }
+      if (isBlock4(parent)) {
+        for (const st of parent.statements) {
+          if (st.getStart() >= cur.getStart())
+            break;
+          if (isIfStatement4(st) && isArrayDisjunct(st.expression) && alwaysExits(st.thenStatement) && !writtenBetween(st.getEnd(), atNode.getStart())) {
+            return true;
+          }
+        }
+      }
+      cur = parent;
+    }
+    return false;
   }
   // `this.F['k1']['k2'] = v` as a statement on a base runtime-state field: the first hop is the map's own `entry`, the write below it an `insert`; a value that reads `self` keeps th...
   rustFieldNestedInsert(node, baseExpr, keys, keyStrs, rhs) {
