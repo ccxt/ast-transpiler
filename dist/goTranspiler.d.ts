@@ -748,6 +748,9 @@ export declare class GoTranspiler extends BaseTranspiler {
     unifiedNullableStringParams: {
         [method: string]: number[];
     };
+    predictionUnifiedStringParams: {
+        [method: string]: number[];
+    };
     unifiedFloat64Params: {
         [method: string]: number[];
     } | undefined;
@@ -1304,7 +1307,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goResolvedStringSliceSlot(node: any, index: number): boolean;
     goAnnotatedSliceParameterType(param: any): string | undefined;
     goBodyReadsElement(body: any, name: string): boolean;
-    goIsUnifiedStringParameter(methodName: string, index: number): boolean;
+    goIsPredictionFile(node: any): boolean;
+    goIsUnifiedStringParameter(methodName: string, index: number, node?: any): boolean;
     goIsUnifiedSliceParameter(methodName: string, index: number): boolean;
     goUnifiedSliceParameterType(fn: any, param: any): string | undefined;
     goUnifiedAnySliceParameterType(fn: any, param: any): string | undefined;

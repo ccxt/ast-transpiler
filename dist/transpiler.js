@@ -18417,7 +18417,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
   }
   goInstAround(goTranspiler, "goParameterKeepsNilCompareNative", function(upstreamKeeps, body, param, goType) {
     const fn = param.parent;
-    const tabled = goType === "string" && fn?.name?.kind === SyntaxKind5.Identifier && this.goIsUnifiedStringParameter?.(fn.name.text, fn.parameters.indexOf(param));
+    const tabled = goType === "string" && fn?.name?.kind === SyntaxKind5.Identifier && this.goIsUnifiedStringParameter?.(fn.name.text, fn.parameters.indexOf(param), fn);
     return upstreamKeeps.call(this, body, param, goType) || goType === "string" && (tabled || ccxtGoNilComparesAreThrowGuards(body, param));
   });
   goInstAround(goTranspiler, "printInlineEquality", function(upstreamEquality, left, right, leftText, rightText, isEq) {
@@ -18430,7 +18430,8 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
     goTranspiler.goUnifiedStringCallArgs = function(node, identation, flat = false) {
       const callee = node.expression;
       const name = callee?.kind === SyntaxKind5.PropertyAccessExpression ? callee.name?.text : void 0;
-      if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name)) {
+      const hasUnified = typeof name === "string" && (Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name) || this.goIsPredictionFile(node) && Object.prototype.hasOwnProperty.call(this.predictionUnifiedStringParams ?? {}, name));
+      if (!hasUnified) {
         return void 0;
       }
       const args = node.arguments ?? [];
@@ -18440,7 +18441,7 @@ function installCcxtGoLocalTypes(goTranspiler, unifiedInt64Params = void 0, unif
       const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
       return args.map((a, i) => {
         const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
-        if (!this.goIsUnifiedStringParameter(name, i) || this.goPrintedArgType(a) === "string") {
+        if (!this.goIsUnifiedStringParameter(name, i, node) || this.goPrintedArgType(a) === "string") {
           return printed;
         }
         return this.goDerefableStringOperand(a) || ccxtGoEnclosingGuardedStringPointer(this, a) ? "*" + printed : `StringArg(${printed})`;
@@ -27203,6 +27204,8 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedNullableInt64Params = {};
     // inherited methods whose nullable `Str` parameter prints `*string` on the base and every override
     this.unifiedNullableStringParams = {};
+    // prediction-tier only mirror of unifiedStringParams (PredictionExchange and ts/src/prediction/*.ts)
+    this.predictionUnifiedStringParams = {};
     this.unifiedFloat64Params = void 0;
     // `<class>.<method>` -> indexes of required `string` params of an exchange-local method that
     this.uncalledStringParams = {};
@@ -27476,6 +27479,7 @@ var GoTranspiler = class extends BaseTranspiler {
     this.unifiedBoolParams = config["unifiedBoolParams"] ?? {};
     this.unifiedNullableInt64Params = config["unifiedNullableInt64Params"] ?? {};
     this.unifiedNullableStringParams = config["unifiedNullableStringParams"] ?? {};
+    this.predictionUnifiedStringParams = config["predictionUnifiedStringParams"] ?? {};
     this.unifiedFloat64Params = config["unifiedFloat64Params"];
     this.uncalledStringParams = config["uncalledStringParams"] ?? {};
     this.goHandWrittenBaseMethods = config["handWrittenBaseMethods"] ?? [];
@@ -34005,7 +34009,7 @@ ${iden}}`;
     }
     const parseParam = fn.name.text.startsWith("parse");
     const handlerParam = !parseParam && this.goIsProHandlerMethod(fn);
-    if (this.goIsUnifiedStringParameter(fn.name.text, fn.parameters.indexOf(param))) {
+    if (this.goIsUnifiedStringParameter(fn.name.text, fn.parameters.indexOf(param), fn)) {
       if (this.goRequiredStringParameterType(param) !== "string" || !this.goParameterBodyTakes(fn, param, "string")) {
         throw new Error(`unifiedStringParams: ${fn.name.text} parameter ${param.name.text} is not a required string written only as string`);
       }
@@ -34152,9 +34156,20 @@ ${iden}}`;
     const found = this.hasNodeWhere(body, (n) => n.kind === SyntaxKind5.ElementAccessExpression && n.expression?.kind === SyntaxKind5.Identifier && n.expression.text === name);
     return found;
   }
-  goIsUnifiedStringParameter(methodName, index) {
+  goIsPredictionFile(node) {
+    const fileName = String(node?.getSourceFile?.()?.fileName ?? "").replaceAll("\\", "/");
+    return /(?:^|\/)(?:base\/PredictionExchange|prediction\/[^/]+)\.ts$/.test(fileName);
+  }
+  goIsUnifiedStringParameter(methodName, index, node) {
     const indexes = Object.prototype.hasOwnProperty.call(this.unifiedStringParams, methodName) ? this.unifiedStringParams[methodName] : void 0;
-    return Array.isArray(indexes) && indexes.includes(index);
+    if (Array.isArray(indexes) && indexes.includes(index)) {
+      return true;
+    }
+    if (node !== void 0 && this.goIsPredictionFile(node)) {
+      const predIndexes = Object.prototype.hasOwnProperty.call(this.predictionUnifiedStringParams ?? {}, methodName) ? this.predictionUnifiedStringParams[methodName] : void 0;
+      return Array.isArray(predIndexes) && predIndexes.includes(index);
+    }
+    return false;
   }
   // ---- the slice mirror of the string table --------------------------------------
   goIsUnifiedSliceParameter(methodName, index) {
@@ -34699,7 +34714,8 @@ ${iden}}`;
   goUnifiedStringCallArgs(node, identation, flat = false) {
     const callee = node.expression;
     const name = callee?.kind === SyntaxKind5.PropertyAccessExpression ? callee.name?.text : void 0;
-    if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name)) {
+    const hasUnified = typeof name === "string" && (Object.prototype.hasOwnProperty.call(this.unifiedStringParams, name) || this.goIsPredictionFile(node) && Object.prototype.hasOwnProperty.call(this.predictionUnifiedStringParams ?? {}, name));
+    if (!hasUnified) {
       return void 0;
     }
     const args = node.arguments ?? [];
@@ -34709,7 +34725,7 @@ ${iden}}`;
     const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
     return args.map((a, i) => {
       const printed = flat ? this.printNode(a, 0) : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
-      if (!this.goIsUnifiedStringParameter(name, i) || this.goPrintedArgType(a) === "string") {
+      if (!this.goIsUnifiedStringParameter(name, i, node) || this.goPrintedArgType(a) === "string") {
         return printed;
       }
       return `StringArg(${printed})`;
@@ -39253,7 +39269,11 @@ ${pad}if !${okName} ${body.trimStart()}`;
         if (calleeName === void 0) {
           return !pointer && !nilable;
         }
-        if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && this.goIsUnifiedStringParameter(calleeName, argIndex) && this.goHasExitingNilGuard(n)) {
+        if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && this.goIsUnifiedStringParameter(calleeName, argIndex, n) && this.goHasExitingNilGuard(n)) {
+          return true;
+        }
+        const unifiedNullableStr = Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams ?? {}, calleeName) ? this.unifiedNullableStringParams[calleeName] : void 0;
+        if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && Array.isArray(unifiedNullableStr) && unifiedNullableStr.includes(argIndex)) {
           return true;
         }
         if (goType === "*string" && this.goGetArgStrPtrGuardedNeedle(n, param)) {
@@ -40152,7 +40172,7 @@ ${this.getIden(identation)}${returnStatement}`;
     const callee = node.expression;
     const calleeName = callee?.kind === SyntaxKind5.PropertyAccessExpression ? callee.name?.text : void 0;
     const deref = args.map((arg, i) => {
-      if (!derefable(arg) || typeof calleeName === "string" && this.goIsUnifiedStringParameter(calleeName, i)) {
+      if (!derefable(arg) || typeof calleeName === "string" && this.goIsUnifiedStringParameter(calleeName, i, node)) {
         return false;
       }
       const param = this.goCallParamAt(node, i);
