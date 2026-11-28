@@ -575,6 +575,8 @@ export declare class JavaTranspiler extends BaseTranspiler {
     printLogicalCondition(node: any): string | undefined;
     javaCcxtErrorClass(node: any): boolean;
     javaCatchCannotWrap(node: any): boolean;
+    javaCatchCauseTest(node: any): any;
+    printTryStatement(node: any, identation: any): string;
     printInstanceOfExpression(node: any, identation: any): string;
     printArrayIsArrayCall(node: any, _identation: any, parsedArg?: any): string;
     printNativeArrayIsArray(node: any, parsedArg: any): string;

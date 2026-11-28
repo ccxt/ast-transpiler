@@ -829,7 +829,7 @@ export declare class RustTranspiler extends BaseTranspiler {
     /** tc: `this.randomBytes(n)` resolved to the hand-written `-> String` runtime method */
     rustRandomBytesCall(node: any): boolean;
     rustIdString(node: any): boolean;
-    /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+    /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `Display` prints an `Int`. */
     rustClockString(node: any): boolean;
     rust46aIntRuntimeCall(node: any): boolean;
     rustNonceCall(node: any): boolean;
@@ -1128,6 +1128,8 @@ export declare class RustTranspiler extends BaseTranspiler {
         bindPos: number;
     }): boolean;
     rust80bClientDeclPending(plan: any): boolean;
+    rustClientCurrentFlag(declaration: any): string | undefined;
+    printClientCurrentTest(left: any, right: any, op: any): string | undefined;
     rustClientHandleReceiver(plan: any, field: boolean): string;
     printClientHandleField(node: any, top: boolean): string | undefined;
     /** `k in client.subscriptions|futures` as the handle's key test (`bare`: a Rust bool). */
@@ -2174,6 +2176,8 @@ export declare class RustTranspiler extends BaseTranspiler {
     rustFieldNestedInsert(node: Node, baseExpr: any, keys: any[], keyStrs: string[], rhs: string): string | undefined;
     rustDictReadInNativeInsert(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
     rustDictCloneGrowth(line: string): number;
+    rustDictReadInLocalReassign(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
+    rustLiteralBucketEntryRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
     /** `this.<field>['k'].length`: a read-only use of a literal-key read off a base runtime-state field. */
     rustFieldLengthRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined;
     /** Statement-like nodes whose finished lines the 400-char budget is measured on. */
@@ -4369,6 +4373,11 @@ export declare class RustTranspiler extends BaseTranspiler {
     h27r06FreshParseEnum(node: any, parsedArg: string | undefined, kind: 'keys' | 'values'): string | undefined;
     /** `this.parseX (..)` or `super.setMarkets (..)` whose declared return is a proven map type. */
     h27r06FreshParseCall(node: any): boolean;
+    rustClientFreeKeys(node: any, parsedArg: string | undefined): string | undefined;
+    private static readonly RUST_CLIENT_FREE_FIELDS;
+    rustClientFreeReceiver(arg: any, site: any): boolean;
+    /** `this.f` or `this.safeDict (this.f, ..)` with `f` one of the named exchange fields. */
+    rustClientFreeFieldRead(init: any, fields: Set<string>): boolean;
     private static readonly H27R07_BASE_HANDLE_METHODS;
     h27r07BaseHandlePlan(method: any, file: string): any;
     h27r07KeepBoxedKey(node: any, plan: any): boolean;

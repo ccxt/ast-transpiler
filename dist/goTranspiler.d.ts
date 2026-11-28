@@ -145,6 +145,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.OrderbookChecksumMessage': string;
     'this.DecodeProtoMsg': string;
     'this.GetLast_http_response': string;
+    'this.CurrencyIds': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;

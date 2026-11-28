@@ -417,6 +417,8 @@ export declare class CSharpTranspiler extends BaseTranspiler {
     csharpTextHasTopLevelConditional(text: string): boolean;
     csharpPrintedConditionIsBoolean(text: string): boolean;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
+    csharpIsStringFieldFunctionTest(condition: any): boolean;
+    printIfStatement(node: any, identation: any): string;
     csharpEqualityOperandType(node: any): string | undefined;
     csharpParameterDeclaration(node: any): ParameterDeclaration | undefined;
     csharpParameterOperandType(node: any): string | undefined;
