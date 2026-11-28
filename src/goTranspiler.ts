@@ -3111,6 +3111,10 @@ const NIL_DECLARED_READ_RULE = {
         [SyntaxKind.AsExpression]: (parent, node, goTranspiler) => {
             const { current, parent: outer } = goReadClimb (parent);
             if (outer?.kind !== SyntaxKind.CallExpression) { return false; }
+            // `parseInt (x as string)`: the one-argument global only reads the string behind the pointer
+            if ((outer.expression?.kind === SyntaxKind.Identifier) && (outer.expression.text === 'parseInt')) {
+                return (outer.arguments.length === 1) && (outer.arguments[0] === current) && (parent.type?.kind === SyntaxKind.StringKeyword);
+            }
             const callee = printedCalleeOfCall (goTranspiler, outer);
             return [ 'this.Client', 'this.Watch', 'this.WatchMultiple' ].includes (callee) && (outer.arguments.indexOf (current) === 0);
         },
@@ -18695,7 +18699,8 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         }
         const nullableStrIndexes = this.goUnifiedNullableStringSlots(fn, fn.name.text);
         if (Array.isArray(nullableStrIndexes) && nullableStrIndexes.includes(fn.parameters.indexOf(param))) {
-            if ((param.type?.getText() !== 'Str') || !this.goLocalIsSafeToType(fn.body, param, param.name.text, '*string')) {
+            const optionalString = (param.questionToken !== undefined) && (param.type?.kind === SyntaxKind.StringKeyword);
+            if (((param.type?.getText() !== 'Str') && !optionalString) || !this.goLocalIsSafeToType(fn.body, param, param.name.text, '*string')) {
                 throw new Error(`unifiedNullableStringParams: ${fn.name.text} parameter ${param.name.text} is not a Str written only as *string`);
             }
             return '*string';
