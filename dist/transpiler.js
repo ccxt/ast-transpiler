@@ -23492,10 +23492,17 @@ function installStringPtrParams(goTranspiler) {
   const upstreamArgType = goTranspiler.goPrintedArgType;
   const widenedSites = function(self, fn, index) {
     const name = fn.name.text;
+    const selfParam = fn.parameters?.[index];
     for (const call of self.goSameFileCallsOf(fn, name)) {
       const arg = call.arguments?.[index];
       if (arg === void 0 || arg.kind === SyntaxKind5.SpreadElement) {
         return false;
+      }
+      if (arg.kind === SyntaxKind5.NullKeyword || arg.kind === SyntaxKind5.Identifier && arg.text === "undefined") {
+        continue;
+      }
+      if (selfParam !== void 0 && arg.kind === SyntaxKind5.Identifier && self.goValueDecl(arg) === selfParam) {
+        continue;
       }
       const t = upstreamArgType.call(self, arg);
       if (t !== "*string" && t !== "string") {
@@ -23511,7 +23518,7 @@ function installStringPtrParams(goTranspiler) {
           continue;
         }
         const arg = site.args[index];
-        if (arg === void 0 || !(self.goTextArgMatchesType(arg, "*string", site.file, tree) || textIsStringLiteral(arg) || objectKeysElementArg(arg, tree.fileText.get(site.file) ?? "", site.at))) {
+        if (arg === void 0 || !(arg === "undefined" || arg === "null" || self.goTextArgMatchesType(arg, "*string", site.file, tree) || textIsStringLiteral(arg) || objectKeysElementArg(arg, tree.fileText.get(site.file) ?? "", site.at))) {
           return false;
         }
       }
@@ -23554,6 +23561,59 @@ function installStringPtrParams(goTranspiler) {
     }
   };
   const upstreamArgs = goTranspiler.printArgsForCallExpression;
+  goTranspiler.goUnifiedNullableStringCallArgs = function(node, identation, flat = false) {
+    const args = node.arguments ?? [];
+    if (args.length === 0 || args.some((a) => a.kind === SyntaxKind5.SpreadElement)) {
+      return void 0;
+    }
+    const callee = node.expression;
+    const calleeName = callee?.kind === SyntaxKind5.PropertyAccessExpression ? callee.name?.text : void 0;
+    if (typeof calleeName === "string" && Object.prototype.hasOwnProperty.call(this.unifiedStringParams ?? {}, calleeName)) {
+      return void 0;
+    }
+    const unifiedNullableStr = typeof calleeName === "string" ? this.goUnifiedNullableStringSlots(node, calleeName) : void 0;
+    if (!Array.isArray(unifiedNullableStr)) {
+      return void 0;
+    }
+    const isTestFile = /(?:^|[\\/])ts[\\/]src[\\/]test[\\/]/.test(String(node.getSourceFile?.()?.fileName ?? ""));
+    const isStringSliceElement = (a) => {
+      if (a?.kind !== SyntaxKind5.ElementAccessExpression || !ts.isIdentifier(a.expression)) {
+        return false;
+      }
+      if (this.goDeclaredTypeOfIdentifier(a.expression) === "[]string") {
+        return true;
+      }
+      const decl = this.goValueDecl(a.expression);
+      return decl?.kind === SyntaxKind5.Parameter && this.goGetArgParameterType(decl) === "[]string";
+    };
+    const wrapKind = args.map((a, i) => {
+      if (!unifiedNullableStr.includes(i)) {
+        return void 0;
+      }
+      const t = this.goPrintedArgType(a);
+      if (t === "string" || isStringSliceElement(a)) {
+        return "string";
+      }
+      if (isTestFile && t !== "*string" && !isAbsentExpression(a)) {
+        return "test";
+      }
+      return void 0;
+    });
+    if (!wrapKind.some((w) => w !== void 0)) {
+      return void 0;
+    }
+    const depth = this.goExprDepth + (args.length > 1 ? 1 : 0);
+    return args.map((a, i) => {
+      const text = flat ? this.printNode(a, 0).trim() : this.goWithExprDepth(depth, () => this.printNode(a, identation)).trim();
+      if (wrapKind[i] === "string") {
+        return goStringAddressArg(this, a, text) ?? ccxtGoStringParamAddress(this, a) ?? goStringListElementAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")";
+      }
+      if (wrapKind[i] === "test") {
+        return "SafeStringPtr(" + text + ")";
+      }
+      return text;
+    }).join(", ");
+  };
   goTranspiler.printArgsForCallExpression = function(node, identation) {
     const printed = upstreamArgs.call(this, node, identation);
     const args = node.arguments ?? [];
@@ -23565,17 +23625,9 @@ function installStringPtrParams(goTranspiler) {
     if (typeof calleeName === "string" && Object.prototype.hasOwnProperty.call(this.unifiedStringParams ?? {}, calleeName)) {
       return printed;
     }
-    const unifiedNullableStr = typeof calleeName === "string" && Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams ?? {}, calleeName) ? this.unifiedNullableStringParams[calleeName] : void 0;
+    const unifiedNullableStr = typeof calleeName === "string" ? this.goUnifiedNullableStringSlots(node, calleeName) : void 0;
     if (Array.isArray(unifiedNullableStr)) {
-      const wrapUnified = args.map((a, i) => unifiedNullableStr.includes(i) && upstreamArgType.call(this, a) === "string");
-      if (!wrapUnified.some((w) => w)) {
-        return printed;
-      }
-      const depth2 = this.goExprDepth + (args.length > 1 ? 1 : 0);
-      return args.map((a, i) => {
-        const text = this.goWithExprDepth(depth2, () => this.printNode(a, identation)).trim();
-        return wrapUnified[i] ? goStringAddressArg(this, a, text) ?? ccxtGoStringParamAddress(this, a) ?? goStringListElementAddressArg(this, a, text) ?? "SafeStringPtr(" + text + ")" : text;
-      }).join(", ");
+      return this.goUnifiedNullableStringCallArgs?.(node, identation, false) ?? printed;
     }
     const decl = stringPtrParamCallDeclaration(this, node);
     if (decl === void 0) {
@@ -24007,8 +24059,14 @@ function goStringAddressArg(goTranspiler, arg, text) {
   return "&" + text;
 }
 function goStringListElementAddressArg(goTranspiler, arg, text) {
-  if (arg?.kind !== SyntaxKind5.ElementAccessExpression || !ts.isIdentifier(arg.expression) || !/^[A-Za-z_]\w*\[[A-Za-z_0-9]\w*\]$/.test(text) || goTranspiler.goDeclaredTypeOfIdentifier(arg.expression) !== "[]string") {
+  if (arg?.kind !== SyntaxKind5.ElementAccessExpression || !ts.isIdentifier(arg.expression) || !/^[A-Za-z_]\w*\[[A-Za-z_0-9]\w*\]$/.test(text)) {
     return void 0;
+  }
+  if (goTranspiler.goDeclaredTypeOfIdentifier(arg.expression) !== "[]string") {
+    const decl = goTranspiler.goValueDecl(arg.expression);
+    if (decl?.kind !== SyntaxKind5.Parameter || goTranspiler.goGetArgParameterType(decl) !== "[]string") {
+      return void 0;
+    }
   }
   return "&" + text;
 }
@@ -33696,7 +33754,7 @@ ${iden}}`;
       if (node.expression.expression.kind === SyntaxKind5.ThisKeyword) {
         const methodName = this.printNode(node.expression.name, 0);
         if (this.wrapThisCalls || this.wrapCallMethods.includes(methodName)) {
-          const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? goDictParamCallArgs(this, node, 0) ?? args.map((a) => this.printNode(a, 0)).join(", ");
+          const argsParsed = this.goUnifiedStringCallArgs(node, 0, true) ?? this.goUnifiedNullableStringCallArgs?.(node, 0, true) ?? goDictParamCallArgs(this, node, 0) ?? args.map((a) => this.printNode(a, 0)).join(", ");
           return `<-this.callInternal("${methodName}"${args.length > 0 ? ", " + argsParsed : ""})`;
         }
       }
@@ -34703,7 +34761,7 @@ ${iden}}`;
       }
       return "*int64";
     }
-    const nullableStrIndexes = Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams, fn.name.text) ? this.unifiedNullableStringParams[fn.name.text] : void 0;
+    const nullableStrIndexes = this.goUnifiedNullableStringSlots(fn, fn.name.text);
     if (Array.isArray(nullableStrIndexes) && nullableStrIndexes.includes(fn.parameters.indexOf(param))) {
       if (param.type?.getText() !== "Str" || !this.goLocalIsSafeToType(fn.body, param, param.name.text, "*string")) {
         throw new Error(`unifiedNullableStringParams: ${fn.name.text} parameter ${param.name.text} is not a Str written only as *string`);
@@ -35392,6 +35450,33 @@ ${iden}}`;
       return next;
     });
     return changed ? formatted.join(", ") : void 0;
+  }
+  goUnifiedNullableStringSlots(node, name) {
+    const table = this.unifiedNullableStringParams;
+    if (table === void 0 || typeof name !== "string") {
+      return void 0;
+    }
+    if (Object.prototype.hasOwnProperty.call(table, name)) {
+      return table[name];
+    }
+    const cls = this.goEnclosingClassName(node);
+    if (typeof cls === "string") {
+      const key = `${cls}.${name}`;
+      if (Object.prototype.hasOwnProperty.call(table, key)) {
+        return table[key];
+      }
+      const tree = this.goTsSrcTree(node?.getSourceFile?.());
+      const file = tree?.relativeOf.get(path2.resolve(String(node?.getSourceFile?.()?.fileName ?? "")));
+      if (tree !== void 0 && file !== void 0) {
+        for (const k of Object.keys(table)) {
+          const dot = k.indexOf(".");
+          if (dot > 0 && k.slice(dot + 1) === name && this.goTsSrcFileDerivesFrom(tree, file, k.slice(0, dot))) {
+            return table[k];
+          }
+        }
+      }
+    }
+    return void 0;
   }
   // the call arguments of a unified method whose parameter prints `string`: an argument the
   // printer cannot prove a Go string goes through StringArg, which panics on any other value
@@ -40002,7 +40087,7 @@ ${pad}if !${okName} ${body.trimStart()}`;
         if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && this.goIsUnifiedStringParameter(calleeName, argIndex, n) && this.goHasExitingNilGuard(n)) {
           return true;
         }
-        const unifiedNullableStr = Object.prototype.hasOwnProperty.call(this.unifiedNullableStringParams ?? {}, calleeName) ? this.unifiedNullableStringParams[calleeName] : void 0;
+        const unifiedNullableStr = this.goUnifiedNullableStringSlots(n, calleeName);
         if (goType === "*string" && callee?.kind === SyntaxKind5.PropertyAccessExpression && Array.isArray(unifiedNullableStr) && unifiedNullableStr.includes(argIndex)) {
           return true;
         }

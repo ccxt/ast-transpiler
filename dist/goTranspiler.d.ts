@@ -748,6 +748,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     unifiedNullableStringParams: {
         [method: string]: number[];
     };
+    goUnifiedNullableStringCallArgs?: (node: any, identation: number, flat?: boolean) => string | undefined;
     predictionUnifiedStringParams: {
         [method: string]: number[];
     };
@@ -1343,6 +1344,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goUnifiedNumericSlotType(name: string, index: number, node?: any): 'int64' | 'float64' | undefined;
     goFormatUnifiedNumericArg(name: string, index: number, arg: any, printed: string): string;
     goUnifiedNumericCallArgs(node: any, identation: any): string | undefined;
+    goUnifiedNullableStringSlots(node: any, name: string): number[] | undefined;
     goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
     goRequiredStringParameterType(param: any): string | undefined;
     goParameterBodyTakes(fn: any, param: any, goType: string): boolean;
