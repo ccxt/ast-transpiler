@@ -1381,7 +1381,7 @@ describe('rust transpiling tests', () => {
     test('toString call', () => {
         const ts = 'const r = n.toString();'
         const output = transpiler.transpileRust(ts).content;
-        expect(output).toContain('to_string_val(&n)');
+        expect(output).toContain('format!("{}", n)');
     });
 
     test('toUpperCase call', () => {
@@ -5276,8 +5276,8 @@ describe('rust native numeric/string helpers', () => {
         const out = rust('function f(s: string) { const r = s.toString(); return r; }');
         expect(out).toContain('Value::Str(format!("{}", s).into())');
     });
-    test('any toString keeps the helper', () => {
-        expect(rust('function f(n: any) { const r = n.toString(); return r; }')).toContain('to_string_val(&n)');
+    test('any toString prints the Display of the box', () => {
+        expect(rust('function f(n: any) { const r = n.toString(); return r; }')).toContain('Value::Str(format!("{}", n).into())');
     });
     test('Math.floor/round/ceil of a number go native', () => {
         const out = rust('function f(n: number) { const a = Math.floor(n); const b = Math.round(n); const c = Math.ceil(n); return [a, b, c]; }');
@@ -5477,7 +5477,7 @@ describe('proven-Str safeString locals: native equality / replace / split / toSt
     test('a non-string write or destructuring write keeps the helpers', () => {
         expect(eqOut).toContain('if !is_equal(&a, &d) {');
         expect(eqOut).toContain('if is_equal(&a, &e) {');
-        expect(eqOut).toContain('let mut v: Value = to_string_val(&d);');
+        expect(eqOut).toContain('let mut v: Value = Value::Str(format!("{}", d).into());');
     });
 });
 
@@ -17545,7 +17545,7 @@ describe('ral-47i: a safeValueN / safeValue2 result used only by null tests reac
     });
 });
 
-describe('ral-47a: `s += v.toString ()` with an any-typed `v` appends the Display of `to_string_val`', () => {
+describe('ral-47a: `s += v.toString ()` with an any-typed `v` appends the Display text', () => {
     const src = (body: string) =>
         'class E {\n' +
         '    hold(x: any): any { return x; }\n' +
@@ -17562,7 +17562,7 @@ describe('ral-47a: `s += v.toString ()` with an any-typed `v` appends the Displa
             "        arrStr += ']';\n" +
             '        return this.hold(arrStr);\n')).content;
         expect(output).toContain('let mut arrStr: String = "[".to_string();');
-        expect(output).toContain('arrStr.push_str(&(to_string_val(&arrayElement)).to_string());');
+        expect(output).toContain('arrStr.push_str(&format!("{}", arrayElement));');
     });
     test('negative: a toString on a number-typed receiver is not taken by this path', () => {
         const output = transpiler.transpileRust(src(

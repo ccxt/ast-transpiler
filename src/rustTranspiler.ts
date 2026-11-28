@@ -5225,7 +5225,7 @@ export class RustTranspiler extends BaseTranspiler {
         return this.rustIntToStringShape(node) || this.rustVenueIntCall(recv) || this.rust46aIntRuntimeCall(recv)
             || (isCallExpression(recv) && isPropertyAccessExpression(recv.expression) && recv.expression.expression.kind === SyntaxKind.ThisKeyword && this.rustBaseTypedReturnKind(recv) === 'int');
     }
-    /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `to_string_val` prints an `Int`. */
+    /** `this.milliseconds().toString()`: the decimal text of the `i64`, as `Display` prints an `Int`. */
     rustClockString(node): boolean {
         if (!isCallExpression(node) || node.arguments.length !== 0 || !isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'toString') return false;
         const clock: any = this.unwrapParens(node.expression.expression);
@@ -9589,7 +9589,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
     /** `s += v` with `v` a string-typed `Value` (not a `+` chain): `Display` is the text the `add` helper concatenates. */
     rustStrPushValueText(target, right, dry: boolean): string | undefined {
-        // ral-47a: `v.toString ()` on an `any` receiver prints `to_string_val(&v)`, always a `Value::Str` (its Display is that text)
+        // ral-47a: `v.toString ()` on an `any` receiver prints the `Display` text of `v` (`format!("{}", v)`)
         const anyToString = isCallExpression(right) && right.arguments.length === 0 && isPropertyAccessExpression(right.expression)
             && String(right.expression.name.text) === 'toString' && isIdentifier(right.expression.expression)
             && (this.typeOfNodeIfAny(right.expression.expression)?.flags & TypeFlags.Any) !== 0;
@@ -9597,6 +9597,8 @@ export class RustTranspiler extends BaseTranspiler {
         if (this.rustScalarHasTypedOperand(right) || new RegExp(`\\b${String(target.text)}\\b`).test(String(right.getText())) || String(right.getText()).includes('\n')) return undefined;
         if (dry) return '_';
         const text = this.printNode(right, 0).trim();
+        const shown = anyToString ? this.rustFormatPrints.get(right) : undefined;
+        if (shown !== undefined) return shown;
         return `${isIdentifier(right) ? text : `(${text})`}.to_string()`;
     }
     /** A string-method local returned from a method whose signature alone could print `-> Option<String>`: typing it would flip that ABI. */
@@ -17500,7 +17502,7 @@ export class RustTranspiler extends BaseTranspiler {
         const cast65b: any = recv65b?.kind === SyntaxKind.AsExpression ? recv65b.expression : undefined;
         if (cast65b !== undefined && isIdentifier(cast65b) && this.rustScalarUseForms.get(cast65b) === 'concat' && this.rust65bCastToStringRecv(cast65b)) return this.rustRecordFormatToString(node, `${super.printIdentifier(cast65b)}.as_deref().unwrap_or("null")`);
         const preciseText = this.printRustPreciseToString(node); if (preciseText !== undefined) return preciseText;
-        return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? `to_string_val(&${name})`;
+        return this.printRustVenueIntToString(node, name) ?? this.printRustNativeToString(node, name) ?? this.printRustToString(node, name) ?? this.rustRecordFormatToString(node, name);
     }
     /** `x` is a local of the base `Precise` class: a typed `Precise` struct in Rust (precise.rs) with `integer`, `decimals: i64`. */
     rustPreciseLocal(x): boolean {
@@ -30215,7 +30217,7 @@ export class RustTranspiler extends BaseTranspiler {
     }
     // Numeric/string helpers on checker-proven `number` / `string` operands (nullish members allowed: the helper's Null arm is reproduced). Each native form answers exactly what the h...
     rustOperandKind(node): string | undefined { try { if (node === undefined || !this.printsValueExpression(node)) return undefined; return this.primitiveKindOfType(this.typeOfNodeIfAny(node)); } catch (e) { return undefined; } }
-    // `x.toString()` on a number/string: `to_string_val` is `stringify_simple`, i.e. `Display`. Typed `Option<String>` receivers have no `Display`, so they keep the helper.
+    // `x.toString()` on a number/string: the `Display` text. Typed `Option<String>` receivers have no `Display`, so they take the later arms.
     printRustNativeToString(node, name: string): string | undefined {
         const receiver = node?.expression?.expression;
         // an `i64` / `Option<i64>` local displays as the `Int` / `Null` box it replaces (`n` / `null`)
@@ -30227,7 +30229,7 @@ export class RustTranspiler extends BaseTranspiler {
         if (sbLocal !== undefined && this.rustScalarUseForms.get(receiver) === 'xbox' && this.rustSbCopyBoxUse(receiver, sbLocal.kind)) return this.rustRecordFormatToString(node, name);
         // xb: an `i64` counter displays as the `Int` box it replaces (`Display` of `Value::Int(n)` is `n`'s)
         if (receiver !== undefined && this.rustI64CounterOperand(this.unwrapParens(receiver)) && this.rustI64CounterUse(this.unwrapParens(receiver))) return this.rustRecordFormatToString(node, name);
-        // ral-70f: a ral-70f reader local boxed at its `.toString()` read displays its `Str` / `Null` box (`format!("{}", <box>)`), the Display `to_string_val` gave the same box (ccxt's n...
+        // ral-70f: a ral-70f reader local boxed at its `.toString()` read displays its `Str` / `Null` box (`format!("{}", <box>)`), the Display of the same box (ccxt's n...
         if (receiver !== undefined && isIdentifier(receiver) && this.rustScalarUseForms.get(receiver) === 'box' && this.rust70fOperandBox(receiver)) return this.rustRecordFormatToString(node, name);
         const kind = this.rustOperandKind(receiver);
         if (kind !== 'number' && kind !== 'string') return undefined;

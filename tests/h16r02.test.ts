@@ -67,16 +67,16 @@ describe('Precise locals are the typed struct', () => {
     test('the decimals write is the i64 field', () => {
         expect(out).toContain('(precise).decimals += 8;');
     });
-    test('an any local keeps the helper forms', () => {
-        expect(out).toContain('to_string_val(&o)');
+    test('an any local keeps the boxed forms', () => {
+        expect(out).toContain('format!("{}", o)');
         expect(out).not.toContain('(o).decimals');
     });
     test('a write of an any operand keeps the helper sum', () => {
         expect(out).not.toContain('(q).decimals');
         expect(out).toMatch(/self\.sum\(/);
     });
-    test('a maybe-undefined Precise keeps the helper toString', () => {
+    test('a maybe-undefined Precise keeps the boxed toString', () => {
         expect(out).not.toContain('m.to_string()');
-        expect(out).toContain('to_string_val(&m)');
+        expect(out).toContain('format!("{}", m)');
     });
 });
