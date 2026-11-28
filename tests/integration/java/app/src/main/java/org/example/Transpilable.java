@@ -175,9 +175,9 @@ class Test
             System.out.println("str is hello world"); // should print "str is hello world"
         }
         System.out.println(((String)str).toUpperCase());
-        Object startsWithHello = ((String)str).startsWith(((String)"hello"));
+        Object startsWithHello = ((String)str).startsWith("hello");
         System.out.println(this.boolToString(startsWithHello)); // should print true
-        Object endsWithWorld = ((String)str).endsWith(((String)"world"));
+        Object endsWithWorld = ((String)str).endsWith("world");
         System.out.println(this.boolToString(endsWithWorld)); // should print true
         Object stringParts = new java.util.ArrayList<Object>(java.util.Arrays.asList(((String)str).split(java.util.regex.Pattern.quote(" "))));
         System.out.println(((java.util.List<?>)stringParts).size()); // should print 2

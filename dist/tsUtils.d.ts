@@ -1,4 +1,4 @@
-import { NodeFlags, ModifierFlags, type Node } from "typescript/unstable/ast";
+import { NodeFlags, ModifierFlags, type Node } from "typescript/ast";
 declare function isFunctionLike(node: Node | undefined): boolean;
 declare function isClassLike(node: Node | undefined): boolean;
 declare function isStringLiteralLike(node: Node | undefined): boolean;

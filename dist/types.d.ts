@@ -1,5 +1,5 @@
-import { type SourceFile } from "typescript/unstable/ast";
-import { type API, type Checker, type Program, type Snapshot } from "typescript/unstable/sync";
+import { type SourceFile } from "typescript/ast";
+import { type API, type Checker, type Program, type Snapshot } from "typescript/sync";
 interface IInput {
     language: Languages;
     async: boolean;

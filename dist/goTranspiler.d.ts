@@ -1,7 +1,8 @@
 import { BaseTranspiler } from "./baseTranspiler.js";
-import { SyntaxKind } from 'typescript/unstable/ast';
-import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/unstable/ast';
-import * as tsAst from 'typescript/unstable/ast';
+import { SyntaxKind } from 'typescript/ast';
+import { Checker } from 'typescript/sync';
+import type { BinaryExpression, CallExpression, Node, NodeArray, Statement } from 'typescript/ast';
+import * as tsAst from 'typescript/ast';
 export declare const ts: any;
 export declare function urlsDescribeStringProducer(initializer: any): boolean;
 export declare function installNilDeclaredTupleJoins(goTranspiler: any): void;
@@ -29,12 +30,19 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.Currency': string;
     'this.SafeCurrency': string;
     'this.SafeMarket': string;
+    'this.Symbol': string;
+    'this.GetSupportedMapping': string;
+    'this.ConvertTypeToAccount': string;
     'this.Outcome': string;
     'this.SafeOutcome': string;
     'this.ParseSearchQueries': string;
     'this.StringToCharsArray': string;
     'this.EthEncodeStructuredData': string;
     'this.MarketSymbols': string;
+    'this.FindMessageHashes': string;
+    'this.MarketIds': string;
+    'this.MarketCodes': string;
+    'this.ShortenSlug': string;
     'this.Capitalize': string;
     'this.Uuid16': string;
     'this.Uuid22': string;
@@ -79,10 +87,12 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.SafeNumber2': string;
     'this.SafeNumberN': string;
     'this.SafeNumberOmitZero': string;
+    'this.SafeIntegerOmitZero': string;
     'exchange.SafeNumber': string;
     'exchange.SafeNumber2': string;
     'exchange.SafeNumberN': string;
     'exchange.SafeNumberOmitZero': string;
+    'exchange.SafeIntegerOmitZero': string;
     'this.ParseNumber': string;
     'exchange.ParseNumber': string;
     'this.NumberToString': string;
@@ -94,6 +104,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'strings.Split': string;
     'strings.Replace': string;
     'strings.ReplaceAll': string;
+    'strings.TrimSpace': string;
     'strings.Join': string;
     'strings.ToUpper': string;
     'strings.ToLower': string;
@@ -121,6 +132,20 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.HandleMarketTypeAndParams': string;
     'this.ParseTimeframe': string;
     'exchange.ParseTimeframe': string;
+    'this.SlugToMarketSymbol': string;
+    'this.SlugToOutcomeSymbol': string;
+    'this.NormalizeTagKey': string;
+    'this.RlpEncodeList': string;
+    'this.IntToRlpHex': string;
+    'this.PadHexToEven': string;
+    'this.HexToRlpBytes': string;
+    'this.FilterEventsByStatus': string;
+    'this.FilterEventsByTags': string;
+    'this.FilterEventsBySearchIn': string;
+    'this.OrderbookChecksumMessage': string;
+    'this.DecodeProtoMsg': string;
+    'this.GetLast_http_response': string;
+    'this.CurrencyIds': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;
@@ -263,6 +288,7 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
     MarketId: string;
     Currency: string;
     MarketSymbols: string;
+    CreateExpiredOptionMarket: string;
     PriceToPrecision: string;
     AmountToPrecision: string;
     DecimalToPrecision: string;
@@ -355,6 +381,26 @@ export declare const CCXT_GO_GETARG_SAFE_CONSUMERS: {
         '1': string;
         '2': string;
         '3': string;
+    };
+    ParseFundingHistories: {
+        '2': string;
+        '3': string;
+    };
+    SafeValue: string;
+    Yyyymmdd: {
+        '0': string;
+    };
+    Ymdhms: {
+        '0': string;
+    };
+    Ymd: {
+        '0': string;
+    };
+    Yymmdd: {
+        '0': string;
+    };
+    StringToCharsArray: {
+        '0': string;
     };
 };
 export declare const CCXT_GO_ASYNC_ELEM_TYPES: {
@@ -589,7 +635,7 @@ export declare function ccxtGoAwaitReceiveUnbox(goTranspiler: any, awaitNode: an
     wrap: (recv: any) => string;
 };
 export { ccxtGoTupleResultJoin };
-export declare function installCcxtGoLocalTypes(goTranspiler: any, unifiedInt64Params?: any): void;
+export declare function installCcxtGoLocalTypes(goTranspiler: any, unifiedInt64Params?: any, unifiedFloat64Params?: any): void;
 export declare function ccxtGoTupleParamsElementType(goTranspiler: any, element: any): any;
 declare class GoNilDeclaredAssignmentScan {
     [key: string]: any;
@@ -629,7 +675,7 @@ export declare function installCcxtGoLimitLocals(goTranspiler: any): void;
 declare function ccxtGoTupleResultCall(node: any): boolean;
 declare function ccxtGoTupleResultFirst(call: any): any;
 declare function ccxtGoTupleResultUnwrap(text: any): any;
-declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, untypedOk?: boolean, first?: string): string;
+declare function ccxtGoTupleResultJoin(printed: any, count: any, declare: any, untypedOk?: boolean, first?: string, named?: any): string;
 export { ccxtGoTupleResultCall, ccxtGoTupleResultFirst, ccxtGoTupleResultUnwrap };
 export declare function installCcxtGoTupleSlotReads(goTranspiler: any): void;
 export declare function installCcxtGoParamTypes(goTranspiler: any): any;
@@ -637,6 +683,7 @@ export declare function goDynamicCallParamsCheck(): string[];
 export declare const GO_BASE_DICT_PARAMS: {
     [method: string]: number[];
 };
+export declare function goDictParamCallArgs(go: any, node: any, identation: number): string | undefined;
 export declare function installCcxtGoDictParams(goTranspiler: any): any;
 export declare function goDictParamTypesSelfTest(): string[];
 export declare function installCcxtGoGb05ParamTypes(goTranspiler: any): any;
@@ -650,11 +697,36 @@ export declare function installFmGo5GP08(goTranspiler: any): void;
 export declare function installFmGo5OG02(goTranspiler: any): void;
 export declare function installRfGo5OwnedTables(goTranspiler: any): void;
 export declare function installNumParams(goTranspiler: any): void;
+export declare const GO_BASE_STR_PTR_PARAMS: {
+    [method: string]: number[];
+};
+export declare function installCcxtGoBaseStrPtrParams(goTranspiler: any): any;
 export declare function installCcxtGoHooks(goTranspiler: any, unifiedInt64Params?: any): void;
+export declare function installCcxtGoFeeTierLiterals(goTranspiler: any): void;
 export declare function alignGoTrailingComments(content: string): string;
 export declare class GoTranspiler extends BaseTranspiler {
-    goScopeDescendants: WeakMap<object, any[]>;
+    goScopeIndexCache: WeakMap<object, {
+        all: any[];
+        idents: Map<string, any[]>;
+        decls: Map<string, any[]>;
+        bindings: Set<string>;
+    }>;
+    goScopeIndex(scope: any): {
+        all: any[];
+        idents: Map<string, any[]>;
+        decls: Map<string, any[]>;
+        bindings: Set<string>;
+    };
     goDescendantsOf(scope: any): any[];
+    goScopeIdents(scope: any, name: string): any[];
+    goCheckerMemoized: WeakSet<object>;
+    getChecker(): Checker;
+    goValueDecl(node: any): any;
+    goSfPropAccessCache: WeakMap<object, Map<string, any[]>>;
+    goSourceFilePropAccesses(sf: any, name: string): any[];
+    goCachedCycleBool(cacheProp: string, activeProp: string, key: any, prove: () => boolean): boolean;
+    goReadOnlyCalleeArg(node: any, checkParam: (fn: any, param: any) => boolean, requireArity: boolean, nameRe?: RegExp): boolean;
+    goMemo<K extends object, V>(cache: WeakMap<K, V> | Map<K, V>, key: K, compute: () => V): V;
     hasNodeWhere(scope: Node | undefined, predicate: (n: any) => boolean): boolean;
     binaryExpressionsWrappers: any;
     wrapThisCalls: boolean;
@@ -667,16 +739,34 @@ export declare class GoTranspiler extends BaseTranspiler {
             [index: number]: string;
         };
     };
+    unifiedInt64Params: {
+        [method: string]: number[];
+    };
     unifiedBoolParams: {
         [method: string]: number[];
     };
     unifiedNullableInt64Params: {
         [method: string]: number[];
     };
+    unifiedNullableStringParams: {
+        [method: string]: number[];
+    };
+    goUnifiedNullableStringCallArgs?: (node: any, identation: number, flat?: boolean) => string | undefined;
+    predictionUnifiedStringParams: {
+        [method: string]: number[];
+    };
+    predictionUnifiedFloat64Params: {
+        [method: string]: number[];
+    };
+    unifiedFloat64Params: {
+        [method: string]: number[];
+    } | undefined;
     uncalledStringParams: {
         [method: string]: number[];
     };
+    goHandWrittenBaseMethods: string[];
     stringPointerTupleCalls: string[];
+    guardedStringTupleCalls: string[];
     siblingStringPassthroughPattern: RegExp | undefined;
     predictionMapFields: Set<string>;
     goTupleSlotTypes: {
@@ -693,6 +783,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     CCXT_GO_GETARG_SAFE_CONSUMERS: any;
     goGetArgTypeCache: WeakMap<any, string | undefined>;
     goGetArgTypeComputing: Set<any>;
+    goGetArgProvisionalHits: number;
     goLocalTypeResolution: Set<any>;
     goSelfConcatLeafCache: WeakMap<any, boolean>;
     goLocalStaticTypeCache: WeakMap<object, string>;
@@ -713,11 +804,6 @@ export declare class GoTranspiler extends BaseTranspiler {
     printNewStructMethod(node: any): string;
     printClass(node: any, identation: any): string;
     joinTopLevelDecls(decls: string[]): string;
-    /**
-     * Indent every non-blank line of `lines` by `identation` levels. gofmt trims trailing
-     * whitespace, so an indented *blank* line (only the indentation of a blank source
-     * line) must stay empty instead of becoming whitespace-only text.
-     */
     printSpreadElement(node: any, identation: any): string;
     printMethodDeclaration(node: any, identation: any): string;
     goProvenReturnRetype(node: any, printed: string): string;
@@ -726,18 +812,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     getAsyncBodyName(node: any, goName: string): string;
     printAsyncTrampolineArgs(node: any): string;
     printAsyncTrampolineBlock(node: any, identation: any, callee: string): string;
-    /**
-     * Resolve the declaration a call/property access refers to and append `asyncMethodSuffix`
-     * when it is an async function. Uses the checker, so `this.x()`, `super.x()`, `obj.x()` and
-     * bare `x()` all agree with the declaration site. Unresolvable or non-function symbols
-     * (properties, `any` receivers, JS builtins) keep the plain name.
-     */
     applyAsyncSuffixToCallee(nameNode: any, goName: string): string;
     isAsyncSuffixExempt(decl: any): boolean;
     printMethodDefinition(node: any, identation: any): string;
     printFunctionDefinition(node: any, identation: any): string;
     printGoSignature(node: any, identation: any, receiver: string): string;
-    goStrPtrFamilyReturnType(node: any): string | undefined;
     printMethodParameters(node: any): any;
     printParameter(node: any, defaultValue?: boolean): string;
     printParameterType(node: any): string;
@@ -745,6 +824,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     isWholePrintedCall(value: string, open: number): boolean;
     goTypeOfInitializer(initializer: any, printedValue: string): string | undefined;
     goUnwrapPrintedParens(printedText: string): string;
+    goStringNarrowedKey(node: any): string;
     goLocalStaticType(node: any): string | undefined;
     goInferredLocalStaticType(node: any): string | undefined;
     goStringFieldStaticType(node: any, printedText: string): string | undefined;
@@ -754,6 +834,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeStringCall(node: any): boolean;
     goAssertedStringDeref(node: any): boolean;
     goDerefableStringOperand(node: any): boolean;
+    goNumberToStringOfProvenNumber(node: any): boolean;
+    goNumberToStringOfNonNilModulo(node: any): boolean;
+    goIso8601OfCurrentTime(node: any): boolean;
+    goBaseThisCall(node: any, name: string, arity: number): boolean;
+    goConstLocalInitializer(node: any): any;
+    goNarrowedNumberPointerArg(arg: any, goType: string | undefined): boolean;
     goStringConcatOperandType(node: any, printedText: string): string | undefined;
     goNativeStringConcat(node: any, leftText: string, rightText: string): {
         goType: string;
@@ -786,31 +872,46 @@ export declare class GoTranspiler extends BaseTranspiler {
     goDefaultedSafeIntegerCall(node: any): boolean;
     goNonNilPointerDivisionText(node: any, leftText: string, rightText: string): string | undefined;
     goPointerNumberIsNonNil(ident: any): boolean;
+    goConstDefaultedSafeIntegerLocal(ident: any): boolean;
+    goClockDefaultedSafeIntegerCall(node: any): boolean;
+    goCheckerTypeIsNumberUnion(node: any): boolean;
     goCheckerTypeHasFlags(node: any, flags: number): boolean;
     goDivisionConsumerIgnoresBox(node: any): boolean;
     goFloatDivisionText(node: any, leftType: string, rightType: string, leftText: string, rightText: string): string;
     goNativeBinaryText(node: any, symbol: string, leftText: string, rightText: string): string;
     goNativeCompoundAssignment(op: any, leftNode: any, leftText: string, rightNode: any, rightText: string): string | undefined;
+    goEnclosingFnCache: WeakMap<object, any>;
     goEnclosingFunction(node: any): any;
     goTypeNameIsShadowed(scope: any, goType: string): boolean;
     goIsNativeAppendShape(receiverNode: any, pushNode: any): boolean;
     goNativeAppendReceiver(pushNode: any): string | undefined;
+    goPushedStringPointerIsNonNil(pushNode: any): boolean;
     goResolvedLocalGoType(receiver: any): string | undefined;
     goStringListAppendsAString(pushNode: any): boolean;
     goStringValueNodeIsProven(node: any): boolean;
+    goStringMethodCallIsProven(node: any): boolean;
+    goStringConcatIsProven(node: any): boolean;
+    goStringListArgMixesSlot(n: any): boolean;
+    goStringListHasConcatPush(n: any): boolean;
+    goStringListArgIsProven(arg: any): boolean;
     goLocalIsSafeToType(scope: any, declaration: any, varName: string, goType: string, stringWriteProven?: boolean): boolean;
+    goLiteralDefaultSafeBoolWrite(node: any, goType: string): boolean;
+    goSelfIntStepWriteKeepsType(node: any, varName: string, goType: string): boolean;
     goSelfConcatWriteIsString(node: any, varName: string): boolean;
     goSelfConcatIsString(node: any, varName: string): boolean;
     goPointerWriteConversion(right: any, goType: string): 'nil' | 'wrap' | undefined;
     goPointerWriteText(node: any, identation: any): string | undefined;
     goStringPointerStore(node: any, value: string, identation: any): string | undefined;
+    goStringTernaryIntoLocal(right: any, local: string, identation: any): string | undefined;
     goOutermostFunction(node: any): any;
     goStringReturningThisCall(call: any): boolean;
     goStringCallLocals: WeakMap<object, Map<string, {
         clash: boolean;
         names: Map<any, string>;
     }>>;
+    goStringValueLocalName(node: any): string | undefined;
     goStringCallLocalName(call: any): string | undefined;
+    goNumberedLocalName(node: any, base: string): string | undefined;
     goSafeAccessorLocalArgs(initializer: any, accessor: 'safeDict' | 'safeList'): {
         container: any;
         key: any;
@@ -841,6 +942,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         add: string;
         owner: any;
     } | undefined;
+    goMapFieldOmitWriteText(node: any): string | undefined;
     goMarketTableWriteText(node: any): string | undefined;
     goBookAccessorRead(initializer: any): boolean;
     goIsBaseMapResultLocal(node: any): boolean;
@@ -856,22 +958,49 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsStructTypedValue(node: any): boolean;
     goPlainMapContainer(container: any, ws: boolean, noDefault: boolean): boolean;
     goNeverNilDict(call: any, ws: boolean): boolean;
+    goNeverNilDictLocalDefault(fallback: any, ws: boolean): boolean;
+    goTupleDictSlotContainer(container: any): boolean;
     goSourceTreeKind(node: any): 'rest' | 'ws' | 'skip';
     goTopFunction(node: any): any;
     goGuardsNonNil(condition: any, name: string): boolean;
     goInsideNonNilBlock(use: any, name: string): boolean;
     goMapLocalUseKeepsMap(ref: any, rebinds: Set<any>, noDefault: boolean, ws: boolean, name: string): boolean;
+    goMapArgCalleeTakesNilMap(call: any, arg: any, depth: number): boolean;
+    goSafeDictSiblingsResolve(scope: any, name: string, bindings: any[]): boolean;
     goSafeDictMapLocal(declaration: any): string | undefined;
     goSafeDictMapLocalUncached(declaration: any): string | undefined;
     goMapLocalRebindWrites: Map<any, Set<any>>;
+    goMapLocalFreshMapWrite(write: any, name: string): boolean;
+    goInsideReaderPresenceBlock(use: any, name: string): boolean;
+    goDeepExtendWrite(write: any): boolean;
+    goSelfNarrowingRead(write: any, name: string, family: string): boolean;
+    goNilGuardFill(write: any, name: string, family: string, ws: boolean): boolean;
+    goAfterNilGuardFill(use: any, rebinds: Set<any>): boolean;
+    goClientSubscriptionsContainer(container: any): boolean;
+    goAfterNilExitGuard(use: any, name: string): boolean;
     goSafeDictMapValue(declaration: any, identation: number): string | undefined;
     goSafeDictRebind(node: any, identation: number): string | undefined;
+    goCommaOkMapRead(container: any, key: any, unboxed?: boolean, selfNarrowing?: boolean): string | undefined;
     goMapLocalKeyIsString(key: any, printed: string): boolean;
     goIsPointerFreeValue(value: any): boolean;
     goMapWritesArePointerFree(scope: any, name: string): boolean;
     goNativeMapLocalRead(access: any, baseExpr: any, keyNode: any, keyStr: string): boolean;
     goAwaitedMapLocal(decl: any): boolean;
     goMarketCallReturnsDict(initializer: any): boolean;
+    goTypedRowFieldRead(node: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+    goTypedRowTable(base: any, firstKey: string): any;
+    goTypedRowFieldText(node: any, text: string, goType: string): {
+        text: string;
+        goType: string;
+    } | undefined;
+    goTypedRowBinder(declaration: any): string | undefined;
+    goTypedRowBinderCache: Map<any, string>;
+    goTypedRowBinderWrite(n: any): boolean;
+    goTypedRowBinderDeclaration(declaration: any, identation: number): string | undefined;
+    goTypedRowBinderUse(node: any): string | undefined;
     goMarketProducerMethods: string[];
     goMarketMapCalls: string[];
     goMethodReturnsMapCache: Map<any, boolean>;
@@ -880,10 +1009,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMarketReturnIsMap(expr: any): boolean;
     goMarketCallIsMap(call: any, printsMap?: boolean): boolean;
     goMethodDeclarationOfCallee(callee: any): any;
+    goMethodDeclarationOfCalleeUncached(checker: any, callee: any): any;
+    goMethodDeclByNameCache: WeakMap<object, Map<string, any>>;
     goMethodDeclarationByName(callee: any): any;
     goMarketLocalInitializerIsMap(identifier: any, knownDeclaration?: any): boolean;
     goNonceReturnCache: WeakMap<object, string>;
     goNonceReturnType(node: any): string | undefined;
+    goIsBaseMethodNamed(fn: any, methodName: string): boolean;
     goIsBaseNonceMethod(fn: any): boolean;
     goNonceReturnIsInt64(expression: any): boolean;
     goInt64SumOperands(call: any): any[] | undefined;
@@ -899,6 +1031,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goMarketUseKeepsMap(node: any, handsOn?: boolean): boolean;
     goMarketUseHandsTheMapOn(node: any, parent: any): boolean;
     goMarketUnboxValue(declaration: any, parsedValue: string): string | undefined;
+    goDeclOfIdentCache: WeakMap<object, WeakMap<object, any>>;
     goDeclarationOfIdentifier(node: any): any;
     goMarketComparisonElementRead(node: any): boolean;
     goIsComparedOperand(node: any): boolean;
@@ -915,6 +1048,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goStringListLiteralIsProven(node: any): boolean;
     goContainerUseReadsAs(node: any, goType: string): boolean;
     goStringListUseReadsAs(node: any): boolean;
+    goStringListFeedsStringArrayParam(node: any): boolean;
     goContainerWriteConversion(right: any, goType: string): 'direct' | undefined;
     goContainerLocalCache: Map<any, string>;
     goContainerLocalType(declaration: any): string | undefined;
@@ -925,6 +1059,16 @@ export declare class GoTranspiler extends BaseTranspiler {
     goNilInitInitializer(initializer: any): boolean;
     goNilInitLocalType(declaration: any): string | undefined;
     goNilInitLocalTypeScan(declaration: any): string | undefined;
+    goNilInitStrDeclaredLocalType(declaration: any): string | undefined;
+    goNilInitStrGuardedBalanceKey(n: any): boolean;
+    goNilInitStrLeftOperandIsRead(parent: any): boolean;
+    goNilInitStrLiteralWriteOk(writes: any[], write: any): boolean;
+    goNilInitStrOwnClassArgument(ident: any): boolean;
+    goNilInitStrConcatOperand(ident: any): boolean;
+    goNilInitStrDeclaredReadOk(n: any): boolean;
+    goNilInitStrLiteralTernaryArmRead(current: any, parent: any): boolean;
+    goNilInitStrBalanceKeyRead(n: any, parent: any, current: any): boolean;
+    goStringPointerStoreLocalName(node: any): string | undefined;
     goNilInitListLocalType(declaration: any): string | undefined;
     goNilInitStringLocalType(declaration: any): string | undefined;
     goNilInitStringScanCache: WeakMap<object, string>;
@@ -939,13 +1083,20 @@ export declare class GoTranspiler extends BaseTranspiler {
     };
     goNilInitEnclosingStatement(node: any): any;
     goNilInitWriteDominates(writes: any[], read: any): boolean;
+    goNilInitWritesCoverRead(writes: any[], read: any): boolean;
+    goNilInitStringMethodArgRead(n: any): boolean;
+    goNilInitStatementAlwaysWrites(statement: any, writeStatements: Set<any>): boolean;
     getGoLocalType(declaration: any, parsedValue: string): string;
     goLocalSafeVerdicts: WeakMap<object, Map<string, string>>;
     goAnnotatedStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
+    goOptionStringSlotLocalOf(declaration: any): boolean;
+    goOptionStringSlotLocalCache: WeakMap<object, boolean>;
+    goOptionStringSlotLocal(declaration: any, scope: any, name: string): boolean;
     goLiteralDefaultStringLocal(declaration: any, goType: string, scope: any, name: string): boolean;
     goLiteralDefaultStringLocalCache: WeakMap<object, boolean>;
     goLiteralDefaultStringCall(node: any, name: string | undefined): boolean;
     goLiteralDefaultStringLocalUsesAreSafe(scope: any, declaration: any, name: string): boolean;
+    goLiteralDefaultStringConcatWrite(right: any, name: string): boolean;
     goLiteralDefaultStringLocalReadIsSafe(node: any): boolean;
     goLiteralDefaultStringCallArgument(call: any, argument: any): boolean;
     goLiteralDefaultStringWrite(left: any, right: any): boolean;
@@ -955,6 +1106,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         goType: string;
         wrap: (recv: string) => string;
         holder?: boolean;
+        commaOk?: boolean;
     } | undefined;
     printVariableDeclarationList(node: any, identation: any): string;
     printObjectLiteralBody(node: any, identation: any): any;
@@ -996,7 +1148,10 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInWsBookTree(node: any): boolean;
     goReceiverIsOrderBook(node: any): boolean;
     goOrderBookSetterText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any, valueStr: string): string | undefined;
+    goOrderBookSideReadFollows(id: any): boolean;
+    goOrderBookClearText(baseExpr: any, containerStr: string, keyNode: any, valueNode: any): string | undefined;
     goOrderBookLocalNeverNil(id: any): boolean;
+    goOrderBookNilGuardedRead(id: any, decl: any): boolean;
     goWsCacheClassType(type: any): boolean;
     goWsCacheField(node: any): boolean;
     goWsCacheTypeOfNode(node: any): string | undefined;
@@ -1025,10 +1180,15 @@ export declare class GoTranspiler extends BaseTranspiler {
         index: string;
         pointer?: string;
     } | undefined;
+    goBalanceGuardedStrKey(keyNode: any): {
+        index: string;
+    } | undefined;
     goBalancePlainValue(valueNode: any): boolean;
+    goBalanceSafeValueRead(valueNode: any): boolean;
     goIsWholeGetValueText(rhs: string): boolean;
     goBalanceIndexable(field: any): boolean;
     goBalanceStoreText(node: any, baseExpr: any, keys: any[], valueNode: any, rhs: string, identation: number): string | undefined;
+    goBalanceScalarPointerValue(valueNode: any): boolean;
     goBalanceChainStep(baseExpr: any, containerStr: string, keyNode: any): string | undefined;
     goBalanceDeleteText(node: any): string | undefined;
     goWsCacheEmptyLiteral(node: any): string | undefined;
@@ -1045,6 +1205,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goWsCacheParameterType(fn: any, param: any, index: number): string | undefined;
     printOutOfOrderCallExpressionIfAny(node: any, identation: any): string;
     goTypeOfHelpers: Map<string, string>;
+    goIsPureTypeOfOperand(expr: any): boolean;
     handleTypeOfInsideBinaryExpression(node: any, identation: any): string;
     printCustomBinaryExpressionIfAny(node: any, identation: any): any;
     goDestructuringAssignment(node: any, identation: any): string | undefined;
@@ -1089,6 +1250,12 @@ export declare class GoTranspiler extends BaseTranspiler {
                 type: string;
             };
         };
+        clears?: {
+            accessor: string;
+            fields: {
+                [field: string]: string;
+            };
+        };
     } | undefined;
     goOrderBookLocalCache: Map<any, string>;
     goOrderBookEntryProven: Map<any, boolean>;
@@ -1099,12 +1266,18 @@ export declare class GoTranspiler extends BaseTranspiler {
         obj: any;
         key: any;
     } | undefined;
+    goNodeIsOrderBookCache(obj: any): boolean;
     goSameExpressionText(a: any, b: any): boolean;
+    goOrderBookKeyText(node: any): string;
     goConditionHasPresence(cond: any, read: {
         obj: any;
         key: any;
     }): boolean;
     goConditionIsNegatedPresence(cond: any, read: {
+        obj: any;
+        key: any;
+    }): boolean;
+    goConditionHasNegatedPresenceArm(cond: any, read: {
         obj: any;
         key: any;
     }): boolean;
@@ -1128,25 +1301,35 @@ export declare class GoTranspiler extends BaseTranspiler {
     goOrderBookUnboxValue(declaration: any, parsedValue: string): string | undefined;
     goOrderBookSideLocalType(declaration: any): string | undefined;
     goOrderBookSideRead(node: any): string | undefined;
+    goOrderBookFieldNilTestRead(node: any): string | undefined;
     goOrderBookParameterType(fn: any, param: any): string | undefined;
     goOrderBookForwardedToBookParameter(fn: any, param: any): boolean;
     goNativeParameterTypeCache: Map<any, string>;
-    goSameFileCallCache: Map<any, Map<string, any[]>>;
     goTsSrcTreeCache: Map<string, any>;
     goNativeParameterType(param: any): string | undefined;
+    goTestFunctionStringParameterType(param: any): string | undefined;
     goNativeParameterTypeOf(param: any): string | undefined;
     goSliceParameterType(fn: any, param: any, index: number): string | undefined;
+    goSliceParamsKeepingGetValue: Set<any>;
+    goAnnotatedStringSliceSlot(fn: any, index: number, goType: string): boolean;
+    goResolvedStringSliceSlot(node: any, index: number): boolean;
     goAnnotatedSliceParameterType(param: any): string | undefined;
     goBodyReadsElement(body: any, name: string): boolean;
-    goIsUnifiedStringParameter(methodName: string, index: number): boolean;
+    goIsPredictionFile(node: any): boolean;
+    goIsUnifiedStringParameter(methodName: string, index: number, node?: any): boolean;
     goIsUnifiedSliceParameter(methodName: string, index: number): boolean;
     goUnifiedSliceParameterType(fn: any, param: any): string | undefined;
     goUnifiedAnySliceParameterType(fn: any, param: any): string | undefined;
+    goUnifiedInt64SliceParameterType(fn: any, param: any): string | undefined;
+    goUnifiedRowSliceParameterType(fn: any, param: any): string | undefined;
+    printRowSliceIsArray(node: any): string | undefined;
+    goSliceParamKeepsGetValue(decl: any): boolean;
     goIsUnifiedAnySliceParameterNode(decl: any): boolean;
     goSliceTableRootParameter(fn: any, param: any): any;
     goSliceTableDeclarationsMatch(fn: any, annotation: string): boolean;
     goSliceTableCallSitesPass(fn: any, methodName: string, index: number, goType: string): boolean;
     goTextSliceArgumentMatches(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
+    goTextTableSliceParameterMatches(text: string, file: string, tree: any, at?: number): boolean;
     goTextStringElementMatches(element: string, file: string, tree: any, at?: number): boolean;
     goTextEnclosingMethod(text: string, at?: number): {
         name: string;
@@ -1154,13 +1337,23 @@ export declare class GoTranspiler extends BaseTranspiler {
     } | undefined;
     goArrayLiteralSliceType(node: any, depth?: number, want?: string): string | undefined;
     goSliceElementIsString(node: any): boolean;
+    goResolvedSigDeclCache: WeakMap<object, WeakMap<object, any>>;
+    goResolvedCallDecl(call: any): any;
+    goSymValDeclCache: WeakMap<object, WeakMap<object, any>>;
+    goSymbolValueDecl(node: any): any;
     goResolvedCallParameter(node: any, index: number): any;
     goCallSliceArgumentType(node: any, calleeName: string, index: number): string | undefined;
     goSliceCallArgs(node: any, identation: any): string | undefined;
+    goUnifiedNumericSlotType(name: string, index: number, node?: any): 'int64' | 'float64' | undefined;
+    goFormatUnifiedNumericArg(name: string, index: number, arg: any, printed: string): string;
+    goUnifiedNumericCallArgs(node: any, identation: any): string | undefined;
+    goUnifiedNullableStringSlots(node: any, name: string): number[] | undefined;
     goUnifiedStringCallArgs(node: any, identation: any, flat?: boolean): string | undefined;
     goRequiredStringParameterType(param: any): string | undefined;
     goParameterBodyTakes(fn: any, param: any, goType: string): boolean;
     goParameterKeepsNilCompareNative(body: any, param: any, goType: string): boolean;
+    goWsClientParameterType(fn: any, param: any): string | undefined;
+    goBaseExchangeMemberParameter(fn: any, index: number): any;
     goWsFrameParameterType(fn: any, param: any): string | undefined;
     goWsFrameReadsStayNative(body: any, param: any): boolean;
     goWsFrameInOpHasInitClause(inNode: any, param: any): boolean;
@@ -1169,6 +1362,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goParameterTypeIsDict(type: any): boolean;
     goNativeParameterTypeCandidates(param: any, isHandler?: boolean): string[];
     goMethodKeepsBaseSignature(fn: any): boolean;
+    goMethodKeepsBaseSignatureUncached(fn: any): boolean;
     goHasTreeCallSite(fn: any): boolean;
     goSliceArgumentType(arg: any, want?: string): string | undefined;
     goParameterCallSitesPassType(fn: any, index: number, goType: string): boolean;
@@ -1178,29 +1372,38 @@ export declare class GoTranspiler extends BaseTranspiler {
     goEnclosingClass(fn: any): any;
     goEnclosingClassName(fn: any): string | undefined;
     goPrintedArgType(arg: any): string | undefined;
+    goSafeDictMapArgType(arg: any): string | undefined;
+    goAwaitedStringLocal(decl: any, callees?: Set<string>): boolean;
     goIsClientUrl(arg: any): boolean;
     goIsClientParameter(node: any): boolean;
     goBoundIdentifierType(arg: any): string | undefined;
     goUncalledStringParameterType(param: any): string | undefined;
     goSiblingPassesUnifiedString(argText: string, fileText: string, at: number | undefined): boolean;
+    goSiblingRequiredStringParam(argText: string, tree: any, file: string, at: number | undefined): boolean;
     goNilProvenStringPtrArg(arg: any): boolean;
+    goNonNilStringOverloadArg(arg: any): boolean;
     goSafeStringLiteralDefaultCall(call: any): boolean;
     goHasExitingNilGuard(ident: any): boolean;
     goStatementExitsOnNil(statement: any, ident: any): boolean;
     goOrChainHasNilTestOf(node: any, ident: any): boolean;
     goIsNilTestOfIdentifier(node: any, ident: any): boolean;
     goIdentifierRefersTo(node: any, other: any): boolean;
+    goSameFileCallsResultCache: WeakMap<object, Map<string, any[]>>;
     goSameFileCallsOf(fn: any, name: string): Array<any>;
     goTsSrcTree(file: any): any;
-    goTsSrcTreeBuild(root: string): {
+    goTsSrcTreeBuild(root: string): any;
+    goTsSrcTreeIndex(shared: any): {
         callIndex: Map<string, any[]>;
         fileText: Map<string, string>;
+        fileClasses: Map<string, string[]>;
+        fileMethodDecls: Map<string, Set<string>>;
         classBases: Map<string, string>;
         relativeOf: Map<string, string>;
     };
     goTsSrcFileDerivesFrom(tree: any, file: string, className: string | undefined): boolean;
     goTextArgMatchesType(argText: string, goType: string, file: string, tree: any, at?: number): boolean;
     goDeclaredTypeCache: Map<any, string>;
+    goStringNarrowedInit: Map<string, string>;
     goDeclaredTypeInProgress: Set<any>;
     goDeclaredTypeOfIdentifier(node: any): string | undefined;
     goPointerTypeOfExpression(node: any, printedText: string): string | undefined;
@@ -1219,6 +1422,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goIsStringKeyExpression(node: any): boolean;
     goSliceIndexProvablyInRange(node: any, indexNode: any): boolean;
     goLocalIsRebound(scope: any, nameNode: any): boolean;
+    goLocalIsReboundInClosure(scope: any, nameNode: any): boolean;
     goRebindingTargetOf(identifier: any): any;
     printNativeElementAssignment(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, compound?: boolean, valueNode?: any): string | undefined;
     printNativeGuardedPointerKeyAssignment(containerNode: any, containerStr: string, containerType: any, fieldType: any, keyNode: any, keyStr: string, valueStr: string, compound: boolean, valueNode: any): string | undefined;
@@ -1283,12 +1487,30 @@ export declare class GoTranspiler extends BaseTranspiler {
         dictText: string;
         keyText: string;
     } | undefined;
+    goSplitHeadLocal(ident: any): boolean;
     goIsNilGuardedStringPointerKey(keyNode: any): boolean;
     goInOpPointerKeyProvenNonNil(statement: any, ident: any): boolean;
     goBlockExitsOnNilTest(block: any, statement: any, ident: any): boolean;
     goNilComparisonOf(node: any, ident: any, loose: any, strict: any): boolean;
     goStatementAlwaysExits(statement: any): boolean;
     goIsFreshUnsharedMapLocal(node: any, writeSite: any): boolean;
+    goMapLocalIsNonNilUntilWrite(node: any): boolean;
+    goInFunctionBelow(n: any, scope: any, isFn?: (p: any) => boolean): boolean;
+    goMapLocalUseKeepsNonNil(use: any, writeSite: any, scope: any): boolean;
+    goIsFreshNonNilMapExpression(expr: any): boolean;
+    goIsSelfMapRebind(expr: any, use: any): boolean;
+    goBaseThisCallName(call: any): string | undefined;
+    goNonNilMapLocalPointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
+    goSafeDictLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goNonNilMapLocalScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goScalarPointerStoreValue(value: any): boolean;
+    goNonNilMapLocalAtWrite(containerNode: any): boolean;
+    goScalarStoreIndex(keyNode: any, keyStr: string): string | undefined;
+    goScalarPointerStoreText(containerStr: string, keyStr: string, value: any, identation: number): string;
+    goPlainFieldScalarPointerStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goPlainFieldScalarAccessorStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueNode: any, identation: number): string | undefined;
+    goScalarAccessorIsBaseMethod(call: any): boolean;
+    goIsBaseMapReaderCall(call: any): boolean;
     goUseMayPrecede(use: any, writeSite: any, scope: any): boolean;
     goIsNonPointerValue(valueNode: any): boolean;
     goPrintedTypeOfExpression(node: any, printedText: string): string | undefined;
@@ -1322,12 +1544,16 @@ export declare class GoTranspiler extends BaseTranspiler {
     goInOpSubstitutedText(node: any): string | undefined;
     goInOpIfInitClause(node: any): string | undefined;
     goInOpGuardedNestedIf(node: any, identation: any): string | undefined;
+    goInOpNestedIfText(node: any, identation: any, dict: any, dictText: string, keyNode: any, negated: boolean, tickerMap: boolean, guardTexts: () => string[]): string | undefined;
+    goInOpChainNestedIf(node: any, identation: any): string | undefined;
     goIfInOpRead(condition: any, statement?: any): any;
+    goSafeDictMapLocalType(node: any): string | undefined;
     GO_NATIVE_MAP_FIELDS: {
         [name: string]: string;
     };
     GO_NATIVE_MAP_ACCESSORS: string[];
     goInOpDictMapType(dictNode: any, dictText?: string): string | undefined;
+    goInOpDeclaredMapLocal(dictNode: any): string | undefined;
     goIfInOpBindingName(statement: any): string | undefined;
     comparisonHelpers: string[];
     printInlineOpNeg(node: any, printedText: string): string | undefined;
@@ -1355,9 +1581,23 @@ export declare class GoTranspiler extends BaseTranspiler {
     printNode(node: any, identation?: number): string;
     printObjectLiteralExpression(node: any, identation: any): string;
     goWsTickersPointerInIf(node: any, identation: any): string | undefined;
+    goTypeofStringCheck(expr: any, negated: boolean): any;
+    goIsAwaitedAnyLocal(ident: any): boolean;
+    goTypeofStringAssignMatch(ifStmt: any): {
+        src: any;
+        target: any;
+    } | undefined;
+    goTypeofStringAssignParent(assignExpr: any): any;
+    goEarlyExitTypeofStringNextDecl(ifStmt: any): {
+        src: any;
+        decl: any;
+    } | undefined;
+    goPrintTypeofStringIf(node: any, identation: any): string | undefined;
     printIfStatement(node: any, identation: any): string;
     printCondition(node: any, identation: any): any;
     goDerefComparableWith(ptrNode: any, ptrText: string, otherNode: any): boolean;
+    goInt64ArithmeticOperand(pointee: string, node: any): boolean;
+    goInt64ArithmeticLeaf(node: any, pointers: string[], top?: boolean): boolean;
     goIsStringLiteralNode(node: any): boolean;
     goDerefRepeatableOperand(node: any, printedText: string): boolean;
     goIsReadOnlyCallArgument(node: any): boolean;
@@ -1383,6 +1623,9 @@ export declare class GoTranspiler extends BaseTranspiler {
         [kind: number]: [string, string];
     };
     goHasEnclosingNilGuard(ident: any): boolean;
+    goInsideNonReboundNilIf(ident: any): boolean;
+    goHasEarlyExitNilGuard(ident: any): boolean;
+    goThisFieldHasEnclosingNilGuard(prop: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
     goIsPureComparisonOperand(node: any): boolean;
@@ -1405,7 +1648,13 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGetArgWriteIsNativeArithmetic(rhs: any): boolean;
     goGetArgCopyTarget(use: any, body: any): any;
     goGetArgUsesAreSafe(body: any, param: any, name: string, goType: string, nilable: boolean, seen: Set<any>, boxed?: boolean): boolean;
+    goGetArgPointerIsBalanceKey(n: any): boolean;
+    goGetArgStrPtrGuardedStringCall(n: any, param: any): boolean;
+    goGetArgStrPtrGuardedLength(n: any, param: any): boolean;
+    goGetArgStrPtrGuardedNeedle(n: any, param: any): boolean;
+    goStrParamCheckerNarrowed(n: any, param: any): boolean;
     goGetArgPointerInHelperArithmetic(n: any): boolean;
+    h21g06GuardedIntNegation(n: any, goType: string): boolean;
     goGetArgPointerStoredAsValue(n: any, param: any): boolean;
     goTupleElementIsDict(right: any, index: number): boolean;
     goTupleSlotUnbox(element: any): {
@@ -1425,6 +1674,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         safe?: string;
     } | undefined;
     goTuplePointerSlotReadAdmissible(ident: any, allowStore: boolean, goType?: string): boolean;
+    goTuplePointerSlotLocalStore(ident: any, current: any): boolean;
+    goTuplePointerSlotTruthyOperand(chain: any): boolean;
     goTuplePointerSlotNilProven(ident: any): boolean;
     goTuplePointerSlotScan(declaration: any, name: string, scope: any, allowStore: boolean, writeType?: {
         goType: string | undefined;
@@ -1436,6 +1687,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goTuplePointerSlotWriteType(element: any): string | undefined;
     goTuplePointerSlotOfBinding(element: any): string | undefined;
     goTuplePointerSlotNilInitType(declaration: any): string | undefined;
+    goTuplePointerSlotLocalStoreRead(node: any): boolean;
     goTuplePointerSlotStoreText(right: any): string | undefined;
     goTupleSlotBindingLines(elements: any[], holder: string, identation: number, declaration: any): string;
     goParamsTupleHelperIndex(call: any): number;
@@ -1468,7 +1720,15 @@ export declare class GoTranspiler extends BaseTranspiler {
     printArrayIsArrayCall(node: any, identation: any, parsedArg?: any): string;
     printObjectKeysCall(node: any, identation: any, parsedArg?: any): string;
     printObjectValuesCall(node: any, identation: any, parsedArg?: any): string;
+    goIsJsonParseMapDecl(declaration: any): boolean;
+    goJsonParseMapLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
     goMapRangeLocalDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    goDefaultedEntryKeysRead(receiver: any): {
+        container: string;
+        key: string;
+    } | undefined;
+    goDefaultedEntryKeysDeclaration(declaration: any, receiver: any, identation: number): string | undefined;
+    goIsMapRangeFieldReceiver(receiver: any, method: string): boolean;
     goIsRebindFreeMapReceiver(receiver: any): boolean;
     goObjectValuesLocalIsList(declaration: any, scope: any): boolean;
     printJsonParseCall(node: any, identation: any, parsedArg?: any): string;
@@ -1501,6 +1761,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     printSplitCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToFixedCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToStringCall(node: any, identation: any, name?: any): any;
+    goOwnBaseIntField(node: any): boolean;
     goToStringReceiverType(receiver: any, printedText: string): string | undefined;
     printConcatCall(node: any, identation: any, name?: any, parsedArg?: any): string;
     printToUpperCaseCall(node: any, identation: any, name?: any): string;
@@ -1517,6 +1778,8 @@ export declare class GoTranspiler extends BaseTranspiler {
         hasEnd: boolean;
         end: number;
     } | undefined;
+    goSliceLoopCounterArgs(node: any): string | undefined;
+    goSliceLoopCounterText(node: any, receiverText: string, goType: string): string | undefined;
     goIsNativeSliceCall(node: any): boolean;
     printInlineSlice(node: any, receiverText: string): string | undefined;
     printSliceCall(node: any, identation: any, name?: any, parsedArg?: any, parsedArg2?: any): string;
@@ -1525,12 +1788,12 @@ export declare class GoTranspiler extends BaseTranspiler {
     printPadEndCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printPadStartCall(node: any, identation: any, name: any, parsedArg: any, parsedArg2: any): string;
     printDateNowCall(node: any, identation: any): string;
-    printLengthProperty(node: any, identation: any, name?: any): string;
     printConditionalExpression(node: any, identation: any): string;
     printPropertyAccessExpression(node: any, identation: any): any;
     printDeleteExpression(node: any, identation: any): string;
     goClientsDeleteText(node: any): string | undefined;
     goNativeDelete(node: any): string | undefined;
+    goDeleteWsArrayCacheText(node: any): string | undefined;
     goDeleteReceiverText(node: any): string | undefined;
     goDeletableMapField(node: any): string | undefined;
     goDeleteKeyText(keyNode: any): string | undefined;
@@ -1545,6 +1808,7 @@ export declare class GoTranspiler extends BaseTranspiler {
         maxProblem: number;
     };
     goBinarySeparator(operator: string, rightText: string, left: any, right: any): string;
+    h21g06DeadNilTest(node: any): string | undefined;
     printBinaryExpression(node: any, identation: any): any;
     printTryStatement(node: any, identation: number): string;
     /**
@@ -1581,8 +1845,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goUrlsViewRead(node: any, baseExpr: any, keys: any, keyStrs: string[]): string | undefined;
     goIsUrlsWrite(statement: any): boolean;
     goElementWriteChain(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): string;
+    goBoundedListRowWriteContainer(baseExpr: any, containerStr: string, keyNodes: any, keyStrs: string[]): boolean;
     goKeyIsString(node: any, printed: string): any;
     printNilGuardedMapIndex(containerStr: string, keyStr: string): string;
+    goProvenPointerKeyMapIndex(keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goIsPushReceiver(node: any): boolean;
     isGoThisPropertyAccessExpression(node: any): boolean;
     isGoElementAccessAssignmentTarget(node: any): boolean;
     goIntIndexExpression(node: any): boolean;
@@ -1595,15 +1862,26 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBoundedLoopListRead(node: any): boolean;
     goSafeListContainerAdmitted(container: any): boolean;
     goListElementsArePointerFree(list: any, depth?: number): boolean;
+    goAssertedRowLocal(base: any): boolean;
+    goAssertedRowDeclaration(declaration: any): boolean;
+    goAssertedRows: WeakMap<any, boolean>;
+    printBlock(node: any, identation: any, chainBlock?: boolean): string;
+    goAssertedRowDeclarationUncached(declaration: any): boolean;
     goNativeListElementRead(node: any, containerStr: string, keyNode: any, keyStr: string): string | undefined;
+    goGuardedListElementValue(readBase: any, containerStr: string, keyStr: string): string;
+    goListWritesCarryNoAny(list: any): boolean;
     generatedListCallees: Set<string>;
     goHostListCalleeType(callee: string, initializer: any): string | undefined;
     goWritesOrRebindsName(n: any, name: string, mutators: string[]): boolean;
     goLoopBoundedSliceRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goLoopBoundedIndexRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
+    goListFieldLoopRead(node: any, baseExpr: any, keyNode: any, containerStr: string, keyStr: string): string | undefined;
     goAwaitedListLocal(base: any): boolean;
     asyncMapRowListCallees: Set<string>;
     asyncTickerMapCallees: Set<string>;
+    asyncStringCallees: Set<string>;
+    asyncStringPtrCallees: Set<string>;
+    asyncStringListCallees: Set<string>;
     goTickerRowCache: Map<any, {
         key: any;
         keyIsPointer: boolean;
@@ -1628,6 +1906,8 @@ export declare class GoTranspiler extends BaseTranspiler {
     goJsonOriginUseIsReadOnly(node: any, name: string): boolean;
     goJsonOriginBindingIsReadOnly(declaration: any, readOnlyUse: (n: any, name: string) => boolean): boolean;
     goAwaitedCallIsRequestStub(expression: any): boolean;
+    goJsonOriginSeedDecl(node: any, depth: number, constOnly: boolean, numericKey: boolean, identContainer: boolean, recurse: (c: any, d: number) => boolean): any;
+    goStatementBoxLocal(node: any): any;
     goJsonOriginContainer(node: any, depth?: number): boolean;
     goJsonOriginListUseIsReadOnly(node: any, name: string): boolean;
     goJsonOriginList(baseExpr: any): boolean;
@@ -1639,8 +1919,11 @@ export declare class GoTranspiler extends BaseTranspiler {
     goGb08IsDictExpression(expr: any): boolean;
     goGb08BoundedListRead(node: any, keyNode: any): 'native' | 'deref' | undefined;
     goAwaitedObjectListRead(node: any, keyNode: any): boolean;
+    goBoundedAwaitedListRead(node: any): boolean;
     goFirstDefinedArm(arms: (() => string | undefined)[]): string | undefined;
     printElementAccessExpression(node: any, identation: any): string;
+    goTryEnclosingMethod(node: any): any;
+    goTryPrintsTypedBool(tryNode: any, method: any): boolean;
     isInsideVoidFunction(node: Node): boolean;
     /**
      * Check if a block or statement contains a return statement or throws an error
@@ -1668,50 +1951,469 @@ export declare class GoTranspiler extends BaseTranspiler {
     goBaseFieldKind(node: any): string | undefined;
     goWideningOperandKind(node: any, text: string): [string, boolean] | undefined;
     printWideningComparison(left: any, right: any, leftText: string, rightText: string, op: any): string | undefined;
-}
-export interface GoTranspiler {
+    goNonNilMapLocalDictValuePointerKeyStore(containerNode: any, containerStr: string, keyNode: any, keyStr: string, valueStr: string, valueNode: any, identation: number): string | undefined;
+    goTsValueIsDictOrList(valueNode: any): boolean;
+    goContainsAwait(node: any): boolean;
     goNativeIntWideningArithmetic(node: any, leftType: string, rightType: string, leftText: string, rightText: string): {
         goType: string;
         text: string;
-    } | undefined;
-}
-export interface GoTranspiler {
-    goStringLiteralUnionType(type: any): boolean;
-}
-export interface GoTranspiler {
-    goConcatDerefableStringOperand(node: any): boolean;
-}
-export interface GoTranspiler {
+    };
+    goStringLiteralUnionType(type: any): any;
+    goConcatDerefableStringOperand(node: any): any;
+    goGuardedStringTupleSlot(node: any): boolean;
+    goNonNilStringOverloadSlot(node: any): boolean;
+    goGuardedTupleSlot0(node: any): boolean;
     goCurrencyRowLocal(node: any): boolean;
+    goAnnotateMethodTypes(methodsTypes: any, file: any): void;
+    goNegatedFloat64ArgType(arg: any): string;
+    goFeedsNullableSlot(fn: any, param: any): boolean;
+    goParameterHasNullishDefault(body: any, param: any): boolean;
+    goNumericParameterCandidates(param: any): string[];
+    goBaseCacheField(node: any): string;
+    goBaseCacheInitText(node: any): string;
+    goInHoistTerms(node: any, reads: any[]): boolean;
+    goInHoistLeaf(node: any): boolean;
+    goInHoistName(inNode: any): string | undefined;
+    goInHoistCondition(condition: any, statement: any, minimum: number): any[] | undefined;
+    goInHoistPrint(node: any, identation: any, hoisted: any[], print: () => string): string | undefined;
+    goInHoistPointerKeyRead(inNode: any, statement: any): any;
+    goInHoistBindLines(h: any, iden: string): string;
+    goReusableFutureCall(node: any): boolean;
+    goReusableFutureLocal(declaration: any): boolean;
+    goTernaryJoinConditionDefines(condition: any, name: string, outcome: boolean): boolean;
+    goTernaryJoinNilMapParts(declaration: any, other: string): {
+        goType: string;
+        derefTrue: boolean;
+        derefFalse: boolean;
+    };
+    goTernaryJoinNilMapInferred(declaration: any): boolean;
+    goTernaryJoinNilMapReadOk(n: any): boolean;
+    goClientFuturesTable(node: any): boolean;
+    goClientFutureReadKey(initializer: any): any;
+    goClientFutureCheckerStringKey(key: any): boolean;
+    goClientFutureLocal(declaration: any): boolean;
+    goSubscriptionPresenceLocal(declaration: any): boolean;
+    goOhlcvsReadCacheType(declaration: any): string;
+    goTernaryJoinProvisional(): boolean;
+    goTernaryJoinFeedsParameterCopy(declaration: any): boolean;
+    go90g3SideKeys(key: any): string[];
+    go90g3ComputedSideLocal(declaration: any): {
+        book: tsAst.Identifier;
+        key: tsAst.Identifier;
+        sides: string[];
+    };
+    go90g3PromiseLocal(declaration: any): boolean;
+    go90g3StringCharRead(node: any): boolean;
+    goTernaryJoin90DictArm(node: any): {
+        container: any;
+        key: any;
+    };
+    goTernaryJoin90DictUsesAreNative(declaration: any): boolean;
+    goTernaryJoin90IntOperand(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90IntArm(node: any, ternary: any, outcome: boolean): string | undefined;
+    goTernaryJoin90HasArithmeticUse(declaration: any): boolean;
+    goTernaryJoin90SafeReaderArgument(node: any): boolean;
+    goTernaryJoinStrPtrArgReads(declaration: any): boolean;
+    goTernaryJoinStrPtrArgSlot(call: any, index: number): boolean;
+    go92g7IsBaseSum(call: any): boolean;
+    go92g7Int64Operands(call: any): Node[] | undefined;
+    go92g7MinMaxName(call: any): string | undefined;
+    go92g7OperandText(operand: any, index: number): string;
+    go92g7HasNumericUse(declaration: any): boolean;
+    go93g4PointerOperands(call: any, self?: any): string[] | undefined;
+    goOrderBookCacheLocal(declaration: any): boolean;
+    goTernaryJoinHasForeignComparison(declaration: any, goType: string): boolean;
+    goTernaryJoinFeedsAnotherTernary(declaration: any): boolean;
+    goTernaryJoin93StatementGuarded(declaration: any, ident: any): boolean;
+    goTernaryStatementArms(ternary: any): string;
+    goTernaryStatementIfElse(target: string, ternary: any, identation: number): string;
+    goTernaryStatementNilSeededBox(decl: any, declared: string | undefined, armType: string | undefined): boolean;
+    goTernaryStatementStrPtrArm(left: any, ternary: any, identation: number): string | undefined;
+    goH19g06BoundedStringListRead(node: any): string | undefined;
+    goH20g12GuardedPointerAppend(node: any): boolean;
+    goDictLocalTupleRebindIsDict(declaration: any, right: any, index: number): boolean;
+    goDictLocalBindsDictElement(leftElement: any, right: any, index: number): boolean;
+    goH20g01PointerNestedArithmetic(node: any, leftText: string, rightText: string): {
+        goType: string;
+        text: string;
+    };
+    goH21g03BodyAppendWrite(node: any): any;
+    goH21g03BodyTextName(node: any): string;
+    goH21g03NativeBodyAppend(append: any): boolean;
+    goH22g04NonNilStringDefault(node: any): boolean;
+    h25g12CacheLength(expression: any, printedText: any, lengthNode: any): string;
+    h25g12GuardedCacheLocal(declaration: any): boolean;
+    h25g17NonNilOptionSlotArg(arg: any): boolean;
+    h26g06BaseMapFieldArg(arg: any): boolean;
+    h26g14FieldNonNilBefore(declaration: any, fieldName: any): any;
+    goInElseOfNilTest(k: any): boolean;
+    goBaseLocalHasNullableKey(declaration: any): boolean;
+    h26g21AliasDefines(node: any, name: string, outcome: boolean): boolean;
+    h26g21IsWritten(scope: any, declaration: any): boolean;
+    goH26g25JsonListUseIsReadOnly(node: any, name: string): boolean;
+    h26g27RowAccumulatorType(declaration: any): string;
+    h26g27RowAccumulatorOf(node: any): any;
+    h26g27RowAccumulatorPush(node: any, parsedArg: any): string;
+    h26g27RowWrite(node: any, identation: any): string;
+    h26g28OrderBookFieldWrite(baseExpr: any, containerStr: any, keyNode: any, valueNode: any, valueStr: any): string;
+    h26g28SetterValue(setter: any, valueNode: any, valueStr: any): any;
+    h26g29NilSliceIndexRead(callee: any, argIndex: number): boolean;
+    h26g31NonPointerMethodSource(expr: any): boolean;
+    h26g31NonPointerReturn(expr: any): boolean;
+    h26g32LiteralDefaultStringSlot(decl: any): string;
+    h26g32SlotIsString(list: any): boolean;
+    h26g32StringSlotOperand(node: any): boolean;
+    h51g52RequiredStringParam(arg: any): boolean;
+    h26g33NonNilMarketTypeSlotArg(arg: any): boolean;
+    h26g33AbsentOrUndefined(node: any): boolean;
+    h26g37NonNilSeed(declaration: any): boolean;
+    goRequestRowParamOf(node: any): any;
+    goRequestRowRead(node: any): string | undefined;
+    goRequestRowParameterType(fn: any, param: any): string | undefined;
+    h26g48SubscriptionSafeKey(node: any): any;
+    h26g48BaseClientFutures(node: any): boolean;
+    h26g51PushStoreBackList(declaration: any): boolean;
+    h26g51StoreBackOf(node: any): boolean;
+    h26g51PushStoreBackValue(declaration: any, identation: any): string;
+    h26g51SlotAliasWriteBack(pushNode: any, identation: any): string;
+    h26g52SymbolIsRebound(scope: any, declaration: any): boolean;
+    h26g53ConstComparisonLocal(arg: any, checker: any): any;
+    h26g53ComparisonExpression(expr: any): any;
+    h26g55GuardedSlice(node: any, receiverText: any, goType: any): string;
+    h54g42ReboundInGuard(node: any, receiver: any): boolean;
+    h54g42Contains(outer: any, inner: any): boolean;
+    h26g55GuardConjuncts(node: any): any[];
+    h26g55LiteralInt(node: any): any;
+    h26g55IsLengthOf(node: any, name: any): boolean;
+    h26g55IsLengthLocalOf(node: any, name: any): boolean;
+    h26g55IsGuardedSlice(node: any): boolean;
+    goH26g56StringListLiteralWrite(right: any, goType: string): boolean;
+    h26g57ForCounterSeed(declaration: any): string;
+    h27a01JsonDictRead(declaration: any, printed: string): string | undefined;
+    h27a02ScalarReaderUse(node: any): boolean;
+    h27a02JsonOrigin(node: any, depth: number): boolean;
+    goStatementThisCall(node: any, unwrapType: boolean): any;
+    h27a03SafeDictDefaultSite(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    };
+    h27a04WrittenThrough(access: any): boolean;
+    h27a04DictEndpointResponse(node: any): boolean;
+    h27a04JsonListRead(node: any, printed: string): string | undefined;
+    goJsonOriginKeysReadOnly(declaration: any): boolean;
+    h27a05JsonOriginContainer(node: any): boolean;
+    h27a05KeyText(keyNode: any): string;
+    h27a05TypedMapRead(declaration: any, declaredType: string, unboxValue: string | undefined, varName: string, identation: number): string;
+    goTypedMapReceiverStaysPlain(container: any): boolean;
+    h27a06OptionsDictRead(node: any, printed: any): string;
+    h27a09SafeReaderArg(node: any, name: string): boolean;
+    h27a10RowSliceRead(declaration: any, identation: number): string;
+    h27a11FrameReadDeclaration(node: any, declaration: any, identation: number): string;
+    h27a12MapTyped(node: any): boolean;
+    h27a12JsonOrigin(node: any, depth: number): boolean;
+    goJsonOriginChain(node: any, depth: number, recurse: string, extraUse: ((n: any) => boolean) | undefined): boolean;
+    h27a12JsonNestedRead(node: any, printed: string): string | undefined;
+    h27a14SiblingEndpointLocal(declaration: any, goType: any, readsTheValue: any, skipUse: any): any;
+    goSafeDict2Site(declaration: any, call: any): boolean;
+    h27a15CacheRowZero(node: any): {
+        expected: string;
+        rows: string;
+        name: string;
+        cache: string;
+    };
+    h27a16ListSlotMap(access: any, at: any): false;
+    h27a16AliasSlot(declaration: any): string;
+    h27g01BaseFile(tree: any, file: string): string | undefined;
+    h27g01ForeignNamesake(tree: any, siteFile: string, myFile: string | undefined): boolean;
+    h27g02StringIdentDefault(node: any): boolean;
+    h27g09GuardedPointerPush(pushNode: any): boolean;
+    h27g10HandlerSliceParameterType(fn: any, param: any, index: number, handlerParam: boolean): string;
+    h27g10OnlyDirectCalls(fn: any): boolean;
+    h27g11GuardedParamRead(node: any, containerStr: string, keyStr: string): string;
+    h27g17HandleOptionCompare(node: any): string;
+    h27g19RequestStubAwait(expr: any): boolean;
+    h27g20BalanceStore(node: any, baseExpr: any, keys: any, valueNode: any, rhs: any, identation: any): string;
+    h27g20BalanceNeverNil(field: any): boolean;
+    h27g21SliceIndexStore(containerNode: any, containerStr: any, keyNode: any, keyStr: any, valueStr: any, valueNode: any): string;
+    h27g21IndexInRange(containerNode: any, keyNode: any): boolean;
+    h27g21IsLengthOf(node: any, containerSymbol: any): any;
+    h27g21LengthGuarded(containerNode: any, at: any, lengthNode: any): boolean;
+    h27g21SliceKeepsLength(containerNode: any): boolean;
+    h27g21StoreValueIsPlain(valueNode: any, containerNode: any): boolean;
+    h27g22NumberRowSliceParameterType(fn: any, param: any, goType: any): string;
+    goRowSliceParameterType(fn: any, param: any, goType: any, slot: string, tsType: string): string;
+    h27g23SideRowRead(node: any): string;
+    h27g23SideLengthBefore(node: any, decl: any): boolean;
+    h27g23IsIntLoopCounter(key: any): boolean;
+    h27g27RowSlotOf(node: any): boolean;
+    h27g27RowParamType(fn: any, param: any): string | undefined;
+    h27g27MapElement(node: any): boolean;
+    h27g28ElementReadOfMap(n: any): boolean;
+    h27g31AnyBoxTernaryStore(node: any, identation: number, upstream: string): string;
+    h27g33StringListLiteralRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string;
+    h27g36ClientUrlPointerCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string;
+    h27g37SpawnedParamType(fn: any, param: any, index: number): string;
+    h27g37SpawnArgIsString(arg: any): boolean;
+    h27g37SpawnArgDeref(node: any, printed: string): string;
+    h27m01RowBaseIsStruct(base: any): boolean;
+    h28a01ParamReadOnly(fn: any, param: any): boolean;
+    h28a01ReadOnlyArg(node: any): boolean;
+    goReadOnlyParamCallers(node: any, readOnly: (fn: any, param: any) => boolean, argOk: (arg: any) => boolean): boolean;
+    h28a01JsonParam(node: any, depth: number): boolean;
+    h28a02EndpointListRead(node: any, identation: number, printed: string, proofOnly?: boolean): string;
+    h28a02EndpointList(list: any): boolean;
+    h28a02EndpointListPrint(declaration: any, args: any, identation: number, printed: string): string;
+    h28a03EndpointWrite(n: any, name: string): boolean;
+    h28a03JoinedEndpointLocal(node: any): boolean;
+    h28a05SelfDefaultSite(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    };
+    h28a06OptionsDefaultedDictRead(node: any, printed: any): string;
+    h28a08AwaitedEndpoint(init: any): boolean;
+    h28a08ReturnedLiteralValue(node: any): boolean;
+    h28a08JsonContainer(node: any, depth: number): any;
+    h28a08JsonList(list: any): boolean;
+    h28a10RowRead(declaration: any, printed: string, identation: number): string;
+    h28a11DefaultedFrameList(node: any, declaration: any, identation: number): string;
+    h28a13FrameList(list: any): boolean;
+    h28a14InfoHolderUse(n: any): boolean;
+    h28a14JsonOrigin(node: any, depth: number): boolean;
+    h28a14JsonList(list: any): boolean;
+    h28a14RowRead(node: any, printed: string): string | undefined;
+    h28a15OutcomeCacheLocal(container: any): boolean;
+    h28a15OutcomeMemberRead(declaration: any, printed: string): string | undefined;
+    h28a16JsonMap(container: any): boolean;
+    h28a16DeltasArgument(node: any, identation: number, printed: string): string | undefined;
+    h28a17InfoUse(n: any): boolean;
+    goDictStubReceiveDecl(declaration: any, notInfo: boolean): boolean;
+    goSeededProof(memo: Map<any, boolean> | WeakMap<any, boolean>, declaration: any, prove: () => boolean): boolean;
+    h28a17InfoReceive(declaration: any): boolean;
+    h28a17HolderName(declaration: any): string;
+    h28a22JsonList(node: any, depth: number, producer: any): boolean;
+    h28a22IndexedJsonContainer(node: any, depth: number): boolean;
+    h28a24CacheDeltaRead(node: any): {
+        name: string;
+        cache: string;
+        key: any;
+        zero: boolean;
+    };
+    h28g04WatchMultipleHashesArg(node: any): boolean;
+    h28G05StringSliceCopyUse(n: any, param: any, goType: string, nilable: boolean, boxed: boolean, seen: Set<any>): boolean;
+    h28G05StringListNilTest(node: any): boolean;
+    h28G05StringListUse(node: any, goType: string): boolean;
+    h28G05GetArgSliceLength(expression: any, printedText: string): string;
+    h28G05GetArgSliceCopy(initializer: any, goType: string): string;
+    h28g10StrPtrTernaryDecl(node: any, identation: number, upstream: string): string;
+    h28g12NullableBoolTruthy(node: any): string;
+    h28g13ProvenDefaultSafeRead(expr: any): boolean;
+    h28g14AwaitedMapStore(containerNode: any, containerStr: any, keyNode: any, keyStr: any, valueNode: any, rhs: any, identation: any): string;
+    h28g15LastIndexExtendStore(containerNode: any, containerStr: any, keyNode: any, keyStr: any, valueStr: any, valueNode: any): string;
+    h28g15ConstLastIndex(containerNode: any, keyNode: any): boolean;
+    h28g16RowAccumulatorRead(declaration: any, identation: any): string;
+    h28g16CellNilCompare(left: any, rFam: any, nilText: any): any;
+    h28g17BranchEnsuresEntry(branch: any, read: any): boolean;
+    h28g19RowLiteralLocal(declaration: any): boolean;
+    h28g22AnyBoxTernaryDeclaration(node: any, identation: number, upstream: string): string;
+    h28g24ExtraLiteralProof(node: any): boolean;
+    h28g24NonNilStringReceiver(receiver: any, split: any): boolean;
+    h28g24StringSlice(list: any): boolean;
+    h28g24StringParamLiteralRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string;
+    goPlainSlotTargetRead(node: any, containerStr: string, keyStrs: string[]): string;
+    h28g27ClientIdentityOperand(n: any): boolean;
+    h28g27ClientIdentityCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string;
+    h28g30OriginAtRead(container: any, read: any, depth: number): boolean;
+    h28g30JsonListRead(node: any, identation: number, printed: string): string | undefined;
+    h28g31DerefedReaderValue(valueNode: any): boolean;
+    h28m01RowFieldBinary(node: any, identation: number): string | undefined;
+    h28m03BinderAccessorUse(n: any): boolean | undefined;
+    h28t03ConstNilTest(node: any): boolean | undefined;
+    h28t03NeverNilInt(node: any): boolean;
+    h28t05ObjectRowSliceParameterType(fn: any, param: any, goType: any): string;
+    h28t07AwaitedJsonLet(container: any): boolean;
+    h28t07DictEndpointCall(expression: any): boolean;
+    h28t07JsonLetRead(declaration: any, printed: string): string;
+    h29a02EndpointDefaultedRead(node: any, identation: number, printed: string, typedReceiver?: boolean): string;
+    h29a03ScalarReaderArg(node: any, name: string): boolean;
+    h29a05JsonOrigin(container: any): boolean;
+    h29a05MapReceiver(container: any): boolean;
+    goLocalWrittenThrough(decl: any, name: string): boolean;
+    h29a05VarKeyDefaultRead(node: any, printed: any): string;
+    h29a06ParseParamReadOnly(fn: any, param: any): boolean;
+    h29a06ReadOnlyArg(node: any): boolean;
+    h29a06JsonParam(node: any, depth: number): boolean;
+    h29a07ParamReadOnly(fn: any, param: any): boolean;
+    h29a07ReadOnlyArg(node: any): boolean;
+    h29a07JsonParam(node: any, depth: number): boolean;
+    h29a08ListParamReadOnly(fn: any, param: any): boolean;
+    h29a08ReadOnlyListArg(node: any): boolean;
+    h29a08JsonListArg(node: any, depth: number): boolean;
+    h29a08JsonListParam(node: any, depth: number): boolean;
+    h29a09EndpointList(node: any): boolean;
+    h29a10EndpointTaskList(node: any): any;
+    h29a10PromiseAllList(list: any): boolean;
+    h29a10Tasks(node: any): any[];
+    h29a11JsonList(list: any, depth: number): boolean;
+    h29a11LoopRow(node: any, depth: number): boolean;
+    h29a13FrameMap(container: any): boolean;
+    h29a13FrameDictRead(declaration: any, printed: string): string | undefined;
+    h29a15DefaultedFrameDict(node: any, depth: number): boolean;
+    h29A16JsonOrigin(node: any, depth: number): boolean;
+    h29a17Receive(declaration: any): boolean;
+    h29a17Joined(declaration: any): boolean;
+    h29a17Site(node: any): {
+        name: any;
+        container: any;
+        key: any;
+    };
+    h29a18RawUseMemo: WeakMap<object, boolean>;
+    h29a18RawUse(n: any): boolean;
+    h29a18RawUseOf(n: any): boolean;
+    h29a18Row(declaration: any): boolean;
+    h29a20ListWriteUse(node: any, name: string): boolean;
+    h29g02SlotRead(n: any): boolean | undefined;
+    h29g02PointerEntries(node: any): any[];
+    h29g03NestedInt64Operand(operand: any, index: number): {
+        pointer: boolean;
+        text: string;
+    };
+    h29g05ListFrameParam(param: any): boolean;
+    h29g06SubscriptionDictRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string;
+    h29g06StringKey(key: any): boolean;
+    h29g08HashmapRow(row: any): boolean;
+    h29g08HashmapRowEntryRead(node: any): {
+        name: any;
+        row: any;
+        key: any;
+        pointer: boolean;
+    };
+    h29g11CopyOrFreshMapSource(expr: any): boolean;
+    h29g11EveryWriteProven(decl: any): boolean;
+    h29g11CopyNilCompare(left: any, rFam: any, nilText: any): any;
+    h29g14RowParamCellRead(node: any, baseExpr: any, keys: any[], containerStr: string, keyStrs: string[]): string;
+    h29g15RebindGuardProves(id: any): boolean;
+    h29g23WsUrlLocal(decl: any): string | undefined;
+    h29g23NonNilStringLeaf(e: any): boolean;
+    h29g23LiteralDefaultedConst(ident: any): boolean;
+    h29g28LengthAliasBound(bound: any, baseExpr: any, loop: any): boolean;
+    h29g28AsCastLoopRead(node: any, baseExpr: any, keys: any, containerStr: string, keyStrs: string[]): string;
+    h29p03PositionRow(declaration: any): boolean;
+    h30p05OrderRow(declaration: any): boolean;
+    h30p10TickerRow(declaration: any): boolean;
+    h27m02StringRowFieldRead(node: any): {
+        text: string;
+        goType: string;
+    };
+    h28m02StringOnlyLocal(init: any): boolean;
+    h28m02MarketBound(row: any): boolean;
+    h28m02PointerLocalRead(node: any): any;
+    h29m02AccessorDeclaration(call: any): {
+        text: string;
+        value: string;
+    };
+    h29m05TypedMapStore(n: any): {
+        field: any;
+        goType: any;
+        kind: string;
+        literal: any;
+    };
+    h29a14DefaultedFrameRead(node: any, printed: string): string;
+    h30a02TypedReadReceiverDefaultedRead(node: any, identation: number, printed: string): string;
+    h30a02WrittenThroughElement(declaration: any): boolean;
+    h30a03Receiver(container: any, read: any, call?: any): boolean;
+    h30a03Site(call: any, name: string, identation: number, printed: string, prefix: string, declaration?: any): string;
+    h30a03DeclRead(node: any, identation: number, printed: string): string;
+    h30a03AssignRead(node: any, identation: number, printed: string): string;
+    h30a06ReturnedInfoUse(node: any, name: string): boolean;
+    h30a08PointerKeyRead(node: any, printed: any): string;
+    h30a09FrameDerived(node: any, holderFrame: any, depth: number): boolean;
+    h30a10FrameAlias(node: any, frame: any, depth?: number): any;
+    h30a11FrameDefaultedRead(declaration: any, printed: string): string | undefined;
+    h30a12ListSliceRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string;
+    h30a15IndexByMap(node: any): boolean;
+    h30a16ToArrayCall(n: any): any;
+    h30a16ToArrayList(baseExpr: any): boolean;
+    h30A17JsonMap(container: any): boolean;
+    h30a19HandedOn(n: any): boolean;
+    h30a19AnyResult(n: any): boolean;
+    h30g01DefaultArg(node: any): any;
+    h30G02SlotRead(n: any): boolean | undefined;
+    h29G04PushedStrPtrIsNonNil(pushNode: any): boolean;
+    h29G04StringSliceCopyFill(n: any, param: any, goType: string, nilable: boolean, boxed: boolean): boolean;
+    h29G04StringListDefaultedArg(node: any, goType: string): boolean;
+    h30g07DerefStoredAccessorWrite(expr: any): boolean;
+    h30g15SafeReadNilCompare(left: any, rFam: any, nilText: any): any;
+    h30g15BaseSafeReadInit(init: any): boolean;
+    h30g15NoWriteReaches(decl: any, use: any): boolean;
+    h30G16PointerSlots(declaration: any): number[] | undefined;
+    h30g24DefaultedRowEntryRead(node: any): {
+        name: any;
+        row: any;
+        key: any;
+        pointer: boolean;
+    };
+    goStringKeyedRowEntry(declaration: any, call: any): {
+        name: any;
+        row: any;
+        key: any;
+        pointer: boolean;
+    };
+    h30g29ForCounterKind(node: any): string;
+    h30g31RowFieldStore(node: any, baseExpr: any, keys: any, keyStrs: any, valueNode: any, rhs: any, identation: any): string;
+    h30m03DefaultedRead(declaration: any): {
+        name: string;
+        base: any;
+        field: string;
+        fallback: string;
+        value: boolean;
+    } | {
+        value?: undefined;
+        name: string;
+        base: any;
+        field: string;
+        fallback: string;
+    };
+    h30m03IsPlainString(node: any): boolean;
+    h30M04SymbolArgRead(node: any): {
+        text: string;
+        goType: string;
+    };
+    h29t05FrameListNilTested(list: any): boolean;
+    h30t06FrameSelfDefault(declaration: any, printed: string): string | undefined;
+    h33p02StringSliceValue(node: any): boolean;
+    h33p02Converter(node: any): string | undefined;
+    h36p11StringArrayLocal(list: any): boolean;
+    h36p11ForCounter(key: any): boolean;
+    h36p11StringSliceIndexCompare(left: any, right: any, leftText: string, rightText: string, isEq: boolean): string;
+    h37p04PassiveUse(node: any, name: string): boolean;
+    h37p10TypedSlot(node: any): boolean;
+    h37p11StringOptionSlotWrite(declaration: any, right: any, index: number): boolean;
+    h37p11StringOptionLocal(node: any): boolean;
+    h38p04ParseRowReadOnly(fn: any, param: any): boolean;
+    h38p10ExtendDeclaration(literal: any): any;
+    h38p10Int64Difference(binary: any, current: any, ident: any): boolean;
+    goCacheIndexReturnType(node: any): string;
+    goCacheIndexReturnKind(expression: any): "const" | "int" | "int64";
+    goIsBaseCacheIndexMethod(fn: any): boolean;
+    h41g25WrapperTask(node: any): boolean;
+    h42g22ReaderArgument(node: any): boolean;
+    h42g22EndpointArmsContainer(node: any): boolean;
+    h45g36LiteralTable(node: any): boolean;
+    h45g36LiteralTableRead(node: any, printed: any): string;
+    h51g07ListSlotSeed(declaration: any): {
+        map: string;
+        key: string;
+    };
 }
 export interface GoTranspiler {
     goRequiredParameterNativeType(fn: any, param: any, index: number): string | undefined;
-    goParameterHasNullishDefault(body: any, param: any): boolean;
-}
-export interface GoTranspiler {
     goCallSiteParameterCandidates(fn: any, param: any, index: number): string[];
-    goFeedsNullableSlot(fn: any, param: any): boolean;
-    goAnnotateMethodTypes(methodsTypes: any[], file: any): void;
-}
-export interface GoTranspiler {
-    goNumericParameterCandidates(param: any): string[];
-}
-export interface GoTranspiler {
-    goBaseCacheField(node: any): string | undefined;
-    goBaseCacheInitText(node: any): string | undefined;
-}
-export interface GoTranspiler {
+    goInHoistRead(inNode: any, statement: any): any;
     goSafeDictMapPredictionAsWs: boolean;
-}
-export interface GoTranspiler {
     goHandleOptionTrueLocal(declaration: any): boolean;
-}
-export interface GoTranspiler {
-    goReusableFutureCall(node: any): boolean;
-    goReusableFutureLocal(declaration: any): boolean;
     goReusableFutureLocalCache: WeakMap<object, boolean>;
-}
-export interface GoTranspiler {
     goTernaryJoinParts(declaration: any): {
         goType: string;
         derefTrue: boolean;
@@ -1722,80 +2424,91 @@ export interface GoTranspiler {
         derefTrue: boolean;
         derefFalse: boolean;
     } | undefined;
-    goTernaryJoinHasForeignComparison(declaration: any, goType: string): boolean;
     goTernaryJoinArmType(node: any): string | undefined;
-    goTernaryJoinConditionDefines(condition: any, name: string, outcome: boolean): boolean;
     goTernaryJoinDeclaration(statement: any, declaration: any, identation: number): string | undefined;
-}
-export interface GoTranspiler {
-    goClientFuturesTable(node: any): boolean;
-    goClientFutureReadKey(initializer: any): Node | undefined;
-    goClientFutureCheckerStringKey(key: any): boolean;
-    goClientFutureLocal(declaration: any): boolean;
     goClientFutureLocalCache: WeakMap<object, boolean>;
-}
-export interface GoTranspiler {
-    goSubscriptionPresenceLocal(declaration: any): boolean;
     goSubscriptionPresenceCache: WeakMap<object, boolean>;
-}
-export interface GoTranspiler {
-    goOhlcvsReadCacheType(declaration: any): string | undefined;
-}
-export interface GoTranspiler {
-    goTernaryJoinProvisional(): boolean;
-    goTernaryJoinFeedsAnotherTernary(declaration: any): boolean;
-}
-export interface GoTranspiler {
-    goTernaryJoinFeedsParameterCopy(declaration: any): boolean;
-}
-export interface GoTranspiler {
     goTernaryJoinR87HasNativeRead(declaration: any, kind: string): boolean;
-}
-export interface GoTranspiler {
-    go90g3SideKeys(key: any): string[] | undefined;
-    go90g3ComputedSideLocal(declaration: any): {
-        book: tsAst.Identifier;
-        key: tsAst.Identifier;
-        sides: string[];
-    } | undefined;
     go90g3ComputedSideCache: WeakMap<object, {
         book: tsAst.Identifier;
         key: tsAst.Identifier;
         sides: string[];
     } | null>;
-    go90g3PromiseLocal(declaration: any): boolean;
-    go90g3StringCharRead(node: any): boolean;
-}
-export interface GoTranspiler {
-    goTernaryJoin90DictArm(node: any): {
-        container: any;
-        key: any;
-    } | undefined;
-    goTernaryJoin90DictUsesAreNative(declaration: any): boolean;
-}
-export interface GoTranspiler {
-    goTernaryJoin90IntOperand(node: any, ternary: any, outcome: boolean): string | undefined;
-    goTernaryJoin90IntArm(node: any, ternary: any, outcome: boolean): string | undefined;
-    goTernaryJoin90HasArithmeticUse(declaration: any): boolean;
-}
-export interface GoTranspiler {
-    goTernaryJoin90SafeReaderArgument(node: any): boolean;
-}
-export interface GoTranspiler {
-    go92g7Int64Operands(call: any): Node[] | undefined;
-    go92g7MinMaxName(call: any): string | undefined;
-    go92g7OperandText(operand: any, index: number): string;
-    go92g7HasNumericUse(declaration: any): boolean;
-    go92g7IsBaseSum(call: any): boolean;
-}
-export interface GoTranspiler {
-    go93g4PointerOperands(call: any, self?: Node): string[] | undefined;
-    go93g4HasNumericUse(declaration: any): boolean;
-}
-export interface GoTranspiler {
-    goOrderBookCacheLocal(declaration: any): boolean;
+    goStrPtrFamilyReturnType(node: any): string | undefined;
     goOrderBookCacheLocalCache: WeakMap<object, boolean>;
+    h20g04SelfOmitDeclaration: any;
+    h25g17NonNilDefaultLocal(node: any): boolean;
+    h26g14MapFieldLocalType(declaration: any): string | undefined;
+    goBaseExchangeAsWs: boolean;
+    h26g24GuardedLiteralRead(node: any, writeContainer?: boolean): boolean;
+    h26g24GuardProves(condition: any, list: any, index: number, boundNames: Set<string>, thenSide: boolean): boolean;
+    h26g28BookDerefBefore(id: any): boolean;
+    h26g37NonNilSafeStringWrite(node: any, varName: string): boolean;
+    h26g49ClientsReadDeclaration(statement: any, declaration: any, identation: number): string | undefined;
+    h26g49ClientLocalUsesAreSafe(declaration: any): boolean;
+    h27a01ReceiverType(container: any): string | undefined;
+    h27a02JsonListRead(node: any, identation: number, printed: string): string | undefined;
+    h27a02JsonOriginBeforeRead(container: any, read: any, stopAt?: any): boolean;
+    goTypedMapDictRead(args: any, unboxValue: string, container: string, key: string, varName: string, identation: number): string | undefined;
+    h27a08RowRead(declaration: any, declaredType: string, varName: string, identation: number, declaredValue: string): string | undefined;
+    h52g58AssignRowRead(node: any, identation: number, printed: string): string | undefined;
+    h53g58AssignKeyRead(node: any, identation: number, printed: string): string | undefined;
+    h27a08JsonList(list: any): boolean;
+    h27a09JsonOriginList(baseExpr: any): boolean;
+    h27a11FrameParam(param: any): boolean;
+    h27a11JsonContainer(node: any, depth?: number): boolean;
+    h27a11FrameParamCache: Map<any, boolean>;
+    h27a11ElsewhereCache: Map<string, boolean>;
+    h27a11Active: Set<any>;
+    h27m01BinderUseIsFieldRead(n: any): boolean;
+    h27m01Proving: Set<any> | undefined;
+    h28a01Active: Set<any>;
+    h28a01ReadOnlyCache: Map<any, boolean>;
+    h28a10JsonList(node: any): boolean;
+    h28g13Proving: Set<any>;
+    h28m01RowPointerUse(n: any): {
+        field: string;
+        goType: string;
+        kind: 'compare' | 'store';
+        literal: any;
+    } | undefined;
+    h28m03AccessorField(call: any): {
+        text: string;
+        goType: string;
+    } | undefined;
+    h29a06ReadOnlyCache: Map<any, boolean>;
+    h29a06Active: Set<any>;
+    h29a07Cache: Map<any, boolean>;
+    h29a07Active: Set<any>;
+    h29a08Active: Set<any>;
+    h29a08Cache: Map<any, boolean>;
+    h29a10EndpointTask(node: any): boolean;
+    h29a12FrameCut(arg: any, holderFrame: any): boolean;
+    h29a17SelfDefault(n: any): boolean;
+    h29a20SafeListWrite(node: any, identation: number, printed: string): string | undefined;
+    h29a20JsonMap(container: any): boolean;
+    h29g02Nil: Set<any> | undefined;
+    h29g05ListFrameCache: Map<any, boolean>;
+    h29g05Active: Set<any>;
+    h29g11Proving: Set<any>;
+    h29m01EntryUse(n: any): {
+        field: string;
+        statement: any;
+        target: any;
+        key: string;
+    } | undefined;
+    h29m01Pending: Map<any, Map<any, string>> | undefined;
+    h30g02Hoist: Map<any, string> | undefined;
+    h30G16Nil: Set<any> | undefined;
+    h30g27IndexOfCompare(node: any, identation: number): string | undefined;
+    h33p02BoxedStores: Set<any> | undefined;
+    h37p10StoreSite(current: any): 'element' | 'entry' | 'extendEntry' | undefined;
+    h37p10Skip: Map<any, Set<any>>;
+    h38p04Cache: Map<any, boolean>;
+    h38p04Active: Set<any>;
 }
-export interface GoTranspiler {
-    goTernaryJoin93StatementGuarded(declaration: any, ident: any): boolean;
-}
+export declare function installH25g05UrlsViews(goTranspiler: any): void;
+export declare function goIsOwnTsSourceName(name: string): boolean;
+export declare function h27g04DefaultDigestHashCall(node: any): boolean;
+export declare function h30p15ParamHasFamilyType(paramList: string, local: string, type: string, body: string): boolean;
+export declare function installH46g30UrlsApiLocal(goTranspiler: any): void;

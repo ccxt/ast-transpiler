@@ -1,8 +1,8 @@
-import { SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/unstable/ast";
-import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/unstable/ast/is";
-import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/unstable/ast/is";
-import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/unstable/ast/factory";
-import { SignatureKind, TypeFlags, type Checker, type Program } from "typescript/unstable/sync";
+import { NodeFlags, SyntaxKind, getLeadingCommentRanges, getTrailingCommentRanges, type BinaryExpression, type Node, type PropertyAccessExpression, type SourceFile } from "typescript/ast";
+import { isArrayLiteralExpression, isArrowFunction, isAwaitExpression, isBinaryExpression, isBooleanLiteral, isCallExpression, isClassDeclaration, isConditionalExpression, isExportAssignment } from "typescript/ast/is";
+import { isExportDeclaration, isFunctionDeclaration, isFunctionExpression, isImportDeclaration, isMethodDeclaration, isNumericLiteral, isObjectLiteralExpression, isSourceFile, isStringLiteralLikeNode, isVariableStatement } from "typescript/ast/is";
+import { createAwaitExpression, createParenthesizedExpression, createReturnStatement } from "typescript/ast/factory";
+import { SignatureKind, TypeFlags, type Checker, type Program } from "typescript/sync";
 import { findAncestor, getAllSuperTypeNodes, isFunctionLike } from "./tsUtils.js";
 import { IFileImport, IFileExport, TranspilationError, IMethodType, IParameterType, ITranspileContext } from './types.js';
 import { unCamelCase } from "./utils.js";
@@ -279,6 +279,74 @@ class BaseTranspiler {
         };
         scope.forEachChild(visit);
         return found;
+    }
+
+    // `const row: Dict = m[k]` (m, k never written) read once, as `row[key]`, in the very next statement, or
+    // `const row: Dict = m[0]` (m not written after it) read only as `row['lit']` later in its block: a port
+    // without a typed Map local prints each read as `m[k][key]`, exactly the code before the annotation
+    annotatedMapRowSource(declaration): any {
+        const list: any = declaration?.parent;
+        const init: any = declaration?.initializer;
+        const checker: any = this.checkerOrUndefined();
+        if ((declaration?.kind !== SyntaxKind.VariableDeclaration) || (declaration.name?.kind !== SyntaxKind.Identifier)
+            || (declaration.type?.kind !== SyntaxKind.TypeReference) || (declaration.type.typeName?.text !== 'Dict')
+            || (list?.kind !== SyntaxKind.VariableDeclarationList) || (list.declarations.length !== 1) || ((list.flags & NodeFlags.Const) === 0)
+            || (list.parent?.kind !== SyntaxKind.VariableStatement) || (list.parent.parent?.kind !== SyntaxKind.Block)
+            || (init?.kind !== SyntaxKind.ElementAccessExpression) || (init.expression?.kind !== SyntaxKind.Identifier)
+            || ((init.argumentExpression?.kind !== SyntaxKind.Identifier) && (init.argumentExpression?.kind !== SyntaxKind.NumericLiteral))
+            || (checker === undefined)) {
+            return undefined;
+        }
+        const literalRow = (init.argumentExpression.kind === SyntaxKind.NumericLiteral);
+        const block: any = list.parent.parent;
+        const next: any = block.statements[block.statements.indexOf(list.parent) + 1];
+        let scope: any = block;
+        while ((scope !== undefined) && (scope.kind !== SyntaxKind.MethodDeclaration) && (scope.kind !== SyntaxKind.FunctionDeclaration)) {
+            scope = scope.parent;
+        }
+        if ((next === undefined) || (scope === undefined)) {
+            return undefined;
+        }
+        const declOf = (n: any): any => checker.getSymbolAtLocation(n)?.valueDeclaration?.resolve?.();
+        const bound = literalRow ? [ declOf(init.expression) ] : [ declOf(init.expression), declOf(init.argumentExpression) ];
+        if (bound.some((d) => d === undefined)) {
+            return undefined;
+        }
+        let uses = 0;
+        const bad = this.hasNodeWhere(scope, (n: any) => {
+            if ((n.kind !== SyntaxKind.Identifier) || (n === declaration.name)) {
+                return false;
+            }
+            const target = declOf(n);
+            const up: any = n.parent;
+            if (bound.includes(target)) {
+                // a write to `m` or `k` anywhere in the method refuses (for `m[0]`: anywhere after the row)
+                return (!literalRow || (n.end > list.parent.pos)) && (((up?.kind === SyntaxKind.BinaryExpression) && (up.left === n) && (up.operatorToken.kind >= SyntaxKind.FirstAssignment)
+                    && (up.operatorToken.kind <= SyntaxKind.LastAssignment)) || (up?.kind === SyntaxKind.PrefixUnaryExpression)
+                    || (up?.kind === SyntaxKind.PostfixUnaryExpression));
+            }
+            if (target !== declaration) {
+                return false;
+            }
+            const grand: any = up?.parent;
+            const inside = literalRow ? ((n.pos >= next.pos) && (n.end <= block.end) && (up?.argumentExpression?.kind === SyntaxKind.StringLiteral))
+                : ((n.pos >= next.pos) && (n.end <= next.end));
+            if ((up?.kind !== SyntaxKind.ElementAccessExpression) || (up.expression !== n) || !inside
+                || ((grand?.kind === SyntaxKind.BinaryExpression) && (grand.left === up)) || (grand?.kind === SyntaxKind.DeleteExpression)) {
+                return true;
+            }
+            uses++;
+            return false;
+        });
+        return (!bad && ((uses === 1) || (literalRow && (uses > 1)))) ? init : undefined;
+    }
+
+    annotatedMapRowUse(node): any {
+        if ((node?.parent?.kind !== SyntaxKind.ElementAccessExpression) || (node.parent.expression !== node)) {
+            return undefined;
+        }
+        const declaration: any = this.checkerOrUndefined()?.getSymbolAtLocation(node)?.valueDeclaration?.resolve?.();
+        return ((declaration === undefined) || (declaration.name === node)) ? undefined : this.annotatedMapRowSource(declaration);
     }
 
     // the checker when a transpilation context is set, undefined otherwise (an in-memory
@@ -935,8 +1003,13 @@ class BaseTranspiler {
         return parsedExpression + "(" + parsedArgs + ")";
     }
 
+    // a bodyless method is a ts overload signature: no runtime code, the implementation below prints
+    isOverloadSignature(member): boolean {
+        return (member.kind === SyntaxKind.MethodDeclaration) && (member.body === undefined);
+    }
+
     printClassBody(node, identation) {
-        return node.members.map((m, index) => {
+        return node.members.filter((m) => !this.isOverloadSignature(m)).map((m, index) => {
             const parsedNode = this.printNode(m, identation+1);
             return (m.kind === SyntaxKind.PropertyDeclaration || index === 0) ? parsedNode : "\n".repeat(this.NUM_LINES_BETWEEN_CLASS_MEMBERS) + parsedNode;
         }).join("\n");
@@ -1196,7 +1269,8 @@ class BaseTranspiler {
     }
 
     printArrayBindingPattern(node, identation) {
-        const elements = node.elements.map((e) => this.printNode(e.name, identation)).join(", ");
+        // a skipped slot (`[ , x ]`) has no name and prints empty
+        const elements = node.elements.map((e) => (e.name === undefined ? '' : this.printNode(e.name, identation))).join(", ");
         return this.getIden(identation) + this.ARRAY_OPENING_TOKEN + elements + this.ARRAY_CLOSING_TOKEN;
     }
 
@@ -1413,7 +1487,7 @@ class BaseTranspiler {
     getMethodTypes(file): IMethodType[] {
         const result: IMethodType[] = [];
         for (const node of (file.statements ?? []).filter((s) => isClassDeclaration(s))) {
-            for (const m of node.members.filter((member) => isMethodDeclaration(member))) {
+            for (const m of node.members.filter((member) => isMethodDeclaration(member) && !this.isOverloadSignature(member))) {
                 const isAsync = this.isAsyncFunction(m);
                 const name = m.name.getText();
                 const returnType = this.getReturnTypeFromMethod(m);

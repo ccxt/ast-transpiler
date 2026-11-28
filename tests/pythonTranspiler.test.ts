@@ -49,6 +49,36 @@ describe('python tests', () => {
         const output = transpiler.transpilePython(ts).content;
         expect(output).toBe(python);
     });
+    test('inclusive for loop prints range end + 1', () => {
+        const ts =
+        "for (let i = 0; i <= n; i++) {\n" +
+        "    break;\n" +
+        "}"
+        const python =
+        "for i in range(0, n + 1):\n" +
+        "    break";
+        expect(transpiler.transpilePython(ts).content).toBe(python);
+    });
+    test('inclusive for loop parenthesises a compound end', () => {
+        const ts =
+        "for (let i = 1; i <= a - b; i++) {\n" +
+        "    break;\n" +
+        "}"
+        const python =
+        "for i in range(1, (a - b) + 1):\n" +
+        "    break";
+        expect(transpiler.transpilePython(ts).content).toBe(python);
+    });
+    test('exclusive for loop is unchanged', () => {
+        const ts =
+        "for (let i = 0; i < n + 1; i++) {\n" +
+        "    break;\n" +
+        "}"
+        const python =
+        "for i in range(0, n + 1):\n" +
+        "    break";
+        expect(transpiler.transpilePython(ts).content).toBe(python);
+    });
     test('basic function declaration', () => {
         const ts =
         "function teste(){\n" +

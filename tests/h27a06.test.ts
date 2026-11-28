@@ -1,0 +1,67 @@
+import fs from 'fs';
+import path from 'path';
+import { Transpiler } from '../src/transpiler';
+
+const root = path.join (__dirname, 'files', 'tmp-h27a06', 'ts', 'src');
+const BASE = 'export type Dict = { [key: string]: any };\n' +
+    'export class BaseExchange {\n' +
+    '    options: Dict;\n' +
+    '    safeDict (o: any, k: any, d: any = undefined): any { return d; }\n' +
+    '    safeString (o: any, k: any, d: any = undefined): string { return d; }\n' +
+    '}\nexport class Exchange extends BaseExchange {}\nexport default Exchange;\n';
+const print = (body: string): string => {
+    fs.mkdirSync (path.join (root, 'base'), { recursive: true });
+    fs.writeFileSync (path.join (root, 'base', 'Exchange.ts'), BASE);
+    fs.writeFileSync (path.join (root, 'ex.ts'), "import { Exchange, Dict } from './base/Exchange';\nexport default class ex extends Exchange {\n" +
+        '    f (code: string, other: Dict, k: any): any {\n' + body + '    }\n}\n');
+    const t = new Transpiler ({ verbose: false, go: {} });
+    return t.transpileGoByPath (path.join (root, 'ex.ts')).content;
+};
+
+describe ('h27a06: safeDict reads of the typed Options map', () => {
+    afterAll (() => fs.rmSync (path.join (__dirname, 'files', 'tmp-h27a06'), { recursive: true, force: true }));
+    test ('a literal key prints the comma-ok read of this.Options', () => {
+        const out = print ("        const networks = this.safeDict (this.options, 'networks');\n        return this.safeString (networks, code);\n");
+        expect (out).toContain ('\tvar networks, _ = this.Options["networks"].(map[string]any)\n');
+        expect (out).not.toContain ('SafeMapTyped(this.Options');
+    });
+    test ('a declared string key prints the comma-ok read', () => {
+        const out = print ("        const c: string = 'x' + this.safeString (other, 'c', 'y');\n        const o = this.safeDict (this.options, c);\n        return this.safeString (o, code);\n");
+        expect (out).toContain ('\tvar o, _ = this.Options[c].(map[string]any)\n');
+    });
+    test ('a read-only {} default prints the comma-ok read', () => {
+        const out = print ("        const o = this.safeDict (this.options, 'networks', {});\n        return this.safeString (o, code);\n");
+        expect (out).toContain ('\tvar o, _ = this.Options["networks"].(map[string]any)\n');
+    });
+    test ('an any key keeps the wrap', () => {
+        const out = print ('        const o = this.safeDict (this.options, k);\n        return this.safeString (o, code);\n');
+        expect (out).not.toContain ('this.Options[k].(map[string]any)');
+    });
+    test ('another receiver keeps the wrap', () => {
+        const out = print ("        const o = this.safeDict (other, 'networks');\n        return this.safeString (o, code);\n");
+        expect (out).not.toContain ('].(map[string]any)');
+    });
+    test ('a no-default read the helper printed as SafeDictMap prints the comma-ok read', () => {
+        const out = print ("        let m = this.safeDict (this.options, 'mm');\n        if (m === undefined) {\n            m = {};\n        }\n        return m;\n");
+        expect (out).toContain ('\tvar m, _ = this.Options["mm"].(map[string]any)\n');
+        expect (out).not.toContain ('SafeDictMap(this.Options');
+    });
+    test ('a SafeDictMap read on another receiver keeps the helper', () => {
+        const out = print ("        let m = this.safeDict (other, 'mm');\n        if (m === undefined) {\n            m = {};\n        }\n        return m;\n");
+        expect (out).not.toContain ('other["mm"].(map[string]any)');
+    });
+    test ('a defaulted read with a write takes a fresh map where the read is nil', () => {
+        const out = print ("        const o = this.safeDict (this.options, 'networks', {});\n        o['a'] = 1;\n        return o;\n");
+        expect (out).toContain ('\tvar o map[string]any\n\to, _ = this.Options["networks"].(map[string]any)\n\tif o == nil {\n\t\to = map[string]any{}\n\t}\n');
+    });
+    test ('a nil test of a literal-key safeDict read of this.options prints the comma-ok read in the if header', () => {
+        const out = print ("        if (this.safeDict (this.options, 'cfg') === undefined) {\n            this.options['cfg'] = other;\n        }\n        if (this.safeDict (this.options, 'acc') !== undefined) {\n            return 1;\n        }\n        return 0;\n");
+        expect (out).toContain ('\tif optionsEntry, _ := this.Options["cfg"].(map[string]any); optionsEntry == nil {\n');
+        expect (out).toContain ('\tif optionsEntry, _ := this.Options["acc"].(map[string]any); optionsEntry != nil {\n');
+        expect (out).not.toContain ('SafeDictMap(this.Options');
+    });
+    test ('a nil test on another receiver, an any key or a defaulted read keeps the helper', () => {
+        const out = print ("        if (this.safeDict (other, 'cfg') === undefined) {\n            return 2;\n        }\n        if (this.safeDict (this.options, k) === undefined) {\n            return 3;\n        }\n        if (this.safeDict (this.options, 'x', {}) === undefined) {\n            return 4;\n        }\n        return 0;\n");
+        expect (out).not.toContain ('optionsEntry');
+    });
+});
