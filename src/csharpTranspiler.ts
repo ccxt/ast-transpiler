@@ -76,6 +76,8 @@ const CSHARP_STATIC_RETURN_TYPES: { [name: string]: string } = {
 };
 // delegate-valued members of the hand-written C# base (cs/ccxt/base/Exchange.Options.cs): `Func<...>` with this many parameters, so `this.<name>(args)` with that arity is a direct...
 const CSHARP_NATIVE_THIS_DELEGATE_ARITY: { [name: string]: number } = { 'proxyUrlCallback': 4, 'proxy_url_callback': 4, 'httpProxyCallback': 4, 'http_proxy_callback': 4, 'httpsProxyCallback': 4, 'https_proxy_callback': 4, 'socksProxyCallback': 4, 'socks_proxy_callback': 4, };
+// members the hand-written C# base declares `string` (cs/ccxt/base/Exchange.Options.cs): never a delegate, so a `typeof this.<name> === 'function'` test is constant false
+const CSHARP_STRING_DECLARED_FIELDS = [ 'proxy' ];
 // base-class helpers whose C# signature is already concrete
 const CSHARP_THIS_RETURN_TYPES: { [name: string]: string } = {
     'extend': 'Dictionary<string, object>',
@@ -3894,6 +3896,25 @@ export class CSharpTranspiler extends BaseTranspiler {
         case "function": return notOperator + `(${target} is Delegate)`;
         }
         return undefined;
+    }
+    // true for `typeof this.<name> === 'function'` on a member of CSHARP_STRING_DECLARED_FIELDS
+    csharpIsStringFieldFunctionTest(condition): boolean {
+        const test = this.csharpUnparenthesized(condition);
+        if ((test?.kind !== SyntaxKind.BinaryExpression) || (test.left?.kind !== SyntaxKind.TypeOfExpression)) { return false; }
+        const op = test.operatorToken?.kind;
+        if ((op !== SyntaxKind.EqualsEqualsEqualsToken) && (op !== SyntaxKind.EqualsEqualsToken)) { return false; }
+        const operand = this.csharpUnparenthesized(test.left.expression);
+        if (!isPropertyAccessExpression(operand) || (operand.expression?.kind !== SyntaxKind.ThisKeyword)) { return false; }
+        return (test.right?.text === 'function') && (CSHARP_STRING_DECLARED_FIELDS.indexOf(operand.name?.text as string) >= 0);
+    }
+    // an `if` whose test is constant false prints only its else statements; an else-if link, a non-block else or an else that declares a local keeps the plain form
+    printIfStatement(node, identation) {
+        const elseStatement = node.elseStatement;
+        const foldable = (node.parent?.kind !== SyntaxKind.IfStatement) && ((elseStatement === undefined) || (elseStatement.kind === SyntaxKind.Block));
+        if (!foldable || !this.csharpIsStringFieldFunctionTest(node.expression)) { return super.printIfStatement(node, identation); }
+        const statements = elseStatement?.statements ?? [];
+        if (statements.some((s) => s.kind !== SyntaxKind.ExpressionStatement)) { return super.printIfStatement(node, identation); }
+        return this.printNodeCommentsIfAny(node, identation, statements.map((s) => this.printNode(s, identation)).join("\n"));
     }
     // The C# type of an operand of `==` / `!=` as the printer emits it, or undefined when the printer only knows `object`: an `object` operand takes the reference-comparing `operator ...
     csharpEqualityOperandType(node): string | undefined {
