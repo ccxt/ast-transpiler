@@ -17442,7 +17442,7 @@ export class RustTranspiler extends BaseTranspiler {
         const h28 = this.h28r05BaseDictParamEnum(node, parsedArg, 'keys'); if (h28 !== undefined) return h28;
         const h29 = this.h29r05OptionsDictEnum(node, parsedArg, 'keys'); if (h29 !== undefined) return h29;
         const h30r07 = this.h30r07ConfigDictEnum(node, parsedArg, 'keys'); if (h30r07 !== undefined) return h30r07;
-        return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? `object_keys(&${parsedArg})`;
+        return this.printShadowEnum(node, 'keys') ?? this.printBorrowedKeys(node, 'keys') ?? this.bearerEnum(node, 'keys') ?? this.provenDictFieldEnum(node, parsedArg, 'keys') ?? this.predictionEnum(node, parsedArg, 'keys') ?? this.baseEnum(node, parsedArg, 'keys') ?? this.h26r11FieldAliasEnum(node, parsedArg, 'keys') ?? this.rustClientFreeKeys(node, parsedArg) ?? `object_keys(&${parsedArg})`;
     }
     printObjectValuesCall(node, identation, parsedArg = undefined) {
         const h27 = this.h27r06FreshParseEnum(node, parsedArg, 'values'); if (h27 !== undefined) return h27;
@@ -34268,6 +34268,93 @@ export class RustTranspiler extends BaseTranspiler {
         try { const checker: any = this.getChecker(); const signature = checker.getResolvedSignature(n); return signature !== undefined && this.isProvenMapType(checker.getReturnTypeOfSignature(signature)); } catch (e) { return false; }
     }
     // The base ws helpers `findMessageHashes` / `cleanUnsubscription` take `client: any`, the live ws client the drive loop hands them. Plan their `client` param like a venue's, so it...
+    // `Object.keys (x)` on a receiver no ws client snapshot can reach (only `client.subscriptions` and its entries carry the tag keys the helper drops):
+    // the map's own keys in insertion order, none for a non-map.
+    rustClientFreeKeys(node: any, parsedArg: string | undefined): string | undefined {
+        const text = parsedArg?.trim();
+        if (text === undefined || text.includes('\n') || !isCallExpression(node) || (node.arguments?.length ?? 0) !== 1 || this.rustTestTierSource(node)) return undefined;
+        let ok = false;
+        try { ok = this.rustClientFreeReceiver(this.rustSkipWrappers(node.arguments[0]), node); } catch (e) { ok = false; }
+        if (!ok) return undefined;
+        const tail = '.into_iter().flat_map(crate::value::HashMap::keys).cloned().map(Value::from).collect())';
+        if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(text)) return `Value::Array(${text}.as_map()${tail}`;
+        const read = /^([a-z_][A-Za-z0-9_]*\.as_map\(\)\.and_then\(\|__m\| __m\.get\("[^"\\]*"\)\))\.cloned\(\)\.unwrap_or\(Value::Null\)$/.exec(text);
+        return read !== null ? `Value::Array(${read[1]}.and_then(Value::as_map)${tail}` : undefined;
+    }
+    private static readonly RUST_CLIENT_FREE_FIELDS = new Set([ 'ohlcvs', 'orders' ]);
+    rustClientFreeReceiver(arg: any, site: any): boolean {
+        let method: any = site;
+        while (method !== undefined && !isFunctionLike(method)) method = method.parent;
+        if (arg === undefined || method === undefined || !isMethodDeclaration(method) || method.body === undefined || !isIdentifier(method.name)) return false;
+        const file = this.provenDictFieldPath(method);
+        const isParam = (id: any) => { const d: any = isIdentifier(id) ? this.rustDeclarationOfIdentifier(id) : undefined; return d !== undefined && isParameterDeclaration(d) && d.parent === method && d.dotDotDotToken === undefined && this.rustParamShadowOf(id) === undefined; };
+        const isAny = (id: any) => (this.rustDeclarationOfIdentifier(id) as any)?.type?.kind === SyntaxKind.AnyKeyword;
+        const typedLocal = (d: any) => this.rustBorrowedLocalKind(d) !== undefined || this.rustDictLocalIsTyped(d);
+        const takesClient = Array.from(method.parameters as any[]).some((p: any) => isIdentifier(p.name) && String(p.name.text) === 'client');
+        const name = String(method.name.text);
+        if (RustTranspiler.RUST_BASE_TIER_FILE.test(file)) {
+            // a REST-side base method: no client parameter, never called from a ws or prediction venue file
+            if (takesClient || RustTranspiler.H27R07_BASE_HANDLE_METHODS.has(name)) return false;
+            const root = file.slice(0, file.search(/\/ts\/src\/base\//)) + '/ts/src';
+            const ws = this.rustTsDirFiles(root + '/pro');
+            if (ws.length === 0) return false;
+            for (const { path: p, text: raw } of ws.concat(this.rustTsDirFiles(root + '/prediction'))) { const info = this.rustTsFileCallInfo(p, raw ?? ''); if ((info.calls.get(name) ?? 0) > 0 || info.quoted.has(name)) return false; }
+            if (isParam(arg)) return isAny(arg);
+            if (isElementAccessExpression(arg)) return isStringLiteralLikeNode(arg.argumentExpression) && isParam(arg.expression);
+            if (!isIdentifier(arg)) return false;
+            // a local starting as `{}` whose every later write is one of the method's parameters
+            const local: any = this.rustDeclarationOfIdentifier(arg);
+            const init: any = local !== undefined && isVariableDeclaration(local) ? this.rustSkipWrappers(local.initializer) : undefined;
+            if (init === undefined || !isObjectLiteralExpression(init) || init.properties.length !== 0 || local.type !== undefined || typedLocal(local)) return false;
+            for (const id of this.rustScopeNameNodes(method.body, String(arg.text)) as any[]) {
+                const up: any = id.parent;
+                if (!isBinaryExpression(up) || up.left !== id || !rustIsAssignmentOperator(up.operatorToken.kind)) continue;
+                if (this.rustDeclarationOfIdentifier(id) !== local || up.operatorToken.kind !== SyntaxKind.EqualsToken || !isParam(this.rustSkipWrappers(up.right)) || !isAny(this.rustSkipWrappers(up.right))) return false;
+            }
+            return true;
+        }
+        if (!/ts\/src\/pro\/[^/]+\.ts$/.test(file) || !isIdentifier(arg)) return false;
+        const declaration: any = this.rustDeclarationOfIdentifier(arg);
+        if (declaration === undefined) return false;
+        if (isVariableDeclaration(declaration)) {
+            const list: any = declaration.parent;
+            if (list?.kind !== SyntaxKind.VariableDeclarationList || (list.flags & NodeFlags.Const) === 0 || declaration.type !== undefined || typedLocal(declaration)) return false;
+            const init: any = this.rustSkipWrappers(declaration.initializer);
+            if (this.rustClientFreeFieldRead(init, RustTranspiler.RUST_CLIENT_FREE_FIELDS)) return true;
+            // a REST fetch result
+            const call: any = init?.kind === SyntaxKind.AwaitExpression ? this.rustSkipWrappers(init.expression) : undefined;
+            return call !== undefined && isCallExpression(call) && isPropertyAccessExpression(call.expression) && call.expression.expression.kind === SyntaxKind.ThisKeyword && String(call.expression.name.text) === 'fetchBalance';
+        }
+        // a venue-private method's parameter that every caller (all in this file) fills from a const read of `this.balance`
+        if (!isParam(arg) || takesClient) return false;
+        const root = file.slice(0, file.search(/\/ts\/src\/pro\//)) + '/ts/src';
+        for (const dir of [ '', '/pro', '/prediction', '/base' ]) {
+            for (const { path: p, text: raw } of this.rustTsDirFiles(root + dir)) {
+                if (String(p).replace(/\\/g, '/') === file) continue;
+                const info = this.rustTsFileCallInfo(p, raw ?? '');
+                if ((info.calls.get(name) ?? 0) > 0 || info.quoted.has(name) || info.declared4.has(name)) return false;
+            }
+        }
+        const at = Array.from(method.parameters as any[]).indexOf(this.rustDeclarationOfIdentifier(arg));
+        const fields = new Set([ 'balance' ]);
+        let calls = 0;
+        for (const n of this.rustScopePropAccesses(method.getSourceFile(), name) as any[]) {
+            const call: any = n.parent;
+            if (!isCallExpression(call) || call.expression !== n || n.expression.kind !== SyntaxKind.ThisKeyword) return false;
+            const a: any = this.rustSkipWrappers(call.arguments?.[at]);
+            const d: any = a !== undefined && isIdentifier(a) ? this.rustDeclarationOfIdentifier(a) : undefined;
+            if (d === undefined || !isVariableDeclaration(d) || ((d.parent as any).flags & NodeFlags.Const) === 0 || !this.rustClientFreeFieldRead(this.rustSkipWrappers(d.initializer), fields)) return false;
+            calls++;
+        }
+        return calls > 0;
+    }
+    /** `this.f` or `this.safeDict (this.f, ..)` with `f` one of the named exchange fields. */
+    rustClientFreeFieldRead(init: any, fields: Set<string>): boolean {
+        const field = (n: any) => n !== undefined && isPropertyAccessExpression(n) && n.expression.kind === SyntaxKind.ThisKeyword && fields.has(String(n.name.text));
+        if (field(init)) return true;
+        return init !== undefined && isCallExpression(init) && isPropertyAccessExpression(init.expression) && init.expression.expression.kind === SyntaxKind.ThisKeyword
+            && String(init.expression.name.text) === 'safeDict' && field(this.rustSkipWrappers(init.arguments?.[0]));
+    }
     private static readonly H27R07_BASE_HANDLE_METHODS = new Set([ 'findMessageHashes', 'cleanUnsubscription', 'cleanCache' ]);
     h27r07BaseHandlePlan(method: any, file: string): any {
         if (!/ts\/src\/base\/(?:\.__ExchangeNoOverloads|Exchange)\.ts$/.test(file) || !isIdentifier(method.name) || !RustTranspiler.H27R07_BASE_HANDLE_METHODS.has(String(method.name.text))) return undefined;
