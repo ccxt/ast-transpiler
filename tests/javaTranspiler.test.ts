@@ -7580,8 +7580,10 @@ describe('isTrue / isInstance / core-argument residual', () => {
     test('instanceof on a catch variable of a synchronous base-call try is native', () => {
         expect(out).toContain('(e1 instanceof BadSymbol)');
         expect(out).toContain('Helpers.isInstance(e1, Error.class)');
-        expect(out).toContain('Helpers.isInstance(e2, BadSymbol.class)');
-        expect(out).toContain('Helpers.isInstance(e3, BadSymbol.class)');
+        expect(out).toContain('(e2Cause instanceof BadSymbol)');
+        expect(out).toContain('(e3Cause instanceof BadSymbol)');
+        expect(out).not.toContain('(e2 instanceof BadSymbol)');
+        expect(out).not.toContain('(e3 instanceof BadSymbol)');
     });
 
     test('typed core slots: const undefined prints a typed null, Integer length widens', () => {
@@ -9043,10 +9045,13 @@ describe('objectValues copy, catch isInstance, awaited / tuple box locals', () =
         expect(method('catchOmit')).toContain('(e1 instanceof BadSymbol)');
     });
 
-    test('instanceof keeps the helper when the try calls a venue member, an unawaited promise or awaits', () => {
-        expect(method('catchOwnSync')).toContain('Helpers.isInstance(e2, BadSymbol.class)');
-        expect(method('catchPromise')).toContain('Helpers.isInstance(e3, BadSymbol.class)');
-        expect(method('catchAwait')).toContain('Helpers.isInstance(e4, BadSymbol.class)');
+    test('instanceof tests the unwrapped cause, never the catch variable, when the try calls a venue member, an unawaited promise or awaits', () => {
+        expect(method('catchOwnSync')).toContain('(e2Cause instanceof BadSymbol)');
+        expect(method('catchPromise')).toContain('(e3Cause instanceof BadSymbol)');
+        expect(method('catchAwait')).toContain('(e4Cause instanceof BadSymbol)');
+        expect(method('catchOwnSync')).not.toContain('(e2 instanceof BadSymbol)');
+        expect(method('catchPromise')).not.toContain('(e3 instanceof BadSymbol)');
+        expect(method('catchAwait')).not.toContain('(e4 instanceof BadSymbol)');
     });
 
     test('an awaited Dict local that is only element-accessed takes the Map box', () => {
@@ -10297,8 +10302,9 @@ describe ('java owner-store counters and Object.values', () => {
         test('instanceof on a catch variable whose try is only sync base calls is native', () => {
             expect (out).toContain ('(e instanceof AuthenticationError)');
         });
-        test('a try that calls a venue method keeps Helpers.isInstance', () => {
-            expect (out.match (/Helpers\.isInstance\(e, AuthenticationError\.class\)/g)?.length).toBe (1);
+        test('a try that calls a venue method tests the unwrapped cause', () => {
+            expect (out.match (/\(eCause instanceof AuthenticationError\)/g)?.length).toBe (1);
+            expect (out.match (/\(e instanceof AuthenticationError\)/g)?.length).toBe (1);
         });
     });
 });

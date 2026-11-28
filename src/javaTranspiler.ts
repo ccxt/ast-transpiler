@@ -6059,8 +6059,28 @@ export class JavaTranspiler extends BaseTranspiler {
                 || this.isPromiseType(checker.getReturnTypeOfSignature(signature))) || undefined;
         });
     }
+    // `catchVar instanceof X` (X from ts/src/base/errors.ts) where the try block can raise a join()-wrapped error: the catch clause that declares catchVar, else undefined
+    javaCatchCauseTest(node) {
+        if (node?.kind !== SyntaxKind.BinaryExpression || node.operatorToken?.kind !== SyntaxKind.InstanceOfKeyword || node.left?.kind !== SyntaxKind.Identifier || node.right?.kind !== SyntaxKind.Identifier) { return undefined; }
+        if (!this.javaCcxtErrorClass(node.right) || this.javaCatchCannotWrap(node.left)) { return undefined; }
+        const decl: any = this.javaTry(() => this.checkerOrUndefined()?.getSymbolAtLocation(node.left)?.valueDeclaration?.resolve(), undefined);
+        const clause = decl?.parent;
+        return (decl?.kind === SyntaxKind.VariableDeclaration && clause?.kind === SyntaxKind.CatchClause && decl.name?.kind === SyntaxKind.Identifier && clause.parent?.catchClause === clause) ? clause : undefined;
+    }
+    // join() rethrows an async failure as one CompletionException around the original error: a catch block testing its variable against ccxt error classes reads the original once into `<name>Cause` and tests that natively
+    printTryStatement(node, identation) {
+        const clause = node.catchClause;
+        if (clause?.variableDeclaration?.name?.kind !== SyntaxKind.Identifier || !this.javaTreeSome(clause.block, (current) => (this.javaCatchCauseTest(current) === clause) || undefined)) { return super.printTryStatement(node, identation); }
+        const name = this.printNode(clause.variableDeclaration.name, 0);
+        const tryBody = this.printBlock(node.tryBlock, identation, true);
+        const catchBody = this.printBlock(clause.block, identation);
+        const open = this.getBlockOpen(identation);
+        const cause = this.getIden(identation + 1) + `Throwable ${clause.variableDeclaration.name.text}Cause = (${name} instanceof java.util.concurrent.CompletionException && ${name}.getCause() != null) ? ${name}.getCause() : ${name};\n`;
+        return this.getIden(identation) + this.TRY_TOKEN + tryBody + this.CATCH_TOKEN + (this.CONDITION_OPENING || " ") + this.CATCH_DECLARATION + " " + name + this.CONDITION_CLOSE + open + cause + catchBody.slice(open.length);
+    }
     printInstanceOfExpression(node, identation) {
         if (node.right?.kind === SyntaxKind.Identifier && this.javaCcxtErrorClass(node.right) && this.javaCatchCannotWrap(node.left)) return this.getIden(identation) + `(${this.printNode(node.left, 0)} instanceof ${node.right.text})`;
+        if (this.javaCatchCauseTest(node)) return this.getIden(identation) + `(${node.left.text}Cause instanceof ${node.right.text})`;
         const right = node.right.text;
         const left = this.printNode(node.left, 0);
         return this.getIden(identation) + `Helpers.isInstance(${left}, ${right}.class)`;
