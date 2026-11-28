@@ -4137,7 +4137,7 @@ describe('go native element assignment', () => {
 });
 
 describe('go array push onto an element access', () => {
-    test('a native map index receiver is hoisted into a local before AppendToArray', () => {
+    test('a native map index receiver appends through a comma-ok slot read and stores the slice back', () => {
         const input =
         "class Exchange {\n" +
         "    main(market: Dict) {\n" +
@@ -4149,7 +4149,7 @@ describe('go array push onto an element access', () => {
         "}\n";
         const output = transpiler.transpileGo(input).content;
         expect(output).not.toContain('AppendToArray(&request["base"]');
-        expect(output).toMatch(/retRes\d+ := request\["base"\]\n\s*AppendToArray\(&retRes\d+, /);
+        expect(output).toMatch(/if (retRes\d+), ok := request\["base"\]\.\(\[\]any\); ok \{\n\s*request\["base"\] = append\(\1, /);
     });
 });
 

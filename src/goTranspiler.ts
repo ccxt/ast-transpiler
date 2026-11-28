@@ -43530,3 +43530,18 @@ goChainRewrite('printVariableDeclarationList', function (printed: any, node) {
     const ind = m[2];
     return `${m[1]}${ind}var ${m[3]}, _ = ${read}\n${ind}if ${m[3]} == nil {\n${ind}\t${m[3]} = map[string]any{}\n${ind}}`;
 });
+// `m['k'].push (v)` as a statement where the slot read already prints as a native map index: the comma-ok read appends and
+// stores the grown slice back when the slot holds a []any; a nil map, a missing key and any other value stay as they are
+goChainAround('printArrayPushCall', function (prev, node: CallExpression, identation: number, name: string | undefined = undefined, parsedArg: string | undefined = undefined) {
+    const printed = prev.call(this, node, identation, name, parsedArg);
+    const receiver: any = (node as any)?.expression?.expression;
+    const map: any = receiver?.expression;
+    const key: any = receiver?.argumentExpression;
+    if ((typeof printed !== 'string') || ((node as any)?.parent?.kind !== SyntaxKind.ExpressionStatement) || ((node as any).arguments?.length !== 1)
+        || ((node as any).arguments[0].kind === SyntaxKind.SpreadElement) || (receiver?.kind !== SyntaxKind.ElementAccessExpression)
+        || (map?.kind !== SyntaxKind.Identifier) || (key?.kind !== SyntaxKind.StringLiteral) || !/^\w+$/.test(key.text)) { return printed; }
+    const m = /^(retRes\d+) := (.+)\n[ \t]*AppendToArray\(&\1, ([\s\S]*)\)$/.exec(printed);
+    if ((m === null) || (m[2] !== `${map.text}["${key.text}"]`)) { return printed; }
+    const ind = this.getIden(identation);
+    return `if ${m[1]}, ok := ${m[2]}.([]any); ok {\n${ind}\t${m[2]} = append(${m[1]}, ${m[3]})\n${ind}}`;
+});
