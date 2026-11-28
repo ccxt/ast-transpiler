@@ -16047,7 +16047,9 @@ export class RustTranspiler extends BaseTranspiler {
     static readonly RUST_DICT_TAGGED_ENTRY_FIELDS = new Set([ 'options', 'urls', 'fees', 'exceptions', 'markets', 'currencies', 'headers', 'has', 'tokenBucket', 'markets_by_id', 'currencies_by_id', ]);
     static readonly RUST_DICT_MARKER_KEYS = /^(?:timestamp|datetime|nonce|symbol|checksum|cache|hashmap|subscriptions|futures|\d+)$/;
     /** Base callees that only ever return a Dict (the content may still carry a marker). */
-    static readonly RUST_DICT_CALLEES = new Set([ 'safeDict', 'safeDict2', 'safeDictN', 'safeDictionary', 'createSafeDictionary', 'extend', 'deepExtend', 'omit', 'groupBy', 'indexBy', 'filterByArray', ]);
+    static readonly RUST_DICT_CALLEES = new Set([ 'safeDict', 'safeDict2', 'safeDictN', 'safeDictionary', 'createSafeDictionary', 'extend', 'deepExtend', 'omit', 'groupBy', 'indexBy', 'filterByArray',
+        'retrieveDydxCredentials',
+    ]);
     /** Name of the base-Exchange runtime-state field behind `this.<name>`, else undefined. */
     rustDictField(node: Node): string | undefined {
         const n: any = this.rustSkipWrappers(node);
@@ -16385,6 +16387,60 @@ export class RustTranspiler extends BaseTranspiler {
             n += 8;
         }
         return n + thrown;
+    }
+    // `x = {.. x['k'] ..}`: a plain reassignment of a proven dict local evaluates its value before the local is replaced, so the literal-key read inside it is the map's own lookup.
+    rustDictReadInLocalReassign(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
+        if (!isIdentifier(receiver) || !isStringLiteralLikeNode(key) || this.isNativeWriteTargetBase(chain) || this.isTestSource(chain)) return undefined;
+        let host: any;
+        for (let current: any = chain.parent; current; current = current.parent) {
+            if (isStatement(current) || isSourceFile(current) || isFunctionLike(current)) break;
+            if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken && this.isNodeInsideNode(chain, current.right)
+                && isIdentifier(current.left) && String(current.left.text) === String(receiver.text)) host = current;
+        }
+        if (host === undefined || host.parent?.kind !== SyntaxKind.ExpressionStatement || !this.isNativeAccessPositionSafe(chain, host)) return undefined;
+        return this.rustLocalDictLiteralRead(acc, receiver, String((key as any).text));
+    }
+    // `const e = m[k]; .. e['lit'] ..` where `m` is a `const` local built from `{}` that only ever stores object literals under one key: `e` is such a literal or absent, so the read is the map's own lookup.
+    rustLiteralBucketEntryRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
+        if (!isIdentifier(receiver) || !isStringLiteralLikeNode(key) || this.isTestSource(chain) || RustTranspiler.RUST_DICT_MARKER_KEYS.test(String((key as any).text))) return undefined;
+        const declaration: any = this.rustSingleLocalDeclaration(receiver);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || (declaration.parent?.flags & NodeFlags.Const) === 0) return undefined;
+        const init: any = this.rustSkipWrappers(declaration.initializer);
+        if (init === undefined || !isElementAccessExpression(init) || !isIdentifier(init.expression)) return undefined;
+        const bucket: any = this.rustSingleLocalDeclaration(init.expression);
+        const scope = bucket === undefined || !isVariableDeclaration(bucket) || (bucket.parent?.flags & NodeFlags.Const) === 0 ? undefined : this.rustEnclosingFunction(bucket);
+        if (scope === undefined || isSourceFile(scope) || !isIdentifier(bucket.name) || bucket.initializer === undefined || !isObjectLiteralExpression(this.rustSkipWrappers(bucket.initializer))) return undefined;
+        const name = String(bucket.name.text);
+        const symbol = this.rustSymbolOf(bucket.name);
+        if (symbol === undefined || (this.rustSkipWrappers(bucket.initializer) as any).properties.length !== 0) return undefined;
+        // the entry itself is only read or written under plain literal keys (never a `__` marker key)
+        const plainKey = (k: any) => k !== undefined && isStringLiteralLikeNode(k) && !String(k.text).startsWith('__');
+        const entrySymbol = this.rustSymbolOf(declaration.name);
+        const entryScope = this.rustEnclosingFunction(declaration);
+        if (entrySymbol === undefined || entryScope === undefined || isSourceFile(entryScope)) return undefined;
+        for (const n of this.rustScopeNameNodes(entryScope, String(receiver.text)) as any[]) {
+            if (n === declaration || n === declaration.name) continue;
+            if (n.kind !== SyntaxKind.Identifier || this.rustSymbolOf(n) !== entrySymbol) return undefined;
+            if (!isElementAccessExpression(n.parent) || n.parent.expression !== n || !plainKey(n.parent.argumentExpression)) return undefined;
+        }
+        for (const n of this.rustScopeNameNodes(scope, name) as any[]) {
+            if (n === bucket || n === bucket.name) continue;
+            if (n.kind !== SyntaxKind.Identifier || this.rustSymbolOf(n) !== symbol) return undefined;
+            const parent: any = n.parent;
+            if (parent === undefined) return undefined;
+            // `k in m`, `x = m`
+            if (isBinaryExpression(parent) && parent.right === n && (parent.operatorToken.kind === SyntaxKind.InKeyword || parent.operatorToken.kind === SyntaxKind.EqualsToken)) continue;
+            if (!isElementAccessExpression(parent) || parent.expression !== n) return undefined;
+            const up: any = parent.parent;
+            if (isBinaryExpression(up) && up.left === parent) {
+                const value: any = this.rustSkipWrappers(up.right);
+                if (up.operatorToken.kind !== SyntaxKind.EqualsToken || !isObjectLiteralExpression(value) || value.properties.some((q: any) => q.kind !== SyntaxKind.PropertyAssignment || !plainKey(q.name))) return undefined;
+                continue;
+            }
+            if (this.isNativeWriteTargetBase(parent) || ((isPropertyAccessExpression(up) || isCallExpression(up)) && up.expression === parent)) return undefined;
+        }
+        const literal = `"${this.escapeRustStringLiteral(String((key as any).text))}"`;
+        return this.rustDictSite({ guarded: true, helper: `get_value(&${acc}, &Value::Str(${literal}.into()))`, closure: `${acc}.as_map().and_then(|__m| __m.get(${literal})).cloned().unwrap_or(Value::Null)`, });
     }
     /** `this.<field>['k'].length`: a read-only use of a literal-key read off a base runtime-state field. */
     rustFieldLengthRead(acc: string, receiver: Node, key: Node, chain: Node): string | undefined {
@@ -16764,7 +16820,9 @@ export class RustTranspiler extends BaseTranspiler {
                 if (kind === 'str' || kind === 'ostr') { acc = `get_value(&${acc}, ${super.printIdentifier(outerKey)}${kind === 'str' ? '.as_str()' : '.as_deref()'})`; continue; }
             }
             const h30r08 = !nativeAllowed && chain.length === 1 ? this.h30r08ListRowRead(acc, receiver, key, node) : undefined; if (h30r08 !== undefined) { acc = h30r08; continue; }
+            const reassignRead = !nativeAllowed && !keepGetValue && chain.length === 1 ? this.rustDictReadInLocalReassign(acc, receiver, key, node) : undefined; if (reassignRead !== undefined) { acc = reassignRead; continue; }
             const native = nativeAllowed ? this.printNativeContainerAccess(acc, receiver, key) : (this.rustDictReadInNativeInsert(acc, receiver, key, node) ?? this.rustFieldLengthRead(acc, receiver, key, node));
+            const bucketRead = native === undefined && !keepGetValue && chain.length === 1 ? this.rustLiteralBucketEntryRead(acc, receiver, key, node) : undefined; if (bucketRead !== undefined) { acc = bucketRead; continue; }
             const staticKey = native === undefined && !keepGetValue ? this.staticKeyLookup(key, receiver) : undefined;
             acc = native ?? (staticKey !== undefined ? `crate::value::get_value_k(&${acc}, ${staticKey})` : `get_value(&${acc}, &${this.rustI64HelperKeyText(key, node) ?? this.printNode(key, 0)})`);
         }
