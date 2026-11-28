@@ -39606,6 +39606,65 @@ ${pad}if !${okName} ${body.trimStart()}`;
     }
     return false;
   }
+  // true when `this.<field>` is guarded non-nil by an enclosing `if` or `&&` with no intervening write/await
+  goThisFieldHasEnclosingNilGuard(prop) {
+    if (prop?.kind !== SyntaxKind5.PropertyAccessExpression || prop.expression?.kind !== SyntaxKind5.ThisKeyword) {
+      return false;
+    }
+    const field = prop.name?.text;
+    if (typeof field !== "string") {
+      return false;
+    }
+    const isSame = (n) => {
+      const u = this.goUnwrapParenthesizedNode(n);
+      return u?.kind === SyntaxKind5.PropertyAccessExpression && u.expression?.kind === SyntaxKind5.ThisKeyword && u.name?.text === field;
+    };
+    const isNullish = (n) => {
+      const u = this.goUnwrapParenthesizedNode(n);
+      return u?.kind === SyntaxKind5.NullKeyword || u?.kind === SyntaxKind5.UndefinedKeyword || u?.kind === SyntaxKind5.Identifier && u.text === "undefined";
+    };
+    const condGuards = (cond) => {
+      const inner = this.goUnwrapParenthesizedNode(cond);
+      if (inner?.kind !== SyntaxKind5.BinaryExpression) {
+        return false;
+      }
+      const op = inner.operatorToken?.kind;
+      if (op === SyntaxKind5.ExclamationEqualsToken || op === SyntaxKind5.ExclamationEqualsEqualsToken) {
+        return isSame(inner.left) && isNullish(inner.right) || isSame(inner.right) && isNullish(inner.left);
+      }
+      if (op === SyntaxKind5.AmpersandAmpersandToken) {
+        return condGuards(inner.left) || condGuards(inner.right);
+      }
+      return false;
+    };
+    const writesOrAwaits = (root) => {
+      if (root === void 0) {
+        return false;
+      }
+      if (root.kind === SyntaxKind5.AwaitExpression) {
+        return true;
+      }
+      if (root.kind === SyntaxKind5.BinaryExpression && root.operatorToken?.kind === SyntaxKind5.EqualsToken && isSame(root.left)) {
+        return true;
+      }
+      let found = false;
+      root.forEachChild((c) => {
+        if (!found && writesOrAwaits(c)) {
+          found = true;
+        }
+      });
+      return found;
+    };
+    for (let child = prop, parent = prop.parent; parent !== void 0 && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+      if (parent.kind === SyntaxKind5.BinaryExpression && parent.operatorToken?.kind === SyntaxKind5.AmpersandAmpersandToken && child === parent.right && condGuards(parent.left)) {
+        return true;
+      }
+      if (parent.kind === SyntaxKind5.IfStatement && parent.thenStatement === child && condGuards(parent.expression) && !writesOrAwaits(child)) {
+        return true;
+      }
+    }
+    return false;
+  }
   // the whole condition, or any conjunct of its `&&` chain, is the non-nil test
   goConditionProvesNonNil(condition, ident) {
     const inner = this.goUnwrapParenthesizedNode(condition);
@@ -41389,6 +41448,10 @@ ${this.getIden(identation)}`;
     if (receiverType === "string") {
       this.goFileStdlibImports.add("strings");
       return `strings.Index(${name}, ${parsedArg})`;
+    }
+    if (!seamOnly && (receiverType === "*string" || GO_NILABLE_FIELDS_Typed[name.trim()] === "*string") && this.goThisFieldHasEnclosingNilGuard(receiver)) {
+      this.goFileStdlibImports.add("strings");
+      return `strings.Index(*${name.trim()}, ${parsedArg})`;
     }
     if (!seamOnly && receiverType === "*string" && receiver?.kind === SyntaxKind5.Identifier) {
       this.goFileStdlibImports.add("strings");

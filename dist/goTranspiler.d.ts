@@ -1624,6 +1624,7 @@ export declare class GoTranspiler extends BaseTranspiler {
     goHasEnclosingNilGuard(ident: any): boolean;
     goInsideNonReboundNilIf(ident: any): boolean;
     goHasEarlyExitNilGuard(ident: any): boolean;
+    goThisFieldHasEnclosingNilGuard(prop: any): boolean;
     goConditionProvesNonNil(condition: any, ident: any): boolean;
     goUnwrapParenthesizedNode(node: any): any;
     goIsPureComparisonOperand(node: any): boolean;

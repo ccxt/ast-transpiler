@@ -22590,6 +22590,44 @@ ${this.getIden(identation)}PanicOnError(${varName})`;
         return false;
     }
 
+    // true when `this.<field>` is guarded non-nil by an enclosing `if` or `&&` with no intervening write/await
+    goThisFieldHasEnclosingNilGuard(prop): boolean {
+        if ((prop?.kind !== SyntaxKind.PropertyAccessExpression) || (prop.expression?.kind !== SyntaxKind.ThisKeyword)) { return false; }
+        const field = prop.name?.text;
+        if (typeof field !== 'string') { return false; }
+        const isSame = (n) => {
+            const u = this.goUnwrapParenthesizedNode(n);
+            return (u?.kind === SyntaxKind.PropertyAccessExpression) && (u.expression?.kind === SyntaxKind.ThisKeyword) && (u.name?.text === field);
+        };
+        const isNullish = (n) => {
+            const u = this.goUnwrapParenthesizedNode(n);
+            return (u?.kind === SyntaxKind.NullKeyword) || (u?.kind === SyntaxKind.UndefinedKeyword) || ((u?.kind === SyntaxKind.Identifier) && (u.text === 'undefined'));
+        };
+        const condGuards = (cond): boolean => {
+            const inner = this.goUnwrapParenthesizedNode(cond);
+            if (inner?.kind !== SyntaxKind.BinaryExpression) { return false; }
+            const op = inner.operatorToken?.kind;
+            if ((op === SyntaxKind.ExclamationEqualsToken) || (op === SyntaxKind.ExclamationEqualsEqualsToken)) {
+                return (isSame(inner.left) && isNullish(inner.right)) || (isSame(inner.right) && isNullish(inner.left));
+            }
+            if (op === SyntaxKind.AmpersandAmpersandToken) { return condGuards(inner.left) || condGuards(inner.right); }
+            return false;
+        };
+        const writesOrAwaits = (root): boolean => {
+            if (root === undefined) { return false; }
+            if (root.kind === SyntaxKind.AwaitExpression) { return true; }
+            if ((root.kind === SyntaxKind.BinaryExpression) && (root.operatorToken?.kind === SyntaxKind.EqualsToken) && isSame(root.left)) { return true; }
+            let found = false;
+            root.forEachChild((c) => { if (!found && writesOrAwaits(c)) { found = true; } });
+            return found;
+        };
+        for (let child: any = prop, parent: any = prop.parent; (parent !== undefined) && !isFunctionLike(parent); child = parent, parent = parent.parent) {
+            if ((parent.kind === SyntaxKind.BinaryExpression) && (parent.operatorToken?.kind === SyntaxKind.AmpersandAmpersandToken) && (child === parent.right) && condGuards(parent.left)) { return true; }
+            if ((parent.kind === SyntaxKind.IfStatement) && (parent.thenStatement === child) && condGuards(parent.expression) && !writesOrAwaits(child)) { return true; }
+        }
+        return false;
+    }
+
     // the whole condition, or any conjunct of its `&&` chain, is the non-nil test
     goConditionProvesNonNil(condition, ident): boolean {
         const inner = this.goUnwrapParenthesizedNode(condition);
@@ -24159,6 +24197,10 @@ ${this.getIden(identation)}${returnStatement}`;
         }
         const receiverType = this.goIndexOfOperandType(receiver, name);
         if (receiverType === 'string') { this.goFileStdlibImports.add('strings'); return `strings.Index(${name}, ${parsedArg})`; }
+        if (!seamOnly && ((receiverType === '*string') || (GO_NILABLE_FIELDS_Typed[name.trim()] === '*string')) && this.goThisFieldHasEnclosingNilGuard(receiver)) {
+            this.goFileStdlibImports.add('strings');
+            return `strings.Index(*${name.trim()}, ${parsedArg})`;
+        }
         // the literal repeats the identifier, so the receiver is still read exactly once
         if (!seamOnly && (receiverType === '*string') && (receiver?.kind === SyntaxKind.Identifier)) {
             this.goFileStdlibImports.add('strings');

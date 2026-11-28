@@ -160,4 +160,43 @@ export class Demo extends Base {
         expect (out).toContain ('var settleId any = nil');
         expect (out).not.toContain ('var settleId *string = nil');
     });
+
+    test ('Go: nil-guarded this.last_http_response.indexOf emits strings.Index without local copy', () => {
+        const root = path.join (tmp, 'this-field-indexof', 'ts', 'src');
+        fs.mkdirSync (root, { recursive: true });
+        const file = path.join (root, 'demo.ts');
+        fs.writeFileSync (file, `
+type Str = string | undefined;
+class Base {
+    last_http_response: Str = undefined;
+}
+export class Demo extends Base {
+    guarded (): boolean {
+        if ((this.last_http_response !== undefined) && (this.last_http_response !== '')) {
+            return this.last_http_response.indexOf ('ERR') >= 0;
+        }
+        return false;
+    }
+    unguarded (): boolean {
+        return this.last_http_response.indexOf ('ERR') >= 0;
+    }
+    mutated (): boolean {
+        if (this.last_http_response !== undefined) {
+            this.last_http_response = undefined;
+            return this.last_http_response.indexOf ('ERR') >= 0;
+        }
+        return false;
+    }
+}
+`);
+        const t = makeTranspiler ();
+        const out = t.transpileGoByPath (file).content;
+        const guardedBody = out.slice (out.indexOf ('func (this *Demo) Guarded'), out.indexOf ('func (this *Demo) Unguarded'));
+        const unguardedBody = out.slice (out.indexOf ('func (this *Demo) Unguarded'), out.indexOf ('func (this *Demo) Mutated'));
+        const mutatedBody = out.slice (out.indexOf ('func (this *Demo) Mutated'));
+        expect (guardedBody).toContain ('strings.Index(*this.Last_http_response, "ERR")');
+        expect (guardedBody).not.toContain ('GetIndexOf');
+        expect (unguardedBody).toContain ('GetIndexOf');
+        expect (mutatedBody).toContain ('GetIndexOf');
+    });
 });
