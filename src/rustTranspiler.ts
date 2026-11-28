@@ -901,6 +901,7 @@ export class RustTranspiler extends BaseTranspiler {
     // Native `==`/`!=` on the unwrapped payload when the checker proves the Value variants line up; undefined keeps the is_equal() helper.
     printNativeEqualityComparison(left, right, op): string {
         const groupInt = this.printGroupIntParamCompare(left, right, op); if (groupInt !== undefined) return groupInt;
+        const clientCurrent = this.printClientCurrentTest(left, right, op); if (clientCurrent !== undefined) return clientCurrent;
         const counterTest = isBinaryExpression(left?.parent) && left.parent.right === right ? this.printI64CounterCompare(left.parent) : undefined;
         if (counterTest !== undefined) return counterTest.startsWith('Value::Bool(') ? counterTest.slice('Value::Bool('.length, -1) : counterTest;
         const neverNull = this.printNeverNullContainerTest(left, op); if (neverNull !== undefined) return neverNull;
@@ -955,6 +956,14 @@ export class RustTranspiler extends BaseTranspiler {
                 return `${this.printNode(other, 0)}.as_bool() ${operator} Some(${value})`;
             }
             return undefined;
+        }
+        // a lent `Option<&str>` filter parameter against a string-typed `Value` read: the payload compares with the borrow as it is
+        const lentLeft = this.rustTypedFilterParamOf(this.unwrapParens(left))?.rustType === 'Option<&str>';
+        const lentRight = this.rustTypedFilterParamOf(this.unwrapParens(right))?.rustType === 'Option<&str>';
+        if (lentLeft !== lentRight) {
+            const other = lentLeft ? right : left;
+            if (!this.printsValueExpression(other) || this.primitiveKindOfType(this.getChecker().getTypeAtLocation(other)) !== 'string') return undefined;
+            return `${this.printNode(other, 0)}.as_str() ${operator} ${super.printIdentifier(this.unwrapParens(lentLeft ? left : right))}`;
         }
         if (!this.printsValueExpression(left) || !this.printsValueExpression(right)) return undefined;
         const leftKind = this.primitiveKindOfType(this.getChecker().getTypeAtLocation(left));
@@ -1817,6 +1826,8 @@ export class RustTranspiler extends BaseTranspiler {
         const sideLocal = node.declarations.length === 1 ? this.printBookSideLocal(declaration, indent, varName) : undefined;
         if (sideLocal !== undefined) return sideLocal;
         if (node.declarations.length === 1 && this.rustOwnedBucketListBind(declaration)) { return `${indent}let mut ${varName}: crate::value::List = ${this.printNode(declaration.initializer, 0).trim()}.into_list()`; }
+        const clientCurrent = node.declarations.length === 1 ? this.rustClientCurrentFlag(declaration) : undefined;
+        if (clientCurrent !== undefined) return `${indent}let ${varName}: bool = ${clientCurrent}.is_current()`;
         const nilKind = node.declarations.length === 1 ? this.rustNilLocalKind(declaration) : undefined;
         if (nilKind !== undefined) { return `${indent}let mut ${varName}: Option<${nilKind === 'str' ? 'String' : (nilKind === 'int' ? 'i64' : 'bool')}> = None`; }
         const optContainer = node.declarations.length === 1 ? this.printOptContainerDeclaration(declaration, varName, indent) ?? this.printOptListDeclaration(declaration, varName, indent) : undefined;
@@ -7672,6 +7683,34 @@ export class RustTranspiler extends BaseTranspiler {
             || init.expression.expression.kind !== SyntaxKind.ThisKeyword || String(init.expression.name.text) !== 'client') return false;
         const arg = init.arguments[0];
         return isIdentifier(arg) || isStringLiteral(arg) || (isPropertyAccessExpression(arg) && isIdentifier(arg.expression));
+    }
+    // `const X = this.safeValue (this.clients, client.url)` whose every read is `X === client` / `X !== client` (the method's `client` parameter): X is the bool `is_current()` of the handle.
+    rustClientCurrentFlag(declaration: any): string | undefined {
+        const init: any = this.unwrapParens(declaration?.initializer);
+        if (declaration === undefined || !isVariableDeclaration(declaration) || !isIdentifier(declaration.name) || init === undefined || !isCallExpression(init) || !isPropertyAccessExpression(init.expression)
+            || init.expression.expression.kind !== SyntaxKind.ThisKeyword || init.expression.name.text !== 'safeValue' || init.arguments.length !== 2) return undefined;
+        const map: any = this.unwrapParens(init.arguments[0]);
+        const key: any = this.unwrapParens(init.arguments[1]);
+        if (!isPropertyAccessExpression(map) || map.expression.kind !== SyntaxKind.ThisKeyword || map.name.text !== 'clients') return undefined;
+        if (!isPropertyAccessExpression(key) || !isIdentifier(key.expression) || key.expression.text !== 'client' || key.name.text !== 'url') return undefined;
+        const plan = this.rustClientHandlePlan(declaration);
+        const method: any = findAncestor(declaration, (n) => isMethodDeclaration(n));
+        if (plan === undefined || plan.kind !== 'param' || method === undefined || this.rustDeclaredNode(key.expression) !== plan.decl) return undefined;
+        const nodes: any[] = this.rustScopeNameNodes(method, String(declaration.name.text));
+        if (nodes.some((n) => isVariableDeclaration(n) && n !== declaration)) return undefined;
+        const reads = nodes.filter((n) => isIdentifier(n) && n !== declaration.name);
+        const compared = (n: any): boolean => {
+            const up: any = n.parent;
+            if (up === undefined || !isBinaryExpression(up) || !this.isEqualityOp(up.operatorToken.kind)) return false;
+            const other: any = this.unwrapParens(up.left === n ? up.right : up.left);
+            return isIdentifier(other) && other.text === 'client' && this.rustDeclaredNode(other) === plan.decl;
+        };
+        return reads.length > 0 && reads.every(compared) ? this.rustClientHandleReceiver(plan, false) : undefined;
+    }
+    printClientCurrentTest(left: any, right: any, op: any): string | undefined {
+        const flag: any = [ this.unwrapParens(left), this.unwrapParens(right) ].find((n: any) => n !== undefined && isIdentifier(n) && n.text !== 'client' && this.rustClientCurrentFlag(this.rustDeclaredNode(n)) !== undefined);
+        if (flag === undefined) return undefined;
+        return op === SyntaxKind.EqualsEqualsEqualsToken || op === SyntaxKind.EqualsEqualsToken ? String(flag.text) : `!${flag.text}`;
     }
     rustClientHandleReceiver(plan: any, field: boolean): string { if (plan.typed) return field ? '(client)' : 'client'; plan.touched = true; return '__ch'; }
     // `client.<field>` as the handle's field (`top`: only for a local declared as the handle, ahead of the native map reads; otherwise the last resort of the property printer).
