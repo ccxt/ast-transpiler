@@ -13804,6 +13804,7 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // exchange_prediction.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
   "this.SlugToMarketSymbol": "string",
   "this.SlugToOutcomeSymbol": "string",
+  "this.NormalizeTagKey": "string",
   // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
   "this.RlpEncodeList": "string",
   "this.IntToRlpHex": "string",
@@ -13816,7 +13817,9 @@ var CCXT_GO_HELPER_RETURN_TYPES = {
   // exchange_generated.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
   "this.OrderbookChecksumMessage": "string",
   // exchange.go: DecodeProtoMsg returns the decoded wrapper as map[string]any (ts `: Dict`); a bad frame panics
-  "this.DecodeProtoMsg": "map[string]any"
+  "this.DecodeProtoMsg": "map[string]any",
+  // exchange_request_book.go: snapshot of BaseExchange.Last_http_response (*string)
+  "this.GetLast_http_response": "*string"
 };
 var CCXT_GO_WS_HELPER_RETURN_TYPES = {
   "this.OrderBook": "OrderBookInterface",
@@ -16289,8 +16292,19 @@ var NIL_DECLARED_READ_RULE = {
       if (parent.expression === node) {
         return false;
       }
+      const argIdx = parent.arguments.indexOf(node);
+      const calleeName = parent.expression?.kind === SyntaxKind5.PropertyAccessExpression ? parent.expression.name?.text : void 0;
+      if (typeof calleeName === "string" && argIdx >= 0) {
+        const nullableStr = goTranspiler.goUnifiedNullableStringSlots?.(parent, calleeName);
+        if (Array.isArray(nullableStr) && nullableStr.includes(argIdx)) {
+          return true;
+        }
+      }
       const callee = printedCalleeOfCall(goTranspiler, parent);
-      if (callee !== void 0 && parent.arguments.indexOf(node) < (NIL_DECLARED_SAFE_ARG_SLOTS[callee] ?? 0)) {
+      if (callee === "this.ThrowExactlyMatchedException" && argIdx === 1) {
+        return true;
+      }
+      if (callee !== void 0 && argIdx < (NIL_DECLARED_SAFE_ARG_SLOTS[callee] ?? 0)) {
         return true;
       }
       return callee !== void 0 && NIL_DECLARED_SAFE_ARG_CALLEES.indexOf(callee) >= 0;
@@ -20336,6 +20350,9 @@ function ccxtGoTupleStringReadIsSafe(goTranspiler, node) {
   if (parent.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === current && ["toUpperCase", "toLowerCase"].includes(parent.name?.text) && parent.parent?.kind === SyntaxKind5.CallExpression && parent.parent.expression === parent) {
     return true;
   }
+  if (parent.kind === SyntaxKind5.PropertyAccessExpression && parent.expression === current && parent.name?.text === "indexOf" && parent.parent?.kind === SyntaxKind5.CallExpression && parent.parent.expression === parent && (goTranspiler.goHasEnclosingNilGuard(current) || goTranspiler.goHasExitingNilGuard(current) || goTranspiler.goInsideNonReboundNilIf(current))) {
+    return true;
+  }
   if (parent.kind === SyntaxKind5.CallExpression && parent.expression !== current) {
     const callee = printedCalleeOfCall(goTranspiler, parent);
     const slots = CCXT_GO_TUPLE_STRING_SAFE_ARGS[(callee ?? "").replace(/^ccxt\./, "")];
@@ -20388,7 +20405,7 @@ function ccxtGoTupleStringFeedsProvenStrParam(goTranspiler, node) {
   }
   return goStringPtrParamProvenAssuming(goTranspiler, param, local);
 }
-var CCXT_GO_TUPLE_STRING_SAFE_ARG_INDEX = { "this.HandleMarketTypeAndParams": [3] };
+var CCXT_GO_TUPLE_STRING_SAFE_ARG_INDEX = { "this.HandleMarketTypeAndParams": [3], "this.HandleOptionStringAndParams": [1] };
 var CCXT_GO_TUPLE_STRING_COPY_CHECKING = /* @__PURE__ */ new Set();
 var CCXT_GO_TUPLE_STRING_ASSUMED = /* @__PURE__ */ new Set();
 function ccxtGoTupleStringIsCopyDeclaration(declaration) {
@@ -27259,7 +27276,7 @@ var GO_PURE_STRING_ACCESSORS = [
 var GO_PURE_BOOL_ACCESSORS = ["this.SafeBool", "this.SafeBool2", "this.SafeBoolN"];
 var GO_NIL_EQUIVALENT_POINTER_TYPES_Native = /* @__PURE__ */ new Set(["*sync.Map", "*string", "*int64", "*float64", "*bool", "*int", "*[]string", "*[]any", "*map[string]any"]);
 var GO_SYNC_MAP_FIELDS = ["Options", "MarketsById", "CurrenciesById", "BaseCurrencies", "QuoteCurrencies", "Transactions"];
-var GO_NILABLE_FIELDS_Typed = Object.fromEntries(GO_SYNC_MAP_FIELDS.map((name) => ["this." + name, "*sync.Map"]));
+var GO_NILABLE_FIELDS_Typed = { ...Object.fromEntries(GO_SYNC_MAP_FIELDS.map((name) => ["this." + name, "*sync.Map"])), "this.last_http_response": "*string", "this.Last_http_response": "*string", "this.GetLast_http_response()": "*string" };
 var GO_TYPE_NAMES = ["string", "int", "int64", "float64", "bool", "any"];
 var GO_SAFE_DICT_LOCAL_TYPE = "map[string]any";
 var GO_STRUCT_BOX_PARSERS = { "parseTrade": "TradeToMap", "safeTrade": "TradeToMap", "parseTransfer": "TransferEntryToMap" };
@@ -31830,7 +31847,8 @@ ${iden}}`;
     if (declaration?.kind !== SyntaxKind5.VariableDeclaration || declaration.name?.kind !== SyntaxKind5.Identifier || !this.goNilInitInitializer(declaration.initializer)) {
       return void 0;
     }
-    if (this.goNilInitLocalTypeCache.has(declaration)) {
+    const stable = CCXT_GO_93_COPY_ASSUMED.size === 0;
+    if (stable && this.goNilInitLocalTypeCache.has(declaration)) {
       return this.goNilInitLocalTypeCache.get(declaration);
     }
     if (this.goNilInitLocalTypeInProgress.has(declaration)) {
@@ -31843,7 +31861,9 @@ ${iden}}`;
     } finally {
       this.goNilInitLocalTypeInProgress.delete(declaration);
     }
-    this.goNilInitLocalTypeCache.set(declaration, result);
+    if (stable) {
+      this.goNilInitLocalTypeCache.set(declaration, result);
+    }
     return result;
   }
   goNilInitLocalTypeScan(declaration) {
@@ -32392,7 +32412,7 @@ ${iden}}`;
     if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName) || this.goLiteralDefaultStringLocal(declaration, goType, scope, sourceName)) {
       return "string";
     }
-    const stable = this.goLocalTypeResolution.size <= 1 && this.goDeclaredTypeInProgress.size === 0;
+    const stable = this.goLocalTypeResolution.size <= 1 && this.goDeclaredTypeInProgress.size === 0 && CCXT_GO_93_COPY_ASSUMED.size === 0;
     const memoKey = goType;
     let perDecl = stable ? this.goLocalSafeVerdicts.get(declaration) : void 0;
     if (perDecl !== void 0 && perDecl.has(memoKey)) {

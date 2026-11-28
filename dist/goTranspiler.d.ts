@@ -134,6 +134,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'exchange.ParseTimeframe': string;
     'this.SlugToMarketSymbol': string;
     'this.SlugToOutcomeSymbol': string;
+    'this.NormalizeTagKey': string;
     'this.RlpEncodeList': string;
     'this.IntToRlpHex': string;
     'this.PadHexToEven': string;
@@ -143,6 +144,7 @@ export declare const CCXT_GO_HELPER_RETURN_TYPES: {
     'this.FilterEventsBySearchIn': string;
     'this.OrderbookChecksumMessage': string;
     'this.DecodeProtoMsg': string;
+    'this.GetLast_http_response': string;
 };
 export declare const CCXT_GO_WS_HELPER_RETURN_TYPES: {
     'this.OrderBook': string;

@@ -1040,6 +1040,7 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     // exchange_prediction.go: `: string`, no venue override, retyped `string` by build goRetypeStringReturns
     'this.SlugToMarketSymbol': 'string',
     'this.SlugToOutcomeSymbol': 'string',
+    'this.NormalizeTagKey': 'string',
     // exchange_prediction.go: `: string`, no override, every return a Go string (build goRetypeStringReturns)
     'this.RlpEncodeList': 'string',
     'this.IntToRlpHex': 'string',
@@ -1053,6 +1054,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.OrderbookChecksumMessage': 'string',
     // exchange.go: DecodeProtoMsg returns the decoded wrapper as map[string]any (ts `: Dict`); a bad frame panics
     'this.DecodeProtoMsg': 'map[string]any',
+    // exchange_request_book.go: snapshot of BaseExchange.Last_http_response (*string)
+    'this.GetLast_http_response': '*string',
 };
 
 // ws/pro tree: getWsRegexes rewrites member accesses into interface type assertions, so these locals must be
@@ -3089,8 +3092,15 @@ const NIL_DECLARED_READ_RULE = {
         },
         [SyntaxKind.CallExpression]: (parent, node, goTranspiler) => {
             if (parent.expression === node) { return false; } // calling the local
+            const argIdx = parent.arguments.indexOf (node);
+            const calleeName = (parent.expression?.kind === SyntaxKind.PropertyAccessExpression) ? parent.expression.name?.text : undefined;
+            if ((typeof calleeName === 'string') && (argIdx >= 0)) {
+                const nullableStr = goTranspiler.goUnifiedNullableStringSlots?.(parent, calleeName);
+                if (Array.isArray (nullableStr) && nullableStr.includes (argIdx)) { return true; }
+            }
             const callee = printedCalleeOfCall (goTranspiler, parent);
-            if ((callee !== undefined) && (parent.arguments.indexOf (node) < (NIL_DECLARED_SAFE_ARG_SLOTS[callee] ?? 0))) { return true; }
+            if ((callee === 'this.ThrowExactlyMatchedException') && (argIdx === 1)) { return true; }
+            if ((callee !== undefined) && (argIdx < (NIL_DECLARED_SAFE_ARG_SLOTS[callee] ?? 0))) { return true; }
             return (callee !== undefined) && (NIL_DECLARED_SAFE_ARG_CALLEES.indexOf (callee) >= 0);
         },
         // `[]any{x, params}` boxes the pointer; a destructuring target `[x, y] = f ()` is caught by the upstream reject in goLocalIsSafeToType
@@ -6589,6 +6599,10 @@ function ccxtGoTupleStringReadIsSafe (goTranspiler, node) {
     if ((parent.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === current)
         && [ 'toUpperCase', 'toLowerCase' ].includes (parent.name?.text)
         && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent)) { return true; }
+    if ((parent.kind === SyntaxKind.PropertyAccessExpression) && (parent.expression === current)
+        && (parent.name?.text === 'indexOf')
+        && (parent.parent?.kind === SyntaxKind.CallExpression) && (parent.parent.expression === parent)
+        && (goTranspiler.goHasEnclosingNilGuard (current) || goTranspiler.goHasExitingNilGuard (current) || goTranspiler.goInsideNonReboundNilIf (current))) { return true; }
     if ((parent.kind === SyntaxKind.CallExpression) && (parent.expression !== current)) {
         const callee = printedCalleeOfCall (goTranspiler, parent);
         const slots = CCXT_GO_TUPLE_STRING_SAFE_ARGS[(callee ?? '').replace (/^ccxt\./, '')];
@@ -6641,7 +6655,7 @@ function ccxtGoTupleStringFeedsProvenStrParam (goTranspiler, node) {
 }
 
 // callee -> exact argument indices bound through GetArg (derefs a pointer, folds a nil one to the default)
-const CCXT_GO_TUPLE_STRING_SAFE_ARG_INDEX = { 'this.HandleMarketTypeAndParams': [ 3 ], };
+const CCXT_GO_TUPLE_STRING_SAFE_ARG_INDEX = { 'this.HandleMarketTypeAndParams': [ 3 ], 'this.HandleOptionStringAndParams': [ 1 ], };
 
 // `let y = x` (x a *string of this family): y holds the same pointer, so the copy is safe when y's
 // own uses and writes pass the join with x taken as *string (checked uncached: no x<->y cycle)
@@ -12482,7 +12496,7 @@ const GO_NIL_EQUIVALENT_POINTER_TYPES_Native = new Set(['*sync.Map', '*string', 
 const GO_SYNC_MAP_FIELDS = ['Options', 'MarketsById', 'CurrenciesById', 'BaseCurrencies', 'QuoteCurrencies', 'Transactions',];
 
 // Hand-written BaseExchange fields (go/v4/exchange.go, embedded by every exchange
-const GO_NILABLE_FIELDS_Typed: { [name: string]: string } = Object.fromEntries(GO_SYNC_MAP_FIELDS.map((name) => [ 'this.' + name, '*sync.Map' ]));
+const GO_NILABLE_FIELDS_Typed: { [name: string]: string } = { ...Object.fromEntries(GO_SYNC_MAP_FIELDS.map((name) => [ 'this.' + name, '*sync.Map' ])), 'this.last_http_response': '*string', 'this.Last_http_response': '*string', 'this.GetLast_http_response()': '*string' };
 
 const GO_TYPE_NAMES = [ 'string', 'int', 'int64', 'float64', 'bool', 'any' ];
 
@@ -16192,7 +16206,9 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
 
     goNilInitLocalType(declaration): string | undefined {
         if ((declaration?.kind !== SyntaxKind.VariableDeclaration || declaration.name?.kind !== SyntaxKind.Identifier) || !this.goNilInitInitializer(declaration.initializer)) { return undefined; }
-        if (this.goNilInitLocalTypeCache.has(declaration)) { return this.goNilInitLocalTypeCache.get(declaration); }
+        // speculative copy-component assumptions in CCXT_GO_93_COPY_ASSUMED must not poison the cache
+        const stable = CCXT_GO_93_COPY_ASSUMED.size === 0;
+        if (stable && this.goNilInitLocalTypeCache.has(declaration)) { return this.goNilInitLocalTypeCache.get(declaration); }
         if (this.goNilInitLocalTypeInProgress.has(declaration)) { return undefined; }
         this.goNilInitLocalTypeInProgress.add(declaration);
         let result;
@@ -16204,7 +16220,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         } finally {
             this.goNilInitLocalTypeInProgress.delete(declaration);
         }
-        this.goNilInitLocalTypeCache.set(declaration, result);
+        if (stable) { this.goNilInitLocalTypeCache.set(declaration, result); }
         return result;
     }
 
@@ -16627,7 +16643,7 @@ func New${this.capitalize(this.className)}() *${(this.className)} {
         const scope = this.goEnclosingFunction(declaration);
         if (this.goAnnotatedStringLocal(declaration, goType, scope, sourceName) || this.goLiteralDefaultStringLocal(declaration, goType, scope, sourceName)) { return 'string'; }
         // outside any nested resolution the verdict depends only on (declaration, goType)
-        const stable = (this.goLocalTypeResolution.size <= 1) && (this.goDeclaredTypeInProgress.size === 0);
+        const stable = (this.goLocalTypeResolution.size <= 1) && (this.goDeclaredTypeInProgress.size === 0) && (CCXT_GO_93_COPY_ASSUMED.size === 0);
         const memoKey = goType;
         let perDecl = stable ? this.goLocalSafeVerdicts.get(declaration) : undefined;
         if (perDecl !== undefined && perDecl.has(memoKey)) { return perDecl.get(memoKey); }
