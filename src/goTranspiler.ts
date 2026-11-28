@@ -1056,6 +1056,8 @@ export const CCXT_GO_HELPER_RETURN_TYPES = {
     'this.DecodeProtoMsg': 'map[string]any',
     // exchange_request_book.go: snapshot of BaseExchange.Last_http_response (*string)
     'this.GetLast_http_response': '*string',
+    // exchange_market_type.go (hand-written): nil exactly for absent input, else the resolved currency ids
+    'this.CurrencyIds': '[]string',
 };
 
 // ws/pro tree: getWsRegexes rewrites member accesses into interface type assertions, so these locals must be
@@ -35161,6 +35163,8 @@ function ccxtGo93OtherBinding (goTranspiler: GoTranspiler, n, declaration): bool
 // `const ids = this.marketIds (symbols)` read only by nil tests and `.join ('lit')` is the []string
 // BaseExchange.MarketIdsStrings returns (nil exactly where MarketIds is nil, else what Join joins).
 GO92G2_STRING_LIST_READERS['marketIds'] = [ 'MarketIdsStrings', 1 ];
+// `const ids = this.currencyIds (codes)` under the same reads is the []string BaseExchange.CurrencyIds returns
+GO92G2_STRING_LIST_READERS['currencyIds'] = [ 'CurrencyIds', 1 ];
 // a string-list local handed as the container of `this.safeString (xs, i[, dflt])`: SafeString reads a
 // []string element exactly as it read the boxed list's string element
 function go93g2StringListElementRead (n, parent): boolean {
